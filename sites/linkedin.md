@@ -2,7 +2,7 @@
 
 Verified live on 2026-09-27, signed in, from a clean `API_ANYTHING_HOME`:
 `api-anything login linkedin --profile "Chrome/Profile 2"`, then `api-anything verify linkedin` passes
-(all four ops at tier 1). All ops are plain HTTP with the imported cookies, no browser. **Needs an
+(all five ops at tier 1). All ops are plain HTTP with the imported cookies, no browser. **Needs an
 account**: there is no logged-out LinkedIn.
 
 | op | args | returns | tier |
@@ -10,7 +10,8 @@ account**: there is no logged-out LinkedIn.
 | `getMe` | none | your own `firstName`, `lastName`, `occupation` (headline), `publicIdentifier` | 1 (about 300 ms) |
 | `getProfile` | `publicId` (example `williamhgates`) | `firstName`, `lastName`, `headline`, `summary` (the About text), `publicIdentifier`, `countryCode`, `websites`, `influencer`, `creator`, `entityUrn` | 1 (about 250 ms) |
 | `getCompany` | `universalName` (example `microsoft`) | `name`, `universalName`, `tagline` (when set), `description`, `industry`, `staffCount`, `website`, `headquarters` (`{country, geographicArea, city, ...}`), `url` | 1 (about 500 ms) |
-| `searchPeople` | `keywords` (example `reid hoffman`) | the first 10 people results: `name`, `headline`, `location`, `url` (profile URL), `distance` (`DISTANCE_2`, `DISTANCE_3`, ...) | 1 (about 1 s) |
+| `searchPeople` | `keywords` (example `reid hoffman`) | the first 10 people results: `name`, `headline`, `location`, `url` (`https://www.linkedin.com/in/<publicId>?miniProfileUrn=...`), `distance` (`DISTANCE_2`, `DISTANCE_3`, ...) | 1 (about 1 s) |
+| `searchCompanies` | `keywords` (example `anthropic`) | the first 10 company results: `name`, `subtitle` (industry, plus location when set), `followers`, `description`, `url` (`https://www.linkedin.com/company/<universalName>/`) | 1 (about 0.6 s) |
 
 ```sh
 api-anything login linkedin --profile "Chrome/Profile 2"   # see "Several signed-in profiles" below
@@ -18,18 +19,35 @@ api-anything call linkedin getMe                           # check WHO you are s
 api-anything call linkedin getProfile publicId=satyanadella
 api-anything call linkedin getCompany universalName=openai
 api-anything call linkedin searchPeople "keywords=rust engineer zurich"
+api-anything call linkedin searchCompanies "keywords=boston dynamics"
 ```
 
-`getProfile` returned correct data for `williamhgates`, `satyanadella` and `reidhoffman`.
-`searchPeople` returned the right people for `satya nadella`, `reid hoffman` and
-`rust engineer, zurich` (the comma is escaped correctly).
+## Chaining search into get
+
+The search results carry no bare `publicIdentifier` or `universalName` field; LinkedIn's search API
+returns only the profile or company URL. Take the id from `url`:
+
+- `searchPeople` `url` `https://www.linkedin.com/in/satyanadella?miniProfileUrn=...` -> `getProfile publicId=satyanadella`
+  (the path segment after `/in/`, without the `?...` query).
+- `searchCompanies` `url` `https://www.linkedin.com/company/anthropicresearch/` -> `getCompany universalName=anthropicresearch`.
+
+Search first when you only know a name: a company's universal name often differs from its brand
+(`anthropic` is an unrelated investment fund; the AI company is `anthropicresearch`; Boston Dynamics
+is `boston-dynamics`).
+
+Verified 2026-09-27 with the chain: `searchPeople` for `satya nadella`, `patrick collison`,
+`rust engineer zurich` and `conan o'brien`, then `getProfile` for `satyanadella`,
+`patrickcollison` and `conanobrien`; `searchCompanies` for `anthropic`, `stripe`, `openai` and
+`boston dynamics`, then `getCompany` for `anthropicresearch`, `openai` and `boston-dynamics`. Every
+call was tier 1.
 
 ## Several signed-in profiles
 
-`login linkedin` without `--profile` imports from the browser profile whose cookie store changed most
-recently. If two Chrome profiles are signed into two different LinkedIn members, that choice can
-flip between runs, and you would silently act as the other member. Always pass
-`--profile "<Browser>/<Profile>"`, then run `getMe` and check the name before anything else.
+If more than one browser profile is signed in to LinkedIn, `login linkedin` without `--profile`
+refuses and lists the candidates (profile, display name, the Chrome profile's Google email). Those
+can be two different LinkedIn members: ask the user which one, pass
+`--profile "<Browser>/<Profile>"`, then run `getMe` and check the name before anything else. The
+email shown is the Chrome profile's, not the LinkedIn account's.
 
 ## How it works
 
@@ -48,18 +66,24 @@ the constant `x-restli-protocol-version: 2.0.0`. The spec holds no credential. N
   logo entities that came back as empty `{}` items. The website field is `companyPageUrl`, returned
   as `website`.
 - **searchPeople** is `GET /voyager/api/search/dash/clusters?q=all&query=(keywords:<k>,flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)&start=0&count=10`
-  with `accept: application/json`. The keywords are filled URL-escaped inside the Rest.li `query`
-  (`escape: "url"`), so commas and parentheses stay inside the value.
+  with `accept: application/json`. **searchCompanies** is the same with `List(COMPANIES)`.
+- The response is a list of clusters: for this account a Premium upsell (people) or a result-count
+  line (companies), the results, then a feedback card. Both ops extract
+  `elements[*].items[*].itemUnion.entityResult`, which collects the results from whichever cluster
+  holds them and skips the cards. If no cluster holds an `entityResult` any more, the extract path
+  is missing and the call is `drift`, not an empty answer.
+- LinkedIn parses the Rest.li `query` before it percent-decodes the value, once. The keywords are
+  filled as a plain query value, so a space goes out as `%20`. The previous `escape: "url"` sent
+  `%2520`: people search still matched loosely, but company search found nothing for any multi-word
+  name (`boston dynamics` gave 0 results).
 
 ## Known limits
 
-- **searchPeople reads cluster 1.** The response is a list of clusters. For this (non-Premium)
-  account, cluster 0 is always a Premium upsell card, cluster 1 holds the people and cluster 2 is a
-  feedback card. The spec extracts `elements[1].items` and carries a hand-set `response.shape` for
-  those items. If an account gets no upsell card, the people move to cluster 0. The shape check then
-  classifies the call as `drift` rather than returning the feedback card as a result. Premium
-  accounts were not tested. Normalized JSON was not an option: its `included` list loses the ranking
-  and adds a feedback entity.
+- **No commas, colons or parentheses in `keywords`.** They are Rest.li syntax, and the value can't
+  be encoded so LinkedIn reads them as text (see above). The param's `pattern` refuses them; use
+  spaces (`rust engineer zurich`). Apostrophes and non-ASCII letters work.
+- Premium accounts were not tested; the cluster-independent extract should cover them.
+- A search with no matches answers `{"elements":[]}`, which returns `ok` with `[]`.
 - **An unknown or restricted `publicId` is `input`.** LinkedIn answers
   `403 {"message":"This profile can't be accessed"}`. A read's bare 403 replays the example args
   once; they answer, so the call returns `input` at tier 1 with no browser run and no stale mark
@@ -75,4 +99,3 @@ the constant `x-restli-protocol-version: 2.0.0`. The spec holds no credential. N
   is logged out too. Keep automated traffic light; LinkedIn may revoke a session that looks like a
   bot. Use `api-anything login linkedin --window` for an independent session.
 - Read-only. No posting, messaging, or connection requests.
-- `universalName=anthropic` is an unrelated investment fund; the AI company's slug differs.

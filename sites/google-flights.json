@@ -2,98 +2,60 @@
   "name": "google-flights",
   "displayName": "Google Flights",
   "baseUrl": "https://www.google.com",
-  "description": "Logged-out one-way flight search on Google Flights (GetShoppingResults). Prices in USD, en-US. See sites/google-flights.md.",
+  "description": "Logged-out one-way flight search and a cheapest-date price calendar on Google Flights. Prices in USD, en-US. See sites/google-flights.md.",
   "operations": [
     {
       "name": "search",
       "request": {
-        "method": "POST",
-        "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=-7489343373632315628&bl=boq_travel-frontend-flights-ui_20260922.02_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=14537&rt=c",
+        "method": "GET",
+        "url": "https://www.google.com/travel/flights?q=Flights%20from%20SFO%20to%20NYC%20on%202027-04-15%20one%20way&hl=en-US&gl=US&curr=USD",
         "headers": {
-          "accept": "*/*",
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
           "accept-language": "en-US,en;q=0.9",
-          "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-          "origin": "https://www.google.com",
-          "priority": "u=1, i",
-          "referer": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way",
+          "priority": "u=0, i",
           "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
           "sec-ch-ua-arch": "\"x86\"",
           "sec-ch-ua-bitness": "\"64\"",
-          "sec-ch-ua-form-factors": "\"Desktop\"",
-          "sec-ch-ua-full-version": "\"153.0.8010.53\"",
           "sec-ch-ua-full-version-list": "\"Google Chrome\";v=\"153.0.8010.53\", \"Not_A Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"153.0.8010.53\"",
           "sec-ch-ua-mobile": "?0",
           "sec-ch-ua-model": "\"\"",
           "sec-ch-ua-platform": "\"macOS\"",
           "sec-ch-ua-platform-version": "\"10_15_7\"",
           "sec-ch-ua-wow64": "?0",
-          "sec-fetch-dest": "empty",
-          "sec-fetch-mode": "cors",
-          "sec-fetch-site": "same-origin",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
           "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
           "x-browser-channel": "stable",
           "x-browser-copyright": "Copyright 2026 Google LLC. All Rights Reserved.",
-          "x-browser-validation": "5NlNaDKBB93vNb2o5VQTaiuhHAY=",
-          "x-browser-year": "2026",
-          "x-goog-batchexecute-bgr": "",
-          "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]",
-          "x-same-domain": "1"
-        },
-        "body": "f.req=%5Bnull%2C%22%5B%5Bnull%2Cnull%2Cnull%2C%5C%22HshMzSzGTMlUAIVMBwBG--------pjbgi22AAAAAGq497gCRmTGA%5C%22%5D%2C%5Bnull%2Cnull%2C2%2Cnull%2C%5B%5D%2C1%2C%5B1%2C0%2C0%2C0%5D%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B%5B%5B%5B%5C%22%7Borigin%7D%5C%22%2C0%5D%5D%5D%2C%5B%5B%5B%5C%22%7Bdestination%7D%5C%22%2C0%5D%5D%5D%2Cnull%2C0%2Cnull%2Cnull%2C%5C%22%7Bdate%7D%5C%22%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C3%5D%5D%2Cnull%2Cnull%2Cnull%2C1%5D%2C0%2C0%2C0%2C1%5D%22%5D&"
+          "x-browser-validation": "i4EyS5V7KAFMVdi4watYsPhpgkI=",
+          "x-browser-year": "2026"
+        }
       },
       "slots": [
         {
           "param": "origin",
           "at": [
-            "form:f.req",
-            "json:/1",
-            "json:/1/13/0/0/0/0/0"
-          ]
-        },
-        {
-          "param": "destination",
-          "at": [
-            "form:f.req",
-            "json:/1",
-            "json:/1/13/0/1/0/0/0"
-          ]
-        },
-        {
-          "param": "date",
-          "at": [
-            "form:f.req",
-            "json:/1",
-            "json:/1/13/0/6"
-          ]
-        },
-        {
-          "param": "origin",
-          "at": [
-            "header:referer"
+            "query:q"
           ],
-          "template": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way"
-        },
-        {
-          "ref": "session:x-goog-batchexecute-bgr",
-          "at": [
-            "header:x-goog-batchexecute-bgr"
-          ]
+          "template": "Flights from {origin} to {destination} on {date} one way"
         }
       ],
       "volatile": [],
       "trigger": {
-        "url": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way"
+        "url": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way&hl=en-US&gl=US&curr=USD"
       },
       "match": {
-        "method": "POST",
+        "method": "GET",
         "host": "www.google.com",
-        "path": "/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults"
+        "path": "/travel/flights"
       },
       "response": {
-        "format": "json",
-        "contentType": "application/json; charset=utf-8",
-        "xssiPrefix": ")]}'",
-        "extract": "[0][0][2][3][0]",
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "[3][0]",
         "pick": [
           "airline=[0][1]",
           "price=[1][0][1]",
@@ -106,10 +68,8 @@
           "durationMinutes=[0][9]",
           "stops=[0][13]"
         ],
-        "shape": {
-          "[]": "array",
-          "[][]": "array",
-          "[][][]": "string"
+        "embedded": {
+          "regex": "key: 'ds:1', hash: '\\d+', data:(\\[)"
         }
       },
       "params": [
@@ -117,43 +77,149 @@
           "name": "origin",
           "type": "string",
           "required": true,
-          "description": "origin airport IATA code, e.g. SFO",
-          "example": "SFO"
+          "description": "origin: airport code, metro code or city name, e.g. SFO",
+          "example": "SFO",
+          "pattern": "^\\D{2,60}$",
+          "hint": "an airport code (JFK), a metro code (NYC, LON, TYO) or a city name (New York, Paris); Google reads it as free text"
         },
         {
           "name": "destination",
           "type": "string",
           "required": true,
-          "description": "destination airport IATA code, e.g. JFK",
-          "example": "JFK"
+          "description": "destination: airport code, metro code or city name, e.g. NYC",
+          "example": "NYC",
+          "pattern": "^\\D{2,60}$",
+          "hint": "an airport code (JFK), a metro code (NYC, LON, TYO) or a city name (New York, Paris); Google reads it as free text"
         },
         {
           "name": "date",
           "type": "string",
           "required": true,
-          "description": "departure date YYYY-MM-DD, in the future",
-          "example": "2027-04-15"
+          "description": "departure date YYYY-MM-DD, today or later",
+          "example": "2027-04-15",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "hint": "departure date as YYYY-MM-DD, e.g. 2027-04-15; not 'Oct 21'"
         }
       ],
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false,
-      "learnedAt": "2026-09-27T11:02:21.662Z",
-      "description": "One-way flights: Google's \"other departing flights\" list, sorted by price. Per item: airline (names; several when carriers mix), price (USD, whole one-way itinerary), from/to (airports), departureDate/arrivalDate [y,m,d], departureTime/arrivalTime local [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), durationMinutes, stops (null = nonstop; else one [layover minutes, airport, airport, null, airport name, city, ...] per stop)."
+      "description": "One-way flights: Google's \"other departing flights\" list, sorted by price. Origin and destination take airport codes, metro codes (NYC) or city names. Per item: airline (names; several when carriers mix), price (USD, whole one-way itinerary), from/to (airports), departureDate/arrivalDate [y,m,d], departureTime/arrivalTime local [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), durationMinutes, stops (null = nonstop; else one [layover minutes, airport, airport, null, airport name, city, ...] per stop)."
     },
     {
       "name": "top",
-      "description": "One-way flights: Google's \"top departing flights\" (best) list; disjoint from search, together they are the full results page. Per item: airline (names; several when carriers mix), price (USD, whole one-way itinerary), from/to (airports), departureDate/arrivalDate [y,m,d], departureTime/arrivalTime local [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), durationMinutes, stops (null = nonstop; else one [layover minutes, airport, airport, null, airport name, city, ...] per stop).",
+      "request": {
+        "method": "GET",
+        "url": "https://www.google.com/travel/flights?q=Flights%20from%20SFO%20to%20NYC%20on%202027-04-15%20one%20way&hl=en-US&gl=US&curr=USD",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-arch": "\"x86\"",
+          "sec-ch-ua-bitness": "\"64\"",
+          "sec-ch-ua-full-version-list": "\"Google Chrome\";v=\"153.0.8010.53\", \"Not_A Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"153.0.8010.53\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-ua-wow64": "?0",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+          "x-browser-channel": "stable",
+          "x-browser-copyright": "Copyright 2026 Google LLC. All Rights Reserved.",
+          "x-browser-validation": "i4EyS5V7KAFMVdi4watYsPhpgkI=",
+          "x-browser-year": "2026"
+        }
+      },
+      "slots": [
+        {
+          "param": "origin",
+          "at": [
+            "query:q"
+          ],
+          "template": "Flights from {origin} to {destination} on {date} one way"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way&hl=en-US&gl=US&curr=USD"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.google.com",
+        "path": "/travel/flights"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "[2][0]",
+        "pick": [
+          "airline=[0][1]",
+          "price=[1][0][1]",
+          "from=[0][3]",
+          "to=[0][6]",
+          "departureDate=[0][4]",
+          "departureTime=[0][5]",
+          "arrivalDate=[0][7]",
+          "arrivalTime=[0][8]",
+          "durationMinutes=[0][9]",
+          "stops=[0][13]"
+        ],
+        "embedded": {
+          "regex": "key: 'ds:1', hash: '\\d+', data:(\\[)"
+        }
+      },
+      "params": [
+        {
+          "name": "origin",
+          "type": "string",
+          "required": true,
+          "description": "origin: airport code, metro code or city name, e.g. SFO",
+          "example": "SFO",
+          "pattern": "^\\D{2,60}$",
+          "hint": "an airport code (JFK), a metro code (NYC, LON, TYO) or a city name (New York, Paris); Google reads it as free text"
+        },
+        {
+          "name": "destination",
+          "type": "string",
+          "required": true,
+          "description": "destination: airport code, metro code or city name, e.g. NYC",
+          "example": "NYC",
+          "pattern": "^\\D{2,60}$",
+          "hint": "an airport code (JFK), a metro code (NYC, LON, TYO) or a city name (New York, Paris); Google reads it as free text"
+        },
+        {
+          "name": "date",
+          "type": "string",
+          "required": true,
+          "description": "departure date YYYY-MM-DD, today or later",
+          "example": "2027-04-15",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "hint": "departure date as YYYY-MM-DD, e.g. 2027-04-15; not 'Oct 21'"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "description": "One-way flights: Google's \"top departing flights\" (best) list; disjoint from search, together they are the full results page. Same args as search. Per item: airline (names; several when carriers mix), price (USD, whole one-way itinerary), from/to (airports), departureDate/arrivalDate [y,m,d], departureTime/arrivalTime local [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), durationMinutes, stops (null = nonstop; else one [layover minutes, airport, airport, null, airport name, city, ...] per stop)."
+    },
+    {
+      "name": "priceCalendar",
       "request": {
         "method": "POST",
-        "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=5052833066978253007&bl=boq_travel-frontend-flights-ui_20260922.02_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=14476&rt=c",
+        "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetCalendarPicker?f.sid=-5475125558638741399&bl=boq_travel-frontend-flights-ui_20260922.02_p0&hl=en-US&gl=US&soc-app=162&soc-platform=1&soc-device=1&_reqid=149750&rt=c",
         "headers": {
           "accept": "*/*",
           "accept-language": "en-US,en;q=0.9",
           "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
           "origin": "https://www.google.com",
           "priority": "u=1, i",
-          "referer": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way",
+          "referer": "https://www.google.com/travel/flights?q=Flights%20from%20SFO%20to%20JFK%20on%202026-10-21%20one%20way&hl=en-US&gl=US&curr=USD",
           "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
           "sec-ch-ua-arch": "\"x86\"",
           "sec-ch-ua-bitness": "\"64\"",
@@ -177,7 +243,7 @@
           "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]",
           "x-same-domain": "1"
         },
-        "body": "f.req=%5Bnull%2C%22%5B%5Bnull%2Cnull%2Cnull%2C%5C%22HNcyLD_kSW-UAIjTzQBG---------pjtl13AAAAAGq493oMLqcAA%5C%22%5D%2C%5Bnull%2Cnull%2C2%2Cnull%2C%5B%5D%2C1%2C%5B1%2C0%2C0%2C0%5D%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B%5B%5B%5B%5C%22%7Borigin%7D%5C%22%2C0%5D%5D%5D%2C%5B%5B%5B%5C%22%7Bdestination%7D%5C%22%2C0%5D%5D%5D%2Cnull%2C0%2Cnull%2Cnull%2C%5C%22%7Bdate%7D%5C%22%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C3%5D%5D%2Cnull%2Cnull%2Cnull%2C1%5D%2C0%2C0%2C0%2C1%5D%22%5D&"
+        "body": "f.req=%5Bnull%2C%22%5Bnull%2C%5Bnull%2Cnull%2C2%2Cnull%2C%5B%5D%2C1%2C%5B1%2C0%2C0%2C0%5D%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B%5B%5B%5B%5C%22SFO%5C%22%2C0%5D%5D%5D%2C%5B%5B%5B%5C%22JFK%5C%22%2C0%5D%5D%5D%2Cnull%2C0%2Cnull%2Cnull%2C%5C%222026-10-21%5C%22%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C3%5D%5D%2Cnull%2Cnull%2Cnull%2C1%5D%2C%5B%5C%222026-09-27%5C%22%2C%5C%222026-10-31%5C%22%5D%5D%22%5D&"
       },
       "slots": [
         {
@@ -197,7 +263,23 @@
           ]
         },
         {
-          "param": "date",
+          "param": "start",
+          "at": [
+            "form:f.req",
+            "json:/1",
+            "json:/2/0"
+          ]
+        },
+        {
+          "param": "end",
+          "at": [
+            "form:f.req",
+            "json:/1",
+            "json:/2/1"
+          ]
+        },
+        {
+          "param": "start",
           "at": [
             "form:f.req",
             "json:/1",
@@ -209,7 +291,7 @@
           "at": [
             "header:referer"
           ],
-          "template": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way"
+          "template": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{start}%20one%20way&hl=en-US&gl=US&curr=USD"
         },
         {
           "ref": "session:x-goog-batchexecute-bgr",
@@ -220,29 +302,35 @@
       ],
       "volatile": [],
       "trigger": {
-        "url": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way"
+        "url": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{start}%20one%20way&hl=en-US&gl=US&curr=USD",
+        "steps": [
+          {
+            "action": "wait",
+            "ms": 2000
+          },
+          {
+            "action": "click",
+            "selector": "input[aria-label=\"Departure\"]"
+          },
+          {
+            "action": "wait",
+            "ms": 4000
+          }
+        ]
       },
       "match": {
         "method": "POST",
         "host": "www.google.com",
-        "path": "/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults"
+        "path": "/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetCalendarPicker"
       },
       "response": {
         "format": "json",
         "contentType": "application/json; charset=utf-8",
         "xssiPrefix": ")]}'",
-        "extract": "[0][0][2][2][0]",
+        "extract": "[0][0][2][1]",
         "pick": [
-          "airline=[0][1]",
-          "price=[1][0][1]",
-          "from=[0][3]",
-          "to=[0][6]",
-          "departureDate=[0][4]",
-          "departureTime=[0][5]",
-          "arrivalDate=[0][7]",
-          "arrivalTime=[0][8]",
-          "durationMinutes=[0][9]",
-          "stops=[0][13]"
+          "date=[0]",
+          "price=[2][0][1]"
         ],
         "shape": {
           "[]": "array",
@@ -255,28 +343,43 @@
           "name": "origin",
           "type": "string",
           "required": true,
-          "description": "origin airport IATA code, e.g. SFO",
-          "example": "SFO"
+          "description": "origin airport IATA code, e.g. SFO (airports only: metro codes like NYC return nothing)",
+          "example": "SFO",
+          "pattern": "^(?!(?:NYC|WAS|CHI|DTT|YTO|YMQ|YEA|LON|PAR|MIL|ROM|STO|MOW|BUH|REK|TYO|OSA|SPK|SEL|BJS|JKT|BUE|SAO|RIO|BHZ)$)[A-Z]{3}$",
+          "hint": "a 3-letter IATA airport code in capitals like JFK, not a metro code; for New York use JFK, LGA or EWR, for London LHR, LGW or STN"
         },
         {
           "name": "destination",
           "type": "string",
           "required": true,
-          "description": "destination airport IATA code, e.g. JFK",
-          "example": "JFK"
+          "description": "destination airport IATA code, e.g. JFK (airports only: metro codes like NYC return nothing)",
+          "example": "JFK",
+          "pattern": "^(?!(?:NYC|WAS|CHI|DTT|YTO|YMQ|YEA|LON|PAR|MIL|ROM|STO|MOW|BUH|REK|TYO|OSA|SPK|SEL|BJS|JKT|BUE|SAO|RIO|BHZ)$)[A-Z]{3}$",
+          "hint": "a 3-letter IATA airport code in capitals like JFK, not a metro code; for New York use JFK, LGA or EWR, for London LHR, LGW or STN"
         },
         {
-          "name": "date",
+          "name": "start",
           "type": "string",
           "required": true,
-          "description": "departure date YYYY-MM-DD, in the future",
-          "example": "2027-04-15"
+          "description": "first departure date",
+          "example": "2027-04-01",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "hint": "first departure date, as YYYY-MM-DD"
+        },
+        {
+          "name": "end",
+          "type": "string",
+          "required": true,
+          "description": "last departure date, at most about 3 months after start",
+          "example": "2027-04-30",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "hint": "last departure date, at most about 3 months after start, as YYYY-MM-DD"
         }
       ],
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false,
-      "learnedAt": "2026-09-27T11:03:15.737Z"
+      "description": "Cheapest one-way price per departure date between two airports, for every day from start to end (tested up to 3 months per call). Per item: date (YYYY-MM-DD), price (USD; missing when Google has no fare that day). Then call search/top with the cheapest date for the flights themselves."
     }
   ]
 }

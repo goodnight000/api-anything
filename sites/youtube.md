@@ -1,7 +1,10 @@
 # youtube
 
-Verified 2026-09-27, logged out, with `api-anything verify youtube` passing twice from a clean
-`API_ANYTHING_HOME` (no cookies). No account is needed.
+Verified 2026-09-27, logged out, with `api-anything verify youtube` passing from a clean
+`API_ANYTHING_HOME` (no cookies). Then, with YouTube's cookies (`VISITOR_INFO1_LIVE`) in the jar,
+eight queries in a row (`kittens`, `rust programming`, `café crème`, `iphone 17 review`, `best vpn`,
+`running shoes`, `car insurance`, `lofi hip hop`) each returned 20 videos with no `{}` items. No
+account is needed.
 
 | op | args | returns | tier |
 |---|---|---|---|
@@ -27,6 +30,7 @@ rotating ids, so it needs no healing in the common case.
   `searchPyvRenderer` ad, a shelf, one or two videos), an `adSlotRenderer` section, then the main
   list. The extract path uses `contents[*]`, which joins the videos of every section, and `pick`
   drops the ad and shelf items, so the call returns only videos either way.
-- `views` is page text (`"148,107 views"`). Only the first page of results (about 20) is included.
+- `views` is page text (`"148,107 views"`). A live stream has no `views` (its count is
+  "N watching", in another field). Only the first page of results (about 20) is included.
 - The innertube search POST (`/youtubei/v1/search`) sends a gzip-compressed body; api-anything now
   decodes such bodies, but this op keeps to the document, which needs no client context.
