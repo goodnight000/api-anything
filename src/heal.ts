@@ -4,7 +4,7 @@
  */
 import { join } from "node:path";
 import { chromeAvailable, ProfileInUse, runTrigger } from "./browser.js";
-import { judge, type Class } from "./classify.js";
+import { botWall, judge, type Class } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
@@ -283,6 +283,18 @@ export function putOperation(site: Site, op: Operation): Site {
   return { ...site, operations: [...rest, op] };
 }
 
+/** learnOperation, but a failure on a page that was a bot wall says so (the recipe or the pick is not the problem). */
+function learnOrExplain(site: string, run: CaptureResult, input: Parameters<typeof learnOperation>[0]): ReturnType<typeof learnOperation> {
+  try {
+    return learnOperation(input);
+  } catch (e) {
+    const doc = run.exchanges.filter((x) => x.resourceType === "document" && x.response).at(-1);
+    const wall = doc?.response && botWall({ status: doc.response.status, headers: doc.response.headers, body: doc.response.body ?? "" });
+    if (wall) throw new Error(`the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} and clear it, then add again`);
+    throw e;
+  }
+}
+
 /** The recipe finds data in this body (a non-empty list, or a value). */
 function resolves(spec: ResponseSpec, body: string | undefined): boolean {
   if (!body) return false;
@@ -350,7 +362,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   }
   const r = i.response ?? {};
   const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
-  const learned = learnOperation({
+  const learned = learnOrExplain(i.site, run1, {
     exchanges: run1.exchanges,
     exchanges2: run2?.exchanges,
     examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
