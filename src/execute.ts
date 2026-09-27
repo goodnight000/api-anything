@@ -9,6 +9,7 @@ import { capOutput } from "./extract.js";
 import { healOperation, judgeExchange, profileDir, runOpTrigger, type Attempt, type HealResult } from "./heal.js";
 import { buildRequest, send } from "./http.js";
 import { cookieHeaderFor, loadSession, saveSession } from "./session.js";
+import { reimportIfBrowser } from "./login.js";
 import type { Operation, Site } from "./spec.js";
 import { lastHealAt, loadSite, markStale, rememberTier, rememberedTier, staleMark } from "./store.js";
 
@@ -268,8 +269,12 @@ export async function call(siteName: string, opName: string, args: Record<string
       tier++;
       continue;
     }
-    if (a.class === "auth" && tier === 1 && !authTried && ctx.maxTier > 1) {
+    if (a.class === "auth" && tier === 1 && !authTried) {
       authTried = true;
+      // An imported session is a mirror of the everyday browser: silently re-import from the same
+      // profile once (browserless), in case the human re-signed in there. Then retry.
+      if (await reimportIfBrowser(siteName, op.request.url, site.loginCookies)) continue;
+      if (ctx.maxTier <= 1) return fail();
       if (await refreshCookies(siteName, op)) continue;
       // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
       // refreshes them, and for a read its answer is this call's answer.

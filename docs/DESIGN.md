@@ -190,10 +190,48 @@ whose keys can be user data; typed example values in the request become null), a
 exact-match secret scan against live jar/session values plus regex heuristics. Headers an op
 lists in `public` (marked by a human) are allowed.
 
+## Logging in (`login.ts`, `import.ts`)
+
+The easiest sign-in is the one the user already did. `api-anything login <site|url>` by default
+**imports** that site's cookies from the user's everyday browser, so there is no password to type
+and no 2FA/captcha to redo — the human solved those in their own browser already.
+
+- **Chromium family** (Chrome, Arc, Brave, Edge, Chromium, Vivaldi; macOS + Linux). The cookie DB
+  is copied to a temp dir first (the browser holds it open), then read with `node:sqlite`. Cookie
+  *names* are plaintext, so the right profile is chosen with no decryption and no Keychain prompt;
+  only the chosen profile's *values* are decrypted, so at most one macOS Keychain dialog appears.
+  Values are `v10`-prefixed AES-128-CBC (IV = 16 spaces) under PBKDF2-SHA1(password, `"saltysalt"`,
+  1003, 16). The password is the "<Browser> Safe Storage" Keychain item on macOS, `"peanuts"` (1
+  iteration) for Linux v10. When the DB's `meta.version >= 24` the plaintext is prefixed by a 32-byte
+  SHA-256 of `host_key`, which is stripped. `expires_utc` is microseconds since 1601.
+- **Firefox**: `cookies.sqlite` `moz_cookies` is plaintext on every OS.
+- **Windows chromium** uses app-bound encryption and is not supported: `login` falls back to the window.
+- **Profile choice**: scan every profile of every installed browser; pick the one that has the
+  site's `loginCookies` (or, for an unknown site, the most recently used profile with cookies for the
+  site). `--profile "Chrome/Profile 2"` overrides. Only cookies whose domain is the site's are read.
+  The chosen source (`"chrome:Profile 2"`, `"window"`, `"file"`) is recorded in the session file.
+- Imported cookies go into the jar **and** into api-anything's own Chrome profile (`addCookies`), so
+  tier 2/3 and heals are logged in too.
+- `--window` opens a visible Chrome window on api-anything's profile for a by-hand sign-in (an
+  independent session). It is also the automatic fallback when nothing is importable.
+- `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON array (Cookie-Editor / Playwright)
+  export, for servers/CI with no browser.
+- **Self-healing auth**: when a call classifies `auth` and the session came from a browser import,
+  the same profile is silently re-imported once (browserless) and the call retried; only if it is
+  still `auth` does the result carry the "run `api-anything login`" hint.
+- **`logout <site>`** clears the jar and that site's cookies in the profile.
+
+`node:sqlite` is chosen over the `sqlite3` CLI: it is built in (no dependency, present on every
+Node ≥ 22.13, which the `engines` floor now requires; its one ExperimentalWarning is silenced) and
+returns the encrypted BLOB as bytes directly, where the CLI would need `hex()` plus escaping of
+binary output. An imported session is the **same** session as the everyday browser: if the site
+revokes it, both are logged out, so heavy headless automation on it is avoided; `--window` is the
+independent alternative.
+
 ## Agent interface
 
 - **CLI** `api-anything`:
-  - `login <site|url>`
+  - `login <site|url> [--profile "Chrome/Profile 2"] [--window] [--cookies <file>]`, `logout <site>`
   - `capture <url> [--steps ...] [--interactive]` prints a compact, noise-filtered list of candidate
     requests with ids
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--write]`
@@ -205,7 +243,8 @@ lists in `public` (marked by a human) are allowed.
   - `sites`, `ops <site>`, `heal <site> <op>`, `export <site>`, `mcp`
   - All output is JSON-first, compact, and ends with a `next` hint on failure.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `list_operations`,
-  `call_operation`, so the tool list costs the same at 2 sites or 200. Writes are hidden unless
+  `call_operation`, and `login` (so an agent can fix an `auth` failure itself: mode import or
+  window), so the tool list costs the same at 2 sites or 200. Writes are hidden unless
   it is started with `--allow-writes`.
 - **Skill** `skills/api-anything/SKILL.md`: the create loop (capture → add → call → verify), the
   strict failure loop (follow `next` at most once, then stop and report), and the safety rules.
@@ -215,4 +254,5 @@ lists in `public` (marked by a human) are allowed.
 ## Non-goals (v1)
 
 TLS impersonation transports, CAPTCHA solving, signature reimplementation, seroval parsing,
-a hosted registry or marketplace, typed-client codegen, reading the user's real Chrome cookie DB.
+a hosted registry or marketplace, typed-client codegen, and Windows app-bound cookie decryption
+(login falls back to `--window` there).

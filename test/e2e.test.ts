@@ -17,6 +17,8 @@ import { addOperation, capturePage, profileDir } from "../src/heal.js";
 import { loadSession, saveSession } from "../src/session.js";
 import { rememberedTier, staleMark } from "../src/store.js";
 import { PUBLIC_BEARER, startFixture, type Fixture } from "./fixture/server.js";
+import { makeChromiumDb } from "./fixture/cookie-db.js";
+import { importSession } from "../src/login.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-e2e-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -214,7 +216,7 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     );
     try {
       const tools = await client.listTools();
-      assert.deepEqual(tools.tools.map((t) => t.name).sort(), ["call_operation", "list_operations", "list_sites"]);
+      assert.deepEqual(tools.tools.map((t) => t.name).sort(), ["call_operation", "list_operations", "list_sites", "login"]);
       assert.equal(tools.tools.find((t) => t.name === "call_operation")?.annotations?.readOnlyHint, true);
 
       const text = (r: Awaited<ReturnType<typeof client.callTool>>) => JSON.parse((r.content as { text: string }[])[0]!.text);
@@ -302,6 +304,38 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     assert.equal(again.tier, 2);
     assert.match(again.reason ?? "", /started at tier 2/);
     assert.equal(rememberedTier(SITE, "walled"), 2);
+  });
+
+  test("18. login imports the session from the browser; a revoke + fresh cookie self-heals by re-import", async () => {
+    const host = new URL(fx.url).hostname; // 127.0.0.1
+    const browserRoot = mkdtempSync(join(tmpdir(), "aa-e2e-browser-"));
+    const writeSession = (token: string) => makeChromiumDb(join(browserRoot, "Default"), [{ host_key: host, name: "session", value: token }], { password: "pw" });
+    const first = fx.mintSession();
+    writeSession(first);
+    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([{ name: "Chrome", family: "chromium", root: browserRoot, password: "pw" }]);
+    try {
+      // Learn the op while the profile is signed in, so its response format is JSON not the login wall.
+      await runTrigger({ url: `${fx.url}/login`, profileDir: profileDir() });
+      await addOperation({ site: SITE, op: "secret2", trigger: { url: `${fx.url}/private` }, examples: [{}], match: { path: "/private" }, response: { extract: "data" } });
+
+      // login by import: browserless, no Keychain (password injected), no profile push
+      const imported = await importSession(SITE, `${fx.url}/`, { pushProfile: false });
+      assert.equal(imported?.source, "chrome:Default");
+      assert.equal(loadSession(SITE).source, "chrome:Default");
+
+      let res = await call(SITE, "secret2", {}, { ...fast, maxTier: 1 });
+      assert.equal(res.ok, true, JSON.stringify(res));
+      assert.deepEqual(res.data, { secret: "only for you" });
+
+      // the server logs the session out; the human re-signs in, so the browser DB now holds a fresh cookie
+      fx.revoke(first);
+      writeSession(fx.mintSession());
+      res = await call(SITE, "secret2", {}, { ...fast, maxTier: 1 });
+      assert.equal(res.ok, true, JSON.stringify(res), "self-healed by re-importing from the same profile");
+    } finally {
+      delete process.env.API_ANYTHING_BROWSER_ROOTS;
+      rmSync(browserRoot, { recursive: true, force: true });
+    }
   });
 
   test("17. capture's next hint points at inspect and --html when the best candidate is the page itself", async () => {

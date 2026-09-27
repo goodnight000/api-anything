@@ -1,0 +1,342 @@
+/**
+ * Import a site's cookies from the user's everyday browser, so `login` needs no password:
+ * they are almost always already signed in there (2FA/captcha done by the human).
+ *
+ * Chromium family: cookie DB names are plaintext (so the right profile is chosen with no
+ * decryption and no Keychain prompt); values are AES-128-CBC under a key derived from the
+ * browser's Safe Storage password. Firefox: plaintext moz_cookies. Only the chosen profile is
+ * decrypted, so at most one macOS Keychain dialog appears.
+ *
+ * node:sqlite is used over the sqlite3 CLI: it is built in (no extra dependency, present on every
+ * Node >= 22.5), and it returns the encrypted BLOB as a Buffer directly, where the CLI would need
+ * hex() plus escaping of binary output.
+ */
+import { execFileSync } from "node:child_process";
+import { pbkdf2Sync, createDecipheriv } from "node:crypto";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { siteOf } from "./session.js";
+import type { StoredCookie } from "./types.js";
+
+// node:sqlite is still flagged "experimental" and prints a warning on first use; drop just that one.
+const realEmitWarning = process.emitWarning.bind(process);
+process.emitWarning = ((w: unknown, ...rest: unknown[]) => {
+  const msg = typeof w === "string" ? w : (w as Error)?.message;
+  if (typeof msg === "string" && msg.includes("SQLite is an experimental")) return;
+  return (realEmitWarning as (...a: unknown[]) => void)(w, ...rest);
+}) as typeof process.emitWarning;
+
+/** One installed browser to scan. Tests inject these via API_ANYTHING_BROWSER_ROOTS. */
+export interface BrowserRoot {
+  /** display name, also the Keychain service prefix: "<name> Safe Storage" */
+  name: string;
+  family: "chromium" | "firefox";
+  /** user-data dir (chromium) or profiles dir (firefox) */
+  root: string;
+  /** overrides the OS key lookup (test injection; also Linux "peanuts") */
+  password?: string;
+  /** PBKDF2 iterations (chromium): macOS 1003, Linux v10 1 */
+  iterations?: number;
+}
+
+export interface ImportedSession {
+  cookies: StoredCookie[];
+  /** "<browser-lower>:<profile>", e.g. "chrome:Profile 2"; recorded so a heal re-imports the same one */
+  source: string;
+  browser: string;
+  profile: string;
+}
+
+const CHROMIUM_MAC: [string, string][] = [
+  ["Chrome", "Google/Chrome"],
+  ["Chrome Beta", "Google/Chrome Beta"],
+  ["Brave", "BraveSoftware/Brave-Browser"],
+  ["Edge", "Microsoft Edge"],
+  ["Arc", "Arc/User Data"],
+  ["Chromium", "Chromium"],
+  ["Vivaldi", "Vivaldi"],
+];
+// The Keychain service is "<x> Safe Storage" where x differs from the display name for a few.
+const SAFE_STORAGE: Record<string, string> = { Brave: "Brave", Edge: "Microsoft Edge", Arc: "Arc", Chromium: "Chromium", Vivaldi: "Vivaldi" };
+
+/** Installed browsers on this OS, or the injected set for tests. */
+export function browserRoots(): BrowserRoot[] {
+  const injected = process.env.API_ANYTHING_BROWSER_ROOTS;
+  if (injected) return JSON.parse(injected) as BrowserRoot[];
+  const out: BrowserRoot[] = [];
+  const home = process.env.HOME || "";
+  if (process.platform === "darwin") {
+    const support = join(home, "Library", "Application Support");
+    for (const [name, rel] of CHROMIUM_MAC) {
+      const root = join(support, rel);
+      if (existsSync(root)) out.push({ name, family: "chromium", root });
+    }
+    const ff = join(support, "Firefox", "Profiles");
+    if (existsSync(ff)) out.push({ name: "Firefox", family: "firefox", root: ff });
+  } else if (process.platform === "linux") {
+    const config = process.env.XDG_CONFIG_HOME || join(home, ".config");
+    for (const [name, rel] of [["Chrome", "google-chrome"], ["Chromium", "chromium"], ["Brave", "BraveSoftware/Brave-Browser"], ["Edge", "microsoft-edge"]] as const) {
+      const root = join(config, rel);
+      // Linux v10 is AES under a fixed password; v11 (secret-tool) is not attempted here.
+      if (existsSync(root)) out.push({ name, family: "chromium", root, password: "peanuts", iterations: 1 });
+    }
+    const ff = join(home, ".mozilla", "firefox");
+    if (existsSync(ff)) out.push({ name: "Firefox", family: "firefox", root: ff });
+  }
+  // Windows chromium uses app-bound encryption (DPAPI + more): not supported; login falls back to --window.
+  return out;
+}
+
+/** The `security` Keychain lookup for a browser's Safe Storage password (may show a macOS dialog). */
+function keychainPassword(name: string): string {
+  const service = `${SAFE_STORAGE[name] ?? name} Safe Storage`;
+  try {
+    return execFileSync("security", ["find-generic-password", "-w", "-s", service], { encoding: "utf8" }).trim();
+  } catch (e) {
+    throw new Error(`could not read the "${service}" password from the macOS Keychain (${(e as Error).message.split("\n")[0]})`);
+  }
+}
+
+/** Copy a locked DB (plus -wal/-journal) to a temp dir and open it read-only. */
+function withDb<T>(dbPath: string, fn: (db: DatabaseSync) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "aa-cookies-"));
+  try {
+    const copy = join(dir, basename(dbPath));
+    copyFileSync(dbPath, copy);
+    for (const ext of ["-wal", "-journal", "-shm"]) if (existsSync(dbPath + ext)) copyFileSync(dbPath + ext, copy + ext);
+    const db = new DatabaseSync(copy, { readOnly: true });
+    try {
+      return fn(db);
+    } finally {
+      db.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** A chromium profile's cookie DB is <profile>/Network/Cookies (modern) or <profile>/Cookies. */
+function chromiumCookieDb(profileDir: string): string | undefined {
+  for (const p of [join(profileDir, "Network", "Cookies"), join(profileDir, "Cookies")]) if (existsSync(p)) return p;
+  return undefined;
+}
+
+interface Candidate {
+  browser: string;
+  profile: string;
+  family: "chromium" | "firefox";
+  root: BrowserRoot;
+  dbPath: string;
+  /** cookie names present for the site (plaintext, no decryption) */
+  names: Set<string>;
+  mtimeMs: number;
+}
+
+/** Every profile of every browser that holds at least one cookie for the site's registrable domain. */
+function candidatesFor(site: string): Candidate[] {
+  const out: Candidate[] = [];
+  for (const root of browserRoots()) {
+    if (root.family === "firefox") {
+      for (const entry of safeReaddir(root.root)) {
+        const db = join(root.root, entry, "cookies.sqlite");
+        if (!existsSync(db)) continue;
+        const names = firefoxNames(db, site);
+        if (names.size) out.push({ browser: root.name, profile: entry, family: "firefox", root, dbPath: db, names, mtimeMs: statSync(db).mtimeMs });
+      }
+      continue;
+    }
+    for (const entry of safeReaddir(root.root)) {
+      const profileDir = join(root.root, entry);
+      const db = chromiumCookieDb(profileDir);
+      if (!db) continue;
+      const names = chromiumNames(db, site);
+      if (names.size) out.push({ browser: root.name, profile: entry, family: "chromium", root, dbPath: db, names, mtimeMs: statSync(db).mtimeMs });
+    }
+  }
+  return out;
+}
+
+function safeReaddir(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return [];
+  }
+}
+
+/** true when a cookie's host_key/host belongs to the site's registrable domain. */
+const belongs = (host: string, site: string) => {
+  const h = host.replace(/^\./, "").toLowerCase();
+  return h === site || h.endsWith("." + site) || siteOf(h) === site;
+};
+
+function chromiumNames(dbPath: string, site: string): Set<string> {
+  return withDb(dbPath, (db) => {
+    const rows = db.prepare("SELECT host_key, name FROM cookies").all() as { host_key: string; name: string }[];
+    return new Set(rows.filter((r) => belongs(r.host_key, site)).map((r) => r.name));
+  });
+}
+
+function firefoxNames(dbPath: string, site: string): Set<string> {
+  return withDb(dbPath, (db) => {
+    const rows = db.prepare("SELECT host, name FROM moz_cookies").all() as { host: string; name: string }[];
+    return new Set(rows.filter((r) => belongs(r.host, site)).map((r) => r.name));
+  });
+}
+
+const CHROME_EPOCH_OFFSET = 11644473600; // seconds between 1601-01-01 and 1970-01-01
+const SAMESITE: Record<number, StoredCookie["sameSite"]> = { 0: "None", 1: "Lax", 2: "Strict" };
+
+function deriveKey(password: string, iterations: number): Buffer {
+  return pbkdf2Sync(password, "saltysalt", iterations, 16, "sha1");
+}
+
+/** Decrypt one chromium encrypted_value; meta.version >= 24 prefixes 32 bytes (SHA-256 of host_key). */
+function decryptChromium(raw: Uint8Array, key: Buffer, metaVersion: number): string | undefined {
+  if (!raw || raw.length === 0) return "";
+  const blob = Buffer.from(raw); // node:sqlite hands back a Uint8Array, whose toString ignores encodings
+  const prefix = blob.subarray(0, 3).toString("latin1");
+  if (prefix !== "v10" && prefix !== "v11") return blob.toString("utf8"); // unencrypted (older Linux)
+  try {
+    const iv = Buffer.alloc(16, 0x20); // 16 spaces
+    const d = createDecipheriv("aes-128-cbc", key, iv);
+    let out = Buffer.concat([d.update(blob.subarray(3)), d.final()]);
+    if (metaVersion >= 24) out = out.subarray(32);
+    return out.toString("utf8");
+  } catch {
+    return undefined; // wrong key: skip this cookie rather than fail the whole import
+  }
+}
+
+function readChromium(root: BrowserRoot, dbPath: string, site: string): StoredCookie[] {
+  const iterations = root.iterations ?? (process.platform === "linux" ? 1 : 1003);
+  const password = root.password ?? keychainPassword(root.name);
+  const key = deriveKey(password, iterations);
+  return withDb(dbPath, (db) => {
+    const metaRow = db.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value: string | number } | undefined;
+    const metaVersion = metaRow ? Number(metaRow.value) : 0;
+    const rows = db
+      .prepare("SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite FROM cookies")
+      .all() as {
+      host_key: string; name: string; value: string; encrypted_value: Uint8Array; path: string; expires_utc: number; is_secure: number; is_httponly: number; samesite: number;
+    }[];
+    const out: StoredCookie[] = [];
+    for (const r of rows) {
+      if (!belongs(r.host_key, site)) continue;
+      const value = r.value || decryptChromium(r.encrypted_value, key, metaVersion);
+      if (value === undefined || value === "") continue;
+      out.push({
+        name: r.name,
+        value,
+        domain: r.host_key,
+        path: r.path || "/",
+        expires: r.expires_utc ? Math.floor(r.expires_utc / 1_000_000 - CHROME_EPOCH_OFFSET) : -1,
+        httpOnly: !!r.is_httponly,
+        secure: !!r.is_secure,
+        sameSite: SAMESITE[r.samesite],
+      });
+    }
+    return out;
+  });
+}
+
+function readFirefox(dbPath: string, site: string): StoredCookie[] {
+  return withDb(dbPath, (db) => {
+    const rows = db.prepare("SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite FROM moz_cookies").all() as {
+      host: string; name: string; value: string; path: string; expiry: number; isSecure: number; isHttpOnly: number; sameSite: number;
+    }[];
+    return rows
+      .filter((r) => belongs(r.host, site))
+      .map((r) => ({
+        name: r.name,
+        value: r.value,
+        domain: r.host,
+        path: r.path || "/",
+        expires: r.expiry || -1, // Firefox expiry is unix seconds
+        httpOnly: !!r.isHttpOnly,
+        secure: !!r.isSecure,
+        sameSite: SAMESITE[r.sameSite],
+      }));
+  });
+}
+
+export interface ImportPin {
+  browser?: string;
+  profile: string;
+}
+
+/** Parse `--profile "Chrome/Profile 2"` or a session source "chrome:Profile 2" into a pin. */
+export function parsePin(text: string): ImportPin {
+  const sep = text.includes("/") ? "/" : ":";
+  const i = text.indexOf(sep);
+  if (i === -1) return { profile: text };
+  return { browser: text.slice(0, i), profile: text.slice(i + 1) };
+}
+
+const matchesPin = (c: Candidate, pin: ImportPin) => c.profile === pin.profile && (!pin.browser || c.browser.toLowerCase() === pin.browser.toLowerCase());
+
+/**
+ * Import the site's cookies from the everyday browser. Chooses the profile with all `loginCookies`
+ * (or, for an unknown site, the most recently used profile with cookies for the site), unless `pin`
+ * fixes one. Returns undefined when nothing is importable (caller falls back to the window flow).
+ */
+export function importFromBrowsers(o: { url: string; loginCookies?: string[]; pin?: ImportPin }): ImportedSession | undefined {
+  const site = siteOf(new URL(o.url).hostname.toLowerCase());
+  let candidates = candidatesFor(site).sort((a, b) => b.mtimeMs - a.mtimeMs); // most recently used first
+  if (o.pin) {
+    candidates = candidates.filter((c) => matchesPin(c, o.pin!));
+    if (!candidates.length) throw new Error(`no browser profile "${o.pin.browser ? `${o.pin.browser}/` : ""}${o.pin.profile}" has cookies for ${site}`);
+  }
+  const login = o.loginCookies?.length ? candidates.filter((c) => o.loginCookies!.every((n) => c.names.has(n))) : [];
+  const chosen = login[0] ?? candidates[0];
+  if (!chosen) return undefined;
+  const cookies = chosen.family === "chromium" ? readChromium(chosen.root, chosen.dbPath, site) : readFirefox(chosen.dbPath, site);
+  if (!cookies.length) return undefined;
+  return { cookies, source: `${chosen.browser.toLowerCase()}:${chosen.profile}`, browser: chosen.browser, profile: chosen.profile };
+}
+
+/* --------------------------------------------------------------- file import */
+
+/** Parse a cookies.txt (Netscape) or JSON array (Cookie-Editor / Playwright shape) export. */
+export function cookiesFromFile(text: string, url: string): StoredCookie[] {
+  const trimmed = text.trim();
+  const host = new URL(url).hostname;
+  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+    const parsed = JSON.parse(trimmed);
+    const arr = Array.isArray(parsed) ? parsed : (parsed.cookies ?? []);
+    return (arr as Record<string, unknown>[]).map((c) => normalizeJson(c, host));
+  }
+  // Netscape columns: domain, includeSubdomains, path, secure, expiry, name, value.
+  // A leading "#HttpOnly_" on the domain marks an http-only cookie (curl/yt-dlp convention).
+  return trimmed
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter((l) => l && (!l.startsWith("#") || l.startsWith("#HttpOnly_")))
+    .map((l) => l.split("\t"))
+    .filter((f) => f.length >= 7)
+    .map((f) => ({
+      name: f[5]!,
+      value: f[6]!,
+      domain: f[0]!.replace(/^#HttpOnly_/, ""),
+      path: f[2] || "/",
+      expires: Number(f[4]) || -1,
+      httpOnly: f[0]!.startsWith("#HttpOnly_"),
+      secure: f[3]?.toUpperCase() === "TRUE",
+    }));
+}
+
+function normalizeJson(c: Record<string, unknown>, host: string): StoredCookie {
+  const exp = (c.expires ?? c.expirationDate) as number | undefined;
+  return {
+    name: String(c.name),
+    value: String(c.value),
+    domain: String(c.domain ?? host),
+    path: String(c.path ?? "/"),
+    expires: typeof exp === "number" ? Math.floor(exp) : -1,
+    httpOnly: !!c.httpOnly,
+    secure: !!c.secure,
+    sameSite: (c.sameSite as StoredCookie["sameSite"]) || undefined,
+  };
+}

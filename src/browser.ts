@@ -114,6 +114,32 @@ export async function profileCookies({ url, profileDir }: { url: string; profile
   return siteCookies(await ctx.cookies(), url);
 }
 
+/** Put imported cookies into api-anything's own Chrome profile, so tier 2/3 and heals are logged in too. */
+export async function addCookiesToProfile(cookies: StoredCookie[], profileDir: string): Promise<void> {
+  if (!cookies.length) return;
+  const ctx = await openBrowser({ profileDir });
+  // Playwright wants a domain that starts with a dot or an exact host; a leading-dot domain plus path is safe.
+  await ctx.addCookies(
+    cookies.map((c) => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      path: c.path || "/",
+      expires: c.expires > 0 ? c.expires : undefined,
+      httpOnly: c.httpOnly,
+      secure: c.secure,
+      sameSite: c.sameSite,
+    })),
+  );
+}
+
+/** Clear one site's cookies from the profile: any host under the registrable domain. */
+export async function clearProfileCookies(site: string, profileDir: string): Promise<void> {
+  const ctx = await openBrowser({ profileDir });
+  const esc = site.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  await ctx.clearCookies({ domain: new RegExp(`(^|\\.)${esc}$`) });
+}
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 // Binary resources: their bodies are never useful to the learner and are not valid UTF-8.
 const NO_BODY = new Set(["image", "media", "font", "stylesheet"]);
@@ -320,7 +346,7 @@ export async function pageFetch(o: {
  * Open `url` headed so the user can sign in. Resolves when they close the window or press Enter
  * in the terminal; what counts as logged in is the caller's call. Returns the site's cookies.
  */
-export async function login({ url, profileDir }: { url: string; profileDir: string }): Promise<StoredCookie[]> {
+export async function login({ url, profileDir, waitForEnter = true }: { url: string; profileDir: string; waitForEnter?: boolean }): Promise<StoredCookie[]> {
   const ctx = await openBrowser({ profileDir, headless: false });
   const page = ctx.pages()[0] ?? (await ctx.newPage());
   await page.goto(url);
@@ -333,14 +359,19 @@ export async function login({ url, profileDir }: { url: string; profileDir: stri
       onEnter = resolve;
       ctx.once("close", () => resolve());
       page.once("close", () => resolve());
-      process.stdin.once("data", onEnter);
-      process.stdin.resume();
+      // The MCP server's stdin is its transport; only the CLI reads Enter.
+      if (waitForEnter) {
+        process.stdin.once("data", onEnter);
+        process.stdin.resume();
+      }
     });
     snapshot = await ctx.cookies().catch(() => snapshot);
   } finally {
     clearInterval(poll);
-    process.stdin.off("data", onEnter);
-    process.stdin.pause();
+    if (waitForEnter) {
+      process.stdin.off("data", onEnter);
+      process.stdin.pause();
+    }
     await closeBrowser();
   }
   return siteCookies(snapshot, url);

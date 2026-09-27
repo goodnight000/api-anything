@@ -6,8 +6,11 @@ import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { closeBrowser } from "./browser.js";
+import { closeBrowser, login } from "./browser.js";
 import { call } from "./execute.js";
+import { profileDir } from "./heal.js";
+import { cookieNames, importSession, loggedIn, resolveLoginTarget } from "./login.js";
+import { loadSession, saveSession } from "./session.js";
 import { listSites, loadSite } from "./store.js";
 
 export const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -77,6 +80,50 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     async ({ site, op, args }) => {
       const r = await call(site, op, args ?? {}, { allowWrites });
       return reply(r, !r.ok);
+    },
+  );
+
+  server.registerTool(
+    "login",
+    {
+      description:
+        "Sign in to a site so its operations work; use after a call returns class 'auth'. mode 'import' (default) copies the session from the user's everyday browser (no password); 'window' opens a visible browser for the user to sign in and clear 2FA/captcha by hand.",
+      inputSchema: {
+        site: z.string().optional().describe("site name from list_sites"),
+        url: z.string().optional().describe("a full URL, if the site is not yet known"),
+        mode: z.enum(["import", "window"]).optional(),
+      },
+      annotations: { openWorldHint: true },
+    },
+    async ({ site, url, mode }) => {
+      const target = site ?? url;
+      if (!target) return reply({ error: "give a site or a url" }, true);
+      let t: ReturnType<typeof resolveLoginTarget>;
+      try {
+        t = resolveLoginTarget(target);
+      } catch (e) {
+        return reply({ error: (e as Error).message, next: "list_sites" }, true);
+      }
+      if (mode === "window") {
+        const cookies = await login({ url: t.url, profileDir: profileDir(), waitForEnter: false });
+        saveSession(t.site, { ...loadSession(t.site), cookies, source: "window" });
+        return reply({ ok: true, site: t.site, source: "window", cookies: cookieNames(cookies), loggedIn: loggedIn(cookies, t.loginCookies) });
+      }
+      let imported;
+      try {
+        imported = await importSession(t.site, t.url, { loginCookies: t.loginCookies });
+      } catch (e) {
+        return reply({ ok: false, site: t.site, error: (e as Error).message, next: `ask the user to run: api-anything login ${t.site} --window` }, true);
+      }
+      if (!imported) return reply({ ok: false, site: t.site, error: "no signed-in session found in the user's browsers", next: `ask the user to run: api-anything login ${t.site} --window` }, true);
+      return reply({
+        ok: true,
+        site: t.site,
+        source: imported.source,
+        ...(imported.source !== "file" ? { profile: `${imported.browser}/${imported.profile}` } : {}),
+        cookies: cookieNames(imported.cookies),
+        loggedIn: loggedIn(imported.cookies, t.loginCookies),
+      });
     },
   );
   return server;

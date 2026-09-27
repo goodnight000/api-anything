@@ -25,6 +25,10 @@ export interface Fixture {
   calls: FixtureCall[];
   /** current queryIds and bundle hash, for assertions */
   state: { userQueryId: string; createQueryId: string; build: string };
+  /** invalidate one /private session token (server-side logout) */
+  revoke(token: string): void;
+  /** mint a fresh valid session token, as /login would (stands in for a re-login in the browser) */
+  mintSession(): string;
   close(): Promise<void>;
 }
 
@@ -127,6 +131,8 @@ export async function startFixture(): Promise<Fixture> {
   const state = { userQueryId: id22(), createQueryId: id22(), build: randomBytes(4).toString("hex") };
   const calls: FixtureCall[] = [];
   const seenSigs = new Set<string>();
+  const revoked = new Set<string>();
+  const mint = () => randomBytes(12).toString("hex");
   let requireSignature = false;
   let limitedHits = 0;
 
@@ -175,10 +181,11 @@ export async function startFixture(): Promise<Fixture> {
     if (p === `/static/app.${state.build}.js`) return send(res, 200, "application/javascript", appJs(state));
 
     if (p === "/login") {
-      return send(res, 302, "text/plain", "", { location: "/private", "set-cookie": `session=${randomBytes(12).toString("hex")}; Path=/; HttpOnly; SameSite=Lax` });
+      return send(res, 302, "text/plain", "", { location: "/private", "set-cookie": `session=${mint()}; Path=/; HttpOnly; SameSite=Lax` });
     }
-    // Login wall returned as 200 HTML where JSON is expected, as Instagram does.
-    if (p === "/private") return jar.session ? json(res, 200, { data: { secret: "only for you" } }) : html(200, LOGIN_PAGE);
+    // Login wall returned as 200 HTML where JSON is expected, as Instagram does. A revoked session
+    // (present but no longer valid) is a login wall too, which is how self-heal by re-import is tested.
+    if (p === "/private") return jar.session && !revoked.has(jar.session) ? json(res, 200, { data: { secret: "only for you" } }) : html(200, LOGIN_PAGE);
 
     if ((m = p.match(/^\/api\/graphql\/([^/]+)\/(UserByName|CreatePost)$/))) {
       const [, qid, op] = m;
@@ -258,6 +265,10 @@ export async function startFixture(): Promise<Fixture> {
     setRequireSignature(on) {
       requireSignature = on;
     },
+    revoke(token) {
+      revoked.add(token);
+    },
+    mintSession: mint,
     close() {
       server.closeAllConnections();
       return new Promise((resolve) => server.close(() => resolve()));
