@@ -8,6 +8,8 @@ export interface Session {
   cookies: StoredCookie[];
   /** values of session: refs (auth/anti-bot headers), refreshed by every capture */
   values: Record<string, string>;
+  /** where the cookies came from: "<browser>:<profile>" (import), "window", or "file"; drives self-heal re-import */
+  source?: string;
   updatedAt?: string;
 }
 
@@ -46,7 +48,7 @@ const sessionFile = (site: string) => join(home(), "sessions", `${safeName(site)
 
 export function loadSession(site: string): Session {
   const s = readJson<Partial<Session>>(sessionFile(site), {});
-  return { cookies: s.cookies ?? [], values: s.values ?? {}, updatedAt: s.updatedAt };
+  return { cookies: s.cookies ?? [], values: s.values ?? {}, source: s.source, updatedAt: s.updatedAt };
 }
 
 export function saveSession(site: string, s: Session): void {
@@ -61,7 +63,7 @@ export function mergeCapture(site: string, cookies: StoredCookie[], values: Reco
   const key = (c: StoredCookie) => `${c.name}\0${c.domain.toLowerCase()}\0${c.path}`;
   const jar = new Map(s.cookies.map((c) => [key(c), c]));
   for (const c of cookies) jar.set(key(c), c);
-  const merged = { cookies: [...jar.values()].filter((c) => !expired(c, now)), values: { ...s.values, ...values } };
+  const merged = { cookies: [...jar.values()].filter((c) => !expired(c, now)), values: { ...s.values, ...values }, source: s.source };
   saveSession(site, merged);
   return merged;
 }

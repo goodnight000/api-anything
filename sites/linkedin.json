@@ -1,0 +1,122 @@
+{
+  "name": "linkedin",
+  "displayName": "LinkedIn",
+  "baseUrl": "https://www.linkedin.com",
+  "description": "LinkedIn read operations over the Voyager API. Needs login: run `api-anything login linkedin` to import your session from Chrome.",
+  "loginCookies": [
+    "li_at",
+    "JSESSIONID"
+  ],
+  "operations": [
+    {
+      "name": "getMe",
+      "description": "The signed-in member's own mini profile (name, headline, public identifier). Confirms the imported session is live.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.linkedin.com/voyager/api/me",
+        "headers": {
+          "accept": "application/vnd.linkedin.normalized+json+2.1",
+          "accept-language": "en-US,en;q=0.9",
+          "csrf-token": "",
+          "x-restli-protocol-version": "2.0.0",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "ref": "cookie:JSESSIONID",
+          "at": [
+            "header:csrf-token"
+          ],
+          "transform": "strip-quotes"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.linkedin.com/feed/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.linkedin.com",
+        "path": "/voyager/api/me"
+      },
+      "response": {
+        "format": "json",
+        "extract": "included[0]",
+        "pick": [
+          "firstName",
+          "lastName",
+          "occupation",
+          "publicIdentifier"
+        ]
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": true
+    },
+    {
+      "name": "getCompany",
+      "description": "A company/organization by its universal name (the last path segment of linkedin.com/company/<name>).",
+      "request": {
+        "method": "GET",
+        "url": "https://www.linkedin.com/voyager/api/organization/companies?q=universalName&universalName=%7BuniversalName%7D",
+        "headers": {
+          "accept": "application/vnd.linkedin.normalized+json+2.1",
+          "accept-language": "en-US,en;q=0.9",
+          "csrf-token": "",
+          "x-restli-protocol-version": "2.0.0",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "universalName",
+          "at": [
+            "query:universalName"
+          ]
+        },
+        {
+          "ref": "cookie:JSESSIONID",
+          "at": [
+            "header:csrf-token"
+          ],
+          "transform": "strip-quotes"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.linkedin.com/company/{universalName}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.linkedin.com",
+        "path": "/voyager/api/organization/companies"
+      },
+      "response": {
+        "format": "json",
+        "extract": "included",
+        "pick": [
+          "name",
+          "universalName",
+          "tagline",
+          "description",
+          "staffCount",
+          "websiteUrl"
+        ]
+      },
+      "params": [
+        {
+          "name": "universalName",
+          "type": "string",
+          "required": true,
+          "description": "universal name from linkedin.com/company/<name>, e.g. microsoft",
+          "example": "microsoft"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": true
+    }
+  ]
+}

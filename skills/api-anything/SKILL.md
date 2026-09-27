@@ -67,16 +67,21 @@ The `add` output lists `warnings`. Read them. A warning such as "minTier 3" mean
 the browser, which is slow but correct. `--pick name=path` renames a field, so positional keys
 such as `[1][0][1]` become `price`.
 
-## When to ask the user to log in
+## Logging in
 
-Ask the user to run `api-anything login <site>` (or `api-anything login https://site.com`) when either
-of these happens:
+Some sites need an account. `api-anything login <site>` (or `... https://site.com`) by default
+**imports** the site's cookies from the user's everyday browser — no password, no re-doing 2FA. It
+prints the profile and cookie names it used, never values.
 
-- A result has `class: "auth"`.
-- The data you need is only visible when signed in, before you capture.
+- If you have the `login` MCP tool, call it yourself (mode `import`) when a result is `class: "auth"`,
+  then retry the call once. api-anything also re-imports a browser session on its own before it ever
+  returns `auth`, so a bare `auth` usually means the user is signed out in their browser too.
+- Only ask the user to act when import cannot: tell them to run `api-anything login <site> --window`
+  (a visible window to sign in and clear any 2FA/captcha by hand) or `--cookies <file>` on a server.
+  You cannot complete a `--window` sign-in for them, and you must never ask for their password.
+- `api-anything logout <site>` clears the session.
 
-The command opens a visible Chrome window. You cannot complete it for them, and you must never
-ask for their password. Wait until they say they are done.
+Ask the user before you capture, too, when the data you need is only visible while signed in.
 
 ## The failure loop
 
