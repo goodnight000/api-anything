@@ -1,6 +1,6 @@
 /**
  * Offline stand-in for a real GUI-only site. Each route mimics one real-world pattern
- * site2api must handle: persisted GraphQL ids in a hashed bundle (X), layered form/JSON
+ * api-anything must handle: persisted GraphQL ids in a hashed bundle (X), layered form/JSON
  * encoding with an XSSI prefix (Google), UI-triggered writes, per-request signatures,
  * login walls served as 200 HTML, rate limits, and server-rendered HTML lists.
  */

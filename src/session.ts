@@ -1,4 +1,4 @@
-/** Per-site cookie jar and session values under ~/.site2api (0700 dirs, 0600 files). */
+/** Per-site cookie jar and session values under ~/.api-anything (0700 dirs, 0600 files). */
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -11,7 +11,7 @@ export interface Session {
   updatedAt?: string;
 }
 
-export const home = () => process.env.SITE2API_HOME || join(homedir(), ".site2api");
+export const home = () => process.env.API_ANYTHING_HOME || join(homedir(), ".api-anything");
 
 /** Site names become file names; refuse anything that could leave the directory. */
 export function safeName(name: string): string {

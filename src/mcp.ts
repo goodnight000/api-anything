@@ -15,12 +15,12 @@ export const VERSION = (JSON.parse(readFileSync(new URL("../package.json", impor
 const reply = (v: unknown, isError = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(v) }], isError });
 
 export function createServer({ allowWrites = false }: { allowWrites?: boolean } = {}): McpServer {
-  const server = new McpServer({ name: "site2api", version: VERSION });
+  const server = new McpServer({ name: "api-anything", version: VERSION });
 
   server.registerTool(
     "list_sites",
     {
-      description: "List the websites site2api can call, with how many operations each has.",
+      description: "List the websites api-anything can call, with how many operations each has.",
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async () =>

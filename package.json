@@ -1,11 +1,11 @@
 {
-  "name": "site2api",
+  "name": "api-anything",
   "version": "0.1.0",
   "description": "Turn any website into an API your agent can call. Self-healing when the site changes.",
   "license": "MIT",
   "type": "module",
   "bin": {
-    "site2api": "dist/cli.js"
+    "api-anything": "dist/cli.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -43,7 +43,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Sift-wiki/site2api.git"
+    "url": "git+https://github.com/goodnight000/api-anything.git"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.1",

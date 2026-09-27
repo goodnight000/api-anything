@@ -1,13 +1,13 @@
 {
-  "name": "site2api",
+  "name": "api-anything",
   "version": "0.1.0",
   "description": "Turn any website into an API your agent can call. Learns requests from the site's own frontend, replays them fast, and heals itself when the site changes.",
-  "author": { "name": "Sift", "url": "https://github.com/Sift-wiki" },
-  "homepage": "https://github.com/Sift-wiki/site2api",
-  "repository": "https://github.com/Sift-wiki/site2api",
+  "author": { "name": "Tianjun Zheng", "url": "https://github.com/goodnight000" },
+  "homepage": "https://github.com/goodnight000/api-anything",
+  "repository": "https://github.com/goodnight000/api-anything",
   "license": "MIT",
   "keywords": ["api", "mcp", "browser", "reverse-engineering", "self-healing"],
   "mcpServers": {
-    "site2api": { "command": "npx", "args": ["-y", "github:Sift-wiki/site2api", "mcp"] }
+    "api-anything": { "command": "npx", "args": ["-y", "github:goodnight000/api-anything", "mcp"] }
   }
 }

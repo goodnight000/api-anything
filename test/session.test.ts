@@ -47,9 +47,9 @@ test("loggedIn heuristic and explicit loginCookies", () => {
   assert.equal(loggedIn([c("auth_token", "0123456789abcdef", ".x.com", { expires: 1 })]), false, "expired does not count");
 });
 
-test("session store: SITE2API_HOME override, 0700 dirs, 0600 files, merge by name/domain/path", () => {
-  process.env.SITE2API_HOME = mkdtempSync(join(tmpdir(), "s2a-"));
-  assert.equal(home(), process.env.SITE2API_HOME);
+test("session store: API_ANYTHING_HOME override, 0700 dirs, 0600 files, merge by name/domain/path", () => {
+  process.env.API_ANYTHING_HOME = mkdtempSync(join(tmpdir(), "aa-"));
+  assert.equal(home(), process.env.API_ANYTHING_HOME);
   assert.deepEqual(loadSession("x"), { cookies: [], values: {}, updatedAt: undefined });
   mergeCapture("x", [c("ct0", "one", ".x.com"), c("old", "gone", ".x.com", { expires: 1 })], { authorization: "Bearer A" });
   const s = mergeCapture("x", [c("ct0", "two", ".x.com")], { "x-guest-token": "123" });

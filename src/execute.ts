@@ -57,19 +57,19 @@ function nextFor(c: CallResult["class"], site: string, op: Operation, a?: Attemp
     case "ok":
       return undefined;
     case "auth":
-      return `ask the user to run: site2api login ${site}; then retry once`;
+      return `ask the user to run: api-anything login ${site}; then retry once`;
     case "rate":
       return "rate limited: do not retry now; wait a few minutes";
     case "blocked":
-      return `the site is challenging automated requests: ask the user to run site2api login ${site} and clear the challenge, then retry once`;
+      return `the site is challenging automated requests: ask the user to run api-anything login ${site} and clear the challenge, then retry once`;
     case "drift":
       if (!op.readOnly) {
         const ran = a?.status === undefined || !NOT_EXECUTED.has(a.status) ? "the write may have run: check the site first, then " : "";
-        return `${ran}re-learn it with site2api add ${site} ${op.name} ... --write`;
+        return `${ran}re-learn it with api-anything add ${site} ${op.name} ... --write`;
       }
-      return `site2api heal ${site} ${op.name}; if that fails, re-learn it with site2api add ${site} ${op.name} ...`;
+      return `api-anything heal ${site} ${op.name}; if that fails, re-learn it with api-anything add ${site} ${op.name} ...`;
     case "input":
-      return `check the args against: site2api ops ${site}`;
+      return `check the args against: api-anything ops ${site}`;
     case "refused":
       return "only if the user asked for this write: rerun with --allow-writes (MCP: start the server with --allow-writes)";
     default:
@@ -162,7 +162,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
         { ...a, class: "input" },
         {
           reason: `no data for these args (${a.reason}), while the example args still return data: the thing probably does not exist or has no results`,
-          next: `check the args against: site2api ops ${ctx.site}; do not heal or re-add`,
+          next: `check the args against: api-anything ops ${ctx.site}; do not heal or re-add`,
         },
       );
     }
@@ -185,7 +185,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       // the site's own request doesn't answer either: stop paying a browser run per call
       markStale(ctx.site, op.name, stale?.reason ?? guard, undefined, undefined, { tier3: false });
     }
-    return fail(a, { reason: `${a.reason}; ${guard}`, next: `wait for the stale mark to expire, or force it: site2api heal ${ctx.site} ${op.name}` });
+    return fail(a, { reason: `${a.reason}; ${guard}`, next: `wait for the stale mark to expire, or force it: api-anything heal ${ctx.site} ${op.name}` });
   }
 
   // A candidate is validated by replaying it; at tier 3 the site's own request would answer instead, validating nothing.
@@ -207,7 +207,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       { ...a, class: "input" },
       {
         reason: `not drift: re-learning gave a byte-identical template (${a.reason})`,
-        next: `check the args against site2api ops ${ctx.site}; if the site needs an account, ask the user to run site2api login ${ctx.site}`,
+        next: `check the args against api-anything ops ${ctx.site}; if the site needs an account, ask the user to run api-anything login ${ctx.site}`,
       },
     );
   }
@@ -217,9 +217,9 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
 
 function resolve(siteName: string, opName: string): { site: Site; op: Operation } | Result {
   const r = loadSite(siteName);
-  if (!r) return { ok: false, class: "input", reason: `no site "${siteName}"`, next: "site2api sites lists what exists; site2api add creates one" };
+  if (!r) return { ok: false, class: "input", reason: `no site "${siteName}"`, next: "api-anything sites lists what exists; api-anything add creates one" };
   const op = r.site.operations.find((o) => o.name === opName);
-  if (!op) return { ok: false, class: "input", reason: `no operation "${opName}" on ${siteName}`, next: `site2api ops ${siteName}` };
+  if (!op) return { ok: false, class: "input", reason: `no operation "${opName}" on ${siteName}`, next: `api-anything ops ${siteName}` };
   return { site: r.site, op };
 }
 
@@ -283,7 +283,7 @@ export async function call(siteName: string, opName: string, args: Record<string
   }
 }
 
-/** Forced heal for `site2api heal`: ignores the stale guard. Reads only; a write's check would perform it. */
+/** Forced heal for `api-anything heal`: ignores the stale guard. Reads only; a write's check would perform it. */
 export async function heal(siteName: string, opName: string, args: Record<string, unknown> = {}, opts: CallOptions = {}): Promise<CallResult & { strategy?: string }> {
   const t0 = Date.now();
   const found = resolve(siteName, opName);
@@ -294,7 +294,7 @@ export async function heal(siteName: string, opName: string, args: Record<string
       ok: false,
       class: "refused",
       reason: "healing a write is validated by performing it",
-      next: `writes heal during a real call: site2api call ${siteName} ${opName} ... --allow-writes`,
+      next: `writes heal during a real call: api-anything call ${siteName} ${opName} ... --allow-writes`,
       ms: Date.now() - t0,
     };
   }

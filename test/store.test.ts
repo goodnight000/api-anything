@@ -30,9 +30,9 @@ const site = (description: string): Site => ({
 });
 
 function fresh() {
-  process.env.SITE2API_HOME = mkdtempSync(join(tmpdir(), "s2a-store-"));
-  const bundled = mkdtempSync(join(tmpdir(), "s2a-bundled-"));
-  return { home: process.env.SITE2API_HOME, bundled };
+  process.env.API_ANYTHING_HOME = mkdtempSync(join(tmpdir(), "aa-store-"));
+  const bundled = mkdtempSync(join(tmpdir(), "aa-bundled-"));
+  return { home: process.env.API_ANYTHING_HOME, bundled };
 }
 
 test("resolution: user copy wins over bundled; save writes a user copy", () => {

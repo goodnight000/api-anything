@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** site2api CLI. Compact JSON on stdout; every failure also prints one `next:` line on stderr. */
+/** api-anything CLI. Compact JSON on stdout; every failure also prints one `next:` line on stderr. */
 import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -15,21 +15,21 @@ import { MatchSchema, TriggerStepSchema, type Operation } from "./spec.js";
 import { exportSite, listSites, loadSite } from "./store.js";
 
 const HELP: Record<string, string> = {
-  login: `site2api login <site|url>
-  Opens a visible Chrome window on site2api's own profile. Sign in, then close the window or press Enter.`,
-  capture: `site2api capture <url> [--steps <json>] [--soft-from <url>] [--example k=v]... [--write] [--limit n]
+  login: `api-anything login <site|url>
+  Opens a visible Chrome window on api-anything's own profile. Sign in, then close the window or press Enter.`,
+  capture: `api-anything capture <url> [--steps <json>] [--soft-from <url>] [--example k=v]... [--write] [--limit n]
   Loads the page in Chrome and lists the requests it made, noise filtered and ranked (requests carrying
   the --example values first). Saves everything as a capture id for: add --from <id> --pick-request <n>,
   and for: inspect <id> <n>.
   --steps      JSON array of {action: click|fill|press|wait|goto, selector?, value?, ms?}
   --soft-from  load this page first, then navigate in-app to <url> (SPAs only fire their data XHRs that way)
   --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser`,
-  inspect: `site2api inspect <captureId> [<requestId>] [--path <p>] [--html <json>] [--embedded <regex>]
+  inspect: `api-anything inspect <captureId> [<requestId>] [--path <p>] [--html <json>] [--embedded <regex>]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
   response: JSON at --path, or items from an --html / --embedded recipe (try selectors before add).`,
-  add: `site2api add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
+  add: `api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
   Runs the trigger twice in Chrome (with --example, then --example2 or --example again), picks the request
-  carrying the example values, and saves the learned operation to ~/.site2api/sites/<site>.json.
+  carrying the example values, and saves the learned operation to ~/.api-anything/sites/<site>.json.
   --trigger       page URL with {param} placeholders, e.g. https://site.com/u/{name}
   --steps <json>  UI steps after load; {param} is filled in selector/value
   --soft-from     neutral page to load first, then navigate in-page to the trigger
@@ -45,33 +45,33 @@ const HELP: Record<string, string> = {
   --write         the op changes state: it is learned from intercepted, aborted requests only
   --description <text>
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.`,
-  call: `site2api call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--max-tier 1|2|3] [--dry]
+  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--max-tier 1|2|3] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, ms, next?}. --dry prints the request with credentials redacted.`,
-  verify: `site2api verify [site]
+  verify: `api-anything verify [site]
   Calls every read operation with its stored example args, healing as needed.`,
-  sites: `site2api sites
-  Lists known sites (user specs in ~/.site2api/sites win over bundled ones).`,
-  ops: `site2api ops <site>
+  sites: `api-anything sites
+  Lists known sites (user specs in ~/.api-anything/sites win over bundled ones).`,
+  ops: `api-anything ops <site>
   Lists a site's operations and params.`,
-  heal: `site2api heal <site> <op> [k=v ...]
+  heal: `api-anything heal <site> <op> [k=v ...]
   Forces a heal (rescan, then recapture) even when the op is marked stale. Reads only.`,
-  export: `site2api export <site> [--out <file>] [--keep-examples] [--force]
+  export: `api-anything export <site> [--out <file>] [--keep-examples] [--force]
   Writes a shareable spec: examples and response shapes stripped, and refused if a live cookie or
   session value is inside. --keep-examples keeps param examples you confirmed are public (so verify works).`,
-  mcp: `site2api mcp [--allow-writes]
+  mcp: `api-anything mcp [--allow-writes]
   Serves list_sites, list_operations and call_operation over stdio MCP.`,
 };
 
-const USAGE = `site2api ${VERSION}: turn a website into operations an agent can call.
+const USAGE = `api-anything ${VERSION}: turn a website into operations an agent can call.
 
-  site2api login <site|url>
-  site2api capture <url> [--steps ...]
-  site2api add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--write]
-  site2api call <site> <op> [k=v ...] [--allow-writes]
-  site2api inspect <captureId> [<requestId>]
-  site2api verify [site] | sites | ops <site> | heal <site> <op> | export <site> | mcp
+  api-anything login <site|url>
+  api-anything capture <url> [--steps ...]
+  api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--write]
+  api-anything call <site> <op> [k=v ...] [--allow-writes]
+  api-anything inspect <captureId> [<requestId>]
+  api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site> | mcp
 
-site2api <command> --help for details. Data lives in ~/.site2api (SITE2API_HOME overrides).`;
+api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
 
 const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
 
@@ -96,7 +96,7 @@ function json<T>(text: string | undefined, schema: z.ZodType<T>, flag: string): 
   try {
     return schema.parse(JSON.parse(text));
   } catch (e) {
-    throw new Fail(`--${flag}: ${(e as Error).message.split("\n")[0]}`, `site2api --help shows the --${flag} format`);
+    throw new Fail(`--${flag}: ${(e as Error).message.split("\n")[0]}`, `api-anything --help shows the --${flag} format`);
   }
 }
 
@@ -105,9 +105,9 @@ const needChrome = () => {
 };
 
 function requireSite(name: string | undefined) {
-  if (!name) throw new Fail("missing <site>", "site2api sites");
+  if (!name) throw new Fail("missing <site>", "api-anything sites");
   const r = loadSite(name);
-  if (!r) throw new Fail(`no site "${name}"`, "site2api sites lists what exists; site2api add creates one");
+  if (!r) throw new Fail(`no site "${name}"`, "api-anything sites lists what exists; api-anything add creates one");
   return r;
 }
 
@@ -159,7 +159,7 @@ async function run(argv: string[]): Promise<number> {
   switch (cmd) {
     case "login": {
       const target = pos[0];
-      if (!target) throw new Fail("missing <site|url>", "site2api login <site|url>");
+      if (!target) throw new Fail("missing <site|url>", "api-anything login <site|url>");
       const known = /^https?:\/\//.test(target) ? undefined : requireSite(target);
       const url = known ? known.site.baseUrl : target;
       const host = new URL(url).hostname;
@@ -174,7 +174,7 @@ async function run(argv: string[]): Promise<number> {
 
     case "capture": {
       const url = pos[0];
-      if (!url) throw new Fail("missing <url>", "site2api capture <url>");
+      if (!url) throw new Fail("missing <url>", "api-anything capture <url>");
       needChrome();
       const c = await capturePage({ url, steps, softFrom: v["soft-from"], write: v.write });
       const limit = Number(v.limit ?? 15);
@@ -198,15 +198,15 @@ async function run(argv: string[]): Promise<number> {
         requests: c.exchanges.length,
         candidates,
         next: html
-          ? `the best candidate is the HTML page (server-rendered): site2api inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
-          : `site2api add <site> <op> --from ${c.id} --pick-request <id> --example k=v (site2api inspect ${c.id} <id> shows a response)`,
+          ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
+          : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`,
       });
       return 0;
     }
 
     case "inspect": {
       const [id, reqId] = pos;
-      if (!id) throw new Fail("missing <captureId>", "site2api inspect --help");
+      if (!id) throw new Fail("missing <captureId>", "api-anything inspect --help");
       const c = loadCapture(id);
       if (reqId === undefined) {
         out({
@@ -224,7 +224,7 @@ async function run(argv: string[]): Promise<number> {
         return 0;
       }
       const e = c.exchanges.find((x) => x.id === Number(reqId));
-      if (!e) throw new Fail(`no request ${reqId} in capture ${id}`, `site2api inspect ${id}`);
+      if (!e) throw new Fail(`no request ${reqId} in capture ${id}`, `api-anything inspect ${id}`);
       const html = json(v.html, z.object({ items: z.string(), fields: z.record(z.string(), z.string()) }), "html");
       const body = e.response?.body ?? "";
       const response = { format: html ? "html" : v.embedded ? "embedded" : "json", ...(html ? { html } : {}), ...(v.embedded ? { embedded: { regex: v.embedded } } : {}) } as const;
@@ -245,15 +245,15 @@ async function run(argv: string[]): Promise<number> {
 
     case "add": {
       const [site, name] = pos;
-      if (!site || !name) throw new Fail("missing <site> <op>", "site2api add --help");
-      if (!v.trigger && !v.from) throw new Fail("missing --trigger (or --from <captureId>)", "site2api add --help");
+      if (!site || !name) throw new Fail("missing <site> <op>", "api-anything add --help");
+      if (!v.trigger && !v.from) throw new Fail("missing --trigger (or --from <captureId>)", "api-anything add --help");
       const ex1 = kv(v.example);
       const ex2 = v.example2 ? kv(v.example2) : undefined;
       const matchText = v.match?.length === 1 && v.match[0]!.trim().startsWith("{") ? v.match[0] : v.match ? JSON.stringify(kv(v.match)) : undefined;
       const match = json(matchText, MatchSchema, "match");
       const html = json(v.html, z.object({ items: z.string(), fields: z.record(z.string(), z.string()) }), "html");
       if (!v.from) needChrome();
-      if (v.from2 && !ex2) throw new Fail("--from2 needs --example2 (the values that capture was made with)", "site2api add --help");
+      if (v.from2 && !ex2) throw new Fail("--from2 needs --example2 (the values that capture was made with)", "api-anything add --help");
       const r = await addOperation({
         site,
         op: name,
@@ -288,14 +288,14 @@ async function run(argv: string[]): Promise<number> {
         warnings: r.warnings,
         ...(r.captures.length ? { captures: r.captures } : {}),
         saved: r.path,
-        next: `site2api call ${site} ${op.name} ${op.params.map((p) => `${p.name}=...`).join(" ")}`.trim(),
+        next: `api-anything call ${site} ${op.name} ${op.params.map((p) => `${p.name}=...`).join(" ")}`.trim(),
       });
       return 0;
     }
 
     case "call": {
       const [site, name, ...rest] = pos;
-      if (!site || !name) throw new Fail("missing <site> <op>", "site2api call --help");
+      if (!site || !name) throw new Fail("missing <site> <op>", "api-anything call --help");
       let base: Record<string, unknown> = {};
       if (v.json) {
         base = json(v.json, z.record(z.string(), z.unknown()), "json") ?? {};
@@ -304,7 +304,7 @@ async function run(argv: string[]): Promise<number> {
       if (v.dry) {
         const { site: s } = requireSite(site);
         const op = s.operations.find((o) => o.name === name);
-        if (!op) throw new Fail(`no operation "${name}" on ${site}`, `site2api ops ${site}`);
+        if (!op) throw new Fail(`no operation "${name}" on ${site}`, `api-anything ops ${site}`);
         const real = loadSession(site);
         // Placeholders in place of every credential, so --dry output is safe to paste anywhere.
         const redacted = {
@@ -383,7 +383,7 @@ async function run(argv: string[]): Promise<number> {
 
     case "heal": {
       const [site, name, ...rest] = pos;
-      if (!site || !name) throw new Fail("missing <site> <op>", "site2api heal <site> <op>");
+      if (!site || !name) throw new Fail("missing <site> <op>", "api-anything heal <site> <op>");
       const op = requireSite(site).site.operations.find((o) => o.name === name);
       const r = await heal(site, name, { ...(op ? examplesOf(op) : {}), ...kv(rest) });
       out(r);
@@ -423,6 +423,6 @@ try {
   await closeBrowser();
   const f = e instanceof Fail ? e : undefined;
   out({ ok: false, error: (e as Error).message, ...(f?.extra ?? {}) });
-  process.stderr.write(`next: ${f?.next ?? `site2api ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " ")}\n`);
+  process.stderr.write(`next: ${f?.next ?? `api-anything ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " ")}\n`);
   process.exitCode = 1;
 }

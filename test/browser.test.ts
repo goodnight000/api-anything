@@ -42,7 +42,7 @@ describe("browser", { skip: !chromeAvailable() && "Google Chrome not installed" 
   let profileDir: string;
   before(async () => {
     fx = await startFixture();
-    profileDir = await mkdtemp(join(tmpdir(), "site2api-profile-"));
+    profileDir = await mkdtemp(join(tmpdir(), "api-anything-profile-"));
   });
   after(async () => {
     await closeBrowser();
@@ -96,7 +96,7 @@ describe("browser", { skip: !chromeAvailable() && "Google Chrome not installed" 
     const hits = () => fx.calls.filter((c) => c.path === "/api/sw-write" || c.path.startsWith("/api/follow")).length;
     const guard = (e: { request: { method: string }; resourceType: string }, acting: boolean) =>
       e.request.method !== "GET" || (acting && ["xhr", "fetch"].includes(e.resourceType));
-    // A worker installed on an earlier visit would proxy fetches past page routing; site2api blocks workers.
+    // A worker installed on an earlier visit would proxy fetches past page routing; api-anything blocks workers.
     await runTrigger({ url: `${fx.url}/sw`, profileDir, intercept: guard });
     const sw = await runTrigger({ url: `${fx.url}/sw`, profileDir, intercept: guard });
     const follow = await runTrigger({ url: `${fx.url}/follow/alice`, steps: [{ action: "click", selector: "#follow" }], profileDir, intercept: guard });

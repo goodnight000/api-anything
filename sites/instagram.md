@@ -1,7 +1,7 @@
 # instagram
 
-Verified 2026-09-27, logged out. `site2api verify instagram` passes, and both ops were called
-from a clean `SITE2API_HOME` using only this bundled spec: tier 1, no cookies, no browser. No
+Verified 2026-09-27, logged out. `api-anything verify instagram` passes, and both ops were called
+from a clean `API_ANYTHING_HOME` using only this bundled spec: tier 1, no cookies, no browser. No
 account is needed.
 
 | op | args | returns | tier |
@@ -10,8 +10,8 @@ account is needed.
 | `getPosts` | `username` (example `nasa`) | the 12 most recent posts: `node.code` (shortcode, so the post is `instagram.com/p/<code>/`), `node.caption.text`, `node.accessibility_caption`, `node.media_type`, `node.product_type`, `node.display_uri` | 1 (the same GET, about 500 to 1000 ms) |
 
 ```sh
-site2api call instagram getProfile username=spacex
-site2api call instagram getPosts username=natgeo
+api-anything call instagram getProfile username=spacex
+api-anything call instagram getPosts username=natgeo
 ```
 
 ## How it works
@@ -34,7 +34,7 @@ fix is to update the regex.
   timestamp or like and comment counts.
 - Post fields are flat dotted keys (`"node.code"`). `pick` can rename them now
   (`code=node.code`); the bundled spec keeps the dotted keys.
-- A username that doesn't exist returns a page without the data. site2api replays the example
+- A username that doesn't exist returns a page without the data. api-anything replays the example
   username, which still answers, and returns `input` in about 1.5 s, with no heal and no browser.
 - `profile_pic_url` and `display_uri` are signed CDN URLs that expire (`oe=` parameter).
 - Only verified logged out, from a US IP. Heavy use may bring up Instagram's login wall.

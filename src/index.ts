@@ -1,4 +1,4 @@
-/** Library entry: `import { call } from "site2api"`. */
+/** Library entry: `import { call } from "api-anything"`. */
 export { call, heal, type CallOptions, type CallResult, type Tier } from "./execute.js";
 export { addOperation, capturePage, healOperation, type AddInput } from "./heal.js";
 export { learnOperation, rankCandidates } from "./learn.js";

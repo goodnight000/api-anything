@@ -8,8 +8,8 @@ import { call } from "../src/execute.ts";
 import { parseSite } from "../src/spec.ts";
 import { saveSite, staleMark } from "../src/store.ts";
 
-const HOME = mkdtempSync(join(tmpdir(), "site2api-exec-"));
-process.env.SITE2API_HOME = HOME;
+const HOME = mkdtempSync(join(tmpdir(), "api-anything-exec-"));
+process.env.API_ANYTHING_HOME = HOME;
 after(() => rmSync(HOME, { recursive: true, force: true }));
 
 const QID = "Aa1Bb2Cc3Dd4Ee5Ff6Gg7H";

@@ -15,8 +15,8 @@ import { addOperation } from "../src/heal.js";
 import { parseSite } from "../src/spec.js";
 import { loadSite, saveSite, staleMark } from "../src/store.js";
 
-const HOME = mkdtempSync(join(tmpdir(), "site2api-heal-"));
-process.env.SITE2API_HOME = HOME;
+const HOME = mkdtempSync(join(tmpdir(), "api-anything-heal-"));
+process.env.API_ANYTHING_HOME = HOME;
 const fast = { minIntervalMs: 0 };
 
 async function serve(handler: Parameters<typeof createServer>[1]): Promise<{ server: Server; base: string }> {

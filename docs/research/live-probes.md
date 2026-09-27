@@ -3,7 +3,7 @@
 Setup: macOS (Darwin 25.2.0), Node v25.1.0, `playwright-core@1.63.0`, installed Google Chrome
 153.0.8010.53 via `chromium.launch({ channel: 'chrome' })`. No browser download. Logged out,
 fresh context per run, read-only GETs and the site's own read queries, 1 to 8 requests per replay
-script. Probe scripts live in `/tmp/site2api-probe/` (`probe.mjs`, `x-*.mjs`, `ig-*.mjs`, `gf-replay.mjs`,
+script. Probe scripts live in `/tmp/api-anything-probe/` (`probe.mjs`, `x-*.mjs`, `ig-*.mjs`, `gf-replay.mjs`,
 `fidelity.mjs`, `sw.mjs`, `reddit2.mjs`). They are scratch files and are not part of the repo.
 
 ## Summary for the design
@@ -229,7 +229,7 @@ for logged-out reads. Logged-in behavior is **unverified**. Failure shows up as 
 - Drift detection: check status, content type, and extract-path presence. Treat 200 + HTML-when-JSON-expected and
   Google `ErrorResponse` as drift or auth failure.
 
-## Probe script (`/tmp/site2api-probe/probe.mjs`, final version)
+## Probe script (`/tmp/api-anything-probe/probe.mjs`, final version)
 
 Run: `node probe.mjs <url> <exampleValue> [--headed] [--fixua] [--out file.json]`. Each line prints
 `status | resourceType | method | content-type | bodyLen | BODYERR | SW | exampleIn{url,post,body} | gqlOp@queryId | url`.

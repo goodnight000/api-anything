@@ -1,7 +1,7 @@
 # x
 
-Verified 2026-09-27, logged out, from a US IP. `site2api verify x` passes, and both ops were called
-from a clean `SITE2API_HOME` using only this bundled spec: tier 1, no cookies, no browser. No
+Verified 2026-09-27, logged out, from a US IP. `api-anything verify x` passes, and both ops were called
+from a clean `API_ANYTHING_HOME` using only this bundled spec: tier 1, no cookies, no browser. No
 account is needed.
 
 | op | args | returns | tier |
@@ -10,8 +10,8 @@ account is needed.
 | `getProfile` | `screen_name` (example `nasa`) | `title` ("NASA (@NASA) on X"), `screen_name`, `bio`, `avatar`, `banner`, `posts` as displayed ("74.3K"), `joined` ("December 2007"), `url`. No follower count | 1 (GET of the profile page, about 1 s) |
 
 ```sh
-site2api call x getUser screen_name=spacex
-site2api call x getProfile screen_name=NASAWebb
+api-anything call x getUser screen_name=spacex
+api-anything call x getProfile screen_name=NASAWebb
 ```
 
 ## How it works
@@ -21,7 +21,7 @@ site2api call x getProfile screen_name=NASAWebb
   visitor) and a browser user agent. Guest token, cookies and `x-client-transaction-id` are not
   needed for this query, so they were removed from the spec by hand.
 - **getProfile** fetches `https://x.com/<screen_name>` and reads the `<meta>` tags with a
-  `response.html` recipe. It was learned entirely with `site2api add ... --html`.
+  `response.html` recipe. It was learned entirely with `api-anything add ... --html`.
 
 ### How getUser was learned
 
@@ -30,8 +30,8 @@ server-side. An in-app navigation does send it, and `--soft-from` now navigates 
 app's router (history API + `popstate`) instead of a full page load:
 
 ```sh
-site2api capture https://x.com/nasa --soft-from https://x.com/spacex --example screen_name=nasa
-site2api add x getUser --from <capture> --pick-request <id> --example screen_name=nasa --public authorization \
+api-anything capture https://x.com/nasa --soft-from https://x.com/spacex --example screen_name=nasa
+api-anything add x getUser --from <capture> --pick-request <id> --example screen_name=nasa --public authorization \
   --extract data.user_result_by_screen_name.result --pick rest_id,core.name,...
 ```
 
@@ -44,7 +44,7 @@ browser sends the same one) and lets `export` write it. The guest token and
 - **Healing getUser.** A rotated queryId returns 404 "Query not found" (drift). The browserless
   rescan finds the new id in the SSR document (`key:"<queryId>{...}",name:"UserByScreenName"`).
   Recapture and tier 3 run the soft-navigation trigger (from `x.com/spacex`).
-- **Unknown handle:** `getUser` gets `200 {"data":{}}`. site2api replays the example handle, which
+- **Unknown handle:** `getUser` gets `200 {"data":{}}`. api-anything replays the example handle, which
   still answers, and returns `input` in about 1 s, with no heal and no browser. `getProfile`
   returns `input` too (HTTP 404).
 - If you query `spacex` itself, the soft-nav trigger's neutral page is the target page. This only

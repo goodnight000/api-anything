@@ -1,7 +1,7 @@
-# site2api — design v1
+# api-anything — design v1
 
 Evidence behind every decision: [research/prior-art.md](research/prior-art.md),
-[research/api-anything-reuse.md](research/api-anything-reuse.md),
+[research/prototype-reuse.md](research/prototype-reuse.md),
 [research/live-probes.md](research/live-probes.md).
 
 ## Goal
@@ -116,7 +116,7 @@ Every response is classified, never by status code alone:
 |---|---|---|
 | `ok` | 2xx, expected content type, extract path present, no GraphQL `errors` with null `data`; any 2xx to a write | return |
 | `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, breaking shape change | heal once |
-| `auth` | 401, 400/403 with login or CSRF markers ("Bad Authentication data"), 200 + HTML login page where JSON expected, `require_login: true` | refresh cookies from the profile; for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `site2api login <site>`" |
+| `auth` | 401, 400/403 with login or CSRF markers ("Bad Authentication data"), 200 + HTML login page where JSON expected, `require_login: true` | refresh cookies from the profile; for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429, "please wait", "rate limit" | back off, report; no heal |
 | `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, reCAPTCHA), even at 200 | escalate transport tier; then diagnostic `gated` |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; data missing while the example args still answer | return the error to the caller |
@@ -151,18 +151,18 @@ Heal strategies, cheapest first:
   op's examples. A candidate that loses any param's slot is refused.
 
 A healed template is saved to the user's spec dir only after validation. Every heal is
-appended to `~/.site2api/heals.jsonl` (op, strategy, diff summary). A tier an op escalated to
+appended to `~/.api-anything/heals.jsonl` (op, strategy, diff summary). A tier an op escalated to
 (above its own `minTier`) is remembered per op, and a call that ran above tier 1 says why in `reason`.
 
 ## Browser
 
 - playwright-core, `channel: "chrome"` (the installed Chrome; no browser download). A persistent
-  profile at `~/.site2api/profile`. Headless by default, with the user agent's `HeadlessChrome`
+  profile at `~/.api-anything/profile`. Headless by default, with the user agent's `HeadlessChrome`
   replaced by `Chrome`. `login` runs headed.
 - Capture uses `page.on('response')` and reads bodies **inside the handler** (bodies vanish
   after navigation). The document body is kept raw.
 - After every browser run, cookies are exported (full Playwright cookie objects) to
-  `~/.site2api/sessions/<site>.json`, together with session values seen in captured headers.
+  `~/.api-anything/sessions/<site>.json`, together with session values seen in captured headers.
 - `softFrom` loads the neutral page, then navigates in-app: a link the app rendered is clicked
   (its router handles it); otherwise `history.pushState` + `popstate`, which client routers listen
   to. Only if nothing fired does it load the URL. An injected `<a>` is not routed by React Router,
@@ -182,9 +182,9 @@ payloads are out of scope for v1.
 ## Spec files and where they live
 
 One JSON file per site: `{ name, displayName, baseUrl, description, operations[] }`, zod-validated.
-Resolution order: `~/.site2api/sites/<site>.json` (user-created and healed copies win) → the
+Resolution order: `~/.api-anything/sites/<site>.json` (user-created and healed copies win) → the
 bundled `sites/<site>.json` (community). A heal of a bundled spec writes a user copy.
-`site2api export <site>` writes a shareable copy. It strips examples (unless `--keep-examples`:
+`api-anything export <site>` writes a shareable copy. It strips examples (unless `--keep-examples`:
 a human confirmed they are public, so `verify` works for others) and samples (response shapes,
 whose keys can be user data; typed example values in the request become null), and it runs an
 exact-match secret scan against live jar/session values plus regex heuristics. Headers an op
@@ -192,7 +192,7 @@ lists in `public` (marked by a human) are allowed.
 
 ## Agent interface
 
-- **CLI** `site2api`:
+- **CLI** `api-anything`:
   - `login <site|url>`
   - `capture <url> [--steps ...] [--interactive]` prints a compact, noise-filtered list of candidate
     requests with ids
@@ -204,13 +204,13 @@ lists in `public` (marked by a human) are allowed.
   - `verify [site]` (health-checks every read op with its example, healing as needed)
   - `sites`, `ops <site>`, `heal <site> <op>`, `export <site>`, `mcp`
   - All output is JSON-first, compact, and ends with a `next` hint on failure.
-- **MCP server** (`site2api mcp`) with fixed meta-tools: `list_sites`, `list_operations`,
+- **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `list_operations`,
   `call_operation`, so the tool list costs the same at 2 sites or 200. Writes are hidden unless
   it is started with `--allow-writes`.
-- **Skill** `skills/site2api/SKILL.md`: the create loop (capture → add → call → verify), the
+- **Skill** `skills/api-anything/SKILL.md`: the create loop (capture → add → call → verify), the
   strict failure loop (follow `next` at most once, then stop and report), and the safety rules.
 - **Claude Code plugin** manifest (skill + MCP), plus copy-paste install lines for Codex and other agents.
-- Library: `import { call, open } from "site2api"`.
+- Library: `import { call, open } from "api-anything"`.
 
 ## Non-goals (v1)
 

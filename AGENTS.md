@@ -17,7 +17,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login |
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |
 | `src/execute.ts` | `call()`: the tier ladder, classifier actions, heal guards, write rules |
-| `src/session.ts`, `src/store.ts` | `~/.site2api`: cookie jar, specs, heal log, state, export scan |
+| `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, export scan |
 | `src/cli.ts`, `src/mcp.ts`, `src/index.ts` | entry points |
 
 ## Rules

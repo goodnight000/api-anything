@@ -1,7 +1,7 @@
 # google-flights
 
-Verified 2026-09-27, logged out, US IP, with `site2api verify google-flights` passing from a clean
-`SITE2API_HOME` (no cookies, no session values). No account is needed.
+Verified 2026-09-27, logged out, US IP, with `api-anything verify google-flights` passing from a clean
+`API_ANYTHING_HOME` (no cookies, no session values). No account is needed.
 
 | op | args | returns | tier |
 |---|---|---|---|
@@ -12,8 +12,8 @@ Verified 2026-09-27, logged out, US IP, with `site2api verify google-flights` pa
 are the whole results page, which costs two requests.
 
 ```sh
-site2api call google-flights search origin=SFO destination=JFK date=2027-02-10
-site2api call google-flights top origin=BOS destination=MIA date=2026-11-18
+api-anything call google-flights search origin=SFO destination=JFK date=2027-02-10
+api-anything call google-flights top origin=BOS destination=MIA date=2026-11-18
 ```
 
 ## Result fields (positional JSPB)
@@ -44,7 +44,7 @@ number `["DL","606",null,"Delta"]` and `[0][2][i][17]` the aircraft), and `[1][1
   clean home with no cookies and no `x-goog-batchexecute-bgr`. `add` now checks this with one
   replay and keeps `minTier: 1` (the first version of this spec needed a hand edit).
 - The example date `2027-02-10` goes stale. Bump it before that date, or `verify` fails.
-- A bad input (past date, unknown airport, no flights) returns no list. site2api replays the
+- A bad input (past date, unknown airport, no flights) returns no list. api-anything replays the
   example route, which still answers, and returns `input` in about 1 s.
 - Prices and names follow the `x-goog-ext-259736195-jspb` header (`en-US`, `US`, `USD`), which is
   stored verbatim. No pagination. The EU consent wall was not tested.

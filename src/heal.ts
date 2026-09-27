@@ -119,7 +119,7 @@ function saveCapture(o: { url: string; steps?: TriggerStep[]; softFrom?: string;
   return file;
 }
 
-/** Run a page, keep everything it sent under ~/.site2api/captures/<id>.json (0600: it holds cookies). */
+/** Run a page, keep everything it sent under ~/.api-anything/captures/<id>.json (0600: it holds cookies). */
 export async function capturePage(o: { url: string; steps?: TriggerStep[]; softFrom?: string; write?: boolean }): Promise<CaptureFile> {
   const r = await runTrigger({ url: o.url, steps: o.steps, softFrom: o.softFrom, profileDir: profileDir(), intercept: o.write ? writeGuard() : undefined });
   return saveCapture(o, r);

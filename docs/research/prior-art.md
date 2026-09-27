@@ -1,6 +1,6 @@
 # Prior art: unbrowse, Integuru, reverse-api-engineer, mitmproxy2swagger
 
-Research date: 2026-09-27. I read the source of shallow clones in `/tmp/site2api-prior/`:
+Research date: 2026-09-27. I read the source of shallow clones in `/tmp/api-anything-prior/`:
 
 | Repo | Commit | License | Language |
 |---|---|---|---|
@@ -75,7 +75,7 @@ Everything else stays literal. The observed value is stored as the default, so r
 
 ### Self-heal and drift
 
-**Trigger-and-intercept** (`triggerAndIntercept`, `src/capture/index.ts:2632`) is the closest thing to site2api's trigger, so here is exactly what it does:
+**Trigger-and-intercept** (`triggerAndIntercept`, `src/capture/index.ts:2632`) is the closest thing to api-anything's trigger, so here is exactly what it does:
 - It opens a fresh tab, injects cookies, navigates to the origin, and injects the interceptor.
 - It navigates to `trigger_url`, injects the interceptor again, then polls every 1 s for up to 15 s.
 - It looks for a response whose URL contains the template's base path (placeholders removed), **and** whose URL contains the stored `queryId` prefix when there is one.
@@ -156,7 +156,7 @@ RAE uses an LLM coding agent (Claude Agent SDK, OpenCode, Cursor, Copilot, or Ol
   - Agent mode (`auto_engineer.py:_get_mcp_config`) attaches a browser MCP server launched through `npx`: `rae-playwright-mcp@latest run-mcp-server <run_id>` (records the HAR), `chrome-devtools-mcp@latest` (drives the user's real Chrome, requires Chrome 146+), or Vercel `agent-browser`.
 - **Request choice and generalization:** entirely inside the LLM. The prompt is `prompts/engineer/system.md`: read the HAR, find auth patterns, and "extract endpoint patterns — required vs optional params". There is no deterministic templating.
 - **Auth:** the prompt says to **"Hardcode all credentials, cookies, tokens, and session data found in the traffic. No env vars, no config files"**, and "if the traffic reveals a token refresh or login flow, implement automatic re-authentication" (`prompts/engineer/system.md`, `prompts/auto/system.md`).
-- **Anti-bot:** the prompt tells the agent to prefer `httpcloak` (TLS/HTTP2 fingerprint matching), then fetch through the browser via Playwright CDP, and only then use full browser automation. This is the same ladder as site2api's tiers, but written as prompt text rather than runtime code.
+- **Anti-bot:** the prompt tells the agent to prefer `httpcloak` (TLS/HTTP2 fingerprint matching), then fetch through the browser via Playwright CDP, and only then use full browser automation. This is the same ladder as api-anything's tiers, but written as prompt text rather than runtime code.
 - **Verification:** the prompt allows up to 5 attempts, each recorded in an `<attempt_log>`. An in-process MCP tool, `report_client_verified` (`engineer.py:98-134`), must be called once after the agent actually runs the client live. It replaced parsing Bash output, which automated review kept finding ways to fool: "eight rounds of automated review kept finding new ways a Bash command could *look* like a real client execution without being one".
 - **Self-heal:** none at runtime. Repair means running RAE again on the same run id ("iterative refinement" of the existing scripts, `prompts/engineer/user.md`).
 - **UX:** `uv tool install reverse-api-engineer` gives a TUI/CLI. The base dependencies are small (click, claude-agent-sdk, rich, httpx…). Playwright is the optional `[manual]` extra. There is no MCP server exposing the generated operations, and no skill.
@@ -186,7 +186,7 @@ RAE uses an LLM coding agent (Claude Agent SDK, OpenCode, Cursor, Copilot, or Ol
 
 ---
 
-## 6. Mechanisms site2api should take
+## 6. Mechanisms api-anything should take
 
 1. **Capture through CDP `Network.*` events, not a JS monkeypatch.** unbrowse's `triggerAndIntercept` injects its interceptor after navigation, so requests fired early or by a service worker can be missed. This is why it also runs CDP capture with `setBypassServiceWorker`. Playwright's `page.on('response')` / CDP sees everything, including auth headers that HAR strips.
 2. **Record a request's provenance and follow it one hop up** (Integuru's core idea, reimplemented because the code is AGPL). After substituting args and cookies, any remaining non-constant value (for example x.com `UserTweets.variables.userId`) should be searched for in earlier captured response bodies from the same trigger run. Record `{fromOp/fromRequest, jsonPath}` (`find_json_path`) so the learner can chain two requests or mark the operation "requires a lookup". Without this, template substitution silently fixes arguments that were derived from other arguments.
@@ -206,36 +206,36 @@ RAE uses an LLM coding agent (Claude Agent SDK, OpenCode, Cursor, Copilot, or Ol
 9. **Record why an operation is stale, with a TTL.** A stale record like `{op, reason, status, ts}` stops the agent (and `verify`) from repeatedly calling an operation already known to be broken. See `stale-endpoints.ts`.
 10. **Never probe writes.** unbrowse learned that a HEAD probe on a write route returns 404 and gets misread as drift (`execution/index.ts:4154-4172`). Writes should skip probing and heuristic tier selection.
 11. **Keep rungs optional and degrade honestly.** If an optional transport (impersonation) is not installed, return "unavailable" and move to the next tier. Never throw, never fake a result, never provision implicitly (`fetch-ladder.ts`, DESIGN_NOTES).
-12. **Verification must be observed, not claimed.** RAE's `report_client_verified` tool is the agent-facing version. For site2api, `add` and `heal` should be marked done only after a tier-1 replay of the learned template, using a new arg value, returns a response that passes the stored extract/pick schema. unbrowse ships locally inferred routes as `verification_status: "unverified"` until replay confirms them.
+12. **Verification must be observed, not claimed.** RAE's `report_client_verified` tool is the agent-facing version. For api-anything, `add` and `heal` should be marked done only after a tier-1 replay of the learned template, using a new arg value, returns a response that passes the stored extract/pick schema. unbrowse ships locally inferred routes as `verification_status: "unverified"` until replay confirms them.
 13. **Skill-first packaging.** unbrowse moved from MCP-first to a skill with a strict loop (one command, at most one `next_step` retry, then stop and report). That supports DESIGN.md's CLI + skill plus a small MCP. Copy the "exactly one retry then report" rule into SKILL.md.
 14. **Export to OpenAPI** (mitmproxy2swagger, RAE docs mode) as an optional `share` format. It is cheap and interoperates with other tooling.
 
 ## 7. Pitfalls to avoid
 
-- **Credentials in artifacts.** RAE hardcodes cookies and tokens into generated code on purpose. mitmproxy2swagger only warns about it. unbrowse needed three layers of redaction plus a final "drop the descriptor if any harvested secret still appears" sweep, because `headers_template` and `proven_recipe` "have historically carried the cookie jar" (`reveng-local.ts` header). site2api should run a fail-closed secret scan on **every** save, not only on `share`, using harvested actual cookie and header values, not just regexes.
+- **Credentials in artifacts.** RAE hardcodes cookies and tokens into generated code on purpose. mitmproxy2swagger only warns about it. unbrowse needed three layers of redaction plus a final "drop the descriptor if any harvested secret still appears" sweep, because `headers_template` and `proven_recipe` "have historically carried the cookie jar" (`reveng-local.ts` header). api-anything should run a fail-closed secret scan on **every** save, not only on `share`, using harvested actual cookie and header values, not just regexes.
 - **Matchers that include rotating ids.** unbrowse's trigger-intercept matches on the stored `queryId`, so the one case it could heal (rotation) turns into a 15 s timeout. Matchers must key on stable identity: GraphQL `operationName` or the last path segment, a path with hash-like segments wildcarded, and the method.
-- **Heal that only signals.** unbrowse detects drift but hands repair back to the agent (`re_capture_signal`, run it headed). Agents usually do not follow up. site2api's automatic re-learn is the real improvement over it; do not weaken it to "emit a hint".
+- **Heal that only signals.** unbrowse detects drift but hands repair back to the agent (`re_capture_signal`, run it headed). Agents usually do not follow up. api-anything's automatic re-learn is the real improvement over it; do not weaken it to "emit a hint".
 - **Scope creep.** unbrowse's payments, wallet, marketplace, 30 host directories, 9k-line orchestrator, opaque vendored `libcontract.dylib`, and opt-in-by-default publishing are what the core route-replay idea turned into. Keep the non-goals.
 - **Reading the user's main browser cookie store.** Decrypting Chrome's SQLite database with the Keychain key triggers macOS keychain prompts, is fragile across Chrome versions, and surprises users about privacy. DESIGN.md's dedicated profile plus `login` is the better choice. Note that RAE copies the real profile to a temp directory, which also avoids Chrome's profile lock.
 - **Code generation as the artifact** (Integuru, RAE). Every site becomes a separately authored program that cannot heal itself, and a new LLM run is the only repair. A data spec plus one generic executor is what makes generic healing possible.
-- **LLM in the hot path of learning.** Integuru makes 3+ LLM calls per DAG node, with temperature 1, so the result is nondeterministic. site2api's deterministic substitution is cheaper and reproducible; reserve the LLM (the calling agent) for choosing among candidates in `capture`.
+- **LLM in the hot path of learning.** Integuru makes 3+ LLM calls per DAG node, with temperature 1, so the result is nondeterministic. api-anything's deterministic substitution is cheaper and reproducible; reserve the LLM (the calling agent) for choosing among candidates in `capture`.
 - **Noise filtering by vendor lists** (Integuru's google/taboola/datadog list) goes stale. unbrowse's structural test (the response contains records, and the payload direction is inbound) needs no list.
-- **Proxy-based capture** (mitmproxy) needs a CA certificate installed, and the proxy's TLS changes the fingerprint (the reason unbrowse built a uTLS proxy). site2api should stay with CDP in a real Chrome.
+- **Proxy-based capture** (mitmproxy) needs a CA certificate installed, and the proxy's TLS changes the fingerprint (the reason unbrowse built a uTLS proxy). api-anything should stay with CDP in a real Chrome.
 
-## 8. Where site2api's trigger + matcher + learn design is different, or weaker
+## 8. Where api-anything's trigger + matcher + learn design is different, or weaker
 
 **Genuinely different or stronger:**
 - **Known example args.** None of the four knows the argument values in advance. unbrowse infers variability from passive traffic; Integuru and RAE ask an LLM. Substituting known examples is deterministic and names the params correctly (`{screen_name}`, not `{id_2}`).
-- **One routine for create, heal, and read fallback.** unbrowse has the pieces (`trigger_url`, trigger-intercept, drift detection, re-capture) but they are not connected: trigger-intercept returns data without re-learning, and drift hands off to the agent. site2api closing that loop, so a tier-3 success rewrites the template and the next call is tier 1, does not exist in any of the four.
+- **One routine for create, heal, and read fallback.** unbrowse has the pieces (`trigger_url`, trigger-intercept, drift detection, re-capture) but they are not connected: trigger-intercept returns data without re-learning, and drift hands off to the agent. api-anything closing that loop, so a tier-3 success rewrites the template and the next call is tier 1, does not exist in any of the four.
 - **Path-argument triggers** (a URL template plus UI steps). unbrowse can only add query params to `trigger_url`.
 - **Deterministic and local.** No server-side inference, no LLM needed to learn, MIT throughout.
 
 **Weaker or not yet designed:**
 - **Derived arguments.** Plain substitution cannot handle a request value computed from an argument by a previous request (userId from screen_name, a cursor from page 1). Integuru's provenance search covers this and DESIGN.md does not (see 6.2).
-- **Discovery.** site2api learns only the operations someone writes a trigger for. unbrowse learns every data route seen during browsing and finds them by intent. `capture` partly covers this; consider "promote a captured candidate to an operation" so a trigger is authored from the page URL where the request was seen.
+- **Discovery.** api-anything learns only the operations someone writes a trigger for. unbrowse learns every data route seen during browsing and finds them by intent. `capture` partly covers this; consider "promote a captured candidate to an operation" so a trigger is authored from the page URL where the request was seen.
 - **UI-step triggers rot too.** Heal depends on the UI still firing the request. When selectors or flows change, the heal fails and tier 4 is correct. There is no second source of truth, whereas unbrowse can fall back to DOM extraction.
 - **Loose matchers can heal to the wrong request.** A re-learn that picks a different request with the same operationName but different semantics would silently return wrong data. Heal should be accepted only if the new response still satisfies the stored extract path and schema (6.7, 6.12).
-- **Tier 1 on protected sites.** Node `fetch` has a Node TLS/HTTP2 fingerprint. unbrowse and RAE both put an impersonation rung (`curl_cffi`/`httpcloak`) between plain fetch and the browser. site2api jumps straight to tier 2 (seconds instead of about 100 ms) on Cloudflare-class sites. This is acceptable because "remember the lowest tier" amortizes it, but it is a known ceiling.
+- **Tier 1 on protected sites.** Node `fetch` has a Node TLS/HTTP2 fingerprint. unbrowse and RAE both put an impersonation rung (`curl_cffi`/`httpcloak`) between plain fetch and the browser. api-anything jumps straight to tier 2 (seconds instead of about 100 ms) on Cloudflare-class sites. This is acceptable because "remember the lowest tier" amortizes it, but it is a known ceiling.
 - **No shared registry** (a non-goal). unbrowse's network effect, where one person's capture serves everyone, is its main moat. That is a fine trade-off for an MIT tool, but community `sites/` will drift with no verification loop running across users.
 - **Anti-bot coverage.** unbrowse detects about 6 vendor challenge types and routes them to the right handler. DESIGN.md has none of this; at minimum, add block detection (6.8).
 

@@ -3,20 +3,20 @@
 ## Adding a site spec
 
 Bundled specs live in `sites/<site>.json`, one file per site. A user's own copy in
-`~/.site2api/sites/` always wins over the bundled one, and a heal writes a user copy. So a
+`~/.api-anything/sites/` always wins over the bundled one, and a heal writes a user copy. So a
 bundled spec is a starting point that each user's machine keeps healing.
 
 1. Learn the ops locally:
    ```sh
-   site2api login <site>          # only if the data needs an account
-   site2api capture <url> --example k=v
-   site2api add <site> <op> --trigger <url-template> --example k=v --example2 k=v2
-   site2api call <site> <op> k=v3
+   api-anything login <site>          # only if the data needs an account
+   api-anything capture <url> --example k=v
+   api-anything add <site> <op> --trigger <url-template> --example k=v --example2 k=v2
+   api-anything call <site> <op> k=v3
    ```
    Use two different example sets, so nonces are told apart from params. Set `--extract` and
    `--pick` so a call returns only what an agent needs.
-2. Check it: `site2api verify <site>` must pass for every read op.
-3. Export it: `site2api export <site> --keep-examples --out sites/<site>.json`. Export strips
+2. Check it: `api-anything verify <site>` must pass for every read op.
+3. Export it: `api-anything export <site> --keep-examples --out sites/<site>.json`. Export strips
    response shapes (and your example values, without `--keep-examples`), and refuses if any live
    cookie or session value from your machine is still in the spec. Don't use `--force` for a PR:
    a header that is a public constant (a web app's shared bearer) is learned with

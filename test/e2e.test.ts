@@ -1,6 +1,6 @@
 /**
- * End to end against the offline fixture site, in a temp SITE2API_HOME, through the public
- * entry points: addOperation (what `site2api add` runs), call, the CLI, and the MCP server.
+ * End to end against the offline fixture site, in a temp API_ANYTHING_HOME, through the public
+ * entry points: addOperation (what `api-anything add` runs), call, the CLI, and the MCP server.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -18,8 +18,8 @@ import { loadSession, saveSession } from "../src/session.js";
 import { rememberedTier, staleMark } from "../src/store.js";
 import { PUBLIC_BEARER, startFixture, type Fixture } from "./fixture/server.js";
 
-const HOME = mkdtempSync(join(tmpdir(), "site2api-e2e-"));
-process.env.SITE2API_HOME = HOME;
+const HOME = mkdtempSync(join(tmpdir(), "api-anything-e2e-"));
+process.env.API_ANYTHING_HOME = HOME;
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI = join(ROOT, "src", "cli.ts");
 const SITE = "fixture";
@@ -37,7 +37,7 @@ const specFile = () => join(HOME, "sites", `${SITE}.json`);
 function cli(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   // async on purpose: the fixture server lives in this process and must keep answering
   return new Promise((resolve) =>
-    execFile(process.execPath, ["--import", "tsx", CLI, ...args], { cwd: ROOT, env: { ...process.env, SITE2API_HOME: HOME } }, (err, stdout, stderr) =>
+    execFile(process.execPath, ["--import", "tsx", CLI, ...args], { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } }, (err, stdout, stderr) =>
       resolve({ code: err ? Number(err.code ?? 1) : 0, stdout, stderr }),
     ),
   );
@@ -131,10 +131,10 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     assert.equal(refused.class, "refused");
     assert.equal(writes(), 0);
 
-    const res = await call(SITE, "createPost", { text: "hello from site2api" }, { ...fast, allowWrites: true });
+    const res = await call(SITE, "createPost", { text: "hello from api-anything" }, { ...fast, allowWrites: true });
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(writes(), 1);
-    assert.match(JSON.stringify(res.data), /hello from site2api/);
+    assert.match(JSON.stringify(res.data), /hello from api-anything/);
   });
 
   test("5. a per-request signature pins the op to tier 3, which answers through the trigger", async () => {
@@ -149,7 +149,7 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   });
 
   test("6. a login wall served as 200 HTML is auth, with a login hint", async () => {
-    await runTrigger({ url: `${fx.url}/login`, profileDir: profileDir() }); // stands in for `site2api login`
+    await runTrigger({ url: `${fx.url}/login`, profileDir: profileDir() }); // stands in for `api-anything login`
     await addOperation({ site: SITE, op: "secret", trigger: { url: `${fx.url}/private` }, examples: [{}], match: { path: "/private" } });
     assert.deepEqual((await call(SITE, "secret", {}, fast)).data, { data: { secret: "only for you" } });
 
@@ -159,7 +159,7 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     const res = await call(SITE, "secret", {}, fast);
     assert.equal(res.ok, false);
     assert.equal(res.class, "auth", JSON.stringify(res));
-    assert.match(res.next ?? "", /site2api login fixture/);
+    assert.match(res.next ?? "", /api-anything login fixture/);
   });
 
   test("7. a rate limit is reported as rate, with no heal and no retry (via the CLI)", async () => {
@@ -210,7 +210,7 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   test("10. the MCP server lists 3 meta-tools, calls reads, and hides and refuses writes", async () => {
     const client = new Client({ name: "e2e", version: "0" });
     await client.connect(
-      new StdioClientTransport({ command: process.execPath, args: ["--import", "tsx", CLI, "mcp"], cwd: ROOT, env: { ...process.env, SITE2API_HOME: HOME } as Record<string, string> }),
+      new StdioClientTransport({ command: process.execPath, args: ["--import", "tsx", CLI, "mcp"], cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } as Record<string, string> }),
     );
     try {
       const tools = await client.listTools();
