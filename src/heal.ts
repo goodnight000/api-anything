@@ -9,9 +9,9 @@ import { asText, escapeTemplate, fillTemplate, getAt, setAt, walk } from "./code
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
 import { checkExamples, hashLike, learnOperation, matches, rankCandidates, type Args } from "./learn.js";
-import { cookieHeaderFor, home, loadSession, mergeCapture, readJson, safeName, withLock, writePrivate } from "./session.js";
+import { cookieHeaderFor, home, loadSession, mergeCapture, readJson, safeName, writePrivate } from "./session.js";
 import type { Match, Operation, ResponseSpec, Site, Trigger, Volatile } from "./spec.js";
-import { appendHeal, clearStale, loadSite, rememberTier, saveSite, scanSecrets, userSitesDir } from "./store.js";
+import { appendHeal, clearStale, loadSite, rememberTier, scanSecrets, updateSite } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
 
 export const profileDir = () => join(home(), "profile");
@@ -89,9 +89,25 @@ function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
     } catch {
       continue;
     }
-    if (typeof v === "string" && v) out[s.ref.slice(8)] = v;
+    const part = typeof v === "string" && s.template !== undefined ? refPart(s.template, s.ref, v, s.escape) : v;
+    if (typeof part === "string" && part) out[s.ref.slice(8)] = part;
   }
   return out;
+}
+
+/** The text a templated ref holds inside a leaf: the template's other holes match anything. */
+function refPart(template: string, ref: string, leaf: string, escape?: "url" | "json"): string | undefined {
+  const re = template
+    .split(/(\{\{|\}\}|\{[^{}]+\})/)
+    .map((p) => (p === "{{" ? "\\{" : p === "}}" ? "\\}" : p === `{${ref}}` ? "(.*?)" : /^\{[^{}]+\}$/.test(p) ? ".*?" : escapeRe(p)))
+    .join("");
+  const m = new RegExp(`^${re}$`, "s").exec(leaf);
+  if (!m) return undefined;
+  try {
+    return escape === "url" ? decodeURIComponent(m[1]!) : escape === "json" ? (JSON.parse(`"${m[1]}"`) as string) : m[1];
+  } catch {
+    return m[1];
+  }
 }
 
 export interface TriggerRun {
@@ -240,9 +256,9 @@ const decodeLoose = (raw: string, plus: boolean) => {
 };
 
 /**
- * Put `{name}` back where an example value sits in a captured page URL: a query value equal to it
- * (however it was encoded: + or %20, any case), else a path segment equal to it, else a substring
- * of the path or query. The host and other positions that merely equal the value stay literal.
+ * Put `{name}` back where an example value sits in a captured page URL: the query value under a key
+ * named like the param, else every query value and path segment equal to it (however it was
+ * encoded: + or %20, any case), else a substring of the path or query. The host stays literal.
  */
 export function templatizeUrl(url: string, args: Args): string {
   const hashAt = url.indexOf("#");
@@ -262,10 +278,15 @@ export function templatizeUrl(url: string, args: Args): string {
     if (want.length < 3) continue;
     const hole = `{${k}}`;
     const valueOf = (p: string) => decodeLoose(p.slice(p.indexOf("=") + 1), true).toLowerCase();
-    if (pairs?.some((p) => p.includes("=") && valueOf(p) === want)) {
-      pairs = pairs.map((p) => (p.includes("=") && valueOf(p) === want ? `${p.slice(0, p.indexOf("="))}=${hole}` : p));
-    } else if (segs.some((seg) => decodeLoose(seg, false).toLowerCase() === want)) {
-      segs = segs.map((seg) => (decodeLoose(seg, false).toLowerCase() === want ? hole : seg));
+    const keyOf = (p: string) => decodeLoose(p.slice(0, p.indexOf("=")), true).toLowerCase();
+    const inQuery = (p: string) => p.includes("=") && valueOf(p) === want;
+    const inPath = (seg: string) => decodeLoose(seg, false).toLowerCase() === want;
+    // A query key named like the param is its position (?q= on /r/python/search). Otherwise an equal
+    // path segment and query value are both taken (/u/nasa?tab=nasa): which one is the arg is unknown.
+    const named = pairs?.some((p) => inQuery(p) && keyOf(p) === k.toLowerCase());
+    if (pairs?.some(inQuery) || segs.some(inPath)) {
+      pairs = pairs?.map((p) => (inQuery(p) && (!named || keyOf(p) === k.toLowerCase()) ? `${p.slice(0, p.indexOf("="))}=${hole}` : p));
+      if (!named) segs = segs.map((seg) => (inPath(seg) ? hole : seg));
     } else {
       const forms = [...new Set([encodeURIComponent(asText(v)), encodeURIComponent(asText(v)).replace(/%20/g, "+"), asText(v)])].map((f) => escapeRe(lit(f)));
       const re = new RegExp(forms.join("|"), "gi");
@@ -367,6 +388,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     exchanges2: run2?.exchanges,
     examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
     cookies: (run2 ?? run1).cookies,
+    storage: { ...run2?.storage, ...run1.storage },
     match: i.match,
     id: i.from?.id,
     name: i.op,
@@ -421,11 +443,14 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     } else warnings.push(`on the captured response this op says ${j.class}: ${j.reason}. Fix --extract/--pick/--html/--embedded and re-run add --from ${again} (no browser needed)`);
   }
 
-  const replaced = !!existing?.operations.some((o) => o.name === operation.name);
-  const site = putOperation(existing ?? { name: i.site, baseUrl: new URL(trigger.url).origin, operations: [] }, operation);
   const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
   warnings.push(...scanSecrets(operation, session, allowed).secrets.map((s) => `credential left in the spec: ${s}`));
-  const path = saveSite(site);
+  // Re-read under the lock: another add or a heal may have saved this site since we started.
+  let replaced = false;
+  const path = updateSite(i.site, (current) => {
+    replaced = !!current?.operations.some((o) => o.name === operation.name);
+    return putOperation(current ?? { name: i.site, baseUrl: new URL(trigger.url).origin, operations: [] }, operation);
+  });
   rememberTier(i.site, operation.name, undefined);
   clearStale(i.site, operation.name);
   return { operation, warnings, path, captures, ...(preview ? { preview } : {}), replaced };
@@ -442,25 +467,42 @@ const CHARSET: Record<Volatile["shape"]["charset"], [string, string]> = {
 };
 const NEAR = 300;
 
-// A statement or module boundary between a token and its anchor (Meta's `}),null);__d(`, X's `};`).
-const BOUNDARY = /;|\}\)/;
+/**
+ * Whether text between a token and its anchor (read left to right) keeps them in one group: no
+ * bracket closes the group the scan started in, and no `;` ends a statement at that level. Meta's
+ * `}),null);__d(` and X's `}},13:e=>{` end the previous module; a `"use strict";` nested inside the
+ * anchor's own module does not.
+ * ponytail: brackets inside string literals count too; a bundle string holding `}` could mislead it.
+ */
+function sameGroup(between: string): boolean {
+  let depth = 0;
+  for (const c of between) {
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      if (--depth < 0) return false;
+    } else if (c === ";" && depth === 0) return false;
+  }
+  return true;
+}
 
 /**
  * The token of the recorded shape next to the anchor. The anchor must stand as its own name
- * ("Followers" is not inside "FollowersYouKnow"); a token in the anchor's own statement beats a
- * nearer one across a boundary (the previous module's id); a tie between two tokens is no answer.
+ * ("Followers" is not inside "FollowersYouKnow"), and an occurrence in code beats one in prose
+ * (a log message "B failed", whitespace next to it). A token in the anchor's own group beats a
+ * nearer one across a module boundary; a tie between two tokens is no answer.
  * `strict` (writes, whose validation is a real send): only a token that is the one candidate.
  */
 function nearestToken(texts: string[], v: Volatile, strict = false): string | undefined {
   const [chars, bound] = CHARSET[v.shape.charset];
   const re = new RegExp(`(?<![${bound}])[${chars}]{${v.shape.length}}(?![${bound}])`, "g");
   const anchor = new RegExp(`(?<![A-Za-z0-9$])${escapeRe(v.anchor)}(?![A-Za-z0-9$])`, "g");
-  const found: { token: string; d: number; same: boolean }[] = [];
+  const found: { token: string; d: number; same: boolean; prose: boolean }[] = [];
   for (const text of texts) {
     for (const a of text.matchAll(anchor)) {
       const i = a.index;
       const from = Math.max(0, i - NEAR);
       const anchorEnd = i + v.anchor.length;
+      const prose = /\s/.test(text[i - 1] ?? "") || /\s/.test(text[anchorEnd] ?? "");
       for (const m of text.slice(from, anchorEnd + NEAR).matchAll(re)) {
         const token = m[0];
         if (v.shape.charset !== "digits" && !hashLike(token)) continue;
@@ -468,11 +510,12 @@ function nearestToken(texts: string[], v: Volatile, strict = false): string | un
         const end = start + token.length;
         if (end > i && start < anchorEnd) continue; // overlaps the anchor itself
         const between = end <= i ? text.slice(end, i) : text.slice(anchorEnd, start);
-        found.push({ token, d: between.length, same: !BOUNDARY.test(between) });
+        found.push({ token, d: between.length, same: sameGroup(between), prose });
       }
     }
   }
-  const pool = found.some((f) => f.same) ? found.filter((f) => f.same) : strict ? [] : found;
+  const code = found.some((f) => !f.prose) ? found.filter((f) => !f.prose) : found;
+  const pool = code.some((f) => f.same) ? code.filter((f) => f.same) : strict ? [] : code;
   if (strict) {
     const distinct = new Set(pool.map((f) => f.token));
     return distinct.size === 1 ? [...distinct][0] : undefined;
@@ -576,10 +619,9 @@ export type HealResult =
 const STOP: ReadonlySet<Class> = new Set(["rate", "blocked", "auth"]);
 
 function saveHealed(site: string, op: Operation, strategy: "rescan" | "recapture", diff: string, attempt: Attempt): HealResult {
-  withLock(join(userSitesDir(), `${safeName(site)}.json`), () => {
-    const r = loadSite(site);
-    if (!r) throw new Error(`site "${site}" disappeared during heal`);
-    saveSite(putOperation(r.site, op));
+  updateSite(site, (current) => {
+    if (!current) throw new Error(`site "${site}" disappeared during heal`);
+    return putOperation(current, op);
   });
   appendHeal({ site, op: op.name, strategy, diff });
   clearStale(site, op.name);
@@ -661,6 +703,7 @@ export async function healOperation(
       exchanges: run.capture.exchanges,
       examples: [learnArgs],
       cookies: run.capture.cookies,
+      storage: run.capture.storage,
       match: op.match,
       name: op.name,
       trigger: op.trigger,

@@ -65,9 +65,10 @@ if((m=p.match(/^\\/u\\/([^/]+)$/))){
   const sig=Date.now()+"."+Math.random().toString(36).slice(2);
   fetch("/api/signed/feed",{headers:{...H(),"x-sig":sig}}).then(r=>r.json()).then(out);
 }else if(p==="/scoped"){
-  // a per-page-load session id: differs between two loads, yet any value replays (Google's f.sid)
-  const sid=Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);
-  fetch("/api/scoped?q="+encodeURIComponent(new URLSearchParams(location.search).get("q")||"")+"&sid="+sid).then(r=>r.json()).then(out);
+  // a per-page-load id: differs between two loads, yet any value replays (Google's f.sid or ei).
+  // Not named like a credential: a random value under a credential's name is a session: ref instead.
+  const ei=Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);
+  fetch("/api/scoped?q="+encodeURIComponent(new URLSearchParams(location.search).get("q")||"")+"&ei="+ei).then(r=>r.json()).then(out);
 }else if((m=p.match(/^\\/follow\\/([^/]+)$/))){
   document.getElementById("follow").addEventListener("click",()=>fetch("/api/follow?user="+m[1]).then(r=>r.json()).then(out,()=>{}));
 }else if(p==="/walled"){

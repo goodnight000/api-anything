@@ -97,7 +97,10 @@ export const OperationSchema = z.object({
   response: ResponseSchema.default({ format: "json" }),
   params: z.array(ParamSchema).default([]),
   readOnly: z.boolean(),
-  /** header names whose captured value is a public constant (a web app's bearer), kept literal; a human's call */
+  /**
+   * header or field names whose captured value is a public constant, kept literal: a human's call (a
+   * web app's shared bearer), or a credential-named value the site ships in its own JS (an API key)
+   */
   public: z.array(z.string()).optional(),
   minTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
   learnedLoggedIn: z.boolean().default(false),

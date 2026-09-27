@@ -472,7 +472,11 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       }
     })();
     await Promise.race([settled, grace]);
-    return { exchanges, cookies: siteCookies(await ctx.cookies(), o.url), finalUrl: page.url() };
+    // Tokens an SPA keeps in web storage (not the jar); learning turns a request repeating one into a session: ref.
+    const storage = await page
+      .evaluate(() => Object.fromEntries([localStorage, sessionStorage].flatMap((s) => Object.keys(s).map((k) => [k, s.getItem(k) ?? ""])).filter(([, v]) => v.length <= 16_384)))
+      .catch(() => ({}));
+    return { exchanges, cookies: siteCookies(await ctx.cookies(), o.url), finalUrl: page.url(), storage };
   } finally {
     ctx.off("page", onPage);
     ctx.off("request", onRequest);
