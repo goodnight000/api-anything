@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
-import { chromium, type BrowserContext, type Cookie, type Page, type Request, type Response, type Route } from "playwright-core";
+import { chromium, type BrowserContext, type Cookie, type Frame, type Page, type Request, type Response, type Route } from "playwright-core";
 import { botWall } from "./classify.js";
 import { siteOf } from "./session.js";
 import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
@@ -261,8 +261,10 @@ export interface TriggerOptions {
   profileDir: string;
   /**
    * requests it matches are aborted before leaving the browser (in any tab the run opens) and
-   * recorded with aborted:true; `acting` is true once the page has loaded and the steps run. A
-   * WebSocket message the page sends is asked as resourceType "websocket", method "SEND".
+   * recorded with aborted:true; `acting` is true once the page has loaded and the steps run, and
+   * false again while the page is a bot challenge's interstitial (its own verify POSTs must go
+   * through, or it never reloads). A WebSocket message the page sends is asked as resourceType
+   * "websocket", method "SEND".
    */
   intercept?: (e: Exchange, acting: boolean) => boolean;
   /**
@@ -359,9 +361,18 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const exchanges: Exchange[] = [];
   /** top-level documents of the run's first page, in order */
   const docs: Exchange[] = [];
+  /** response bodies being read, so a guard can wait for the latest document's */
+  const bodies = new Map<Exchange, Promise<unknown>>();
+  /** every URL the first page's main frame had, history API changes included (an SPA's pushState) */
+  const locations = new Set<string>();
+  const onNavigated = (f: Frame) => void (f === page.mainFrame() && locations.add(f.url()));
+  page.on("framenavigated", onNavigated);
   const byReq = new Map<Request, Exchange>();
   const reads: Promise<unknown>[] = [];
   const pending = new Map<Request, number>();
+  // Resolves when the first page starts its next document: the old one's requests never finish then.
+  let navigated = () => {};
+  let nextDoc = new Promise<void>((r) => (navigated = r));
   const hits = new Map<string, number>();
   let lastActivity = Date.now();
 
@@ -385,7 +396,13 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const onRequest = (req: Request) => {
     if (!mine(req)) return;
     const ex = record(req);
-    if (req.isNavigationRequest() && req.frame() === page.mainFrame()) docs.push(ex);
+    if (req.isNavigationRequest() && req.frame() === page.mainFrame()) {
+      docs.push(ex);
+      // A challenge's verify POST, cut off by the reload it triggered, would hold "quiet" and the body reads.
+      for (const r of pending.keys()) if (r !== req) pending.delete(r);
+      navigated();
+      nextDoc = new Promise<void>((r) => (navigated = r));
+    }
     // allHeaders() is what went on the wire: cookie, sec-fetch-*, origin, referer.
     bounded(req.allHeaders().then((h) => (ex.request.headers = h), () => {}));
     let endpoint = req.url();
@@ -408,13 +425,15 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const onResponse = (res: Response) => {
     if (!mine(res.request())) return;
     const ex = record(res.request());
-    bounded(
-      (async () => {
-        const headers = await res.allHeaders().catch(() => res.headers());
-        const body = NO_BODY.has(ex.resourceType) ? undefined : await res.text().catch(() => undefined);
-        ex.response = { status: res.status(), headers, body, contentType: headers["content-type"] ?? "" };
-      })(),
-    );
+    const read = (async () => {
+      const headers = await res.allHeaders().catch(() => res.headers());
+      const body = NO_BODY.has(ex.resourceType) ? undefined : await res.text().catch(() => undefined);
+      ex.response = { status: res.status(), headers, body, contentType: headers["content-type"] ?? "" };
+    })();
+    bodies.set(ex, read);
+    // a body its document outlives by 2 s is not coming (Playwright never settles it)
+    const gone = nextDoc.then(() => sleep(2000));
+    bounded(Promise.race([read, gone]));
   };
   const onPage = (p: Page) => void adopt(p);
   ctx.on("page", onPage);
@@ -425,13 +444,27 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
 
   let acting = false;
   const intercept = o.intercept;
+  // The latest top-level document of this run's first page, when it is a bot challenge's interstitial.
+  const walled = () => {
+    const d = docs.at(-1);
+    return !!d?.response && !!botWall({ status: d.response.status, headers: d.response.headers, body: d.response.body ?? "" });
+  };
+  /** walled(), once the latest document's body is in (bounded: a stuck read is not a wall) */
+  const walledNow = async () => {
+    const d = docs.at(-1);
+    if (d && !d.response) await Promise.race([bodies.get(d), sleep(3000)]);
+    return walled();
+  };
+  // A JS challenge solves itself by POSTing a proof (AWS WAF's mp_verify, Cloudflare's
+  // challenge-platform), then reloads: while it is on screen, the steps are not acting yet.
+  const actingNow = async () => acting && !(await walledNow());
   // Context-wide, so a popup the run opens is covered too; other runs' requests pass through.
   const guard = intercept
     ? async (route: Route) => {
         const req = route.request();
         if (!(await adopt(ownerOf(req)))) return route.fallback();
         const ex = record(req);
-        if (!intercept(ex, acting)) return route.fallback();
+        if (!intercept(ex, await actingNow())) return route.fallback();
         ex.aborted = true;
         return route.abort();
       }
@@ -462,10 +495,13 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       await idle();
     }
   };
-  // The latest top-level document of this run's first page, when it is a bot challenge's interstitial.
-  const walled = () => {
-    const d = docs.at(-1);
-    return !!d?.response && !!botWall({ status: d.response.status, headers: d.response.headers, body: d.response.body ?? "" });
+  /** Wait (bounded) for a challenge interstitial to solve itself; true when a real document replaced it. */
+  const outwait = async () => {
+    if (!(await walledNow())) return false;
+    const end = Math.min(deadline, Date.now() + CHALLENGE_WAIT_MS);
+    const seen = docs.length;
+    while (Date.now() < end && (docs.length === seen || !docs.at(-1)!.response || walled())) await sleep(100);
+    return docs.length > seen && !walled();
   };
 
   try {
@@ -497,16 +533,13 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       await goto(page, o.url);
     }
     acting = true;
+    // steps typed into a challenge interstitial would time out on selectors the real page has
+    if (o.steps?.length) await outwait();
     for (const s of o.steps ?? []) await runStep(page, s);
     await waitForData();
     // A JS challenge (AWS WAF, Cloudflare) solves itself and reloads, often after a second or more:
     // judging now would take the interstitial for the page. Wait (bounded) for a real document.
-    if (walled()) {
-      const end = Math.min(deadline, Date.now() + CHALLENGE_WAIT_MS);
-      const seen = docs.length;
-      while (Date.now() < end && (docs.length === seen || !docs.at(-1)!.response || walled())) await sleep(100);
-      if (docs.length > seen && !walled()) await waitForData();
-    }
+    if (await outwait()) await waitForData();
     // Bodies still arriving get a short grace, not the whole budget: a hung long poll is not the data.
     const grace = new Promise((r) => setTimeout(r, Math.min(5000, Math.max(0, deadline - Date.now()))).unref());
     const settled = (async () => {
@@ -520,8 +553,9 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     const storage = await page
       .evaluate(() => Object.fromEntries([localStorage, sessionStorage].flatMap((s) => Object.keys(s).map((k) => [k, s.getItem(k) ?? ""])).filter(([, v]) => v.length <= 16_384)))
       .catch(() => ({}));
-    return { exchanges, cookies: siteCookies(await ctx.cookies(), o.url), finalUrl: page.url(), storage };
+    return { exchanges, cookies: siteCookies(await ctx.cookies(), o.url), finalUrl: page.url(), storage, locations: [...locations] };
   } finally {
+    page.off("framenavigated", onNavigated);
     ctx.off("page", onPage);
     ctx.off("request", onRequest);
     ctx.off("requestfinished", onDone);
@@ -576,38 +610,64 @@ export async function pageFetch(o: {
   profileDir: string;
   headless?: boolean;
   timeoutMs?: number;
+  /**
+   * a read: when the origin page navigates mid-fetch (its own challenge or redirect destroys the
+   * context), wait for it to load and fetch once more. A write is never resent: it may have left.
+   */
+  retryOnNavigation?: boolean;
 }): Promise<PageFetchResult> {
   const timeoutMs = o.timeoutMs ?? 30_000;
   const release = hold();
   try {
     const ctx = await openBrowser(o);
-    const page = await originPage(ctx, o.origin, timeoutMs);
     // Pseudo-headers are invalid names for fetch(); forbidden ones (cookie, host, ...) the browser drops itself.
     const headers = Object.fromEntries(Object.entries(o.headers).filter(([k]) => !k.startsWith(":")));
     const body = o.method === "GET" || o.method === "HEAD" ? undefined : o.body;
-    const run = page.evaluate(
-      async ({ url, method, headers, body, timeoutMs }) => {
-        const t = performance.now();
-        const r = await fetch(url, { method, headers, body, credentials: "include", signal: AbortSignal.timeout(timeoutMs) });
-        const h: Record<string, string> = {};
-        r.headers.forEach((v, k) => (h[k] = v));
-        const text = await r.text();
-        return { status: r.status, headers: h, body: text, url: r.url, ms: Math.round(performance.now() - t), redirected: r.redirected };
-      },
-      { url: o.url, method: o.method, headers, body, timeoutMs },
-    );
-    // the page itself can hang (a stuck renderer): the budget holds either way
-    let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`no response within ${timeoutMs} ms`)), timeoutMs + 1000);
-    });
+    const once = async (page: Page) => {
+      const run = page.evaluate(
+        async ({ url, method, headers, body, timeoutMs }) => {
+          const t = performance.now();
+          const r = await fetch(url, { method, headers, body, credentials: "include", signal: AbortSignal.timeout(timeoutMs) });
+          const h: Record<string, string> = {};
+          r.headers.forEach((v, k) => (h[k] = v));
+          const text = await r.text();
+          return { status: r.status, headers: h, body: text, url: r.url, ms: Math.round(performance.now() - t), redirected: r.redirected };
+        },
+        { url: o.url, method: o.method, headers, body, timeoutMs },
+      );
+      // the page itself can hang (a stuck renderer): the budget holds either way
+      let timer: NodeJS.Timeout | undefined;
+      const late = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`no response within ${timeoutMs} ms`)), timeoutMs + 1000);
+      });
+      try {
+        return await Promise.race([run, late]);
+      } catch (e) {
+        if (/TimeoutError|timed out|signal timed out/i.test((e as Error).message)) throw new Error(`no response within ${timeoutMs} ms`);
+        throw e;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const page = await originPage(ctx, o.origin, timeoutMs);
     try {
-      return await Promise.race([run, late]);
+      return await once(page);
     } catch (e) {
-      if (/TimeoutError|timed out|signal timed out/i.test((e as Error).message)) throw new Error(`no response within ${timeoutMs} ms`);
-      throw e;
-    } finally {
-      clearTimeout(timer);
+      if (!o.retryOnNavigation || !/Execution context was destroyed|navigat/i.test((e as Error).message)) throw e;
+      // waitForFunction outlives a context swap (a bare load-state wait can resolve on the old document)
+      await page.waitForFunction(() => document.readyState !== "loading", undefined, { timeout: timeoutMs }).catch(() => {});
+      // it may have landed on another origin (a challenge's redirect): start from a fresh page on ours
+      let here = "";
+      try {
+        here = new URL(page.url()).origin;
+      } catch {
+        /* about:blank */
+      }
+      if (here !== o.origin) {
+        originPages.delete(o.origin);
+        await page.close().catch(() => {});
+      }
+      return await once(here === o.origin ? page : await originPage(ctx, o.origin, timeoutMs));
     }
   } finally {
     release();

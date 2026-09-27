@@ -48,7 +48,7 @@ export interface BrowserRoot {
 
 export interface ImportedSession {
   cookies: StoredCookie[];
-  /** "<browser-lower>:<profile>", e.g. "chrome:Profile 2"; recorded so a heal re-imports the same one */
+  /** "<browser-lower>:<profile>", e.g. "chrome:Profile 1"; recorded so a heal re-imports the same one */
   source: string;
   browser: string;
   profile: string;
@@ -59,7 +59,7 @@ export interface ImportedSession {
 
 /** One browser profile a human can pick with --profile. */
 export interface ProfileChoice {
-  /** the --profile value: "Chrome/Profile 2" */
+  /** the --profile value: "Chrome/Profile 1" */
   profile: string;
   name?: string;
   email?: string;
@@ -294,7 +294,7 @@ export interface ImportPin {
   profile: string;
 }
 
-/** Parse `--profile "Chrome/Profile 2"` or a session source "chrome:Profile 2" into a pin. */
+/** Parse `--profile "Chrome/Profile 1"` or a session source "chrome:Profile 1" into a pin. */
 export function parsePin(text: string): ImportPin {
   const sep = text.includes("/") ? "/" : ":";
   const i = text.indexOf(sep);

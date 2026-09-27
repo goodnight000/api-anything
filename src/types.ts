@@ -46,6 +46,8 @@ export interface CaptureResult {
   finalUrl: string;
   /** the final page origin's localStorage and sessionStorage, so learning can ref a token kept there */
   storage?: Record<string, string>;
+  /** every URL the page had, history API changes (an SPA's pushState) included: echoes of them are not evidence */
+  locations?: string[];
 }
 
 /** How to make the site's own frontend fire a request. */

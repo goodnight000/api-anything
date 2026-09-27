@@ -82,6 +82,9 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
       continue;
     }
     vals[p.name] = coerce(p, v);
+    if (p.pattern !== undefined && !new RegExp(`^(?:${p.pattern})$`).test(asText(vals[p.name]))) {
+      throw new Error(`param "${p.name}" must be ${p.hint ?? `a value matching /${p.pattern}/`}, got ${JSON.stringify(v)}`);
+    }
   }
 
   let req: Request = { ...op.request, method: op.request.method.toUpperCase(), headers: { ...op.request.headers } };

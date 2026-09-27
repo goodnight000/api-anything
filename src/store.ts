@@ -32,6 +32,15 @@ export function loadSite(name: string, bundledDir = BUNDLED_DIR): Resolved | und
   return undefined;
 }
 
+/** A site's notes (caveats, arg formats, login advice): `<site>.md` beside its spec, the user's copy first. */
+export function siteNotes(name: string, bundledDir = BUNDLED_DIR): string | undefined {
+  for (const dir of [userSitesDir(), bundledDir]) {
+    const path = join(dir, `${safeName(name)}.md`);
+    if (existsSync(path)) return readFileSync(path, "utf8").trim();
+  }
+  return undefined;
+}
+
 export function listSites(bundledDir = BUNDLED_DIR): string[] {
   const names = new Set<string>();
   for (const dir of [userSitesDir(), bundledDir]) {
@@ -204,7 +213,21 @@ function decodings(v: string): Set<string> {
 const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
 const IPV6 = /^[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}$/i;
 /** A literal IP address (a client's remoteHost the page reported): the user's, not the site's. */
-const ipAddress = (v: string) => (IPV4.test(v) && !/^(127\.|0\.0\.0\.0$)/.test(v)) || (IPV6.test(v) && (v.includes("::") || v.split(":").length >= 5) && v !== "::1");
+const ipAddress = (v: string) => (IPV4.test(v) && !/^(127\.|0\.)|\.0$/.test(v)) || (IPV6.test(v) && (v.includes("::") || v.split(":").length >= 5) && v !== "::1");
+/**
+ * An IP address anywhere in a leaf: the whole value, "ip:port", an x-forwarded-for list, "ip=.."
+ * text. A version string is not one: "Chrome/120.0.0.0" follows a letter or "/", and ends in .0.
+ */
+function ipIn(v: string): string | undefined {
+  for (const m of v.matchAll(/[0-9A-Fa-f:.]+/g)) {
+    const before = v[m.index - 1] ?? "";
+    let t = m[0].replace(/^[.:]+|[.:]+$/g, "");
+    if (t.includes(".")) t = t.replace(/:\d{1,5}$/, ""); // ip:port
+    if (t.includes(".") && /[\w/]/.test(before)) continue; // a version: v1.2.3.4, Chrome/1.2.3.4
+    if (ipAddress(t)) return t;
+  }
+  return undefined;
+}
 
 /**
  * `secrets`: exact hits of live jar/session values (6+ chars, raw, unquoted or URL-decoded) under
@@ -274,7 +297,8 @@ export function exportSite(name: string, o: { keepExamples?: boolean } = {}): { 
       const where = `$.operations[${i}].request ${leaf.at.join(" > ")}`;
       const n = leafName(leaf.at);
       if (!pub.has(n.toLowerCase()) && isCredential(n, leaf.value)) named.push([path, `${where} holds a literal credential (${n}); make it a session: ref, or list ${n} in the op's public names if the site ships it to everyone`]);
-      if (ipAddress(leaf.value)) ips.push(`${where} holds the IP address ${leaf.value} (likely yours, as the page reported it); blank it if the site does not need it`);
+      const ip = ipIn(leaf.value);
+      if (ip) ips.push(`${where} holds the IP address ${ip} (likely yours, as the page reported it); blank it if the site does not need it`);
     }
   });
   const scan = scanSecrets(spec, loadSession(name), allowed);

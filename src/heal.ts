@@ -8,8 +8,8 @@ import { botWall, judge, type Class } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
-import { checkExamples, hashLike, learnOperation, matches, rankCandidates, type Args } from "./learn.js";
-import { cookieHeaderFor, home, loadSession, mergeCapture, pruneCaptures, readJson, safeName, writePrivate } from "./session.js";
+import { ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches, rankCandidates, type Args } from "./learn.js";
+import { cookieHeaderFor, home, loadSession, mergeCapture, pruneCaptures, readJson, safeName, siteOf, writePrivate } from "./session.js";
 import type { Match, Operation, ResponseSpec, Site, Trigger, Volatile } from "./spec.js";
 import { appendHeal, clearStale, loadSite, rememberTier, scanSecrets, updateSite } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
@@ -52,22 +52,49 @@ export function fillTrigger(t: Trigger, args: Args): Trigger {
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 // Once the steps run, only these may still load: they can't carry a write the way an image ping,
-// a link, a GET form, a JSONP script or an iframe can.
+// a link, a GET form, a JSONP script or an iframe can...
 const INERT = new Set(["stylesheet", "font", "media"]);
+
+/**
+ * ...unless it is the site's own endpoint in disguise (`<link rel=stylesheet href=/api/vote?id=..>`,
+ * an <audio> or @font-face pointed at one): same-site, and not a static asset path (no asset
+ * extension, or a query carrying an example value). Other sites' CDNs and the site's own
+ * .css/.woff2/.mp4 files still load, so the page keeps rendering.
+ */
+function inertLoad(e: Exchange, site: string | undefined, values: string[]): boolean {
+  let u: URL;
+  try {
+    u = new URL(e.request.url);
+  } catch {
+    return true; // data:, blob:
+  }
+  if (!site || siteOf(u.hostname) !== site) return true;
+  const query = decodeLoose(u.search, true).toLowerCase();
+  return ASSET_EXT.test(u.pathname) && !values.some((v) => v.length >= 3 && query.includes(v.toLowerCase()));
+}
+
 /**
  * While learning a write: abort every unsafe request, and once the UI steps run, every request
- * but stylesheets, fonts and media (a "Follow" button may send a GET, an upvote may be
- * `new Image().src`). A known write's own match is aborted whatever its method. WebSocket
- * messages the page sends are dropped by the browser layer.
+ * but stylesheets, fonts and media that are really assets (a "Follow" button may send a GET, an
+ * upvote may be `new Image().src`). A known write's own match is aborted whatever its method.
+ * WebSocket messages the page sends are dropped by the browser layer.
+ * `url`: the page the run loads (its site); `args`: the example values.
  * ponytail: also aborts requests the page needs after the click; a narrower matcher would risk
  * letting the write itself through when the match is wrong.
  */
-export const writeGuard =
-  (m?: Match) =>
-  (e: Exchange, acting: boolean): boolean =>
+export const writeGuard = (m?: Match, o: { url?: string; args?: Args } = {}) => {
+  let site: string | undefined;
+  try {
+    site = o.url ? siteOf(new URL(o.url).hostname) : undefined;
+  } catch {
+    /* no site: every inert load passes, as before */
+  }
+  const values = Object.values(o.args ?? {}).map((v) => asText(v));
+  return (e: Exchange, acting: boolean): boolean =>
     !SAFE_METHODS.has(e.request.method.toUpperCase()) ||
-    (acting && !INERT.has(e.resourceType)) ||
+    (acting && !(INERT.has(e.resourceType) && inertLoad(e, site, values))) ||
     (!!m && Object.keys(m).length > 0 && matches(m, e.request));
+};
 
 /**
  * A read's trigger must not write either: a shared spec that says "read" but clicks a button that
@@ -157,7 +184,7 @@ export async function runOpTrigger(site: string, op: Operation, args: Args, o: {
   const t = fillTrigger(op.trigger, args);
   const isHit = (e: Exchange) => matches(op.match, e.request);
   // A write's tier-3 run is the UI sending it for real; learning or healing one intercepts it.
-  const intercept = o.intercept ? writeGuard(op.match) : op.readOnly ? readGuard(op.match) : undefined;
+  const intercept = o.intercept ? writeGuard(op.match, { url: t.url, args }) : op.readOnly ? readGuard(op.match) : undefined;
   const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit });
   const matched = pickHit(op, capture.exchanges.filter(isHit), args);
   mergeCapture(site, capture.cookies, matched ? sessionValuesOf(op, matched) : {});
@@ -198,8 +225,8 @@ function saveCapture(o: { url: string; steps?: TriggerStep[]; softFrom?: string;
 }
 
 /** Run a page, keep everything it sent under ~/.api-anything/captures/<id>.json (0600: it holds cookies). */
-export async function capturePage(o: { url: string; steps?: TriggerStep[]; softFrom?: string; write?: boolean }): Promise<CaptureFile> {
-  const r = await runTrigger({ url: o.url, steps: o.steps, softFrom: o.softFrom, profileDir: profileDir(), intercept: o.write ? writeGuard() : undefined });
+export async function capturePage(o: { url: string; steps?: TriggerStep[]; softFrom?: string; write?: boolean; args?: Args }): Promise<CaptureFile> {
+  const r = await runTrigger({ url: o.url, steps: o.steps, softFrom: o.softFrom, profileDir: profileDir(), intercept: o.write ? writeGuard(undefined, { url: o.url, args: o.args }) : undefined });
   return saveCapture(o, r);
 }
 
@@ -376,7 +403,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   } else {
     const run = async (a: Args) => {
       const t = fillTrigger(trigger!, a);
-      const r = await runTrigger({ ...t, profileDir: profileDir(), intercept: i.write ? writeGuard(i.match) : undefined });
+      const r = await runTrigger({ ...t, profileDir: profileDir(), intercept: i.write ? writeGuard(i.match, { url: t.url, args: a }) : undefined });
       const saved = saveCapture({ url: t.url, steps: t.steps, softFrom: t.softFrom, write: i.write }, r);
       captures.push(saved.id);
       return saved;
@@ -390,6 +417,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
   const learned = learnOrExplain(i.site, run1, {
     exchanges: run1.exchanges,
+    pages: capturePages(run1),
     exchanges2: run2?.exchanges,
     examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
     cookies: (run2 ?? run1).cookies,
@@ -706,6 +734,7 @@ export async function healOperation(
   try {
     ({ operation: fresh, sessionValues } = learnOperation({
       exchanges: run.capture.exchanges,
+      pages: capturePages(run.capture),
       examples: [learnArgs],
       cookies: run.capture.cookies,
       storage: run.capture.storage,

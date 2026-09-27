@@ -49,7 +49,7 @@ export function resolveLoginTarget(target: string): { site: string; url: string;
 
 export interface ImportOptions {
   loginCookies?: string[];
-  /** "Chrome/Profile 2" or a session source "chrome:Profile 2" */
+  /** "Chrome/Profile 1" or a session source "chrome:Profile 1" */
   profile?: string;
   /** a cookies.txt / JSON export, for servers/CI with no browser */
   file?: string;
@@ -58,7 +58,7 @@ export interface ImportOptions {
 }
 
 /**
- * Import a session for `site` and save it. Returns the source (e.g. "chrome:Profile 2", "file"),
+ * Import a session for `site` and save it. Returns the source (e.g. "chrome:Profile 1", "file"),
  * or undefined when nothing was importable (the caller falls back to the visible window).
  */
 export async function importSession(site: string, url: string, o: ImportOptions = {}): Promise<ImportedSession | undefined> {
@@ -84,7 +84,7 @@ export async function importSession(site: string, url: string, o: ImportOptions 
 
 const forSite = (c: StoredCookie, url: string) => belongs(c.domain, siteOf(new URL(url).hostname.toLowerCase()));
 
-/** The browser profile a human chose for this site ("chrome:Profile 2"), if its session came from one. */
+/** The browser profile a human chose for this site ("chrome:Profile 1"), if its session came from one. */
 export function browserSource(site: string): string | undefined {
   const source = loadSession(site).source;
   return source && source !== "window" && source !== "file" ? source : undefined;

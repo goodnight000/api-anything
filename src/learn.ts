@@ -6,7 +6,7 @@ import { asText, escapeTemplate, escapeValue, fillSlotTemplate, fillTemplate, ge
 import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
 import { loggedIn, parseCookieHeader } from "./session.js";
 import { OperationSchema, type Match, type Operation, type Param, type Request, type ResponseSpec, type Slot, type Trigger, type Volatile } from "./spec.js";
-import type { Exchange, StoredCookie } from "./types.js";
+import type { CaptureResult, Exchange, StoredCookie } from "./types.js";
 
 export type Args = Record<string, unknown>;
 
@@ -29,6 +29,8 @@ export interface LearnInput {
   storage?: Record<string, string>;
   /** when several requests carry the values, prefer one this accepts (the response recipe resolves on it) */
   accepts?: (e: Exchange) => boolean;
+  /** where the page was during the capture (capturePages): an echo of these is not evidence */
+  pages?: string[];
 }
 
 export interface Learned {
@@ -42,7 +44,7 @@ export interface Learned {
 
 /* ------------------------------------------------------------------ noise */
 
-const ASSET_EXT =
+export const ASSET_EXT =
   /\.(js|mjs|cjs|jsx|ts|css|scss|png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|wasm|map|pdf|zip)$/i;
 const DENY_RESOURCE = new Set([
   "image", "font", "stylesheet", "script", "media", "manifest", "texttrack", "websocket", "eventsource", "preflight", "ping", "cspviolationreport",
@@ -109,7 +111,10 @@ function norm(s: string): string {
   return out.replace(/\+/g, " ");
 }
 
-/** The pages a capture ran on: its documents, every Referer, and any extra (the filled trigger). */
+/** Every URL a run's page had: its main frame's locations (pushState included) and where it ended. */
+export const capturePages = (c: CaptureResult): string[] => [...(c.locations ?? []), c.finalUrl].filter(Boolean);
+
+/** The pages a capture ran on: its documents, every Referer, and any extra (the filled trigger, capturePages). */
 export function pageUrls(exchanges: Exchange[], extra: string[] = []): string[] {
   const urls = new Set(extra);
   for (const e of exchanges) {
@@ -389,7 +394,10 @@ interface Hit {
  */
 function escapeOf(leaf: Leaf, hits: Hit[]): Escape | undefined {
   if (URL_HEADER.has(leaf.at[0]!)) return undefined;
-  if (hits.some((h) => h.encoded) || URL_SHAPED.test(leaf.value)) return "url";
+  if (hits.some((h) => h.encoded)) return "url";
+  // A URL leaf takes the arg percent-encoded, unless the example sits there raw in a form encoding
+  // would change: "/facebook/react" in a route resolver's path keeps its slash.
+  if (URL_SHAPED.test(leaf.value) && hits.every((h) => encodeURIComponent(h.text) === h.text)) return "url";
   const i = leaf.value.toLowerCase().indexOf(hits[0]!.text);
   const quotes = leaf.value.slice(0, Math.max(0, i)).match(/(?<!\\)"/g)?.length ?? 0;
   return quotes % 2 ? "json" : undefined;
@@ -490,7 +498,7 @@ const notFound = (name: string, raw: unknown) =>
 /* ------------------------------------------------------------ credentials */
 
 // Words that name a credential in a key or header: api_key, authToken, x-session-id, sid, X-Amz-Signature.
-const CREDENTIAL_WORD = /^(?:auth(?!or)[a-z0-9]*|[a-z0-9]*(?:token|secret|key|signature|password|credential)s?|sess(?:ion)?[a-z0-9]*|sid)$/;
+const CREDENTIAL_WORD = /^(?:auth(?!or)[a-z0-9]*|[a-z0-9]*(?:token|secret|key|signature|password|passwd|pwd|credential|bearer)s?|sess(?:ion)?[a-z0-9]*|sid)$/;
 
 /** A key or header named like a credential, judged by its words (authToken -> auth, token; "author" is not). */
 export function credentialName(name: string): boolean {
@@ -515,6 +523,18 @@ export function highEntropy(v: string): boolean {
 /** A literal a spec must not hold: a per-session field or header, or a random value under a credential's name. */
 export function isCredential(name: string, value: string): boolean {
   return ((SESSION_FIELD.test(name) || SESSION_HEADER.test(name)) && value.length >= 8) || (credentialName(name) && highEntropy(value));
+}
+
+/**
+ * A script every visitor gets byte for byte: a GET whose answer shared caches may keep (not private
+ * or no-store), fetched without the user's cookies or marked public/immutable. A script from a
+ * per-user path sent with the session cookie proves nothing is public.
+ */
+function staticBundle(e: Exchange): boolean {
+  if (e.resourceType !== "script" || e.request.method.toUpperCase() !== "GET" || !e.response) return false;
+  const cc = Object.entries(e.response.headers).find(([k]) => k.toLowerCase() === "cache-control")?.[1] ?? "";
+  if (/private|no-store/i.test(cc)) return false;
+  return !e.request.headers.cookie || /\bpublic\b|immutable/i.test(cc);
 }
 
 interface Live {
@@ -695,8 +715,19 @@ export function learnOperation(input: LearnInput): Learned {
 
   // 1. pick the request
   const enc = Object.fromEntries(Object.entries(args1).map(([k, v]) => [k, encodeURIComponent(asText(v))]));
-  const pages = pageUrls(input.exchanges, [fillTemplate(input.trigger.url, enc)]);
+  const pages = pageUrls(input.exchanges, [fillTemplate(input.trigger.url, enc), ...(input.pages ?? [])]);
   const ex = pickExchange(input, input.exchanges, args1, pages, warnings);
+  // A read's answer is data. Picked by rank alone, a data-less 2xx is a beacon's ack whose echo of the
+  // page went unrecognized; learning it would answer every call with {"success":true}.
+  const answer = (ex.response?.body ?? "").toLowerCase();
+  const echoesArgs = exampleValues(args1).some(([, v]) => v.length >= 3 && answer.includes(v));
+  if (input.readOnly && isAck(ex) && !echoesArgs && input.id === undefined && !input.match) {
+    throw new Error(
+      `the request that carries the example values (#${ex.id} ${ex.request.method} ${ex.request.url.slice(0, 120)}) answers without data ` +
+        `(${JSON.stringify((ex.response?.body ?? "").trim().slice(0, 60))}): an analytics beacon's ack, not the op's answer. ` +
+        "Pick the data request (capture, then add --from <id> --pick-request <n>), or learn the page itself with --html or --embedded",
+    );
+  }
   let request: Request = {
     method: ex.request.method.toUpperCase(),
     url: ex.request.url,
@@ -705,8 +736,9 @@ export function learnOperation(input: LearnInput): Learned {
   };
   const leaves = walk(request);
 
-  // 2. params
-  const { slots, types } = paramSlots(leaves, args1, locations(pages), warnings);
+  // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
+  // (a route resolver posts {path:"/facebook/react"}, the page's own path).
+  const { slots, types } = paramSlots(leaves, args1, input.id !== undefined ? { abs: [], rel: [] } : locations(pages), warnings);
   const taken = new Set(slots.map((s) => key(s.at)));
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
@@ -727,7 +759,7 @@ export function learnOperation(input: LearnInput): Learned {
   }
   const publicNames = new Set((input.public ?? []).map((h) => h.toLowerCase()));
   // A key the site ships in its own JS to every visitor (a public API key) is a constant, not a credential.
-  const scripts = input.exchanges.flatMap((e) => (e.resourceType === "script" && e.response?.body ? [e.response.body] : []));
+  const scripts = input.exchanges.flatMap((e) => (staticBundle(e) && e.response?.body ? [e.response.body] : []));
   const shipped = new Set<string>();
   const secretNamed = (name: string, value: string) => {
     if (publicNames.has(name.toLowerCase()) || !credentialName(name) || !highEntropy(value)) return false;
@@ -749,6 +781,21 @@ export function learnOperation(input: LearnInput): Learned {
     if (!same && !SESSION_HEADER.test(name) && (BROWSER_HEADER.test(name) || !secretNamed(name, value))) continue;
     addRef(at, { ref: `session:${same ?? name}` }, same ? undefined : value);
   }
+  // A random value an earlier answer of this capture handed the page (a bootstrap JSON, a per-user
+  // config script, a token in the document) is server-issued: a session: ref under any name,
+  // refreshed by every trigger run. Static bundles are public (above); hash-like path segments and
+  // persisted-query ids are volatile anchors, healed by rescan.
+  const issued = input.exchanges.flatMap((e) => (e.id < ex.id && e.response?.body && !staticBundle(e) ? [e.response.body] : []));
+  for (const leaf of leaves) {
+    if (leaf.container || leaf.type !== "string" || taken.has(key(leaf.at)) || !highEntropy(leaf.value)) continue;
+    const header = headerName(leaf.at);
+    const name = leafName(leaf.at);
+    if (leaf.at[0]!.startsWith("path:") || VOLATILE_KEY.test(name) || publicNames.has(name.toLowerCase())) continue;
+    if (header && (URL_HEADER.has(leaf.at[0]!) || BROWSER_HEADER.test(header))) continue;
+    const escaped = JSON.stringify(leaf.value).slice(1, -1);
+    if (!issued.some((b) => b.includes(leaf.value) || b.includes(escaped))) continue;
+    addRef(leaf.at, { ref: `session:${name}` }, leaf.value);
+  }
   // A live value inside a longer leaf ("v1:<cookie>", a next= URL holding it percent-encoded, a
   // JSON-escaped copy) is a templated ref, re-encoded like the leaf had it.
   const long = [...live].filter(([v]) => v.length >= 16);
@@ -758,8 +805,15 @@ export function learnOperation(input: LearnInput): Learned {
     const own = taken.has(key(leaf.at)) ? slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(leaf.at)) : undefined;
     if (own) {
       for (const [v, l] of long) {
-        const form = escapeValue(v, own.escape);
-        if (l.transform || !own.template!.includes(escapeTemplate(form))) continue;
+        if (l.transform) continue;
+        // With no escape of its own, the leaf may still hold the value encoded (x-ctx: user={q};auth=<%-encoded>):
+        // the slot then takes that escape, so the hole is refilled the same way.
+        const tries: (Escape | undefined)[] = own.escape ? [own.escape] : [undefined, "url", "json"];
+        const i = tries.findIndex((e) => own.template!.includes(escapeTemplate(escapeValue(v, e))));
+        if (i < 0) continue;
+        const esc = tries[i];
+        const form = escapeValue(v, esc);
+        if (esc && !own.escape) own.escape = esc;
         own.template = own.template!.split(escapeTemplate(form)).join(`{${l.ref}}`);
         if (l.ref.startsWith("session:") && l.value !== undefined) sessionValues[l.ref.slice(8)] = l.value;
         request = setAt(request, leaf.at, (getAt(request, leaf.at) as string).split(form).join(""));

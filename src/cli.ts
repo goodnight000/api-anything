@@ -8,23 +8,23 @@ import { botWall } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
 import { addOperation, capturePage, loadCapture, PROFILE_HINT, profileDir } from "./heal.js";
 import { buildRequest } from "./http.js";
-import { capOutput, extract } from "./extract.js";
-import { rankCandidates } from "./learn.js";
+import { capOutput, extract, innerJson } from "./extract.js";
+import { capturePages, pageUrls, rankCandidates } from "./learn.js";
 import { serveStdio, VERSION } from "./mcp.js";
 import { loadSession, loggedIn, saveSession, sessionFile, withLock } from "./session.js";
 import { AmbiguousProfile } from "./import.js";
 import { cookieNames, importSession, logout, resolveLoginTarget } from "./login.js";
 import { MatchSchema, TriggerStepSchema, type Operation } from "./spec.js";
-import { exportSite, listSites, loadSite } from "./store.js";
+import { exportSite, listSites, loadSite, siteNotes } from "./store.js";
 
 const HELP: Record<string, string> = {
-  login: `api-anything login <site|url> [--profile "Chrome/Profile 2"] [--window] [--cookies <file>]
+  login: `api-anything login <site|url> [--profile "Chrome/Profile 1"] [--window] [--cookies <file>]
   By default imports the site's cookies from your everyday browser (you are almost always already
   signed in there, so no password and no re-doing 2FA). Prints which profile was used and the cookie
   NAMES only (plus the profile's display name and Google account). The imported session is the SAME
   one as your browser: if the site logs it out, both go.
   <site|url>  a site name (linkedin), a domain (linkedin.com, www.linkedin.com) or a URL
-  --profile   the browser profile to import from, e.g. "Chrome/Profile 2". Needed when several
+  --profile   the browser profile to import from, e.g. "Chrome/Profile 1". Needed when several
               profiles are signed in to the site (possibly different people's accounts): login
               then lists them with their names and emails instead of guessing. The choice is
               remembered: a later automatic re-import uses the same profile.
@@ -68,7 +68,8 @@ const HELP: Record<string, string> = {
   sites: `api-anything sites
   Lists known sites (user specs in ~/.api-anything/sites win over bundled ones).`,
   ops: `api-anything ops <site>
-  Lists a site's operations and params.`,
+  Lists a site's operations and params (with each param's format), and the site's notes: caveats,
+  arg formats and login advice from <site>.md beside its spec.`,
   heal: `api-anything heal <site> <op> [k=v ...]
   Forces a heal (rescan, then recapture) even when the op is marked stale. Reads only.`,
   export: `api-anything export <site> [--out <file>] [--keep-examples] [--force]
@@ -133,6 +134,20 @@ function requireSite(name: string | undefined) {
   const r = loadSite(name);
   if (!r) throw new Fail(`no site "${name}"`, "api-anything sites lists what exists; api-anything add creates one");
   return r;
+}
+
+/**
+ * JSON inside strings parsed in place (batchexecute's `wrb.fr` payloads, a form's f.req), so the
+ * default view shows the data instead of an envelope around one long string.
+ */
+function unlayer(v: unknown, layers = 0): unknown {
+  if (typeof v === "string") {
+    const inner = layers < 5 ? innerJson(v) : undefined;
+    return inner !== null && typeof inner === "object" ? unlayer(inner, layers + 1) : v;
+  }
+  if (Array.isArray(v)) return v.map((x) => unlayer(x, layers));
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, unlayer(x, layers)]));
+  return v;
 }
 
 const examplesOf = (op: Operation) => Object.fromEntries(op.params.flatMap((p) => (p.example !== undefined ? [[p.name, p.example]] : [])));
@@ -245,8 +260,9 @@ async function run(argv: string[]): Promise<number> {
       if (!url) throw new Fail("missing <url>", "api-anything capture <url>");
       needChrome();
       const limit = positive(v.limit, "limit") ?? 15;
-      const c = await capturePage({ url, steps, softFrom: v["soft-from"], write: v.write });
-      const ranked = rankCandidates(c.exchanges, kv(v.example));
+      const examples = kv(v.example);
+      const c = await capturePage({ url, steps, softFrom: v["soft-from"], write: v.write, args: examples });
+      const ranked = rankCandidates(c.exchanges, examples, { pages: pageUrls(c.exchanges, capturePages(c)) });
       const candidates = ranked.slice(0, limit).map((x) => ({
         id: x.id,
         kind: x.resourceType,
@@ -305,13 +321,16 @@ async function run(argv: string[]): Promise<number> {
       const response = { format: html ? "html" : v.embedded ? "embedded" : "json", ...(html ? { html } : {}), ...(v.embedded ? { embedded: { regex: v.embedded } } : {}) } as const;
       let data: unknown;
       try {
-        data = html || v.embedded || !/html/i.test(e.response?.contentType ?? "") ? extract({ ...response, extract: v.path }, body) : body;
+        data = html || v.embedded || !/html/i.test(e.response?.contentType ?? "") ? unlayer(extract({ ...response, extract: v.path }, body)) : body;
       } catch {
         data = body; // not JSON: show the text
       }
+      const sent = e.request.body;
+      const form = sent !== undefined && /x-www-form-urlencoded/i.test(e.request.headers["content-type"] ?? "") && !/^\s*[[{]/.test(sent);
+      const shownBody = sent === undefined ? undefined : form ? unlayer(Object.fromEntries(new URLSearchParams(sent))) : unlayer(sent);
       out({
         id: e.id,
-        request: { method: e.request.method, url: e.request.url, ...(e.request.body ? { body: e.request.body.slice(0, 2000) } : {}) },
+        request: { method: e.request.method, url: e.request.url, ...(shownBody !== undefined ? { body: capOutput(shownBody, 4000).data } : {}) },
         ...(e.response ? { status: e.response.status, type: e.response.contentType } : { aborted: !!e.aborted }),
         ...capOutput(data),
       });
@@ -442,6 +461,11 @@ async function run(argv: string[]): Promise<number> {
 
     case "ops": {
       const { site } = requireSite(pos[0]);
+      const notes = siteNotes(site.name);
+      const about = (p: Operation["params"][number]) => [
+        ...(p.example !== undefined ? [`e.g. ${JSON.stringify(p.example)}`] : []),
+        ...(p.hint ? [p.hint] : p.pattern ? [`matches /${p.pattern}/`] : []),
+      ];
       out({
         site: site.name,
         baseUrl: site.baseUrl,
@@ -449,10 +473,11 @@ async function run(argv: string[]): Promise<number> {
           name: o.name,
           ...(o.description ? { description: o.description } : {}),
           readOnly: o.readOnly,
-          params: o.params.map((p) => `${p.name}:${p.type}${p.required ? "" : "?"}${p.example !== undefined ? ` (e.g. ${JSON.stringify(p.example)})` : ""}`),
+          params: o.params.map((p) => `${p.name}:${p.type}${p.required ? "" : "?"}${about(p).length ? ` (${about(p).join("; ")})` : ""}`),
           ...(o.minTier > 1 ? { minTier: o.minTier } : {}),
           trigger: o.trigger.url,
         })),
+        ...(notes ? { notes } : {}),
       });
       return 0;
     }

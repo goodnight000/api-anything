@@ -1,4 +1,5 @@
 /** Classify every response, never by status code alone. See DESIGN.md "Failure classifier". */
+import { parse as parseHtml } from "node-html-parser";
 import { extract, extractHtml, getPath, inferShape, parseBody } from "./extract.js";
 import type { Operation } from "./spec.js";
 
@@ -76,8 +77,10 @@ function challenge(body: string, status: number): string | undefined {
 /**
  * The bot wall this response is, if any ("Cloudflare challenge page (HTTP 403)"). A real HTML page
  * may mention recaptcha in a login form; challenge pages are small, non-2xx, or where data was expected.
+ * `hasData`: the op's recipe finds its data on this page. A title alone ("Robot check-in: how our
+ * warehouse robots work") is then an ordinary page; a vendor's interstitial markers still count.
  */
-export function botWall(r: Observed, wantsJson = false): string | undefined {
+export function botWall(r: Observed, wantsJson = false, hasData?: () => boolean): string | undefined {
   const body = r.body ?? "";
   const ct = (r.headers["content-type"] ?? "").toLowerCase();
   const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
@@ -88,8 +91,64 @@ export function botWall(r: Observed, wantsJson = false): string | undefined {
     const vendor = challenge(body, r.status);
     if (vendor) return `${vendor} challenge page (HTTP ${r.status})`;
   }
-  if (isHtml && CHALLENGE_TITLE.test(body.slice(0, 20_000))) return `challenge page (HTTP ${r.status})`;
+  if (isHtml && CHALLENGE_TITLE.test(body.slice(0, 20_000)) && !hasData?.()) return `challenge page (HTTP ${r.status})`;
   return undefined;
+}
+
+/** The html/embedded recipe finds data here (a non-empty list, or a value). Never throws. */
+function recipeFinds(op: Operation, body: string): boolean {
+  try {
+    if (op.response.format === "html") return !!op.response.html && extractHtml(body, op.response.html).length > 0;
+    if (op.response.format === "embedded") {
+      const d = extract(op.response, body);
+      return d !== undefined && !(Array.isArray(d) && !d.length);
+    }
+  } catch {
+    /* a bad recipe finds nothing */
+  }
+  return false;
+}
+
+/**
+ * An items selector's container: the part before its last compound ("ul.results li.r" -> "ul.results",
+ * "#search > div.item" -> "#search"). Undefined for a single compound or a selector list.
+ */
+function containerOf(selector: string): { container: string; item: string } | undefined {
+  selector = selector.trim();
+  let depth = 0;
+  let quote = "";
+  let cut = -1;
+  for (let i = 0; i < selector.length; i++) {
+    const c = selector[i]!;
+    if (quote) {
+      if (c === quote) quote = "";
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === "[" || c === "(") depth++;
+    else if (c === "]" || c === ")") depth--;
+    else if (depth === 0 && c === ",") return undefined;
+    else if (depth === 0 && /[\s>+~]/.test(c)) cut = i;
+  }
+  const container = selector.slice(0, cut).replace(/[\s>+~]+$/, "").trim();
+  const item = selector.slice(cut + 1).trim();
+  return cut > 0 && container && item ? { container, item } : undefined;
+}
+
+/**
+ * A results page with no results: the items' container is on the page and holds nothing of the
+ * items' tag (any element, when the selector names no tag). Items there under another class
+ * are a renamed selector (drift), not zero results.
+ */
+function emptyResults(body: string, items: string): boolean {
+  const parts = containerOf(items);
+  if (!parts) return false;
+  try {
+    const box = parseHtml(body).querySelector(parts.container);
+    if (!box) return false;
+    const tag = /^[a-z][a-z0-9-]*/i.exec(parts.item)?.[0];
+    return !box.querySelector(tag ?? "*");
+  } catch {
+    return false;
+  }
 }
 
 /** " (retry after 120 s)" from a Retry-After header in seconds or as an HTTP date. */
@@ -152,7 +211,7 @@ export function classify(op: Operation, r: Observed): Classified {
   const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
   const wantsJson = op.response.format === "json";
 
-  const wall = botWall(r, wantsJson);
+  const wall = botWall(r, wantsJson, () => recipeFinds(op, body));
   if (wall) return is("blocked", wall);
 
   const wait = retryAfter(r.headers);
@@ -167,7 +226,7 @@ export function classify(op: Operation, r: Observed): Classified {
   if (r.status === 403) {
     return LOGIN.test(body) || CSRF_FAILED.test(body)
       ? is("auth", `HTTP 403 with login markers: ${snippet(body)}`)
-      : { ...is("blocked", `HTTP 403 without login markers (likely a bot wall): ${snippet(body)}`), missing: true };
+      : { ...is("blocked", `HTTP 403 with no login or challenge markers: ${snippet(body)}`), missing: true };
   }
   if (r.url) {
     try {
@@ -200,7 +259,9 @@ export function classify(op: Operation, r: Observed): Classified {
   if (op.response.format === "html") {
     if (!op.response.html) return ok();
     if (extractHtml(body, op.response.html).length) return ok();
-    return LOGIN.test(body) ? is("auth", "login page instead of content") : missing(`selector "${op.response.html.items}" matched nothing`);
+    if (LOGIN.test(body)) return is("auth", "login page instead of content");
+    if (emptyResults(body, op.response.html.items)) return ok("no results");
+    return missing(`selector "${op.response.html.items}" matched nothing`);
   }
   if (op.response.format === "embedded") {
     if (extract(op.response, body) !== undefined) return ok();

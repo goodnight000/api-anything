@@ -24,7 +24,8 @@ Everything lives in `~/.api-anything`; set `API_ANYTHING_HOME` to use another di
 Bundled specs, verified live and logged out on 2026-09-27: `x` (getUser, getProfile),
 `instagram` (getProfile, getPosts), `google-flights` (search, top), `hacker-news` (frontPage,
 search), `youtube` (search), `airbnb` (search), `amazon` (search), `linkedin` (getMe, getProfile,
-getCompany, searchPeople — needs login). `api-anything sites` lists them; each has notes in `sites/<site>.md`.
+getCompany, searchPeople — needs login). `api-anything sites` lists them; each has notes (caveats, arg formats) in `sites/<site>.md`,
+which `api-anything ops <site>` and MCP `list_operations` print.
 
 ## Logging in
 
@@ -51,7 +52,7 @@ answers `ok: false` with a `candidates` list, each with its profile, display nam
 pick one:
 
 ```sh
-api-anything login linkedin.com --profile "Chrome/Profile 2"
+api-anything login linkedin.com --profile "Chrome/Profile 1"
 ```
 
 The choice is remembered: when a call later returns `class: "auth"`, api-anything re-imports from
@@ -92,7 +93,9 @@ It exposes four fixed tools, `list_sites`, `list_operations`, `call_operation` a
 the tool list costs the same whether you have 2 sites or 200. Writes are hidden until you start the
 server with `api-anything mcp --allow-writes`.
 
-`call_operation` takes `{ site, op, args: { name: value } }` and returns the same JSON as the CLI.
+`call_operation` takes `{ site, op, args: { name: value } }` and returns the same JSON as the CLI,
+except that `next` names MCP tools (`list_operations {"site":"x"}`, the `login` tool) and marks
+CLI-only commands (heal, add) as ones to ask the user to run in a terminal.
 `login` lets an agent recover from `class: "auth"` on its own: mode `import` only refreshes a
 session you already imported with the CLI, from the same profile (an agent reading page content
 can't pull another site's or another account's cookies), and mode `window` opens a window for you
@@ -229,7 +232,11 @@ Known limits:
 - An op extracts one value from one request. Data in two places of one page takes two ops.
 - `--html` returns text and attributes as they are in the page (relative `href`s stay relative).
 - "Not found" is detected by replaying the op's example args, so a spec without examples reports
-  missing data as `drift`.
+  missing data as `drift`. An empty result is `ok` with `[]` when the page shows it structurally:
+  an empty JSON list at the extract path, or, for `--html`, an items selector written as
+  `"<container> <item>"` whose container is on the page with no item-tag element in it.
+- A param may declare a `pattern` (a regex the whole value must match) and a `hint`; a call whose
+  arg fails it is `input`, with the hint, and nothing is sent.
 - Request pacing (1 s per site) holds within one process: separate CLI runs are not paced
   against each other.
 - Chrome locks its profile to one process. An MCP server releases it after 3 s idle; another

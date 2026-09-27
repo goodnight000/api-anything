@@ -84,6 +84,20 @@ export const ParamSchema = z.object({
   description: z.string().optional(),
   example: z.unknown().optional(),
   default: z.unknown().optional(),
+  /** a regex the whole value must match; a call with an arg that doesn't is `input`, and nothing is sent */
+  pattern: z
+    .string()
+    .refine((p) => {
+      try {
+        new RegExp(p);
+        return true;
+      } catch {
+        return false;
+      }
+    }, "pattern must be a valid regular expression")
+    .optional(),
+  /** what a valid value looks like, said to the agent when an arg fails `pattern` ("YYYY-MM-DD") */
+  hint: z.string().optional(),
 });
 
 export const OperationSchema = z.object({

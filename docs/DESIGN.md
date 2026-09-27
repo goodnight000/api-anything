@@ -64,6 +64,8 @@ preflight) is walked as `body > json:`.
 
 A JSON leaf replaced by a param keeps the arg's native type, except that a leaf that was a JSON
 string stays a string (`"id":"123"` next to `ids:[123]`). Params default to type `string`.
+A param may declare `pattern` (a regex the whole value must match) and `hint` (what a valid value
+is, "a date as YYYY-MM-DD"): an arg that fails it is `input`, named with the hint, and nothing is sent.
 Numbers are never coerced beyond 2^53, and `"false"` is false.
 
 ## Learning (`learn.ts`)
@@ -76,7 +78,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    in `.js` is not an asset), and rank them. A data-less answer (empty 2xx, `{"success":true}`, `OK`)
    ranks below every real answer: a read's answer is data. With a response recipe (`--html`, `--embedded`,
    `--extract`), a candidate the recipe resolves on wins over a beacon that echoes the page URL. The
-   agent confirms which one when it's ambiguous.
+   agent confirms which one when it's ambiguous. A read picked this way whose answer is data-less
+   and does not carry an example value is refused (an analytics beacon's ack whose echo of the page
+   went unrecognized), with a hint to `--pick-request` the data request or learn the document with
+   `--html`/`--embedded`; a request picked by id or pinned by `match` is the agent's call.
 2. **Decode and substitute.** Walk every decoded layer of URL path, query, form, and JSON (including JSON
    inside strings, base64 JSON, and every occurrence of a repeated key). A leaf equal to an example
    value → a slot. A string leaf containing it (or its percent-encoded form) → a slot with a
@@ -91,10 +96,15 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    not evidence: an example value found nowhere else in the chosen request is an error, since the
    param would change nothing the server reads and every call would silently return the example's
    data. An echo is found structurally from the capture's page URLs (its documents, every Referer,
-   the filled trigger): a leaf holding the page's href or origin anywhere, or starting with its path
+   the filled trigger, and every location the page's main frame had, history API changes and the
+   final URL included, since an SPA's pushState URL is in no document and a cross-origin Referer
+   is origin-only): a leaf holding the page's href or origin anywhere, or starting with its path
    or search string, at any percent-encoding depth (analytics `context.page.url`, `x-page-path`,
    `src=`/`redirect=` params). A request whose only hits are echoes (a Segment-style beacon) is no
-   candidate.
+   candidate. A request the agent picked by id (`--pick-request`) is exempt: its echo-shaped leaf
+   is evidence (a route resolver posting `{path:"/facebook/react"}`). `--match` is not, since heals
+   pass it too. An example found raw in a URL leaf is filled percent-encoded, unless encoding would
+   change it (the slash in `/facebook/react`): then the leaf evidently holds it raw.
 3. **Two-run diff** (create with two example sets, recommended). A position that changes with the args is a
    param. A position that changes although the args did not (including the text around the arg in a
    templated leaf, such as a signed URL; browser-computed headers never count) is a nonce/signature, so the op gets `minTier: 3`,
@@ -107,8 +117,16 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    after the storage key. A key or header named like a credential (its words: token, secret, key,
    auth, sess(ion), sid, signature, password, credential; "author" is not) with a random-looking
    value (≥ 16 chars, two character classes, ≥ 3 bits/char) is a `session:` ref too, unless the site
-   ships that value in one of its own scripts to every visitor (a public API key): then it stays
-   literal and is listed in `public`. Auth/anti-bot-looking
+   ships that value in a static bundle to every visitor (a public API key): then it stays
+   literal and is listed in `public`. A static bundle is a GET script that shared caches may keep
+   (not `private`/`no-store`), fetched without the user's cookies or marked `public`/`immutable`;
+   a per-user script sent with the session cookie proves nothing. A random value (≥ 16 chars, as
+   above) that an earlier response of the same capture holds (a bootstrap JSON, a per-user config
+   script, a token in the document; not a static bundle) is server-issued: a `session:` ref named
+   after its leaf, whatever the name. Hash-like path segments and persisted-query keys stay
+   volatile anchors. Like every `session:` ref it is refreshed by each trigger run; when it
+   expires, tier 1 answers `auth` or a bare 403, and the ladder's tier-3 run (below) re-derives it
+   and answers the call, so it needs no `minTier` of its own. Auth/anti-bot-looking
    headers (authorization, x-*-token, x-csrf*, x-goog-batchexecute-bgr, x-client-transaction-id)
    become `session:` refs, whose values live in the session store and are refreshed by every capture. So do
    per-session fields in forms, queries and JSON bodies (`at`, `fb_dtsg`, `lsd`,
@@ -116,7 +134,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    them (Meta's `x-fb-lsd`) shares its ref. A cookie or stored value (≥ 16 chars) inside a longer
    leaf (`v1:<cookie>`, percent-encoded in a `next=` URL, JSON-escaped) is a templated ref that
    re-encodes it the same way; in a leaf that also holds an arg (`next=/search?q={q}&auth=<cookie>`)
-   it is a `{cookie:x}` hole in the param's template, filled at call time. A capture refreshes a
+   it is a `{cookie:x}` hole in the param's template, filled at call time. When that slot has no
+   escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. A capture refreshes a
    templated `session:` value from its place in the leaf. The spec never holds a credential. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.
@@ -142,12 +161,17 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
 A write must never be performed to learn it. Create/heal for writes runs the UI trigger with a
 context-wide route (popups included) that **aborts** before it leaves: every non-GET request, every
 request but stylesheets, fonts and media once the UI steps start (a "Follow" button may send a GET,
-an upvote may be `new Image().src`, a link, a GET form, JSONP or an iframe), and anything matching a
+an upvote may be `new Image().src`, a link, a GET form, JSONP or an iframe), those too when they are
+the site's own endpoint in disguise (same site, and no asset extension or a query carrying an
+example value: `<link rel=stylesheet href=/api/vote?id=..>`), and anything matching a
 known write's `match`; WebSocket messages any of the run's pages sends (a popup's too: the socket
 route is context-wide) are dropped too. Service workers are
 blocked in the profile, since their fetches bypass routing. The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
-run, so a spec that says "read" can't write. Any 2xx to a write is `ok`, whatever the body (204,
+run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the
+steps are not running yet: its own verify POSTs (AWS WAF's `mp_verify`, Cloudflare's
+`/cdn-cgi/challenge-platform`) go through, or it would never reload; the guard applies from the real
+document on. Any 2xx to a write is `ok`, whatever the body (204,
 "OK", an HTML page with a password field), because the server took it, with one exception: a
 sign-in form (a password field next to a username field, or a form posting to a login path) where
 the op's answer is not a page is `auth`: the session was gone and nothing ran. A write executes exactly
@@ -162,11 +186,11 @@ Every response is classified, never by status code alone:
 
 | class | signals | action |
 |---|---|---|
-| `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`), no GraphQL `errors` with null `data` or next to a null extract target; any 2xx to a write | return |
+| `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`; for an html recipe whose items selector is `<container> <item>`, the container present with no element of the item's tag), no GraphQL `errors` with null `data` or next to a null extract target; any 2xx to a write | return |
 | `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once |
 | `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, `require_login: true`, a trigger that lands on a sign-in page | refresh cookies from the profile; for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429 (with the server's Retry-After), "please wait", "rate limit" | back off, report; no heal |
-| `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers | escalate transport tier; then diagnostic `gated`. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal |
+| `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers | escalate transport tier; then diagnostic `gated`. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
 | `error` | anything else (a network error names its cause) | return with details |
 
@@ -218,7 +242,9 @@ its own tier), and a call that ran above tier 1 says why in `reason`. The jar, `
 spec (every add and heal, re-read under the lock) are read-modify-written under a lock file, so
 concurrent processes and calls lose nothing.
 Tier 2 honours `timeoutMs`; when the origin's root redirects to another origin, it fetches from a
-blank stand-in page on the request's origin. The tier-3 answer is the matching request that carries
+blank stand-in page on the request's origin. When the origin page navigates mid-fetch (its own
+challenge or redirect destroys the context), a read waits for the new document and fetches once
+more; a write is never resent. The tier-3 answer is the matching request that carries
 the call's args and judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
 
 ## Browser
@@ -230,10 +256,13 @@ the call's args and judges ok (a `softFrom` page fires its own; a WAF interstiti
   afterwards), and reads bodies **inside the response handler** (bodies vanish after navigation).
   The document body is kept raw. Pages load to `domcontentloaded` (a hung tracker or a download URL
   doesn't fail the run). The run waits for the network to go quiet, ignoring streams, an endpoint's
-  repeats (beacons, polling) and requests open over 3 s; with an op's match it ends soon after that
+  repeats (beacons, polling), requests open over 3 s, and the previous document's requests once the
+  page starts a new one (they never finish; their bodies get 2 s); with an op's match it ends soon after that
   request answers; with no XHR yet it waits up to 2 s more for a deferred one. When the page it
   ended on is a bot challenge's interstitial (a JS challenge that solves itself, often after a second
-  or more), it waits up to 15 s for the real document, then waits for its data as before.
+  or more), it waits up to 15 s for the real document, then waits for its data as before; UI steps
+  wait for it the same way before they run. It records every URL the main frame had (history API
+  changes included) as the capture's `locations`.
 - Chrome locks a profile to one process. The browser is released after 3 s idle, and a second
   process waits up to 15 s for the profile before it fails with a short hint. SIGTERM exits.
 - After every browser run, cookies are exported (full Playwright cookie objects) to
@@ -271,7 +300,8 @@ exact-match secret scan against live jar/session values, found under any encodin
 carry them in (percent-encoded up to three layers, JSON- or `\u`-escaped, base64), plus regex
 heuristics. It also refuses any literal the learner would have made a ref (a session field or
 header, a random value under a credential's name), and warns about a literal IP address (a client
-`remoteHost` the page reported). Names an op lists in `public` are allowed.
+`remoteHost` the page reported), whole or inside a longer leaf (`ip:port`, an x-forwarded-for list,
+`ip=` text; a version string after a letter or `/`, or one ending in `.0`, is not one). Names an op lists in `public` are allowed.
 
 ## Logging in (`login.ts`, `import.ts`)
 
@@ -295,7 +325,7 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
   same Chrome): never a guess. `login` answers `ok: false` with each candidate's profile, display name
   and Google account email (from Chrome's `Local State` `profile.info_cache`) and a `next` of
   `api-anything login <site> --profile "<Browser/Profile>"`. Only cookies whose domain is the site's
-  are read. The chosen source (`"chrome:Profile 2"`, `"window"`, `"file"`) is recorded in the session
+  are read. The chosen source (`"chrome:Profile 1"`, `"window"`, `"file"`) is recorded in the session
   file, and success prints the profile's display name and account.
 - **Targets**: a site name, a domain (`linkedin.com`, `www.linkedin.com`) or a URL. A domain or URL
   on a known site's baseUrl host (with or without `www.`) is that site; any other becomes a site
@@ -321,18 +351,20 @@ independent alternative.
 ## Agent interface
 
 - **CLI** `api-anything`:
-  - `login <site|url> [--profile "Chrome/Profile 2"] [--window] [--cookies <file>]`, `logout <site>`
+  - `login <site|url> [--profile "Chrome/Profile 1"] [--window] [--cookies <file>]`, `logout <site>`
   - `capture <url> [--steps ...] [--interactive]` prints a compact, noise-filtered list of candidate
     requests with ids
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--write]`
   - `call <site> <op> [k=v ...] [--allow-writes]`
   - `inspect <captureId> [requestId]` reads a saved capture with no browser: a response at a path, or
-    the items an `--html`/`--embedded` recipe would return. Every `add` saves its trigger runs as
+    the items an `--html`/`--embedded` recipe would return; JSON inside strings (batchexecute
+    payloads, a form's `f.req`) is shown decoded, in the response and the request body. Every `add` saves its trigger runs as
     captures, so `add --from <id>` re-learns (a fixed `--extract`) without Chrome. Captures hold
     full responses and the run's cookie values (one page can be tens of MB), so each new one prunes
     the directory to the newest 20, none older than 24 h.
   - `verify [site]` (health-checks every read op with its example, healing as needed)
-  - `sites`, `ops <site>`, `heal <site> <op>`, `export <site>`, `mcp`
+  - `sites`, `ops <site>` (params with their format, and the site's notes: `<site>.md` beside its
+    spec, the user's copy first), `heal <site> <op>`, `export <site>`, `mcp`
   - All output is JSON-first, compact, and ends with a `next` hint on failure.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `list_operations`,
   `call_operation`, and `login` (so an agent can fix an `auth` failure itself), so the tool list
@@ -340,7 +372,9 @@ independent alternative.
   only refreshes a site that has a spec and a browser source a human chose with the CLI, from that
   same profile; anything else answers `next`: ask the user to run `api-anything login <site>`. Mode
   window is allowed (a human signs in). MCP cannot create operations: capture and add are CLI only. Writes are hidden unless
-  it is started with `--allow-writes`.
+  it is started with `--allow-writes`. `list_operations` carries the site's notes and each param's
+  `hint`/`pattern`. A `next` served over MCP names the tools (`list_operations {"site":"x"}`, the
+  `login` tool) instead of CLI commands, and marks a CLI-only one (heal, add) as the user's to run.
 - **Skill** `skills/api-anything/SKILL.md`: the create loop (capture → add → call → verify), the
   strict failure loop (follow `next` at most once, then stop and report), and the safety rules.
 - **Claude Code plugin** manifest (skill + MCP), plus copy-paste install lines for Codex and other agents.

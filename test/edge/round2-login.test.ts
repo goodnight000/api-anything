@@ -41,7 +41,7 @@ function twoLinkedInProfiles(): string {
   makeChromiumDb(join(root, "Profile 2"), li("my-own-token-value"), { password: "pw" });
   writeFileSync(
     join(root, "Local State"),
-    JSON.stringify({ profile: { info_cache: { Default: { name: "Other Person", user_name: "other@example.com" }, "Profile 2": { name: "Charles", user_name: "me@example.com" } } } }),
+    JSON.stringify({ profile: { info_cache: { Default: { name: "Other Person", user_name: "other@example.com" }, "Profile 2": { name: "Sam Rivera", user_name: "me@example.com" } } } }),
   );
   process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
   return root;
@@ -83,7 +83,7 @@ describe("login", () => {
       assert.equal(out.ok, false);
       const byProfile = Object.fromEntries(out.candidates.map((c: { profile: string }) => [c.profile, c]));
       assert.deepEqual(byProfile["Chrome/Default"], { profile: "Chrome/Default", name: "Other Person", email: "other@example.com" });
-      assert.deepEqual(byProfile["Chrome/Profile 2"], { profile: "Chrome/Profile 2", name: "Charles", email: "me@example.com" });
+      assert.deepEqual(byProfile["Chrome/Profile 2"], { profile: "Chrome/Profile 2", name: "Sam Rivera", email: "me@example.com" });
       assert.match(r.err, /next: .*api-anything login linkedin --profile "<Browser\/Profile>"/);
       assert.equal(existsSync(join(home, "sessions", "linkedin.json")), false, "nothing imported on a guess");
     } finally {
@@ -97,7 +97,7 @@ describe("login", () => {
     try {
       await assert.rejects(importSession("linkedin", "https://www.linkedin.com", { loginCookies: ["li_at", "JSESSIONID"], pushProfile: false }), /2 browser profiles are signed in/);
       const r = await importSession("linkedin", "https://www.linkedin.com", { loginCookies: ["li_at", "JSESSIONID"], profile: "Chrome/Profile 2", pushProfile: false });
-      assert.equal(r?.name, "Charles");
+      assert.equal(r?.name, "Sam Rivera");
       assert.equal(loadSession("linkedin").source, "chrome:Profile 2");
       saveSession("linkedin", { ...loadSession("linkedin"), cookies: [] }); // the site logged the jar out
       assert.equal(await reimportIfBrowser("linkedin", "https://www.linkedin.com", ["li_at", "JSESSIONID"]), true);

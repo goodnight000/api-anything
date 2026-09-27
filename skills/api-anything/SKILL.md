@@ -13,14 +13,26 @@ local, under `~/.api-anything` (`API_ANYTHING_HOME` overrides it).
 Run the CLI as `api-anything` (or `npx -y github:goodnight000/api-anything`). Its output is one line of JSON. A failure also
 prints a `next:` line on stderr. If the MCP server is connected, `list_sites`, `list_operations`
 and `call_operation` do the same as `sites`, `ops` and `call`, and `login` refreshes a session. MCP
-cannot create operations: `capture` and `add` are CLI only.
+cannot create operations: `capture` and `add` are CLI only. Over MCP, `next` names the tools to
+use; a command it marks CLI only is one to ask the user to run in a terminal.
 
 ## Using an existing operation
 
-1. `api-anything sites`, then `api-anything ops <site>` to see the operations and their params.
-2. `api-anything call <site> <op> name=value ...`
-3. Read `data` (`[]` with `ok: true` is a valid answer: no results). `tier` shows which transport answered. `healed: true` means the template was repaired
-   and saved during this call. You don't need to do anything about it.
+1. `api-anything sites`, then `api-anything ops <site>` to see the operations, their params (with
+   the format a param expects, when the spec says), and the site's `notes`. Read the notes: they
+   hold caveats such as "airport codes only".
+2. `api-anything call <site> <op> name=value ...`. An arg that doesn't fit the param's declared
+   format comes back `class: "input"` with that format, and nothing was sent: fix the arg.
+3. Read `data`. `tier` shows which transport answered. `healed: true` means the template was
+   repaired and saved during this call. You don't need to do anything about it.
+4. No results look like this:
+   - `ok: true` with `data: []` when the page shows it's empty: a JSON op's list at the extract
+     path is empty, an `--embedded` op's extract resolves to `[]`, or an `--html` op whose items
+     selector is `"<container> <item>"` finds the container with no element of the item's tag in it.
+   - Otherwise (the list or selector is simply missing) api-anything replays the op's example
+     args once: if those still return data, the answer is `ok: false`, `class: "input"`, "no
+     results for these args ... the operation works". Treat that as "nothing found" for these
+     args, not as a broken op.
 
 ## Creating an operation: capture, add, call, verify
 
@@ -32,7 +44,9 @@ cannot create operations: `capture` and `add` are CLI only.
    the request whose URL or operationName matches the data you want. `kind` is the resource type:
    `document` is the page itself. If the output has `blocked`, the site served a bot challenge:
    follow `next` (the user logs in and clears it) instead of picking a request.
-   - `api-anything inspect <captureId> <id> [--path a.b]` prints a candidate's response, with no browser.
+   - `api-anything inspect <captureId> <id> [--path a.b]` prints a candidate's response, with no
+     browser. JSON inside strings (Google's batchexecute payloads, a form's `f.req`) is shown
+     decoded.
    - If the page is a single-page app and the data request only fires on in-app navigation, add
      `--soft-from <another page on the site>`: it loads that page first and navigates in-app.
    - If the data is server-rendered, prefer the `document` itself over hunting for an XHR: it has
@@ -53,8 +67,17 @@ cannot create operations: `capture` and `add` are CLI only.
    - An op with no args (a feed, a list) needs `--match path=/api/feed` to say which request.
    - If `add` warns that the match is ambiguous, or picks the wrong request, run `capture` again
      and use `add --from <captureId> --pick-request <id>`.
+   - A copy of the page's own URL in a request (analytics `page.url`, `?src=`) is not evidence
+     that the request reads the arg, so `add` won't learn from it on its own. If the data request
+     really takes the page path (a route resolver posting `{"path":"/facebook/react"}`), pick it
+     with `--pick-request <id>`: an explicitly picked request counts.
+   - `add` refuses to learn a read whose chosen answer carries no data (`{"success":true}`, an
+     empty 2xx): that is an analytics beacon. Pick the data request, or learn the page itself
+     with `--html`/`--embedded`.
    - For a server-rendered page, use
-     `--html '{"items":"li.result","fields":{"title":"a","url":"a@href"}}'` or `--embedded '<regex>'`.
+     `--html '{"items":"ul.results li.result","fields":{"title":"a","url":"a@href"}}'` or
+     `--embedded '<regex>'`. Write `items` as `"<container> <item>"` when the results sit in a
+     stable container: a results page with the container and no items then reads as `[]`.
    - A header that carries a public constant (a web app's shared bearer, the same for every
      visitor) can stay literal with `--public authorization`. Only do this when it is not the user's.
    - Check `preview` in the output: it is what a call returns, judged on the captured response. If
@@ -81,7 +104,8 @@ Google account) and cookie names, never values.
 
 - If several browser profiles are signed in to the site, `login` returns `ok: false` with
   `candidates` (profile, name, email). They may be different people's accounts: **ask the user which
-  one**, then run `api-anything login <site> --profile "<Browser/Profile>"`. Never pick for them.
+  one**, then run `api-anything login <site> --profile "<Browser/Profile>"` with the profile they
+  named. Never pick for them, and never copy a profile from an example.
 - If you have the `login` MCP tool, call it (mode `import`) when a result is `class: "auth"`, then
   retry the call once. It only refreshes a session the user already imported with the CLI; if it says
   so, ask the user to run `api-anything login <site>`. api-anything also re-imports from the chosen

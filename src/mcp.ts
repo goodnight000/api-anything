@@ -13,9 +13,23 @@ import { call } from "./execute.js";
 import { profileDir } from "./heal.js";
 import { browserSource, cookieNames, importSession, loggedIn, resolveLoginTarget } from "./login.js";
 import { loadSession, saveSession, sessionFile, withLock } from "./session.js";
-import { listSites, loadSite } from "./store.js";
+import { listSites, loadSite, siteNotes } from "./store.js";
 
 export const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+
+/**
+ * A `next` hint in MCP terms: the CLI's `ops`, `sites` and `login` are tools here; commands only the
+ * CLI has (heal, add, capture) are for the user to run in a terminal.
+ */
+export function mcpNext(next: string): string {
+  const out = next
+    .replace(/rerun with --allow-writes \(MCP: [^)]*\)/, "ask the user to restart this MCP server with --allow-writes")
+    .replace(/api-anything ops ([\w.-]+)/g, 'list_operations {"site":"$1"}')
+    .replace(/api-anything sites/g, "list_sites")
+    .replace(/(?:ask the user to run:? )?api-anything login ([\w.-]+)/g, 'the login tool {"site":"$1"} (mode "window" when the user must sign in or clear a challenge by hand)')
+    .replace(/api-anything add creates one/, "a new site is added with the CLI");
+  return /\bapi-anything (heal|add|capture|verify|export)\b/.test(out) ? `${out} (api-anything commands are CLI only: ask the user to run them in a terminal)` : out;
+}
 
 const reply = (v: unknown, isError = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(v) }], isError });
 
@@ -57,13 +71,14 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
   server.registerTool(
     "list_operations",
     {
-      description: "List a site's operations with their params. Call this before call_operation.",
+      description: "List a site's operations with their params, and the site's notes (caveats, arg formats). Call this before call_operation.",
       inputSchema: { site: z.string().describe("site name from list_sites") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     guarded(async ({ site }: { site: string }) => {
       const r = loadSite(site);
       if (!r) return reply({ error: `no site "${site}"`, next: "list_sites" }, true);
+      const notes = siteNotes(r.site.name);
       return reply({
         site,
         operations: r.site.operations
@@ -72,8 +87,17 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
             name: o.name,
             ...(o.description ? { description: o.description } : {}),
             ...(o.readOnly ? {} : { write: true }),
-            params: o.params.map((p) => ({ name: p.name, type: p.type, required: p.required, ...(p.description ? { description: p.description } : {}), ...(p.example !== undefined ? { example: p.example } : {}) })),
+            params: o.params.map((p) => ({
+              name: p.name,
+              type: p.type,
+              required: p.required,
+              ...(p.description ? { description: p.description } : {}),
+              ...(p.example !== undefined ? { example: p.example } : {}),
+              ...(p.hint ? { hint: p.hint } : {}),
+              ...(p.pattern ? { pattern: p.pattern } : {}),
+            })),
           })),
+        ...(notes ? { notes } : {}),
       });
     }),
   );
@@ -93,7 +117,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     },
     guarded(async ({ site, op, args }: { site: string; op: string; args?: Record<string, unknown> }) => {
       const r = await call(site, op, args ?? {}, { allowWrites });
-      return reply(r, !r.ok);
+      return reply(r.next ? { ...r, next: mcpNext(r.next) } : r, !r.ok);
     }),
   );
 

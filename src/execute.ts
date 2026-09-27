@@ -129,7 +129,7 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     } else {
       const req = buildRequest(op, ctx.args, session);
       const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
-      r = await pageFetch({ origin: new URL(req.url).origin, url: req.url, method: req.method, headers, body: req.body, profileDir: profileDir(), timeoutMs: ctx.opts.timeoutMs });
+      r = await pageFetch({ origin: new URL(req.url).origin, url: req.url, method: req.method, headers, body: req.body, profileDir: profileDir(), timeoutMs: ctx.opts.timeoutMs, retryOnNavigation: op.readOnly });
     }
     return { tier, status: r.status, ...(r.redirected ? { redirected: true } : {}), ...judge(op, r) };
   } catch (e) {
