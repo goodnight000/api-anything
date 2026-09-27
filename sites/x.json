@@ -1,0 +1,230 @@
+{
+  "name": "x",
+  "displayName": "X (Twitter)",
+  "baseUrl": "https://x.com",
+  "description": "Public X (Twitter) profiles by screen name, logged out: full profile via the UserByScreenName GraphQL query, or the profile card from the server-rendered page. No tweets (the logged-out timeline query 404s). See sites/x.md.",
+  "operations": [
+    {
+      "name": "getProfile",
+      "description": "Profile card of an X account from its server-rendered page (meta tags): name, bio, avatar, banner, post count as displayed (e.g. \"74.3K\"), join month. No follower count. Fallback if getUser breaks.",
+      "request": {
+        "method": "GET",
+        "url": "https://x.com/%7Bscreen_name%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "screen_name",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://x.com/{screen_name}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "x.com",
+        "path": "/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "head",
+          "fields": {
+            "title": "meta[property=\"og:title\"]@content",
+            "screen_name": "meta[property=\"profile:username\"]@content",
+            "bio": "meta[name=\"description\"]@content",
+            "avatar": "meta[property=\"og:image\"]@content",
+            "banner": "meta[name=\"twitter:image\"]@content",
+            "posts": "meta[name=\"twitter:data1\"]@content",
+            "joined": "meta[name=\"twitter:data2\"]@content",
+            "url": "meta[property=\"og:url\"]@content"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "screen_name",
+          "type": "string",
+          "required": true,
+          "example": "nasa",
+          "description": "account handle without @, e.g. nasa"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-27T11:07:35.213Z"
+    },
+    {
+      "name": "getUser",
+      "description": "Public profile of an X account by screen name: id, name, bio, location, follower/following/post counts, verification, avatar. Uses the UserByScreenName GraphQL query with the public web-app bearer; no account needed.",
+      "request": {
+        "method": "GET",
+        "url": "https://api.x.com/graphql/6tXRska4Vx-MZLENLErFmg/UserByScreenName?variables=%7B%22screenName%22%3A%22%7Bscreen_name%7D%22%2C%22__relay_internal__pv__appviewerisloggedinprovider%22%3Afalse%7D",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
+          "content-type": "application/json",
+          "origin": "https://x.com",
+          "priority": "u=1, i",
+          "referer": "https://x.com/",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+          "x-twitter-active-user": "yes",
+          "x-twitter-client-language": "en"
+        }
+      },
+      "slots": [
+        {
+          "param": "screen_name",
+          "at": [
+            "query:variables",
+            "json:/screenName"
+          ]
+        }
+      ],
+      "volatile": [
+        {
+          "at": [
+            "path:1"
+          ],
+          "shape": {
+            "charset": "base64url",
+            "length": 22
+          },
+          "anchor": "UserByScreenName"
+        }
+      ],
+      "trigger": {
+        "url": "https://x.com/{screen_name}",
+        "softFrom": "https://x.com/spacex"
+      },
+      "match": {
+        "method": "GET",
+        "host": "api.x.com",
+        "path": "/graphql/*/UserByScreenName"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "data.user_result_by_screen_name.result",
+        "pick": [
+          "rest_id",
+          "core.name",
+          "core.screen_name",
+          "core.created_at_ms",
+          "profile_bio.description",
+          "location.location",
+          "relationship_counts.followers",
+          "relationship_counts.following",
+          "tweet_counts.tweets",
+          "verification.is_blue_verified",
+          "verification.verified_type",
+          "privacy.protected",
+          "avatar.image_url",
+          "banner.image_url"
+        ],
+        "shape": {
+          "data": "object",
+          "data.user_result_by_screen_name": "object",
+          "data.user_result_by_screen_name.id": "string",
+          "data.user_result_by_screen_name.result": "object",
+          "data.user_result_by_screen_name.result.__typename": "string",
+          "data.user_result_by_screen_name.result.affiliates_highlighted_label": "object",
+          "data.user_result_by_screen_name.result.avatar": "object",
+          "data.user_result_by_screen_name.result.avatar.image_url": "string",
+          "data.user_result_by_screen_name.result.banner": "object",
+          "data.user_result_by_screen_name.result.banner.image_url": "string",
+          "data.user_result_by_screen_name.result.business_account": "object",
+          "data.user_result_by_screen_name.result.business_account.affiliates_count": "number",
+          "data.user_result_by_screen_name.result.can_view_expanded_profile": "boolean",
+          "data.user_result_by_screen_name.result.core": "object",
+          "data.user_result_by_screen_name.result.core.created_at_ms": "number",
+          "data.user_result_by_screen_name.result.core.name": "string",
+          "data.user_result_by_screen_name.result.core.screen_name": "string",
+          "data.user_result_by_screen_name.result.creator_subscriptions_count": "number",
+          "data.user_result_by_screen_name.result.grok_translated_bio_with_availability": "object",
+          "data.user_result_by_screen_name.result.grok_translated_bio_with_availability.is_available": "boolean",
+          "data.user_result_by_screen_name.result.has_hidden_subscriptions_on_profile": "boolean",
+          "data.user_result_by_screen_name.result.highlights_info": "object",
+          "data.user_result_by_screen_name.result.highlights_info.can_highlight_tweets": "boolean",
+          "data.user_result_by_screen_name.result.highlights_info.highlighted_tweets": "string",
+          "data.user_result_by_screen_name.result.id": "string",
+          "data.user_result_by_screen_name.result.identity_profile_labels_highlighted_label": "object",
+          "data.user_result_by_screen_name.result.legacy": "object",
+          "data.user_result_by_screen_name.result.legacy_extended_profile": "object",
+          "data.user_result_by_screen_name.result.legacy_extended_profile.birthdate": "object",
+          "data.user_result_by_screen_name.result.legacy_extended_profile.birthdate.day": "number",
+          "data.user_result_by_screen_name.result.legacy_extended_profile.birthdate.month": "number",
+          "data.user_result_by_screen_name.result.legacy_extended_profile.birthdate.visibility": "string",
+          "data.user_result_by_screen_name.result.legacy_extended_profile.birthdate.year": "number",
+          "data.user_result_by_screen_name.result.legacy_extended_profile.birthdate.year_visibility": "string",
+          "data.user_result_by_screen_name.result.location": "object",
+          "data.user_result_by_screen_name.result.location.location": "string",
+          "data.user_result_by_screen_name.result.possibly_sensitive": "boolean",
+          "data.user_result_by_screen_name.result.privacy": "object",
+          "data.user_result_by_screen_name.result.privacy.protected": "boolean",
+          "data.user_result_by_screen_name.result.profile_bio": "object",
+          "data.user_result_by_screen_name.result.profile_bio.description": "string",
+          "data.user_result_by_screen_name.result.profile_bio.entities": "object",
+          "data.user_result_by_screen_name.result.profile_bio.entities.description": "object",
+          "data.user_result_by_screen_name.result.profile_bio.entities.url": "object",
+          "data.user_result_by_screen_name.result.profile_image_shape": "string",
+          "data.user_result_by_screen_name.result.relationship_counts": "object",
+          "data.user_result_by_screen_name.result.relationship_counts.followers": "number",
+          "data.user_result_by_screen_name.result.relationship_counts.following": "number",
+          "data.user_result_by_screen_name.result.rest_id": "string",
+          "data.user_result_by_screen_name.result.subscribers_count": "number",
+          "data.user_result_by_screen_name.result.super_follow_eligible": "boolean",
+          "data.user_result_by_screen_name.result.tweet_counts": "object",
+          "data.user_result_by_screen_name.result.tweet_counts.tweets": "number",
+          "data.user_result_by_screen_name.result.user_seed_tweet_count": "number",
+          "data.user_result_by_screen_name.result.verification": "object",
+          "data.user_result_by_screen_name.result.verification.is_blue_verified": "boolean",
+          "data.user_result_by_screen_name.result.verification.verified": "boolean",
+          "data.user_result_by_screen_name.result.verification.verified_type": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "screen_name",
+          "type": "string",
+          "required": true,
+          "example": "nasa",
+          "description": "account handle without @, e.g. nasa"
+        }
+      ],
+      "readOnly": true,
+      "public": [
+        "authorization"
+      ],
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-27T11:08:26.327Z"
+    }
+  ]
+}

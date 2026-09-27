@@ -1,0 +1,282 @@
+{
+  "name": "google-flights",
+  "displayName": "Google Flights",
+  "baseUrl": "https://www.google.com",
+  "description": "Logged-out one-way flight search on Google Flights (GetShoppingResults). Prices in USD, en-US. Result fields are positional; see sites/google-flights.md.",
+  "operations": [
+    {
+      "name": "search",
+      "request": {
+        "method": "POST",
+        "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=-7489343373632315628&bl=boq_travel-frontend-flights-ui_20260922.02_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=14537&rt=c",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+          "origin": "https://www.google.com",
+          "priority": "u=1, i",
+          "referer": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-arch": "\"x86\"",
+          "sec-ch-ua-bitness": "\"64\"",
+          "sec-ch-ua-form-factors": "\"Desktop\"",
+          "sec-ch-ua-full-version": "\"153.0.8010.53\"",
+          "sec-ch-ua-full-version-list": "\"Google Chrome\";v=\"153.0.8010.53\", \"Not_A Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"153.0.8010.53\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-ua-wow64": "?0",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+          "x-browser-channel": "stable",
+          "x-browser-copyright": "Copyright 2026 Google LLC. All Rights Reserved.",
+          "x-browser-validation": "5NlNaDKBB93vNb2o5VQTaiuhHAY=",
+          "x-browser-year": "2026",
+          "x-goog-batchexecute-bgr": "",
+          "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]",
+          "x-same-domain": "1"
+        },
+        "body": "f.req=%5Bnull%2C%22%5B%5Bnull%2Cnull%2Cnull%2C%5C%22HshMzSzGTMlUAIVMBwBG--------pjbgi22AAAAAGq497gCRmTGA%5C%22%5D%2C%5Bnull%2Cnull%2C2%2Cnull%2C%5B%5D%2C1%2C%5B1%2C0%2C0%2C0%5D%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B%5B%5B%5B%5C%22%7Borigin%7D%5C%22%2C0%5D%5D%5D%2C%5B%5B%5B%5C%22%7Bdestination%7D%5C%22%2C0%5D%5D%5D%2Cnull%2C0%2Cnull%2Cnull%2C%5C%22%7Bdate%7D%5C%22%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C3%5D%5D%2Cnull%2Cnull%2Cnull%2C1%5D%2C0%2C0%2C0%2C1%5D%22%5D&"
+      },
+      "slots": [
+        {
+          "param": "origin",
+          "at": [
+            "form:f.req",
+            "json:/1",
+            "json:/1/13/0/0/0/0/0"
+          ]
+        },
+        {
+          "param": "destination",
+          "at": [
+            "form:f.req",
+            "json:/1",
+            "json:/1/13/0/1/0/0/0"
+          ]
+        },
+        {
+          "param": "date",
+          "at": [
+            "form:f.req",
+            "json:/1",
+            "json:/1/13/0/6"
+          ]
+        },
+        {
+          "param": "origin",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way"
+        },
+        {
+          "ref": "session:x-goog-batchexecute-bgr",
+          "at": [
+            "header:x-goog-batchexecute-bgr"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way"
+      },
+      "match": {
+        "method": "POST",
+        "host": "www.google.com",
+        "path": "/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "xssiPrefix": ")]}'",
+        "extract": "[0][0][2][3][0]",
+        "pick": [
+          "[0][1]",
+          "[1][0][1]",
+          "[0][3]",
+          "[0][6]",
+          "[0][4]",
+          "[0][5]",
+          "[0][7]",
+          "[0][8]",
+          "[0][9]",
+          "[0][13]"
+        ],
+        "shape": {
+          "[]": "array",
+          "[][]": "array",
+          "[][][]": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "origin",
+          "type": "string",
+          "required": true,
+          "description": "origin airport IATA code, e.g. SFO",
+          "example": "SFO"
+        },
+        {
+          "name": "destination",
+          "type": "string",
+          "required": true,
+          "description": "destination airport IATA code, e.g. JFK",
+          "example": "JFK"
+        },
+        {
+          "name": "date",
+          "type": "string",
+          "required": true,
+          "description": "departure date YYYY-MM-DD, in the future",
+          "example": "2027-02-10"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-27T11:02:21.662Z",
+      "description": "One-way flights: Google's \"other departing flights\" list, sorted by price. Per item: [0][1] airline names, [1][0][1] price USD, [0][3]/[0][6] from/to airport, [0][4]/[0][7] dep/arr date [y,m,d], [0][5]/[0][8] dep/arr local time [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), [0][9] duration minutes, [0][13] layovers (null = nonstop; each [minutes, airport, ...])."
+    },
+    {
+      "name": "top",
+      "description": "One-way flights: Google's \"top departing flights\" (best) list; disjoint from search, together they are the full results page. Per item: [0][1] airline names, [1][0][1] price USD, [0][3]/[0][6] from/to airport, [0][4]/[0][7] dep/arr date [y,m,d], [0][5]/[0][8] dep/arr local time [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), [0][9] duration minutes, [0][13] layovers (null = nonstop; each [minutes, airport, ...]).",
+      "request": {
+        "method": "POST",
+        "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=5052833066978253007&bl=boq_travel-frontend-flights-ui_20260922.02_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=14476&rt=c",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+          "origin": "https://www.google.com",
+          "priority": "u=1, i",
+          "referer": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-arch": "\"x86\"",
+          "sec-ch-ua-bitness": "\"64\"",
+          "sec-ch-ua-form-factors": "\"Desktop\"",
+          "sec-ch-ua-full-version": "\"153.0.8010.53\"",
+          "sec-ch-ua-full-version-list": "\"Google Chrome\";v=\"153.0.8010.53\", \"Not_A Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"153.0.8010.53\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-ua-wow64": "?0",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+          "x-browser-channel": "stable",
+          "x-browser-copyright": "Copyright 2026 Google LLC. All Rights Reserved.",
+          "x-browser-validation": "5NlNaDKBB93vNb2o5VQTaiuhHAY=",
+          "x-browser-year": "2026",
+          "x-goog-batchexecute-bgr": "",
+          "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]",
+          "x-same-domain": "1"
+        },
+        "body": "f.req=%5Bnull%2C%22%5B%5Bnull%2Cnull%2Cnull%2C%5C%22HNcyLD_kSW-UAIjTzQBG---------pjtl13AAAAAGq493oMLqcAA%5C%22%5D%2C%5Bnull%2Cnull%2C2%2Cnull%2C%5B%5D%2C1%2C%5B1%2C0%2C0%2C0%5D%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B%5B%5B%5B%5C%22%7Borigin%7D%5C%22%2C0%5D%5D%5D%2C%5B%5B%5B%5C%22%7Bdestination%7D%5C%22%2C0%5D%5D%5D%2Cnull%2C0%2Cnull%2Cnull%2C%5C%22%7Bdate%7D%5C%22%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C3%5D%5D%2Cnull%2Cnull%2Cnull%2C1%5D%2C0%2C0%2C0%2C1%5D%22%5D&"
+      },
+      "slots": [
+        {
+          "param": "origin",
+          "at": [
+            "form:f.req",
+            "json:/1",
+            "json:/1/13/0/0/0/0/0"
+          ]
+        },
+        {
+          "param": "destination",
+          "at": [
+            "form:f.req",
+            "json:/1",
+            "json:/1/13/0/1/0/0/0"
+          ]
+        },
+        {
+          "param": "date",
+          "at": [
+            "form:f.req",
+            "json:/1",
+            "json:/1/13/0/6"
+          ]
+        },
+        {
+          "param": "origin",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way"
+        },
+        {
+          "ref": "session:x-goog-batchexecute-bgr",
+          "at": [
+            "header:x-goog-batchexecute-bgr"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.google.com/travel/flights?q=Flights%20from%20{origin}%20to%20{destination}%20on%20{date}%20one%20way"
+      },
+      "match": {
+        "method": "POST",
+        "host": "www.google.com",
+        "path": "/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "xssiPrefix": ")]}'",
+        "extract": "[0][0][2][2][0]",
+        "pick": [
+          "[0][1]",
+          "[1][0][1]",
+          "[0][3]",
+          "[0][6]",
+          "[0][4]",
+          "[0][5]",
+          "[0][7]",
+          "[0][8]",
+          "[0][9]",
+          "[0][13]"
+        ],
+        "shape": {
+          "[]": "array",
+          "[][]": "array",
+          "[][][]": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "origin",
+          "type": "string",
+          "required": true,
+          "description": "origin airport IATA code, e.g. SFO",
+          "example": "SFO"
+        },
+        {
+          "name": "destination",
+          "type": "string",
+          "required": true,
+          "description": "destination airport IATA code, e.g. JFK",
+          "example": "JFK"
+        },
+        {
+          "name": "date",
+          "type": "string",
+          "required": true,
+          "description": "departure date YYYY-MM-DD, in the future",
+          "example": "2027-02-10"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-27T11:03:15.737Z"
+    }
+  ]
+}

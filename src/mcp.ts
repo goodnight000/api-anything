@@ -65,7 +65,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     "call_operation",
     {
       description:
-        "Call a site operation. Returns {ok, class, data, tier, healed?, next?}. On failure follow `next` at most once, then stop and report." +
+        "Call a site operation. Returns {ok, class, data, tier, healed?, ms, reason?, next?}; `reason` also explains a slow success. On failure follow `next` at most once, then stop and report." +
         (allowWrites ? " Write operations change the user's account: only call them when the user asked for that exact action." : " Writes are disabled on this server."),
       inputSchema: {
         site: z.string(),

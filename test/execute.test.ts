@@ -120,3 +120,74 @@ test("a byte-identical rescan is not a heal; rate is reported without heal or re
   assert.equal(seen.length, 1);
   assert.match(rate.next ?? "", /do not retry/);
 });
+
+test("no data for an arg while the example still returns data is input, not drift: no heal, one extra request", async () => {
+  saveSite(
+    parseSite({
+      name: "nf",
+      baseUrl: "https://t.test",
+      operations: [
+        {
+          name: "user",
+          readOnly: true,
+          request: { method: "GET", url: "https://t.test/api/User?name=alice", headers: {} },
+          slots: [{ param: "name", at: ["query:name"] }],
+          trigger: { url: "https://t.test/u/{name}" },
+          params: [{ name: "name", example: "alice" }],
+          response: { extract: "data.user" },
+        },
+      ],
+    }),
+  );
+  const h: Handler = (url) => {
+    const name = new URL(url).searchParams.get("name");
+    return name === "alice" ? json({ data: { user: { name } } }) : json({ data: {} });
+  };
+  const r = await call("nf", "user", { name: "zzqq_no_such_user" }, opts(h));
+  assert.equal(r.class, "input", JSON.stringify(r));
+  assert.match(r.reason ?? "", /example args still return data/);
+  assert.match(r.next ?? "", /do not heal/);
+  assert.equal(seen.length, 2);
+  assert.equal(heals().length, 0);
+
+  // when the example fails too, it is drift and the heal runs
+  seen = [];
+  const d = await call("nf", "user", { name: "bob" }, opts(() => json({ data: {} })));
+  assert.equal(d.class, "drift");
+  assert.ok(seen.length >= 2);
+});
+
+test("a write answered 204, HTML or plain text is ok, sent once", async () => {
+  for (const res of [new Response(null, { status: 204 }), new Response("<html>Posted!</html>", { headers: { "content-type": "text/html" } }), new Response("OK")]) {
+    seen = [];
+    const r = await call("t", "post", { text: "hi" }, { ...opts(() => res), allowWrites: true });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(seen.length, 1);
+  }
+});
+
+test("add --from a capture judges the op on the captured response: a wrong --extract is a warning, a right one a preview", async () => {
+  const { addOperation } = await import("../src/heal.ts");
+  const capture = {
+    id: "cfake1",
+    at: "",
+    url: "https://t.test/u/nasa",
+    cookies: [],
+    finalUrl: "https://t.test/u/nasa",
+    exchanges: [
+      {
+        id: 7,
+        resourceType: "fetch",
+        request: { method: "GET", url: "https://t.test/api/User?screen_name=nasa", headers: {} },
+        response: { status: 200, headers: {}, contentType: "application/json", body: '{"data":{"user_result":{"name":"NASA","followers":9}}}' },
+      },
+    ],
+  };
+  const bad = await addOperation({ site: "addfrom", op: "u", examples: [{ screen_name: "nasa" }], from: { capture, id: 7 }, response: { extract: "data.user.result" } });
+  assert.ok(bad.warnings.some((w) => /on the captured response this op says drift: extract path "data.user.result" missing.*add --from cfake1/.test(w)), bad.warnings.join("\n"));
+  assert.equal(bad.preview, undefined);
+  assert.equal(bad.operation.trigger.url, "https://t.test/u/{screen_name}");
+  const good = await addOperation({ site: "addfrom", op: "u", examples: [{ screen_name: "nasa" }], from: { capture, id: 7 }, response: { extract: "data.user_result", pick: ["name"] } });
+  assert.deepEqual(good.preview, { first: { name: "NASA" } });
+  assert.equal(good.replaced, true);
+});

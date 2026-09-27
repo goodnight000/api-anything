@@ -62,3 +62,11 @@ test("session store: SITE2API_HOME override, 0700 dirs, 0600 files, merge by nam
   assert.throws(() => loadSession("../etc"), /invalid site name/);
   assert.throws(() => safeName("a/b"));
 });
+
+test("cookieValue never hands a cookie to another site, nor a Secure one over http", () => {
+  const bank = [c("sid", "SECURE-ONLY-SESSION", ".bank.test", { secure: true, httpOnly: true })];
+  assert.equal(cookieValue(bank, "sid", "http://evil.test/"), undefined);
+  assert.equal(cookieValue(bank, "sid", "http://www.bank.test/"), undefined, "Secure cookie over http");
+  const host = [c("csrftoken", "tok123456", "www.site.test")];
+  assert.equal(cookieValue(host, "csrftoken", "https://api.site.test/v1"), "tok123456", "same site: page JS echoes it to its API host");
+});

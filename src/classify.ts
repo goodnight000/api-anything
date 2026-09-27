@@ -6,6 +6,12 @@ export type Class = "ok" | "drift" | "auth" | "rate" | "blocked" | "input" | "er
 export interface Classified {
   class: Class;
   reason: string;
+  /**
+   * drift only: the response came back fine but without the data (extract path, selector or
+   * embedded JSON missing). Bad args ("no such user") look the same, so the caller checks the
+   * example args before healing.
+   */
+  missing?: boolean;
 }
 export interface Observed {
   status: number;
@@ -24,7 +30,7 @@ const CHALLENGES: [string, RegExp][] = [
 ];
 
 const LOGIN =
-  /require_login|login_required|not logged in|(log|sign) ?in to continue|please (log|sign) ?in|authentication required|bad authentication|could not authenticate|bad guest token|invalid session|session (has )?expired|type=["']password["']|accounts\.google\.com\/ServiceLogin/i;
+  /"require_login"\s*:\s*true|login_required|not logged in|(log|sign) ?in to continue|please (log|sign) ?in|authentication required|bad authentication|could not authenticate|bad guest token|invalid session|session (has )?expired|type=["']password["']|accounts\.google\.com\/ServiceLogin/i;
 const LOGIN_URL = /\/(login|signin|sign_in|sign-in|accounts\/login|i\/flow\/login|onboarding)(\/|$|\?)/i;
 const RATE = /rate.?limit|too many requests|please wait a few minutes|slow down/i;
 const DRIFT =
@@ -32,6 +38,10 @@ const DRIFT =
 
 const ok = (reason = "ok"): Classified => ({ class: "ok", reason });
 const is = (c: Class, reason: string): Classified => ({ class: c, reason });
+const missing = (reason: string): Classified => ({ class: "drift", reason, missing: true });
+const CSRF = /csrf|xsrf/i;
+// Instagram sends "require_login": false on its rate-limit answers, so the key alone means nothing.
+const REQUIRE_LOGIN = /"require_login"\s*:\s*true|login_required/i;
 const snippet = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 160);
 
 function challenge(body: string): string | undefined {
@@ -71,11 +81,11 @@ export function classify(op: Operation, r: Observed): Classified {
   }
 
   if (r.status === 429) return is("rate", "HTTP 429");
-  if (r.status >= 400 && /require_login|login_required/i.test(body)) return is("auth", `HTTP ${r.status}: ${snippet(body)}`);
+  if (r.status >= 400 && REQUIRE_LOGIN.test(body)) return is("auth", `HTTP ${r.status}: ${snippet(body)}`);
   if (r.status >= 400 && RATE.test(body)) return is("rate", `HTTP ${r.status}: ${snippet(body)}`);
   if (r.status === 401) return is("auth", `HTTP 401: ${snippet(body)}`);
   if (r.status === 403) {
-    return LOGIN.test(body)
+    return LOGIN.test(body) || CSRF.test(body)
       ? is("auth", `HTTP 403 with login markers: ${snippet(body)}`)
       : is("blocked", `HTTP 403 without login markers (likely a bot wall): ${snippet(body)}`);
   }
@@ -90,13 +100,14 @@ export function classify(op: Operation, r: Observed): Classified {
     }
   }
   if (r.status === 404 || r.status === 410) {
-    // With the param in the path, 404 usually means that entity doesn't exist.
-    return op.slots.some((s) => s.param && s.at[0]!.startsWith("path:"))
-      ? is("input", `HTTP ${r.status}: not found`)
-      : is("drift", `HTTP ${r.status} on a templated API path`);
+    // With the param in the path, 404 usually means that entity doesn't exist. With a rotating id
+    // in the path too (Next.js /_next/data/<buildId>/...), it may be a deploy: let the caller check.
+    if (!op.slots.some((s) => s.param && s.at[0]!.startsWith("path:"))) return is("drift", `HTTP ${r.status} on a templated API path`);
+    return op.volatile.some((v) => v.at[0]!.startsWith("path:")) ? missing(`HTTP ${r.status}`) : is("input", `HTTP ${r.status}: not found`);
   }
   if (r.status === 400) {
     if (DRIFT.test(body)) return is("drift", `HTTP 400 schema error: ${snippet(body)}`);
+    if (LOGIN.test(body)) return is("auth", `HTTP 400 with login markers: ${snippet(body)}`);
     if (mentionsParam(op, body)) return is("input", `HTTP 400: ${snippet(body)}`);
     return is("error", `HTTP 400: ${snippet(body)}`);
   }
@@ -105,21 +116,21 @@ export function classify(op: Operation, r: Observed): Classified {
   if (op.response.format === "html") {
     if (!op.response.html) return ok();
     if (extractHtml(body, op.response.html).length) return ok();
-    return LOGIN.test(body) ? is("auth", "login page instead of content") : is("drift", `selector "${op.response.html.items}" matched nothing`);
+    return LOGIN.test(body) ? is("auth", "login page instead of content") : missing(`selector "${op.response.html.items}" matched nothing`);
   }
   if (op.response.format === "embedded") {
     if (extract(op.response, body) !== undefined) return ok();
-    return LOGIN.test(body) ? is("auth", "login page instead of content") : is("drift", "embedded data not found");
+    return LOGIN.test(body) ? is("auth", "login page instead of content") : missing("embedded data not found");
   }
 
-  if (isHtml) {
-    return LOGIN.test(body) ? is("auth", "HTML login page where JSON was expected") : is("drift", "HTML where JSON was expected");
-  }
   let data: unknown;
   try {
     data = parseBody(body, op.response.xssiPrefix);
   } catch {
-    return is("drift", `response is not JSON: ${snippet(body)}`);
+    if (isHtml && LOGIN.test(body)) return is("auth", "HTML login page where JSON was expected");
+    // A 2xx to a write means the server took it; many answer 204, "OK" or an HTML page.
+    if (!op.readOnly) return ok(`HTTP ${r.status}, ${body.trim() ? "non-JSON body" : "empty body"}`);
+    return is("drift", isHtml ? "HTML where JSON was expected" : `response is not JSON: ${snippet(body)}`);
   }
   const d = data as { errors?: unknown; data?: unknown } | null;
   if (d && typeof d === "object" && Array.isArray(d.errors) && d.errors.length && d.data == null) {
@@ -129,14 +140,17 @@ export function classify(op: Operation, r: Observed): Classified {
     if (RATE.test(msg)) return is("rate", `GraphQL: ${snippet(msg)}`);
     return is("error", `GraphQL errors with null data: ${snippet(msg)}`);
   }
-  if (op.response.extract && getPath(data, op.response.extract) === undefined) {
-    return is("drift", `extract path "${op.response.extract}" missing`);
+  let gone: string | undefined;
+  if (op.response.extract && getPath(data, op.response.extract) === undefined) gone = `extract path "${op.response.extract}" missing`;
+  else if (op.response.shape && Object.keys(op.response.shape).length >= 4 && shapeKept(op.response.shape, data) < 0.5) {
+    gone = "response shape changed (under half of the learned key paths remain)";
   }
-  const shape = op.response.shape;
-  if (shape && Object.keys(shape).length >= 4 && shapeKept(shape, data) < 0.5) {
-    return is("drift", "response shape changed (under half of the learned key paths remain)");
-  }
-  return ok();
+  if (!gone) return ok();
+  // Instagram answers "login_required" and "please wait" as 200 JSON; only trust the wording when the data is gone.
+  if (REQUIRE_LOGIN.test(body)) return is("auth", `${gone}: ${snippet(body)}`);
+  if (RATE.test(body)) return is("rate", `${gone}: ${snippet(body)}`);
+  if (LOGIN.test(body)) return is("auth", `${gone}: ${snippet(body)}`);
+  return missing(gone);
 }
 
 export interface Judged extends Classified {
@@ -144,13 +158,20 @@ export interface Judged extends Classified {
   data?: unknown;
 }
 
-/** classify, then extract when ok. An extract that throws is drift, not a crash. */
+/** classify, then extract when ok. Never throws: a bad selector or regex in the spec is an error. */
 export function judge(op: Operation, r: Observed): Judged {
-  const c = classify(op, r);
+  let c: Classified;
+  try {
+    c = classify(op, r);
+  } catch (e) {
+    return is("error", `the op's response recipe failed: ${(e as Error).message}`);
+  }
   if (c.class !== "ok") return c;
   try {
     return { ...c, data: extract(op.response, r.body) };
   } catch (e) {
+    // a write's non-JSON answer: hand back its text
+    if (!op.readOnly) return { ...c, data: r.body.trim() ? r.body.slice(0, 1000) : null };
     return is("drift", `extract failed: ${(e as Error).message}`);
   }
 }

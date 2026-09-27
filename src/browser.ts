@@ -4,7 +4,8 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type BrowserContext, type Cookie, type Page, type Request } from "playwright-core";
+import { chromium, type BrowserContext, type Cookie, type Page, type Request, type Route } from "playwright-core";
+import { siteOf } from "./session.js";
 import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
 
 let current: { profileDir: string; headless: boolean; ctx: Promise<BrowserContext> } | undefined;
@@ -52,6 +53,8 @@ export function openBrowser({ profileDir, headless = true }: { profileDir: strin
       headless,
       userAgent: headless ? headlessUA : undefined,
       viewport: headless ? undefined : null,
+      // A service worker's fetches bypass routing (so write interception) and hide requests from capture.
+      serviceWorkers: "block",
     });
     c.on("close", () => {
       if (current?.ctx === ctx) current = undefined;
@@ -95,10 +98,8 @@ const toStored = (c: Cookie): StoredCookie => ({
   sameSite: c.sameSite,
 });
 
-// ponytail: registrable domain approximated by the last two labels; co.uk-style suffixes over-include sibling sites.
 function siteCookies(cookies: Cookie[], url: string): StoredCookie[] {
-  const host = new URL(url).hostname;
-  const site = /^[\d.]+$|:/.test(host) ? host : host.split(".").slice(-2).join(".");
+  const site = siteOf(new URL(url).hostname);
   return cookies
     .filter((c) => {
       const d = c.domain.replace(/^\./, "");
@@ -121,12 +122,15 @@ const QUIET_MS = 500;
 export interface TriggerOptions {
   url: string;
   steps?: TriggerStep[];
-  /** open this page first, then reach `url` by an anchor click so SPAs fire their XHRs */
+  /** open this page first, then reach `url` by an in-app navigation so SPAs fire their XHRs */
   softFrom?: string;
   headless?: boolean;
   profileDir: string;
-  /** requests it matches are aborted before leaving the browser and recorded with aborted:true */
-  intercept?: (req: Exchange["request"]) => boolean;
+  /**
+   * requests it matches are aborted before leaving the browser (in any tab of the context) and
+   * recorded with aborted:true; `acting` is true once the page has loaded and the steps run
+   */
+  intercept?: (e: Exchange, acting: boolean) => boolean;
   /** extra wait after the network first goes quiet (default 300) */
   settleMs?: number;
   /** overall budget; also the per-action Playwright timeout (default 30000) */
@@ -211,35 +215,51 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     );
   });
 
-  if (o.intercept) {
-    const intercept = o.intercept;
-    await page.route("**/*", (route) => {
-      const ex = record(route.request());
-      if (!intercept(ex.request)) return route.fallback();
-      ex.aborted = true;
-      return route.abort();
-    });
-  }
+  let acting = false;
+  const intercept = o.intercept;
+  // Context-wide, so a popup the trigger opens is covered too.
+  const guard = intercept
+    ? (route: Route) => {
+        const ex = record(route.request());
+        if (!intercept(ex, acting)) return route.fallback();
+        ex.aborted = true;
+        return route.abort();
+      }
+    : undefined;
+  if (guard) await ctx.route("**/*", guard);
 
   // ponytail: sites that long-poll never go quiet, so they pay the whole timeout; add a per-op idle cap if that bites.
-  const idle = async () => {
-    while (Date.now() < deadline && (inflight > 0 || Date.now() - lastActivity < QUIET_MS)) await sleep(50);
+  const idle = async (capMs = timeout) => {
+    const end = Math.min(deadline, Date.now() + capMs);
+    while (Date.now() < end && (inflight > 0 || Date.now() - lastActivity < QUIET_MS)) await sleep(50);
   };
 
   try {
     if (o.softFrom) {
       await page.goto(o.softFrom);
+      await idle(5000);
       const from = page.url();
+      const before = exchanges.length;
+      // A link the app rendered goes through its router; otherwise the history API plus popstate,
+      // which client routers (React Router, TanStack, Next) listen to. An injected <a> would not be routed.
       await page.evaluate((u) => {
-        const a = document.createElement("a");
-        a.href = u;
-        document.body.append(a);
-        a.click();
+        const link = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find((a) => a.href === u && (!a.target || a.target === "_self"));
+        if (link) return link.click();
+        try {
+          history.pushState({}, "", u);
+          dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+        } catch {
+          /* cross-origin: fall through to a plain load */
+        }
       }, o.url);
-      await page.waitForURL((u) => u.href !== from);
+      await idle(5000);
+      // ponytail: "fired anything" is the routed signal; a page whose analytics fire on pushState fools it.
+      const routed = exchanges.slice(before).some((e) => ["xhr", "fetch", "document"].includes(e.resourceType));
+      if (!routed) await page.goto(o.url, { referer: from });
     } else {
       await page.goto(o.url);
     }
+    acting = true;
     for (const s of o.steps ?? []) await runStep(page, s);
     await idle();
     await sleep(o.settleMs ?? 300);
@@ -250,6 +270,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     }
     return { exchanges, cookies: siteCookies(await ctx.cookies(), o.url), finalUrl: page.url() };
   } finally {
+    if (guard) await ctx.unroute("**/*", guard).catch(() => {});
     await page.close().catch(() => {});
   }
 }

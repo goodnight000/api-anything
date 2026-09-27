@@ -6,7 +6,7 @@
 import { chromeAvailable, pageFetch, profileCookies } from "./browser.js";
 import { judge, type Class } from "./classify.js";
 import { capOutput } from "./extract.js";
-import { healOperation, judgeExchange, profileDir, runOpTrigger, type Attempt } from "./heal.js";
+import { healOperation, judgeExchange, profileDir, runOpTrigger, type Attempt, type HealResult } from "./heal.js";
 import { buildRequest, send } from "./http.js";
 import { cookieHeaderFor, loadSession, saveSession } from "./session.js";
 import type { Operation, Site } from "./spec.js";
@@ -81,6 +81,24 @@ function nextFor(c: CallResult["class"], site: string, op: Operation, a?: Attemp
 
 const success = (a: Attempt, extra: Partial<Result> = {}): Result => ({ ok: true, class: "ok", tier: a.tier, ...capOutput(a.data), ...extra });
 
+/** The op's stored example args, with defaults; undefined when a required param has none. */
+function exampleArgs(op: Operation): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {};
+  for (const p of op.params) {
+    const v = p.example ?? p.default;
+    if (v !== undefined) out[p.name] = v;
+    else if (p.required) return undefined;
+  }
+  return out;
+}
+
+const sameArgs = (a: Record<string, unknown>, b: Record<string, unknown>, op: Operation) =>
+  op.params.every((p) => String(a[p.name] ?? p.default ?? "") === String(b[p.name] ?? p.default ?? ""));
+
+/** Never throws: a browser that fails to launch or a page that fails to load is a failed heal. */
+const safeHeal = (p: Promise<HealResult>): Promise<HealResult> =>
+  p.catch((e: Error) => ({ outcome: "failed" as const, reason: `heal crashed: ${e.message.split("\n")[0]}` }));
+
 async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   try {
     if (tier === 3) {
@@ -134,6 +152,22 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     ...extra,
   });
 
+  // "No such user" and "no results" look exactly like a moved extract path. If the example args
+  // still return data through the same template, nothing drifted: the args are the problem.
+  const examples = exampleArgs(op);
+  if (a.missing && op.readOnly && examples && !sameArgs(examples, ctx.args, op)) {
+    const b = await attempt({ ...ctx, args: examples }, op, a.tier);
+    if (b.class === "ok") {
+      return fail(
+        { ...a, class: "input" },
+        {
+          reason: `no data for these args (${a.reason}), while the example args still return data: the thing probably does not exist or has no results`,
+          next: `check the args against: site2api ops ${ctx.site}; do not heal or re-add`,
+        },
+      );
+    }
+  }
+
   let guard: string | undefined;
   const stale = staleMark(ctx.site, op.name);
   const healedAt = lastHealAt(ctx.site, op.name);
@@ -145,20 +179,27 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   }
   if (guard) {
     // Not re-healed. A read can still get its answer from the site's own frontend.
-    if (op.readOnly && a.tier < 3 && ctx.maxTier >= 3 && chromeAvailable()) {
+    if (op.readOnly && a.tier < 3 && ctx.maxTier >= 3 && stale?.tier3 !== false && chromeAvailable()) {
       const b = await attempt(ctx, op, 3);
       if (b.class === "ok") return success(b, { reason: guard });
+      // the site's own request doesn't answer either: stop paying a browser run per call
+      markStale(ctx.site, op.name, stale?.reason ?? guard, undefined, undefined, { tier3: false });
     }
     return fail(a, { reason: `${a.reason}; ${guard}`, next: `wait for the stale mark to expire, or force it: site2api heal ${ctx.site} ${op.name}` });
   }
 
-  const h = await healOperation(ctx.site, op, ctx.args, {
-    validate: (candidate) => attempt(ctx, candidate, a.tier),
-    fetchImpl: ctx.opts.fetchImpl,
-    loginCookies: site.loginCookies,
-    browser: ctx.maxTier > 1,
-  });
+  // A candidate is validated by replaying it; at tier 3 the site's own request would answer instead, validating nothing.
+  const h = await safeHeal(
+    healOperation(ctx.site, op, ctx.args, {
+      validate: (candidate) => attempt(ctx, candidate, Math.min(a.tier, 2) as Tier),
+      fetchImpl: ctx.opts.fetchImpl,
+      loginCookies: site.loginCookies,
+      browser: ctx.maxTier > 1,
+    }),
+  );
   if (h.outcome === "healed") return success(h.attempt, { healed: true });
+  // A heal that tried everything and failed would fail the same way on the next call: don't rerun the browser each time.
+  if (h.outcome === "failed" && ctx.maxTier > 1) markStale(ctx.site, op.name, `heal failed: ${h.reason}`, undefined, undefined, { tier3: h.fallback?.class === "ok" });
   // The template can't be replayed, but the site's own request answered: that is the tier-3 read.
   if (h.fallback?.class === "ok" && ctx.maxTier >= 3) return success(h.fallback, { reason: `heal failed (${h.reason}); answered by the site's own request` });
   if (h.outcome === "identical") {
@@ -202,6 +243,9 @@ export async function call(siteName: string, opName: string, args: Record<string
   const ctx: Ctx = { site: siteName, args, opts, maxTier: opts.maxTier ?? 3 };
   const remembered = rememberedTier(siteName, op.name);
   let tier = Math.max(op.minTier, remembered ?? 1) as Tier;
+  // Why a call ran above tier 1, so a slow call explains itself.
+  const notes: string[] = tier > op.minTier ? [`started at tier ${tier}: an earlier call escalated there`] : [];
+  const noted = (a: Attempt) => success(a, notes.length ? { reason: notes.join("; ") } : {});
   let authTried = false;
   for (;;) {
     if (tier > ctx.maxTier) {
@@ -212,18 +256,27 @@ export async function call(siteName: string, opName: string, args: Record<string
     }
     const a = await attempt(ctx, op, tier);
     if (a.class === "ok") {
-      if (remembered !== tier) rememberTier(siteName, op.name, tier);
-      return done(success(a));
+      // Only an escalation is remembered; a tier the spec itself asks for is not, so editing minTier takes effect.
+      const keep = tier > op.minTier ? tier : undefined;
+      if (remembered !== keep) rememberTier(siteName, op.name, keep);
+      return done(noted(a));
     }
     const fail = (): CallResult => done({ ok: false, class: a.class, tier, reason: a.reason, next: nextFor(a.class, siteName, op, a) });
     if (write && !(a.status !== undefined && NOT_EXECUTED.has(a.status))) return fail();
     if (a.class === "blocked" && tier < (write ? 2 : 3)) {
+      notes.push(`tier ${tier} was blocked (${a.reason})`);
       tier++;
       continue;
     }
     if (a.class === "auth" && tier === 1 && !authTried && ctx.maxTier > 1) {
       authTried = true;
       if (await refreshCookies(siteName, op)) continue;
+      // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
+      // refreshes them, and for a read its answer is this call's answer.
+      if (op.readOnly && ctx.maxTier >= 3 && chromeAvailable() && op.slots.some((s) => s.ref?.startsWith("session:"))) {
+        const b = await attempt(ctx, op, 3);
+        if (b.class === "ok") return done(success(b, { reason: `tier 1 said ${a.class} (${a.reason}); refreshed the session through the site's own request` }));
+      }
     }
     if (a.class === "drift") return done(await onDrift(ctx, site, op, a));
     return fail();
@@ -247,12 +300,14 @@ export async function heal(siteName: string, opName: string, args: Record<string
   }
   const ctx: Ctx = { site: siteName, args, opts, maxTier: opts.maxTier ?? 3 };
   const tier = Math.min(Math.max(op.minTier, rememberedTier(siteName, op.name) ?? 1), 2) as Tier;
-  const h = await healOperation(siteName, op, args, {
-    validate: (c) => attempt(ctx, c, tier),
-    fetchImpl: opts.fetchImpl,
-    loginCookies: site.loginCookies,
-    browser: ctx.maxTier > 1,
-  });
+  const h = await safeHeal(
+    healOperation(siteName, op, args, {
+      validate: (c) => attempt(ctx, c, tier),
+      fetchImpl: opts.fetchImpl,
+      loginCookies: site.loginCookies,
+      browser: ctx.maxTier > 1,
+    }),
+  );
   const ms = Date.now() - t0;
   if (h.outcome === "healed") return { ...success(h.attempt, { healed: true }), strategy: h.strategy, ms };
   if (h.outcome === "identical") return { ok: true, class: "ok", healed: false, reason: "the stored template is already current", ms };

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { chromeAvailable, closeBrowser, pageFetch, runTrigger } from "../src/browser.js";
-import { startFixture, type Fixture } from "./fixture/server.js";
+import { PUBLIC_BEARER, startFixture, type Fixture } from "./fixture/server.js";
 
 describe("fixture site (plain http)", () => {
   let fx: Fixture;
@@ -82,6 +82,29 @@ describe("browser", { skip: !chromeAvailable() && "Google Chrome not installed" 
     assert.equal(r.finalUrl, `${fx.url}/u/bob`);
   });
 
+  test("softFrom on a client-routed SPA stays in the app: through its own link, or history + popstate", async () => {
+    for (const name of ["bob", "dave"]) {
+      // bob has a link the app rendered; dave has none, so only the history API can route there
+      const r = await runTrigger({ url: `${fx.url}/spa/${name}`, softFrom: `${fx.url}/spa/alice`, profileDir });
+      assert.equal(r.exchanges.filter((e) => e.resourceType === "document").length, 1, `${name}: no second page load`);
+      assert.ok(r.exchanges.some((e) => e.request.url.endsWith(`/api/spa/user?name=${name}`)), `${name}: the route's XHR fired`);
+      assert.equal(r.finalUrl, `${fx.url}/spa/${name}`);
+    }
+  });
+
+  test("write interception covers service workers and GETs sent by a UI action", async () => {
+    const hits = () => fx.calls.filter((c) => c.path === "/api/sw-write" || c.path.startsWith("/api/follow")).length;
+    const guard = (e: { request: { method: string }; resourceType: string }, acting: boolean) =>
+      e.request.method !== "GET" || (acting && ["xhr", "fetch"].includes(e.resourceType));
+    // A worker installed on an earlier visit would proxy fetches past page routing; site2api blocks workers.
+    await runTrigger({ url: `${fx.url}/sw`, profileDir, intercept: guard });
+    const sw = await runTrigger({ url: `${fx.url}/sw`, profileDir, intercept: guard });
+    const follow = await runTrigger({ url: `${fx.url}/follow/alice`, steps: [{ action: "click", selector: "#follow" }], profileDir, intercept: guard });
+    assert.equal(hits(), 0, "no write reached the server");
+    assert.ok(sw.exchanges.some((e) => e.request.url.endsWith("/api/sw-write") && e.aborted));
+    assert.ok(follow.exchanges.some((e) => e.request.url.endsWith("/api/follow?user=alice") && e.aborted));
+  });
+
   test("intercept aborts the write before it reaches the server", async () => {
     const r = await runTrigger({
       url: `${fx.url}/compose`,
@@ -90,7 +113,7 @@ describe("browser", { skip: !chromeAvailable() && "Google Chrome not installed" 
         { action: "fill", selector: "#text", value: "hello world" },
         { action: "click", selector: "#post" },
       ],
-      intercept: (req) => req.method === "POST" && req.url.includes("/CreatePost"),
+      intercept: (e) => e.request.method === "POST" && e.request.url.includes("/CreatePost"),
     });
     const w = r.exchanges.find((e) => e.request.url.includes("/CreatePost"));
     assert.ok(w);
@@ -117,7 +140,7 @@ describe("browser", { skip: !chromeAvailable() && "Google Chrome not installed" 
   });
 
   test("pageFetch runs fetch() on the site origin with the profile's cookies", async () => {
-    const r = await pageFetch({ origin: fx.url, url: gqlUrl, method: "GET", headers: { "x-csrf-token": csrf }, profileDir });
+    const r = await pageFetch({ origin: fx.url, url: gqlUrl, method: "GET", headers: { "x-csrf-token": csrf, authorization: PUBLIC_BEARER }, profileDir });
     assert.equal(r.status, 200);
     assert.equal(JSON.parse(r.body).data.user.name, "alice");
     assert.match(r.headers["content-type"], /json/);

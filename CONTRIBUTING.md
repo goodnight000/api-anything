@@ -16,16 +16,18 @@ bundled spec is a starting point that each user's machine keeps healing.
    Use two different example sets, so nonces are told apart from params. Set `--extract` and
    `--pick` so a call returns only what an agent needs.
 2. Check it: `site2api verify <site>` must pass for every read op.
-3. Export it: `site2api export <site> --out sites/<site>.json`. Export strips your example
-   values and refuses if any live cookie or session value from your machine is still in the
-   spec. Don't use `--force` for a PR. Read the heuristic warnings it prints: a long hex or base64
+3. Export it: `site2api export <site> --keep-examples --out sites/<site>.json`. Export strips
+   response shapes (and your example values, without `--keep-examples`), and refuses if any live
+   cookie or session value from your machine is still in the spec. Don't use `--force` for a PR:
+   a header that is a public constant (a web app's shared bearer) is learned with
+   `add --public <header>` instead. Read the heuristic warnings it prints: a long hex or base64
    string must be a public constant (a queryId, a public app id), never a token.
 4. Edit by hand:
    - set `displayName` and `description`;
    - add a `description` to each op and param;
    - add `loginCookies` (the cookie names that mean "signed in") if the site needs an account;
-   - add `example` values that are public and harmless (a well-known account, not yours), so
-     `verify` works for others.
+   - check that the kept `example` values are public and harmless (a well-known account, not
+     yours), so `verify` works for others.
 5. In the PR description, say what you verified, on what date, and whether you were logged in.
 
 Rules for bundled specs:

@@ -305,10 +305,18 @@ export function setAt(req: Request, steps: Step[], value: unknown): Request {
   return layer.put(setNested(layer.value, rest, value));
 }
 
-/** Replace `{name}` for names present in vars; anything else (e.g. minified GraphQL `{id}`) stays. */
+/**
+ * Replace `{name}` for names present in vars; anything else (e.g. minified GraphQL `{id}`) stays.
+ * `{{` and `}}` are literal braces, so a learned template can hold text like `{name}` verbatim.
+ */
 export function fillTemplate(template: string, vars: Record<string, unknown>): string {
-  return template.replace(/\{([^{}]+)\}/g, (m, k: string) => (vars[k] === undefined ? m : asText(vars[k])));
+  return template.replace(/\{\{|\}\}|\{([^{}]+)\}/g, (m, k: string | undefined) =>
+    k === undefined ? m[0]! : vars[k] === undefined ? m : asText(vars[k]),
+  );
 }
+
+/** Literal text as a template: every brace doubled. */
+export const escapeTemplate = (text: string) => text.replace(/[{}]/g, (c) => c + c);
 
 function walkJsonString(s: string, at: Step[], out: Leaf[]): boolean {
   const start = skipWs(s, 0);
@@ -353,7 +361,8 @@ export function walk(req: Request): Leaf[] {
   }
   for (const [name, value] of Object.entries(req.headers)) add([`header:${name.toLowerCase()}`], value);
   if (req.body !== undefined && req.body !== "") {
-    if (isFormBody(req)) {
+    // Some clients (Algolia's) send a JSON body labeled form-urlencoded to skip the CORS preflight.
+    if (isFormBody(req) && !/^\s*[[{]/.test(req.body)) {
       seen.clear();
       for (const p of parsePairs(req.body)) {
         if (seen.has(p.key)) continue;

@@ -95,10 +95,23 @@ export function cookieHeaderFor(cookies: StoredCookie[], url: string, now = Date
     .join("; ");
 }
 
-/** Value for a cookie: ref, preferring a cookie that would be sent to url. */
+// ponytail: registrable domain approximated by the last two labels; co.uk-style suffixes over-include sibling sites.
+export const siteOf = (host: string) => (/^[\d.]+$|:/.test(host) ? host : host.split(".").slice(-2).join("."));
+
+/**
+ * Value for a cookie: ref. Prefers a cookie that would be sent to url; else one from the same site
+ * (page JS on www.site.com echoes its cookies to api.site.com), never another site's, and a Secure
+ * cookie only over https.
+ */
 export function cookieValue(cookies: StoredCookie[], name: string, url?: string, now = Date.now()): string | undefined {
-  const scoped = url ? cookiesFor(cookies, url, now).find((c) => c.name === name) : undefined;
-  return (scoped ?? cookies.find((c) => c.name === name && !expired(c, now)))?.value;
+  const live = cookies.filter((c) => c.name === name && !expired(c, now));
+  if (!url) return live[0]?.value;
+  const scoped = cookiesFor(cookies, url, now).find((c) => c.name === name);
+  if (scoped) return scoped.value;
+  const u = new URL(url);
+  const site = siteOf(u.hostname.toLowerCase());
+  const secureOk = u.protocol === "https:" || u.hostname === "localhost" || u.hostname === "127.0.0.1";
+  return live.find((c) => siteOf(c.domain.replace(/^\./, "").toLowerCase()) === site && (!c.secure || secureOk))?.value;
 }
 
 /** Parse a raw Cookie header ("a=1; b=\"x\"") into a name -> value map. */

@@ -5,11 +5,13 @@
 import { join } from "node:path";
 import { chromeAvailable, runTrigger } from "./browser.js";
 import { judge, type Class } from "./classify.js";
-import { asText, fillTemplate, getAt, setAt, walk } from "./codec.js";
-import { hashLike, learnOperation, matches, type Args } from "./learn.js";
+import { asText, escapeTemplate, fillTemplate, getAt, setAt, walk } from "./codec.js";
+import { capOutput } from "./extract.js";
+import { buildRequest, send } from "./http.js";
+import { checkExamples, hashLike, learnOperation, matches, type Args } from "./learn.js";
 import { cookieHeaderFor, home, loadSession, mergeCapture, readJson, safeName, writePrivate } from "./session.js";
 import type { Match, Operation, ResponseSpec, Site, Trigger, Volatile } from "./spec.js";
-import { appendHeal, clearStale, loadSite, saveSite, scanSecrets } from "./store.js";
+import { appendHeal, clearStale, loadSite, rememberTier, saveSite, scanSecrets } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
 
 export const profileDir = () => join(home(), "profile");
@@ -22,6 +24,8 @@ export interface Attempt {
   status?: number;
   data?: unknown;
   ambiguous?: boolean;
+  /** drift with the data missing from an otherwise fine response; see Classified.missing */
+  missing?: boolean;
 }
 
 /** Fill `{param}` in a trigger. URL parts are percent-encoded; step values are typed as given. */
@@ -40,17 +44,31 @@ export function fillTrigger(t: Trigger, args: Args): Trigger {
 }
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-// ponytail: aborts every unsafe request while learning a write, even ones the page needs to render;
-// a narrower matcher would risk letting the write itself through when the match is wrong.
-const unsafe = (req: Exchange["request"]) => !SAFE_METHODS.has(req.method.toUpperCase());
+/**
+ * While learning a write: abort every unsafe request, and once the UI steps run, every xhr/fetch
+ * (a "Follow" button may send a GET). A known write's own match is aborted whatever its method.
+ * ponytail: also aborts requests the page needs after the click; a narrower matcher would risk
+ * letting the write itself through when the match is wrong.
+ */
+const writeGuard =
+  (m?: Match) =>
+  (e: Exchange, acting: boolean): boolean =>
+    !SAFE_METHODS.has(e.request.method.toUpperCase()) ||
+    (acting && (e.resourceType === "xhr" || e.resourceType === "fetch")) ||
+    (!!m && Object.keys(m).length > 0 && matches(m, e.request));
 
-/** Values of the op's session: header refs as the browser just sent them. */
+/** Values of the op's session: refs as the browser just sent them. */
 function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
   const out: Record<string, string> = {};
   for (const s of op.slots) {
-    const header = s.at.length === 1 && s.at[0]!.startsWith("header:") ? s.at[0]!.slice(7) : undefined;
-    const v = header && e.request.headers[header];
-    if (s.ref?.startsWith("session:") && v) out[s.ref.slice(8)] = v;
+    if (!s.ref?.startsWith("session:")) continue;
+    let v: unknown;
+    try {
+      v = getAt(e.request, s.at);
+    } catch {
+      continue;
+    }
+    if (typeof v === "string" && v) out[s.ref.slice(8)] = v;
   }
   return out;
 }
@@ -63,7 +81,7 @@ export interface TriggerRun {
 
 /** Run an op's trigger with args in the shared profile and refresh the session from it. */
 export async function runOpTrigger(site: string, op: Operation, args: Args, o: { intercept?: boolean } = {}): Promise<TriggerRun> {
-  const capture = await runTrigger({ ...fillTrigger(op.trigger, args), profileDir: profileDir(), intercept: o.intercept ? unsafe : undefined });
+  const capture = await runTrigger({ ...fillTrigger(op.trigger, args), profileDir: profileDir(), intercept: o.intercept ? writeGuard(op.match) : undefined });
   const hits = capture.exchanges.filter((e) => matches(op.match, e.request));
   const matched = hits.find((e) => e.response || e.aborted) ?? hits[0];
   mergeCapture(site, capture.cookies, matched ? sessionValuesOf(op, matched) : {});
@@ -85,17 +103,26 @@ export interface CaptureFile extends CaptureResult {
   url: string;
   steps?: TriggerStep[];
   softFrom?: string;
+  /** writes were intercepted during this run */
+  write?: boolean;
 }
 
 const captureFile = (id: string) => join(home(), "captures", `${safeName(id)}.json`);
+let lastId = "";
+
+function saveCapture(o: { url: string; steps?: TriggerStep[]; softFrom?: string; write?: boolean }, r: CaptureResult): CaptureFile {
+  let id = `c${Date.now().toString(36)}`;
+  while (id <= lastId) id = `c${(parseInt(lastId.slice(1), 36) + 1).toString(36)}`;
+  lastId = id;
+  const file: CaptureFile = { id, at: new Date().toISOString(), url: o.url, steps: o.steps, softFrom: o.softFrom, ...(o.write ? { write: true } : {}), ...r };
+  writePrivate(captureFile(id), JSON.stringify(file));
+  return file;
+}
 
 /** Run a page, keep everything it sent under ~/.site2api/captures/<id>.json (0600: it holds cookies). */
 export async function capturePage(o: { url: string; steps?: TriggerStep[]; softFrom?: string; write?: boolean }): Promise<CaptureFile> {
-  const r = await runTrigger({ url: o.url, steps: o.steps, softFrom: o.softFrom, profileDir: profileDir(), intercept: o.write ? unsafe : undefined });
-  const id = `c${Date.now().toString(36)}`;
-  const file: CaptureFile = { id, at: new Date().toISOString(), url: o.url, steps: o.steps, softFrom: o.softFrom, ...r };
-  writePrivate(captureFile(id), JSON.stringify(file));
-  return file;
+  const r = await runTrigger({ url: o.url, steps: o.steps, softFrom: o.softFrom, profileDir: profileDir(), intercept: o.write ? writeGuard() : undefined });
+  return saveCapture(o, r);
 }
 
 export function loadCapture(id: string): CaptureFile {
@@ -116,16 +143,33 @@ export interface AddInput {
   write?: boolean;
   description?: string;
   response?: Partial<Pick<ResponseSpec, "format" | "extract" | "pick" | "html" | "embedded">>;
+  /** header names a human confirmed are public constants: kept literal instead of session refs */
+  public?: string[];
   /** learn from a saved capture instead of running the trigger; id = the request to learn */
   from?: { capture: CaptureFile; id?: number };
+  /** a second saved capture, made with examples[1], for the two-run diff */
+  from2?: CaptureFile;
+  fetchImpl?: typeof fetch;
+}
+
+export interface AddResult {
+  operation: Operation;
+  warnings: string[];
+  path: string;
+  /** the trigger runs, saved as captures (add --from <id> re-learns from them without Chrome) */
+  captures: string[];
+  /** what a call would have returned, judged on the captured response */
+  preview?: { count?: number; first: unknown };
+  /** an op of that name existed and was overwritten */
+  replaced: boolean;
 }
 
 /** Put `{name}` back where an example value sits in a literal URL or step. */
 function templatize(text: string, args: Args, encoded: boolean): string {
-  let out = text;
+  let out = escapeTemplate(text);
   for (const [k, v] of Object.entries(args)) {
     const s = asText(v);
-    if (s.length >= 3) out = out.split(encoded ? encodeURIComponent(s) : s).join(`{${k}}`);
+    if (s.length >= 3) out = out.split(escapeTemplate(encoded ? encodeURIComponent(s) : s)).join(`{${k}}`);
   }
   return out;
 }
@@ -135,22 +179,32 @@ export function putOperation(site: Site, op: Operation): Site {
   return { ...site, operations: [...rest, op] };
 }
 
+function previewOf(data: unknown): AddResult["preview"] {
+  const first = Array.isArray(data) ? data[0] : data;
+  const cut = capOutput(first, 600);
+  return { ...(Array.isArray(data) ? { count: data.length } : {}), first: cut.data };
+}
+
 /**
  * Learn an op and save it to the user spec dir. Without `from`, the trigger runs twice (with
  * example 2, or example 1 again) so nonces show up. A write is learned from aborted requests only.
  */
-export async function addOperation(i: AddInput): Promise<{ operation: Operation; warnings: string[]; path: string }> {
+export async function addOperation(i: AddInput): Promise<AddResult> {
   safeName(i.site);
   const existing = loadSite(i.site)?.site;
   const [ex1, ex2] = i.examples;
+  for (const c of [i.from?.capture, i.from2]) {
+    if (i.write && c && !c.write) throw new Error(`capture ${c.id} ran without --write, so any write in it was already sent; capture again with --write`);
+  }
   let trigger = i.trigger;
   if (!trigger && i.from) {
     const c = i.from.capture;
-    trigger = {
-      url: templatize(c.url, ex1, true),
-      ...(c.softFrom ? { softFrom: c.softFrom } : {}),
-      ...(c.steps ? { steps: c.steps.map((s) => ({ ...s, ...(s.value ? { value: templatize(s.value, ex1, false) } : {}) })) } : {}),
-    };
+    const step = (s: TriggerStep): TriggerStep => ({
+      ...s,
+      ...(s.selector ? { selector: templatize(s.selector, ex1, false) } : {}),
+      ...(s.value ? { value: templatize(s.value, ex1, s.action === "goto") } : {}),
+    });
+    trigger = { url: templatize(c.url, ex1, true), ...(c.softFrom ? { softFrom: c.softFrom } : {}), ...(c.steps ? { steps: c.steps.map(step) } : {}) };
   }
   if (!trigger) throw new Error("a trigger url is needed (or --from a capture)");
   if (trigger.url.startsWith("/")) {
@@ -160,10 +214,18 @@ export async function addOperation(i: AddInput): Promise<{ operation: Operation;
 
   let run1: CaptureResult;
   let run2: CaptureResult | undefined;
+  const captures: string[] = [];
   if (i.from) {
     run1 = i.from.capture;
+    run2 = i.from2;
   } else {
-    const run = (a: Args) => runTrigger({ ...fillTrigger(trigger!, a), profileDir: profileDir(), intercept: i.write ? unsafe : undefined });
+    const run = async (a: Args) => {
+      const t = fillTrigger(trigger!, a);
+      const r = await runTrigger({ ...t, profileDir: profileDir(), intercept: i.write ? writeGuard(i.match) : undefined });
+      const saved = saveCapture({ url: t.url, steps: t.steps, softFrom: t.softFrom, write: i.write }, r);
+      captures.push(saved.id);
+      return saved;
+    };
     run1 = await run(ex1);
     run2 = await run(ex2 ?? ex1);
   }
@@ -178,9 +240,12 @@ export async function addOperation(i: AddInput): Promise<{ operation: Operation;
     trigger,
     readOnly: !i.write,
     loginCookies: existing?.loginCookies,
+    public: i.public,
   });
   const r = i.response ?? {};
-  const operation: Operation = {
+  const recipe = r.html ?? r.embedded;
+  const warnings = learned.warnings.filter((w) => !(recipe && w.startsWith("response is HTML")));
+  let operation: Operation = {
     ...learned.operation,
     ...(i.description ? { description: i.description } : {}),
     response: {
@@ -191,9 +256,38 @@ export async function addOperation(i: AddInput): Promise<{ operation: Operation;
     },
   };
   const session = mergeCapture(i.site, (run2 ?? run1).cookies, learned.sessionValues);
+
+  // Values that differ between two page loads are often session-scoped ids, not per-request
+  // signatures. One replay of run 1's template with example 2's args tells them apart.
+  if (operation.minTier === 3 && operation.readOnly && run2) {
+    try {
+      const sent = await send(operation, ex2 ?? ex1, session, { site: i.site, fetchImpl: i.fetchImpl });
+      if (judge(operation, sent).class === "ok") {
+        operation = { ...operation, minTier: 1 };
+        warnings.push("...but run 1's template replays fine with example 2's args, so those values are session-scoped: minTier 1");
+      }
+    } catch {
+      /* keep minTier 3 */
+    }
+  }
+
+  let preview: AddResult["preview"];
+  const res = learned.exchange.response;
+  if (res) {
+    const j = judge(operation, { status: res.status, headers: res.headers, body: res.body ?? "", url: learned.exchange.request.url });
+    const again = captures[0] ?? i.from?.capture.id;
+    if (j.class === "ok") preview = previewOf(j.data);
+    else warnings.push(`on the captured response this op says ${j.class}: ${j.reason}. Fix --extract/--pick/--html/--embedded and re-run add --from ${again} (no browser needed)`);
+  }
+
+  const replaced = !!existing?.operations.some((o) => o.name === operation.name);
   const site = putOperation(existing ?? { name: i.site, baseUrl: new URL(trigger.url).origin, operations: [] }, operation);
-  const warnings = [...learned.warnings, ...scanSecrets(operation, session).secrets.map((s) => `credential left in the spec: ${s}`)];
-  return { operation, warnings, path: saveSite(site) };
+  const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
+  warnings.push(...scanSecrets(operation, session, allowed).secrets.map((s) => `credential left in the spec: ${s}`));
+  const path = saveSite(site);
+  rememberTier(i.site, operation.name, undefined);
+  clearStale(i.site, operation.name);
+  return { operation, warnings, path, captures, ...(preview ? { preview } : {}), replaced };
 }
 
 /* ---------------------------------------------------------------- rescan */
@@ -281,7 +375,16 @@ export async function rescan(site: string, op: Operation, args: Args, fetchImpl:
 
 /* -------------------------------------------------------------- recapture */
 
-const template = (op: Operation) => JSON.stringify([op.request, op.slots, op.volatile]);
+/** The wire template with these args filled in, so the example values an op was learned with don't count as a change. */
+function template(op: Operation, args: Args): string {
+  let req = op.request;
+  try {
+    req = buildRequest(op, args, { cookies: [], values: {} });
+  } catch {
+    /* compare raw */
+  }
+  return JSON.stringify([req, op.slots, op.volatile]);
+}
 
 function summarize(a: Operation, b: Operation): string {
   const parts: string[] = [];
@@ -314,9 +417,31 @@ function saveHealed(site: string, op: Operation, strategy: "rescan" | "recapture
   return { outcome: "healed", strategy, operation: op, attempt };
 }
 
+const withDefaults = (op: Operation, args: Args): Args => {
+  const out: Args = {};
+  for (const p of op.params) {
+    const v = args[p.name] ?? p.default;
+    if (v !== undefined) out[p.name] = v;
+  }
+  return out;
+};
+
+/** Args the learner can locate: every param present, values distinct and 3+ chars. */
+function learnable(op: Operation, a: Args): boolean {
+  if (op.params.some((p) => a[p.name] === undefined)) return false;
+  try {
+    checkExamples(a, "args");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Rescan, then recapture; a candidate is saved only after `validate` (a replay) says ok.
  * A write's validation is the write itself, so a write gets exactly one validation in total.
+ * Recapture learns from the call's args (defaults filled) when they can be located, else from the
+ * op's examples, so a short arg ("page=2") or an omitted optional one never loses a slot.
  */
 export async function healOperation(
   site: string,
@@ -326,8 +451,9 @@ export async function healOperation(
 ): Promise<HealResult> {
   let budget = op.readOnly ? 2 : 1;
   let last: Attempt | undefined;
+  const callArgs = withDefaults(op, args);
 
-  const scanned = await rescan(site, op, args, o.fetchImpl).catch(() => undefined);
+  const scanned = await rescan(site, op, callArgs, o.fetchImpl).catch(() => undefined);
   if (scanned) {
     budget--;
     last = await o.validate(scanned.operation);
@@ -337,20 +463,29 @@ export async function healOperation(
   if (o.browser === false) return { outcome: "failed", attempt: last, reason: "rescan found nothing new; recapture needs the browser (maxTier 1)" };
   if (!chromeAvailable()) return { outcome: "failed", attempt: last, reason: "rescan found nothing new; recapture needs Google Chrome" };
 
-  const run = await runOpTrigger(site, op, args, { intercept: !op.readOnly });
+  const examples = withDefaults(op, Object.fromEntries(op.params.flatMap((p) => (p.example !== undefined ? [[p.name, p.example]] : []))));
+  const learnArgs = learnable(op, callArgs) || !learnable(op, examples) ? callArgs : examples;
+  let run: TriggerRun;
+  try {
+    run = await runOpTrigger(site, op, learnArgs, { intercept: !op.readOnly });
+  } catch (e) {
+    return { outcome: "failed", attempt: last, reason: `the browser run failed: ${(e as Error).message.split("\n")[0]}` };
+  }
   if (!run.matched) return { outcome: "failed", attempt: last, reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` };
-  const fallback = op.readOnly ? judgeExchange(op, run.matched) : undefined;
+  // The site's own answer is this call's answer only when the trigger ran with this call's args.
+  const fallback = op.readOnly && learnArgs === callArgs ? judgeExchange(op, run.matched) : undefined;
   let fresh: Operation;
   try {
     fresh = learnOperation({
       exchanges: run.capture.exchanges,
-      examples: [args],
+      examples: [learnArgs],
       cookies: run.capture.cookies,
       match: op.match,
       name: op.name,
       trigger: op.trigger,
       readOnly: op.readOnly,
       loginCookies: o.loginCookies,
+      public: op.public,
     }).operation;
   } catch (e) {
     return { outcome: "failed", attempt: last, fallback, reason: `re-learning failed: ${(e as Error).message}` };
@@ -363,10 +498,13 @@ export async function healOperation(
     trigger: op.trigger,
     match: op.match,
     readOnly: op.readOnly,
+    ...(op.public ? { public: op.public } : {}),
     minTier: Math.max(op.minTier, fresh.minTier) as Operation["minTier"],
     response: { ...fresh.response, format: op.response.format, extract: op.response.extract, pick: op.response.pick, html: op.response.html, embedded: op.response.embedded },
   };
-  if (template(candidate) === template(op)) {
+  const lost = [...new Set(op.slots.flatMap((s) => (s.param ? [s.param] : [])))].filter((p) => !candidate.slots.some((s) => s.param === p));
+  if (lost.length) return { outcome: "failed", attempt: last, fallback, reason: `re-learning found no place for ${lost.join(", ")}; not saved` };
+  if (template(candidate, learnArgs) === template(op, learnArgs)) {
     return { outcome: "identical", fallback, reason: "re-learning produced a byte-identical template" };
   }
   last = await o.validate(candidate);

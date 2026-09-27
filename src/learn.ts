@@ -2,8 +2,8 @@
  * Captured exchanges + example args -> an Operation (DESIGN.md "Learning", steps 1-8).
  * Only example-arg values become params; everything else is kept verbatim.
  */
-import { fillTemplate, getAt, setAt, walk, type Leaf, type Step } from "./codec.js";
-import { inferShape, innerJson, parseBody, XSSI } from "./extract.js";
+import { escapeTemplate, fillTemplate, getAt, setAt, walk, type Leaf, type Step } from "./codec.js";
+import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
 import { loggedIn, parseCookieHeader } from "./session.js";
 import { OperationSchema, type Match, type Operation, type Param, type Request, type ResponseSpec, type Slot, type Trigger, type Volatile } from "./spec.js";
 import type { Exchange, StoredCookie } from "./types.js";
@@ -23,10 +23,14 @@ export interface LearnInput {
   trigger: Trigger;
   readOnly: boolean;
   loginCookies?: string[];
+  /** header names a human marked as public constants: kept literal, never session refs */
+  public?: string[];
 }
 
 export interface Learned {
   operation: Operation;
+  /** the captured request it was learned from */
+  exchange: Exchange;
   warnings: string[];
   /** literal values of session: refs, for the session store; never written to the spec */
   sessionValues: Record<string, string>;
@@ -56,7 +60,9 @@ function isNoise(e: Exchange): boolean {
   if (e.aborted) return false;
   if (!e.response) return true;
   if (e.response.status >= 300 && e.response.status < 400) return true;
-  // XHR/fetch are data by definition; Instagram's GraphQL answers JSON as text/javascript.
+  // Media is never data, even fetched by XHR (video segments); otherwise XHR/fetch are data by
+  // definition: Instagram's GraphQL answers JSON as text/javascript.
+  if (/^(image|font|video|audio)\//i.test(e.response.contentType)) return true;
   return e.resourceType !== "xhr" && e.resourceType !== "fetch" && DENY_MIME.test(e.response.contentType);
 }
 
@@ -78,6 +84,8 @@ export interface Candidate {
 
 // The page URL rides along in these on every XHR, so they say nothing about which request carries the args.
 const NOT_EVIDENCE = new Set(["header:cookie", "header:referer", "header:origin"]);
+// Telemetry posts the page URL in its body (web-vitals, perf logs); a value seen only inside a URL is weak evidence.
+const URLISH = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 function exampleValues(args: Args): [string, string][] {
   return Object.entries(args).map(([k, v]) => [k, String(v).toLowerCase()]);
@@ -99,7 +107,10 @@ export function rankCandidates(exchanges: Exchange[], args: Args = {}): Candidat
     .filter((e) => !isNoise(e))
     .map((e) => {
       const leaves = walk(e.request).filter((l) => !NOT_EVIDENCE.has(l.at[0]!));
-      const hits = values.filter(([, v]) => leaves.some((l) => l.value.toLowerCase().includes(v))).map(([k]) => k);
+      const has = (v: string, ls: Leaf[]) => ls.some((l) => l.value.toLowerCase().includes(v));
+      const direct = leaves.filter((l) => !l.container && !URLISH.test(l.value));
+      const hits = values.filter(([, v]) => has(v, direct)).map(([k]) => k);
+      const urlHits = values.filter(([k, v]) => !hits.includes(k) && has(v, leaves)).length;
       const body = e.response?.body ?? "";
       const parsed = tryParse(body);
       const json = parsed !== null && typeof parsed === "object";
@@ -107,6 +118,7 @@ export function rankCandidates(exchanges: Exchange[], args: Args = {}): Candidat
       const lower = values.length ? body.toLowerCase() : "";
       const score =
         hits.length * 1000 +
+        urlHits * 50 +
         (e.aborted ? 600 : 0) +
         (status !== undefined && status >= 200 && status < 300 ? 300 : 0) +
         (json ? 400 : 0) +
@@ -185,6 +197,8 @@ function buildMatch(req: Request, paramSegments: Set<number>): Match {
 
 const DROP_HEADER = /^(:.*|host|content-length|connection|cookie|accept-encoding)$/i;
 const SESSION_HEADER = /^(authorization|x-[a-z0-9-]*token|x-csrf[a-z0-9-]*|x-xsrf[a-z0-9-]*|x-goog-batchexecute-bgr|x-client-transaction-id)$/i;
+// Per-session anti-CSRF fields sent in forms, queries or JSON bodies: Google's `at`, Meta's fb_dtsg/lsd, Rails', ASP.NET's.
+const SESSION_FIELD = /^(at|fb_dtsg|lsd|authenticity_token|__RequestVerificationToken|_?csrf(_?token)?|_?xsrf(_?token)?|csrfmiddlewaretoken)$/i;
 const VOLATILE_KEY = /^(doc_?id|query_?id|document_?id|sha256_?hash|query_?hash|persisted_?query_?hash|hash)$/i;
 
 const key = (at: Step[]) => JSON.stringify(at);
@@ -194,7 +208,7 @@ const lastToken = (at: Step[]) => {
   return s.startsWith("json:") ? s.slice(s.lastIndexOf("/") + 1) : s.slice(s.indexOf(":") + 1);
 };
 
-function checkExamples(args: Args, label: string): void {
+export function checkExamples(args: Args, label: string): void {
   const seen = new Map<string, string>();
   for (const [name, v] of Object.entries(args)) {
     const s = String(v).toLowerCase();
@@ -257,13 +271,16 @@ function paramSlots(leaves: Leaf[], args: Args, warnings: string[]): { slots: Sl
       if (!leaf.at[0]!.startsWith("header:")) places.push(leaf.at.join(" > "));
     }
     if (!found) {
-      warnings.push(`example value for "${name}" was not found in the request; the param has no effect`);
+      throw new Error(
+        `example value for "${name}" (${JSON.stringify(raw)}) is not in the learned request, so the param would change nothing. ` +
+          "Pick the request that carries it (capture, then add --from <id> --pick-request <n>), or drop the param",
+      );
     }
     if (places.length > 1) warnings.push(`"${name}" appears in ${places.length} places, all will be filled: ${places.join("; ")}`);
   }
   for (const { leaf, names } of partial.values()) {
-    let template = leaf.value;
-    for (const name of names) template = template.replace(new RegExp(escapeRe(String(args[name])), "gi"), `{${name}}`);
+    let template = escapeTemplate(leaf.value);
+    for (const name of names) template = template.replace(new RegExp(escapeRe(escapeTemplate(String(args[name]))), "gi"), `{${name}}`);
     slots.push({ param: names[0]!, at: leaf.at, template });
   }
   return { slots, types };
@@ -349,7 +366,7 @@ function learnResponse(e: Exchange, values: string[], warnings: string[]): Respo
   const r = e.response;
   if (!r) return { format: "json" };
   const body = r.body ?? "";
-  const xssiPrefix = body.trimStart().startsWith(XSSI) ? XSSI : undefined;
+  const xssiPrefix = xssiOf(body);
   const data = tryParse(body);
   if (data !== null && typeof data === "object") {
     const extract = suggestExtract(data, values);
@@ -363,7 +380,7 @@ function learnResponse(e: Exchange, values: string[], warnings: string[]): Respo
   }
   warnings.push(
     /html/i.test(r.contentType)
-      ? 'response is HTML: set response.html {items, fields} or response.format "embedded" with a regex'
+      ? "response is HTML: add --html '{\"items\":\"<css>\",\"fields\":{...}}' for a list, or --embedded '<regex>' for JSON inside the page"
       : `response is ${r.contentType || "untyped"} text, returned raw`,
   );
   return { format: "html", contentType: r.contentType };
@@ -442,12 +459,21 @@ export function learnOperation(input: LearnInput): Learned {
     slots.push({ ...ref, at: leaf.at });
     taken.add(key(leaf.at));
   }
+  const publicHeaders = new Set((input.public ?? []).map((h) => h.toLowerCase()));
   for (const [name, value] of Object.entries(request.headers)) {
     const at = [`header:${name}`];
-    if (!SESSION_HEADER.test(name) || taken.has(key(at))) continue;
+    if (!SESSION_HEADER.test(name) || publicHeaders.has(name) || taken.has(key(at))) continue;
     slots.push({ ref: `session:${name}`, at });
     taken.add(key(at));
     sessionValues[name] = value;
+  }
+  for (const leaf of leaves) {
+    if (leaf.container || leaf.type !== "string" || leaf.at[0]!.startsWith("header:") || taken.has(key(leaf.at))) continue;
+    const name = lastToken(leaf.at);
+    if (!SESSION_FIELD.test(name) || leaf.value.length < 8) continue;
+    slots.push({ ref: `session:${name}`, at: leaf.at });
+    taken.add(key(leaf.at));
+    sessionValues[name] = leaf.value;
   }
   // The spec never holds a credential: blank every ref'd leaf.
   for (const s of slots) if (s.ref) request = setAt(request, s.at, "");
@@ -501,10 +527,11 @@ export function learnOperation(input: LearnInput): Learned {
     response,
     params,
     readOnly: input.readOnly,
+    ...(input.public?.length ? { public: [...publicHeaders] } : {}),
     minTier,
     learnedLoggedIn: loggedIn(input.cookies, input.loginCookies),
     learnedAt: new Date().toISOString(),
   });
-  return { operation, warnings, sessionValues };
+  return { operation, exchange: ex, warnings, sessionValues };
 }
 

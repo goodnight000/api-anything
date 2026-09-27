@@ -13,10 +13,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { chromeAvailable, closeBrowser, openBrowser, runTrigger } from "../src/browser.js";
 import { call } from "../src/execute.js";
-import { addOperation, profileDir } from "../src/heal.js";
+import { addOperation, capturePage, profileDir } from "../src/heal.js";
 import { loadSession, saveSession } from "../src/session.js";
-import { staleMark } from "../src/store.js";
-import { startFixture, type Fixture } from "./fixture/server.js";
+import { rememberedTier, staleMark } from "../src/store.js";
+import { PUBLIC_BEARER, startFixture, type Fixture } from "./fixture/server.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "site2api-e2e-"));
 process.env.SITE2API_HOME = HOME;
@@ -84,6 +84,14 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     assert.ok(readFileSync(specFile(), "utf8").includes(fx.state.userQueryId));
   });
 
+  test("2b. a handle that doesn't exist is input (the example still answers): no heal, no browser", async () => {
+    const before = heals().length;
+    const res = await call(SITE, "getUser", { name: "nobody_zz" }, fast);
+    assert.equal(res.class, "input", JSON.stringify(res));
+    assert.match(res.next ?? "", /do not heal/);
+    assert.equal(heals().length, before);
+  });
+
   test("3. heal-loop guard, then a heal by recapture when rescan cannot work", async () => {
     await addOperation({ site: SITE, op: "getUser2", trigger: { url: `${fx.url}/u/{name}` }, examples: [{ name: "alice" }, { name: "bob" }] });
     const spec = JSON.parse(readFileSync(specFile(), "utf8"));
@@ -136,6 +144,7 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     const res = await call(SITE, "feed", {}, fast);
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(res.tier, 3);
+    assert.equal(rememberedTier(SITE, "feed"), undefined, "the spec's own minTier is not remembered, so editing it takes effect");
     assert.deepEqual(res.data, [{ id: "f1", text: "first" }, { id: "f2", text: "second" }]);
   });
 
@@ -178,7 +187,7 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   });
 
   test("9. the html recipe on a server-rendered list returns picked items", async () => {
-    await addOperation({
+    const added = await addOperation({
       site: SITE,
       op: "listUsers",
       trigger: { url: `${fx.url}/list` },
@@ -186,6 +195,9 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
       match: { path: "/list" },
       response: { html: { items: "li.user", fields: { name: "a.name", followers: "span.followers", href: "a.name@href" } }, pick: ["name", "href"] },
     });
+    assert.ok(!added.warnings.some((w) => /response is HTML/.test(w)), "no 'set response.html' warning when --html was given");
+    assert.deepEqual(added.preview, { count: 3, first: { name: "alice", href: "/u/alice" } });
+    assert.equal(added.captures.length, 2, "both trigger runs are saved as captures");
     const res = await call(SITE, "listUsers", {}, fast);
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.deepEqual(res.data, [
@@ -220,5 +232,83 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     } finally {
       await client.close();
     }
+  });
+
+  test("11. a missing session value (clean home) is auth; one trigger run refreshes it, then tier 1 works", async () => {
+    await addOperation({ site: SITE, op: "getUser3", trigger: { url: `${fx.url}/u/{name}` }, examples: [{ name: "alice" }, { name: "bob" }], response: { extract: "data.user.name" } });
+    const s = loadSession(SITE);
+    saveSession(SITE, { ...s, values: {} }); // as from a bundled spec on a fresh machine
+    const r = await call(SITE, "getUser3", { name: "heidi" }, fast);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 3);
+    assert.match(r.reason ?? "", /refreshed the session/);
+    assert.equal(loadSession(SITE).values.authorization, PUBLIC_BEARER);
+    const again = await call(SITE, "getUser3", { name: "ivan" }, fast);
+    assert.equal(again.tier, 1, JSON.stringify(again));
+  });
+
+  test("12. --public keeps a public bearer literal: works with no session values, and export allows it", async () => {
+    await addOperation({ site: SITE, op: "getUserPublic", trigger: { url: `${fx.url}/u/{name}` }, examples: [{ name: "alice" }, { name: "bob" }], public: ["authorization"], response: { extract: "data.user.name" } });
+    saveSession(SITE, { ...loadSession(SITE), values: {} });
+    const r = await call(SITE, "getUserPublic", { name: "judy" }, { ...fast, maxTier: 1 });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.data, "judy");
+    saveSession(SITE, { ...loadSession(SITE), values: { authorization: PUBLIC_BEARER } }); // the export scan sees it live
+    const out = await cli("export", SITE, "--keep-examples");
+    const spec = JSON.parse(out.stdout);
+    const op = spec.operations.find((o: { name: string }) => o.name === "getUserPublic");
+    assert.equal(op.request.headers.authorization, PUBLIC_BEARER);
+    assert.equal(op.params[0].example, "alice");
+  });
+
+  test("13. a write sent as a GET by a button is learned without being sent; --from a non-write capture is refused", async () => {
+    const follows = () => fx.calls.filter((c) => c.path.startsWith("/api/follow")).length;
+    const r = await addOperation({
+      site: SITE,
+      op: "follow",
+      trigger: { url: `${fx.url}/follow/{user}`, steps: [{ action: "click", selector: "#follow" }] },
+      examples: [{ user: "alice" }, { user: "carol" }],
+      write: true,
+    });
+    assert.equal(r.operation.request.method, "GET");
+    assert.equal(follows(), 0, "learning sent no write");
+    const cap = await capturePage({ url: `${fx.url}/list` });
+    await assert.rejects(addOperation({ site: SITE, op: "w2", examples: [{}], write: true, from: { capture: cap } }), /ran without --write/);
+  });
+
+  test("14. ids that differ per page load but replay fine are session-scoped: minTier stays 1", async () => {
+    const r = await addOperation({ site: SITE, op: "scoped", trigger: { url: `${fx.url}/scoped?q={q}` }, examples: [{ q: "kittens" }, { q: "puppies" }], response: { extract: "data.results" } });
+    assert.equal(r.operation.minTier, 1, r.warnings.join("\n"));
+    assert.ok(r.warnings.some((w) => /session-scoped/.test(w)));
+    const res = await call(SITE, "scoped", { q: "otters" }, fast);
+    assert.deepEqual(res.data, ["otters one", "otters two"]);
+    assert.equal(res.tier, 1);
+  });
+
+  test("15. add --from a saved run re-learns without a browser, templating step selectors", async () => {
+    const cap = await capturePage({ url: `${fx.url}/follow/alice`, steps: [{ action: "click", selector: "#follow" }, { action: "wait", selector: 'a[href="/u/alice"], #follow' }], write: true });
+    const r = await addOperation({ site: SITE, op: "follow2", examples: [{ user: "alice" }], write: true, from: { capture: cap } });
+    assert.equal(r.operation.trigger.url, `${fx.url}/follow/{user}`);
+    assert.equal(r.operation.trigger.steps?.[1]?.selector, 'a[href="/u/{user}"], #follow');
+    assert.deepEqual(r.captures, []);
+  });
+
+  test("16. a site that walls plain HTTP answers at tier 2, and the result says why", async () => {
+    await addOperation({ site: SITE, op: "walled", trigger: { url: `${fx.url}/walled` }, examples: [{}], match: { path: "/api/walled" } });
+    const r = await call(SITE, "walled", {}, fast);
+    assert.equal(r.tier, 2, JSON.stringify(r));
+    assert.match(r.reason ?? "", /tier 1 was blocked \(Cloudflare/);
+    const again = await call(SITE, "walled", {}, fast);
+    assert.equal(again.tier, 2);
+    assert.match(again.reason ?? "", /started at tier 2/);
+    assert.equal(rememberedTier(SITE, "walled"), 2);
+  });
+
+  test("17. capture's next hint points at inspect and --html when the best candidate is the page itself", async () => {
+    await closeBrowser(); // the CLI launches its own Chrome on the same profile
+    const r = await cli("capture", `${fx.url}/list`, "--example", "q=alice");
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.candidates[0].kind, "document");
+    assert.match(out.next, /inspect .* --html/);
   });
 });

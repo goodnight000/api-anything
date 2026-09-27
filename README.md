@@ -15,8 +15,15 @@ npx -y site2api call hn front
 ```
 
 The first command opens the page twice in a headless Chrome and saves an operation to
-`~/.site2api/sites/hn.json`. The second is a single HTTP request that takes about 200 ms and
-returns JSON.
+`~/.site2api/sites/hn.json`. Its output includes a `preview` of what a call returns. The second
+is a single HTTP request that takes about 200 ms and returns JSON. (Sites that challenge plain
+HTTP clients answer through Chrome instead, in 1 to 2 s; the result's `reason` says so.)
+
+Everything lives in `~/.site2api`; set `SITE2API_HOME` to use another directory.
+
+Bundled specs, verified live and logged out on 2026-09-27: `x` (getUser, getProfile),
+`instagram` (getProfile, getPosts), `google-flights` (search, top), `hacker-news` (frontPage,
+search). `site2api sites` lists them; each has notes in `sites/<site>.md`.
 
 ## Install
 
@@ -41,7 +48,10 @@ It exposes three fixed tools, `list_sites`, `list_operations` and `call_operatio
 tool list costs the same whether you have 2 sites or 200. Writes are hidden until you start the
 server with `site2api mcp --allow-writes`.
 
-**Codex and other agents.** Install the CLI (`npm i -g site2api`). Then point the agent at the
+`call_operation` takes `{ site, op, args: { name: value } }` and returns the same JSON as the CLI.
+
+**Codex and other agents.** Install the CLI (`npm i -g site2api`; from a checkout, `npm install &&
+npm pack` then `npm i -g ./site2api-<version>.tgz`). Then point the agent at the
 skill file, [`skills/site2api/SKILL.md`](skills/site2api/SKILL.md), or copy it into the agent's
 skills directory (for Codex, `~/.codex/skills/site2api/SKILL.md`). The skill teaches the
 create loop, the failure loop, and the write rules. Every command prints JSON and gives a
@@ -57,32 +67,38 @@ const r = await call("hn", "front", {});
 
 ## Worked example
 
-Suppose you want a site's search as an operation. Start by seeing which requests the page makes:
+Suppose you want Hacker News search as an operation. Start by seeing which requests the page makes:
 
 ```sh
 $ site2api capture "https://hn.algolia.com/?q=sqlite" --example q=sqlite
-{"capture":"cmg2k8x1","requests":41,"candidates":[
-  {"id":17,"method":"POST","url":"https://uj5wyc0l7x-dsn.algolia.net/1/indexes/*/queries?...","status":200,"type":"application/json","carries":["q"],"size":48211},
-  {"id":1,"method":"GET","url":"https://hn.algolia.com/?q=sqlite","status":200,"type":"text/html","carries":["q"],"size":3120}, ...]}
+{"capture":"cmujqsybh","requests":38,"candidates":[
+  {"id":21,"kind":"fetch","method":"POST","url":"https://uj5wyc0l7x-dsn.algolia.net/1/indexes/Item_dev/query?x-algolia-agent=...","status":200,"type":"application/json","carries":["q"],"size":61234},
+  {"id":1,"kind":"document","method":"GET","url":"https://hn.algolia.com/?q=sqlite","status":200,"type":"text/html","size":2841}, ...]}
 ```
 
-Then describe how to make the page fire that request. Give two example values, so the learner
-can tell params from nonces:
+`site2api inspect <capture> <id>` shows a candidate's response, without a browser. Then describe
+how to make the page fire that request. Give two example values, so the learner can tell params
+from nonces:
 
 ```sh
-$ site2api add hn-search search --trigger "https://hn.algolia.com/?q={q}" \
-    --example q=sqlite --example2 q=postgres --extract "results[0].hits" --pick title,url,points
-{"ok":true,"site":"hn-search","op":"search","request":"POST https://uj5wyc0l7x-dsn.algolia.net/1/indexes/*/queries",
- "params":["q:string"],"minTier":1,"match":{"method":"POST","host":"uj5wyc0l7x-dsn.algolia.net","path":"/1/indexes/*/queries"},
- "warnings":[],"next":"site2api call hn-search search q=..."}
+$ site2api add hn-search search --trigger "https://hn.algolia.com/?q={query}" \
+    --example query=sqlite --example2 query=postgres --match host=uj5wyc0l7x-dsn.algolia.net \
+    --extract hits --pick "title,url,points,comments=num_comments"
+{"ok":true,"site":"hn-search","op":"search","request":"POST https://uj5wyc0l7x-dsn.algolia.net/1/indexes/Item_dev/query",
+ "params":["query:string"],"readOnly":true,"minTier":1,"match":{"host":"uj5wyc0l7x-dsn.algolia.net"},"extract":"hits",
+ "preview":{"count":30,"first":{"title":"Hosting SQLite databases on GitHub Pages or any static file hoster","url":"https://phiresky.github.io/blog/2021/hosting-sqlite-databases-on-github-pages/","points":1812,"comments":244}},
+ "warnings":[],"captures":["cmujqsybh","cmujqszcj"],"next":"site2api call hn-search search query=..."}
 
-$ site2api call hn-search search q=duckdb
-{"ok":true,"class":"ok","tier":1,"ms":212,"data":[{"title":"DuckDB 1.0","url":"https://...","points":812}, ...]}
+$ site2api call hn-search search query=duckdb
+{"ok":true,"class":"ok","tier":1,"data":[{"title":"The DuckDB Local UI","url":"https://duckdb.org/2025/03/12/duckdb-ui.html","points":926,"comments":188}, ...],"ms":990}
 ```
 
-The output above is abbreviated and shows the shape of each response. It was not re-run
-against the live site for this README. The offline test suite (`test/e2e.test.ts`) runs the
-same flow end to end against a local fixture site.
+The `add` and `call` output is real, from 2026-09-27, shortened; the `capture` listing shows its
+shape (ids and sizes vary). `--pick`
+accepts `name=path` to rename a field. If the preview is wrong, fix `--extract`/`--pick` and
+re-run `add --from <one of the captures>`: no browser needed. For a server-rendered page, use
+`--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page;
+`inspect` accepts the same flags, so you can try selectors first.
 
 ## How self-healing works
 
@@ -155,7 +171,15 @@ Known limits:
 
 - An arg a site derives from another request (a numeric user id looked up from a handle, or a
   page-2 cursor) cannot be substituted. Model the lookup as its own op, or rely on tier 3.
-- Example values need at least 3 characters and must appear in the request as typed.
+  `add` refuses an example value that the chosen request does not carry.
+- Example values need at least 3 characters and must appear in the request (multi-word values
+  are fine; they are matched decoded, so `mcp server` finds `mcp%20server`).
+- An op extracts one value from one request. Data in two places of one page takes two ops.
+- `--html` returns text and attributes as they are in the page (relative `href`s stay relative).
+- "Not found" is detected by replaying the op's example args, so a spec without examples reports
+  missing data as `drift`.
+- Request pacing (1 s per site) holds within one process: separate CLI runs are not paced
+  against each other.
 - Optional request structure (a reply block that only some calls have) needs a separate op.
 - Rescan only reads scripts that the page references directly. An id inside a lazily loaded
   chunk heals through recapture instead, which is slower.

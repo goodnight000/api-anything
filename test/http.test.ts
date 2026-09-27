@@ -125,3 +125,49 @@ test("send against a local server: GET has no body, per-site pacing, timeout", a
     server.close();
   }
 });
+
+test("send: a cross-origin redirect drops cookie-derived and session headers; same-origin keeps them", async () => {
+  let seen: Record<string, unknown> = {};
+  const other = createServer((req, res) => {
+    seen = req.headers;
+    res.setHeader("content-type", "application/json");
+    res.end('{"landed":true}');
+  });
+  await new Promise<void>((r) => other.listen(0, "127.0.0.1", r));
+  const otherUrl = `http://127.0.0.1:${(other.address() as AddressInfo).port}/landing`;
+  let sameHeaders: Record<string, unknown> = {};
+  const site = createServer((req, res) => {
+    if (req.url === "/away") return void res.writeHead(302, { location: otherUrl }).end();
+    if (req.url === "/here") return void res.writeHead(307, { location: "/final" }).end();
+    sameHeaders = req.headers;
+    res.setHeader("content-type", "application/json");
+    res.end("{}");
+  });
+  await new Promise<void>((r) => site.listen(0, "localhost", r));
+  const base = `http://localhost:${(site.address() as AddressInfo).port}`;
+  const me = (path: string) =>
+    OperationSchema.parse({
+      name: "me",
+      readOnly: true,
+      request: { method: "GET", url: `${base}${path}`, headers: { "x-csrf-token": "", "x-keep": "1" } },
+      slots: [{ ref: "cookie:ct0", at: ["header:x-csrf-token"] }],
+      trigger: { url: base },
+    });
+  const local: Session = { cookies: [cookie("ct0", "SECRET-CSRF-COOKIE-VALUE", "localhost")], values: {} };
+  try {
+    const r = await send(me("/away"), {}, local, { site: "redir", minIntervalMs: 0 });
+    assert.equal(r.body, '{"landed":true}');
+    assert.equal(r.url, otherUrl);
+    assert.equal(seen["x-csrf-token"], undefined);
+    assert.equal(seen.cookie, undefined);
+    assert.equal(seen["x-keep"], "1");
+    await send(me("/here"), {}, local, { site: "redir", minIntervalMs: 0 });
+    assert.equal(sameHeaders["x-csrf-token"], "SECRET-CSRF-COOKIE-VALUE");
+    assert.equal(sameHeaders.cookie, "ct0=SECRET-CSRF-COOKIE-VALUE");
+  } finally {
+    for (const s of [site, other]) {
+      s.closeAllConnections();
+      s.close();
+    }
+  }
+});

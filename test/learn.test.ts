@@ -346,3 +346,80 @@ test("example validation and pick errors", () => {
   assert.deepEqual(byId.operation.slots, [{ param: "screen_name", at: ["path:0"] }]);
   assert.deepEqual(byId.operation.match.path, "/*");
 });
+
+test("per-session form tokens (Google at, Meta fb_dtsg) become session refs, and a public header can stay literal", () => {
+  const AT = "AJpMio3qL0x-Vw8nZ2rT9kYb4HsE:1727430000000";
+  const DTSG = "NAcNq8Yx2b3LmPq:17:1727430000";
+  const body = `f.req=${encodeURIComponent(JSON.stringify([[["rpc1", JSON.stringify(["paris"]), null, "generic"]]]))}&at=${encodeURIComponent(AT)}&fb_dtsg=${encodeURIComponent(DTSG)}&`;
+  const exchanges: Exchange[] = [
+    {
+      id: 1,
+      resourceType: "xhr",
+      request: { method: "POST", url: "https://www.google.test/_/rpc?rpcids=rpc1", headers: { "content-type": "application/x-www-form-urlencoded", authorization: BEARER }, body },
+      response: { status: 200, headers: {}, contentType: "application/json", body: '[["paris",1]]' },
+    },
+  ];
+  const base = { exchanges, examples: [{ city: "paris" }] as [Record<string, unknown>], cookies: [], name: "s", trigger: { url: "https://www.google.test/s?q={city}" }, readOnly: true };
+  const { operation: op, sessionValues } = learnOperation(base);
+  assert.ok(op.slots.some((s) => s.ref === "session:at" && s.at[0] === "form:at"));
+  assert.ok(op.slots.some((s) => s.ref === "session:fb_dtsg"));
+  assert.equal(sessionValues.at, AT);
+  assert.ok(!op.request.body!.includes(encodeURIComponent(AT)) && !op.request.body!.includes(encodeURIComponent(DTSG)), op.request.body);
+  assert.equal(op.request.headers.authorization, "", "authorization is a session ref by default");
+
+  const pub = learnOperation({ ...base, public: ["Authorization"] }).operation;
+  assert.equal(pub.request.headers.authorization, BEARER);
+  assert.deepEqual(pub.public, ["authorization"]);
+  assert.ok(!pub.slots.some((s) => s.ref === "session:authorization"));
+});
+
+test("an example value not in the chosen request is an error, not a param that changes nothing", () => {
+  const exchanges: Exchange[] = [
+    {
+      id: 1,
+      resourceType: "fetch",
+      request: { method: "GET", url: "https://a.test/api/feed", headers: {} },
+      response: { status: 200, headers: {}, contentType: "application/json", body: '{"items":[{"q":"sqlite"}]}' },
+    },
+  ];
+  assert.throws(
+    () => learnOperation({ exchanges, examples: [{ q: "sqlite" }], cookies: [], name: "s", trigger: { url: "https://a.test/?q={q}" }, readOnly: true, id: 1 }),
+    /"q" \("sqlite"\) is not in the learned request/,
+  );
+});
+
+test("a learned template keeps the leaf's own {name} text (minified GraphQL selection)", () => {
+  const body = JSON.stringify({ query: 'query{repository(owner:"octocat",name:"hello-world"){name}}' });
+  const L = learnOperation({
+    exchanges: [
+      {
+        id: 1,
+        resourceType: "fetch",
+        request: { method: "POST", url: "https://g.test/graphql", headers: { "content-type": "application/json" }, body },
+        response: { status: 200, headers: {}, contentType: "application/json", body: '{"data":{"repository":{"name":"hello-world"}}}' },
+      },
+    ],
+    examples: [{ owner: "octocat", name: "hello-world" }],
+    cookies: [],
+    name: "repo",
+    trigger: { url: "https://g.test/{owner}/{name}" },
+    readOnly: true,
+  });
+  const out = buildRequest(L.operation, { owner: "torvalds", name: "linux" }, { cookies: [], values: {} }).body!;
+  assert.equal(JSON.parse(out).query, 'query{repository(owner:"torvalds",name:"linux"){name}}');
+});
+
+test("telemetry that logs the page URL does not count as carrying the args", () => {
+  const ex = (id: number, url: string, body?: string): Exchange => ({
+    id,
+    resourceType: "xhr",
+    request: { method: body ? "POST" : "GET", url, headers: {}, ...(body ? { body } : {}) },
+    response: { status: 200, headers: {}, contentType: "application/json", body: "{}" },
+  });
+  const ranked = rankCandidates([ex(1, "https://x.test/1.1/viewer_context.json", JSON.stringify({ page: "https://x.test/nasa" })), ex(2, "https://api.x.test/User?screen_name=nasa")], {
+    screen_name: "nasa",
+  });
+  assert.deepEqual(ranked.map((c) => [c.id, c.hits]), [[2, ["screen_name"]], [1, []]]);
+  const video: Exchange = { ...ex(3, "https://video.test/seg-1.m4s?nasa"), response: { status: 200, headers: {}, contentType: "video/mp4", body: "x" } };
+  assert.deepEqual(rankCandidates([video], { screen_name: "nasa" }), [], "media fetched by XHR is noise");
+});

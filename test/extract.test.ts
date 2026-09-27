@@ -85,3 +85,17 @@ test("getPath steps into JSON-encoded strings (batchexecute payloads)", () => {
   assert.deepEqual(getPath(body, "[0][2][0][1]"), ["b", 2]);
   assert.equal(getPath(body, "[0][1][0]"), undefined, "a plain string is not indexed");
 });
+
+test("parseBody: Meta's for (;;); prefix, repeated before each chunk, gives an array", () => {
+  assert.deepEqual(parseBody('for (;;);{"a":1}'), { a: 1 });
+  assert.deepEqual(parseBody('for (;;);{"a":1}\nfor (;;);{"b":2}'), [{ a: 1 }, { b: 2 }]);
+  assert.deepEqual(parseBody("while(1);[1,2]"), [1, 2]);
+});
+
+test("pick: name=path renames the output key", () => {
+  assert.deepEqual(pick([{ node: { code: "A", caption: { text: "hi" } } }], ["code=node.code", "caption=node.caption.text", "node.code"]), [
+    { code: "A", caption: "hi", "node.code": "A" },
+  ]);
+  assert.deepEqual(pick({ "[1][0][1]": 1 }, []), {});
+  assert.deepEqual(pick([[["UA"], [0, 209]]], ["price=[1][1]"]), [{ price: 209 }]);
+});

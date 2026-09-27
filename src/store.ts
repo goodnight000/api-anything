@@ -21,7 +21,8 @@ export function loadSite(name: string, bundledDir = BUNDLED_DIR): Resolved | und
     const path = join(dir, file);
     if (!existsSync(path)) continue;
     try {
-      return { site: parseSite(JSON.parse(readFileSync(path, "utf8"))), source, path };
+      // The file name is the site's address; saving under a different inner name would overwrite another site.
+      return { site: { ...parseSite(JSON.parse(readFileSync(path, "utf8"))), name }, source, path };
     } catch (e) {
       throw new Error(`${path}: ${(e as Error).message}`);
     }
@@ -47,8 +48,15 @@ export function saveSite(site: Site): string {
 
 /* ------------------------------------------------------------------ state */
 
+export interface StaleMark {
+  until: number;
+  reason: string;
+  /** false when the site's own frontend did not answer either, so a tier-3 read is pointless */
+  tier3?: boolean;
+}
+
 interface State {
-  stale: Record<string, { until: number; reason: string }>;
+  stale: Record<string, StaleMark>;
   tier: Record<string, 1 | 2 | 3>;
   healedAt: Record<string, number>;
 }
@@ -88,8 +96,8 @@ export function lastHealAt(site: string, op: string): number | undefined {
   return loadState().healedAt[key(site, op)];
 }
 
-export function markStale(site: string, op: string, reason: string, ttlMs = 30 * 60_000, now = Date.now()): void {
-  updateState((s) => void (s.stale[key(site, op)] = { until: now + ttlMs, reason }));
+export function markStale(site: string, op: string, reason: string, ttlMs = 30 * 60_000, now = Date.now(), extra: { tier3?: boolean } = {}): void {
+  updateState((s) => void (s.stale[key(site, op)] = { until: now + ttlMs, reason, ...extra }));
 }
 
 export function clearStale(site: string, op: string): void {
@@ -97,7 +105,7 @@ export function clearStale(site: string, op: string): void {
 }
 
 /** Current stale mark for an op, if it has not expired. */
-export function staleMark(site: string, op: string, now = Date.now()): { until: number; reason: string } | undefined {
+export function staleMark(site: string, op: string, now = Date.now()): StaleMark | undefined {
   const m = loadState().stale[key(site, op)];
   return m && m.until > now ? m : undefined;
 }
@@ -111,8 +119,9 @@ export function staleList(now = Date.now()): { site: string; op: string; until: 
     });
 }
 
-export function rememberTier(site: string, op: string, tier: 1 | 2 | 3): void {
-  updateState((s) => void (s.tier[key(site, op)] = tier));
+/** The tier an op escalated to; undefined forgets it (the op's own minTier applies again). */
+export function rememberTier(site: string, op: string, tier: 1 | 2 | 3 | undefined): void {
+  updateState((s) => void (tier === undefined ? delete s.tier[key(site, op)] : (s.tier[key(site, op)] = tier)));
 }
 
 export function rememberedTier(site: string, op: string): 1 | 2 | 3 | undefined {
@@ -126,12 +135,15 @@ const HEX_BLOB = /\b[0-9a-fA-F]{32,}\b/;
 // "/" left out: every long URL path would match
 const BASE64_BLOB = /[A-Za-z0-9+_-]{40,}={0,2}/;
 const BEARER = /^Bearer\s+\S{20,}/i;
+// identifiers like __relay_internal__pv__appviewerisloggedinprovider are long too; tokens mix case and digits
+const RANDOM = (s: string) => /\d/.test(s) && /[a-z]/.test(s) && /[A-Z]/.test(s);
 
 /**
  * `secrets`: exact hits of live jar/session values (6+ chars, raw, unquoted or URL-decoded): no
  * false positives, so callers fail closed. `warnings`: regex heuristics, which do misfire.
+ * `allowed`: JSON paths a human marked public (an op's `public` headers); skipped.
  */
-export function scanSecrets(value: unknown, session: Session): { secrets: string[]; warnings: string[] } {
+export function scanSecrets(value: unknown, session: Session, allowed: Set<string> = new Set()): { secrets: string[]; warnings: string[] } {
   const live: [string, string][] = [];
   const add = (label: string, v: string) => {
     let decoded = v;
@@ -147,10 +159,19 @@ export function scanSecrets(value: unknown, session: Session): { secrets: string
   const secrets: string[] = [];
   const warnings: string[] = [];
   const visit = (v: unknown, path: string) => {
+    if (allowed.has(path)) return;
     if (typeof v === "string") {
       for (const [label, s] of live) if (v.includes(s)) secrets.push(`${path} holds the live ${label}`);
-      const why = JWT.test(v) ? "a JWT" : BEARER.test(v) ? "a bearer token" : HEX_BLOB.test(v) ? "a long hex blob" : BASE64_BLOB.test(v) ? "a long base64 blob" : "";
-      if (why) warnings.push(`${path} looks like ${why}; check it is public`);
+      let text = v;
+      try {
+        text = decodeURIComponent(v); // percent-encoded bodies hide the blob's shape
+      } catch {
+        /* raw */
+      }
+      const hit = ([["a JWT", JWT], ["a bearer token", BEARER], ["a long hex blob", HEX_BLOB], ["a long base64 blob", BASE64_BLOB]] as const)
+        .map(([why, re]) => [why, [...text.matchAll(new RegExp(re, "g"))].map((m) => m[0]).find((m) => why !== "a long base64 blob" || RANDOM(m))] as const)
+        .find(([, m]) => m);
+      if (hit) warnings.push(`${path} looks like ${hit[0]} (${hit[1]!.slice(0, 24)}...); check it is public`);
     } else if (Array.isArray(v)) v.forEach((x, i) => visit(x, `${path}[${i}]`));
     else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) visit(x, `${path}.${k}`);
   };
@@ -159,24 +180,30 @@ export function scanSecrets(value: unknown, session: Session): { secrets: string
 }
 
 /**
- * A shareable copy: examples stripped from params and from the stored request (string param
- * slots become `{name}`), then scanned against this machine's live session.
+ * A shareable copy: example values stripped from the stored request (param slots become `{name}`,
+ * or null in a typed JSON leaf) and from params (unless `keepExamples`: a human confirmed they
+ * are public), response shapes dropped (their keys can be user data), then scanned against this
+ * machine's live session.
  */
-export function exportSite(name: string): { spec: Site; secrets: string[]; warnings: string[] } {
+export function exportSite(name: string, o: { keepExamples?: boolean } = {}): { spec: Site; secrets: string[]; warnings: string[] } {
   const r = loadSite(name);
   if (!r) throw new Error(`no site "${name}"`);
   const spec = structuredClone(r.site);
-  for (const op of spec.operations) {
+  const allowed = new Set<string>();
+  spec.operations.forEach((op, i) => {
     for (const slot of op.slots) {
       const p = slot.param !== undefined ? op.params.find((x) => x.name === slot.param) : undefined;
-      if (!p || (p.type !== "string" && slot.template === undefined)) continue;
+      if (!p) continue;
+      const typed = p.type !== "string" && slot.template === undefined && slot.at.at(-1)!.startsWith("json:");
       try {
-        op.request = setAt(op.request, slot.at, slot.template ?? `{${p.name}}`);
+        op.request = setAt(op.request, slot.at, typed ? null : (slot.template ?? `{${p.name}}`));
       } catch {
         /* position gone; leave it */
       }
     }
-    for (const p of op.params) delete p.example;
-  }
-  return { spec, ...scanSecrets(spec, loadSession(name)) };
+    if (!o.keepExamples) for (const p of op.params) delete p.example;
+    delete op.response.shape;
+    for (const h of op.public ?? []) allowed.add(`$.operations[${i}].request.headers.${h.toLowerCase()}`);
+  });
+  return { spec, ...scanSecrets(spec, loadSession(name), allowed) };
 }

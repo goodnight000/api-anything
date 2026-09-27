@@ -1,6 +1,6 @@
 # api-anything → site2api reuse audit
 
-Source: `/Users/charleszheng/Developer/api-anything` (MIT, same author, HEAD `7199102`, 9 commits,
+Source: `api-anything`, the private predecessor project (MIT, same author, HEAD `7199102`, 9 commits,
 ~7.0k lines; `npm test` = 79/79 pass on 2026-09-27). Judged against `docs/DESIGN.md` (draft v0).
 Everything marked **[verified]** was checked on 2026-09-27, either by running code (`npx tsx`) or
 by a live `curl`. **[unverified]** means I could not check it.

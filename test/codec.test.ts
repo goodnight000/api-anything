@@ -159,3 +159,22 @@ test("JSON pointer escapes ~0 and ~1", () => {
   assert.deepEqual(leaf.at, ["body", "json:/a~1b/c~0d"]);
   assert.equal(setAt(r, leaf.at, "w").body, '{"a/b":{"c~d":"w"}}');
 });
+
+test("a JSON body labeled form-urlencoded (Algolia) is walked as JSON, so its values are found", () => {
+  const r: Request = {
+    method: "POST",
+    url: "https://app-dsn.algolia.net/1/indexes/Item_dev/query",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: '{"query":"sqlite","hitsPerPage":30}',
+  };
+  const leaf = walk(r).find((l) => l.value === "sqlite");
+  assert.deepEqual(leaf?.at, ["body", "json:/query"]);
+  assert.equal(setAt(r, leaf!.at, "duckdb").body, '{"query":"duckdb","hitsPerPage":30}');
+  const form: Request = { ...r, body: "q=sqlite&n=1" };
+  assert.deepEqual(walk(form).find((l) => l.value === "sqlite")?.at, ["form:q"], "a real form body still parses as pairs");
+});
+
+test("fillTemplate: doubled braces are literal, so a learned leaf's own {name} text survives", () => {
+  assert.equal(fillTemplate('query{{repo(name:"{name}"){{name}}}}', { name: "linux" }), 'query{repo(name:"linux"){name}}');
+  assert.equal(fillTemplate("{{{name}}}", { name: "x" }), "{x}");
+});

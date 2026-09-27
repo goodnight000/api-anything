@@ -110,27 +110,44 @@ async function pace(site: string, minIntervalMs: number): Promise<void> {
   if (at > now) await new Promise((r) => setTimeout(r, at - now));
 }
 
+const REDIRECT = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * Send the filled template. Redirects are followed by hand (at most 5): on an origin change the
+ * credential headers (every ref'd header, authorization, cookie) are dropped, since undici only
+ * strips authorization and cookie and would hand a CSRF header to the other origin.
+ */
 export async function send(op: Operation, args: Record<string, unknown>, session: Session, opts: SendOptions): Promise<Sent> {
   const req = buildRequest(op, args, session);
   await pace(opts.site, opts.minIntervalMs ?? 1000);
   const timeoutMs = opts.timeoutMs ?? 30_000;
+  const signal = AbortSignal.timeout(timeoutMs);
+  const secret = new Set(["authorization", "cookie", ...op.slots.flatMap((s) => (s.ref && s.at.length === 1 && s.at[0]!.startsWith("header:") ? [s.at[0]!.slice(7).toLowerCase()] : []))]);
+  let { url, method, headers } = req;
+  let body = method === "GET" || method === "HEAD" ? undefined : req.body;
   const t0 = performance.now();
   try {
-    const res = await (opts.fetchImpl ?? fetch)(req.url, {
-      method: req.method,
-      headers: req.headers,
-      body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
-      redirect: "follow",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    const body = await res.text();
-    return {
-      status: res.status,
-      headers: Object.fromEntries(res.headers),
-      body,
-      url: res.url || req.url,
-      ms: Math.round(performance.now() - t0),
-    };
+    for (let hops = 0; ; hops++) {
+      const res = await (opts.fetchImpl ?? fetch)(url, { method, headers, body, redirect: "manual", signal });
+      const location = res.headers.get("location");
+      if (REDIRECT.has(res.status) && location && hops < 5) {
+        await res.body?.cancel();
+        const next = new URL(location, url);
+        const cross = next.origin !== new URL(url).origin;
+        headers = Object.fromEntries(Object.entries(headers).filter(([k]) => k !== "cookie" && !(cross && secret.has(k.toLowerCase()))));
+        const cookie = cookieHeaderFor(session.cookies, next.href);
+        if (cookie) headers.cookie = cookie;
+        if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === "POST")) {
+          method = "GET";
+          body = undefined;
+          headers = Object.fromEntries(Object.entries(headers).filter(([k]) => k.toLowerCase() !== "content-type"));
+        }
+        url = next.href;
+        continue;
+      }
+      const text = await res.text();
+      return { status: res.status, headers: Object.fromEntries(res.headers), body: text, url: res.url || url, ms: Math.round(performance.now() - t0) };
+    }
   } catch (e) {
     if ((e as Error).name === "TimeoutError") throw new Error(`${op.name}: no response within ${timeoutMs} ms`);
     throw e;

@@ -97,3 +97,36 @@ test("embedded: missing data is drift, present is ok", () => {
   assert.equal(cls(emb, html(200, "<script>x({data:[1,2]})</script>")), "ok");
   assert.equal(cls(emb, html(200, "<script>nothing</script>")), "drift");
 });
+
+test("auth and rate signals win over drift when the data is gone (X code 215, Instagram 200 JSON, csrf 403)", () => {
+  assert.equal(cls(op(), json(400, { errors: [{ message: "Bad Authentication data", code: 215 }] })), "auth");
+  assert.equal(cls(op(), json(403, { errors: [{ code: 353, message: "This request requires a matching csrf cookie and header." }] })), "auth");
+  assert.equal(cls(op(), json(200, { message: "login_required", require_login: true, status: "fail" })), "auth");
+  assert.equal(cls(op(), json(200, { message: "Please wait a few minutes before you try again.", require_login: false, status: "fail" })), "rate");
+  assert.equal(cls(op(), json(200, { errors: [{ message: "Rate limit exceeded" }], data: {} })), "rate");
+  assert.equal(cls(op(), json(200, { data: { user: { bio: "I rate limit my coffee" } } })), "ok", "wording alone does not matter when the data is there");
+});
+
+test("missing data is drift flagged missing, so the caller can check the example args first", () => {
+  assert.deepEqual(classify(op(), json(200, { data: {} })), { class: "drift", reason: 'extract path "data.user" missing', missing: true });
+  assert.equal(classify(op(), json(404, "")).missing, undefined, "a 404 on a templated API path is plain drift");
+  // Next.js /_next/data/<buildId>/u/<name>.json: 404 after a deploy is not "no such user"
+  const next = op({
+    slots: [{ param: "screen_name", at: ["path:4"], template: "{screen_name}.json" }],
+    volatile: [{ at: ["path:2"], shape: { charset: "base64url", length: 21 }, anchor: "u" }],
+  });
+  assert.deepEqual(classify(next, html(404, "<html>404</html>")), { class: "drift", reason: "HTTP 404", missing: true });
+});
+
+test("a write's 2xx is ok whatever the body; judge hands back the text; a bad recipe is an error, not a throw", async () => {
+  const { judge } = await import("../src/classify.ts");
+  const write = op({ readOnly: false, response: { format: "json" } });
+  for (const r of [json(204, ""), html(200, "<html><body>Liked!</body></html>"), { status: 200, headers: {}, body: "OK" }]) {
+    assert.equal(cls(write, r), "ok", r.body);
+  }
+  assert.deepEqual(judge(write, { status: 200, headers: {}, body: "OK" }), { class: "ok", reason: "HTTP 200, non-JSON body", data: "OK" });
+  assert.equal(cls(write, html(200, '<form><input type="password"></form>')), "auth");
+  assert.equal(cls(write, json(200, { errors: [{ message: "denied" }], data: null })), "error");
+  const bad = op({ response: { format: "html", html: { items: "li[", fields: {} } } });
+  assert.equal(judge(bad, html(200, "<li>x</li>")).class, "error");
+});

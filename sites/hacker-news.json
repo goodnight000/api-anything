@@ -1,0 +1,204 @@
+{
+  "name": "hacker-news",
+  "displayName": "Hacker News",
+  "baseUrl": "https://news.ycombinator.com",
+  "description": "Hacker News front page (HTML) and story search via the Algolia index behind hn.algolia.com. Public, logged out.",
+  "operations": [
+    {
+      "name": "frontPage",
+      "description": "The 30 stories currently on the Hacker News front page: title, url, points (\"N points\"), comments (\"N comments\" or \"discuss\").",
+      "request": {
+        "method": "GET",
+        "url": "https://news.ycombinator.com/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://news.ycombinator.com/"
+      },
+      "match": {
+        "path": "/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "tr.athing",
+          "fields": {
+            "title": ".titleline > a",
+            "url": ".titleline > a@href",
+            "points": "+ tr .score",
+            "comments": "+ tr .subline > a:last-child"
+          }
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-27T11:01:09.867Z"
+    },
+    {
+      "name": "search",
+      "description": "Search Hacker News stories via the Algolia index behind hn.algolia.com; returns up to 30 hits with title, url, points, num_comments, objectID, author, created_at.",
+      "request": {
+        "method": "POST",
+        "url": "https://uj5wyc0l7x-dsn.algolia.net/1/indexes/Item_dev/query?x-algolia-agent=Algolia%20for%20JavaScript%20(4.13.1)%3B%20Browser%20(lite)&x-algolia-api-key=28f0e1ec37a5e792e6845e67da5f20dd&x-algolia-application-id=UJ5WYC0L7X",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://hn.algolia.com",
+          "referer": "https://hn.algolia.com/",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "cross-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+          "content-type": "application/x-www-form-urlencoded",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        },
+        "body": "{\"query\":\"{query}\",\"analyticsTags\":[\"web\"],\"page\":0,\"hitsPerPage\":30,\"minWordSizefor1Typo\":4,\"minWordSizefor2Typos\":8,\"advancedSyntax\":true,\"ignorePlurals\":false,\"clickAnalytics\":true,\"minProximity\":7,\"numericFilters\":[],\"tagFilters\":[[\"story\"],[]],\"typoTolerance\":true,\"queryType\":\"prefixNone\",\"restrictSearchableAttributes\":[\"title\",\"comment_text\",\"url\",\"story_text\",\"author\"],\"getRankingInfo\":true}"
+      },
+      "slots": [
+        {
+          "param": "query",
+          "at": [
+            "body",
+            "json:/query"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://hn.algolia.com/?q={query}"
+      },
+      "match": {
+        "host": "uj5wyc0l7x-dsn.algolia.net"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=UTF-8",
+        "extract": "hits",
+        "pick": [
+          "title",
+          "url",
+          "points",
+          "num_comments",
+          "objectID",
+          "author",
+          "created_at"
+        ],
+        "shape": {
+          "hits": "array",
+          "hits[]": "object",
+          "hits[].title": "string",
+          "hits[].url": "string",
+          "hits[].author": "string",
+          "hits[].points": "number",
+          "hits[].num_comments": "number",
+          "hits[].story_id": "number",
+          "hits[].created_at_i": "number",
+          "hits[].created_at": "string",
+          "hits[].updated_at": "string",
+          "hits[]._tags": "array",
+          "hits[]._tags[]": "string",
+          "hits[].children": "array",
+          "hits[].children[]": "number",
+          "hits[].objectID": "string",
+          "hits[]._highlightResult": "object",
+          "hits[]._highlightResult.title": "object",
+          "hits[]._highlightResult.title.value": "string",
+          "hits[]._highlightResult.title.matchLevel": "string",
+          "hits[]._highlightResult.title.fullyHighlighted": "boolean",
+          "hits[]._highlightResult.title.matchedWords": "array",
+          "hits[]._highlightResult.title.matchedWords[]": "string",
+          "hits[]._highlightResult.url": "object",
+          "hits[]._highlightResult.url.value": "string",
+          "hits[]._highlightResult.url.matchLevel": "string",
+          "hits[]._highlightResult.url.fullyHighlighted": "boolean",
+          "hits[]._highlightResult.url.matchedWords": "array",
+          "hits[]._highlightResult.url.matchedWords[]": "string",
+          "hits[]._highlightResult.author": "object",
+          "hits[]._highlightResult.author.value": "string",
+          "hits[]._highlightResult.author.matchLevel": "string",
+          "hits[]._highlightResult.author.matchedWords": "array",
+          "hits[]._rankingInfo": "object",
+          "hits[]._rankingInfo.nbTypos": "number",
+          "hits[]._rankingInfo.firstMatchedWord": "number",
+          "hits[]._rankingInfo.proximityDistance": "number",
+          "hits[]._rankingInfo.userScore": "number",
+          "hits[]._rankingInfo.geoDistance": "number",
+          "hits[]._rankingInfo.geoPrecision": "number",
+          "hits[]._rankingInfo.nbExactWords": "number",
+          "hits[]._rankingInfo.words": "number",
+          "hits[]._rankingInfo.filters": "number",
+          "nbHits": "number",
+          "page": "number",
+          "nbPages": "number",
+          "hitsPerPage": "number",
+          "exhaustiveNbHits": "boolean",
+          "exhaustiveTypo": "boolean",
+          "exhaustive": "object",
+          "exhaustive.nbHits": "boolean",
+          "exhaustive.typo": "boolean",
+          "query": "string",
+          "params": "string",
+          "queryID": "string",
+          "serverUsed": "string",
+          "indexUsed": "string",
+          "parsedQuery": "string",
+          "timeoutCounts": "boolean",
+          "timeoutHits": "boolean",
+          "processingTimeMS": "number",
+          "processingTimingsMS": "object",
+          "processingTimingsMS._request": "object",
+          "processingTimingsMS._request.roundTrip": "number",
+          "processingTimingsMS.afterFetch": "object",
+          "processingTimingsMS.afterFetch.format": "object",
+          "processingTimingsMS.afterFetch.format.highlighting": "number",
+          "processingTimingsMS.afterFetch.format.total": "number",
+          "processingTimingsMS.afterFetch.total": "number",
+          "processingTimingsMS.fetch": "object",
+          "processingTimingsMS.fetch.query": "number",
+          "processingTimingsMS.fetch.scanning": "number",
+          "processingTimingsMS.fetch.total": "number",
+          "processingTimingsMS.getIdx": "object",
+          "processingTimingsMS.getIdx.load": "object",
+          "processingTimingsMS.getIdx.load.gens": "number",
+          "processingTimingsMS.getIdx.load.total": "number",
+          "processingTimingsMS.getIdx.total": "number",
+          "processingTimingsMS.total": "number",
+          "serverTimeMS": "number"
+        }
+      },
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "example": "sqlite",
+          "description": "Search text, as typed into hn.algolia.com (stories only, sorted by popularity)."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-27T11:02:04.098Z"
+    }
+  ]
+}

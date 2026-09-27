@@ -4,15 +4,24 @@ import { jsonValueEnd, parseJson } from "./codec.js";
 import type { ResponseSpec } from "./spec.js";
 
 export const XSSI = ")]}'";
+// Anti-JSON-hijacking prefixes: Google's, Meta's /ajax/* and older Google/Facebook APIs.
+const PREFIXES = [XSSI, "for (;;);", "while(1);"];
 
-/** Strip the XSSI prefix and parse JSON losslessly. Google `rt=c` length-prefixed chunks become an array. */
+/** The XSSI prefix a body starts with, if any. */
+export const xssiOf = (body: string) => PREFIXES.find((p) => body.trimStart().startsWith(p));
+
+/**
+ * Strip the XSSI prefix and parse JSON losslessly. Google `rt=c` length-prefixed chunks, and
+ * Meta-style bodies that repeat the prefix before each JSON value, become an array.
+ */
 export function parseBody(body: string, xssiPrefix?: string): unknown {
   let text = body.trimStart();
-  const prefix = xssiPrefix ?? (text.startsWith(XSSI) ? XSSI : "");
+  const prefix = xssiPrefix ?? xssiOf(text) ?? "";
   if (prefix && text.startsWith(prefix)) text = text.slice(prefix.length);
   text = text.trim();
   if (/^\d+[ \t]*\r?\n/.test(text)) return parseChunks(text);
-  return parseJson(text);
+  const parts = prefix ? text.split(prefix) : [text];
+  return parts.length > 1 ? parts.map((p) => parseJson(p.trim())) : parseJson(text);
 }
 
 function parseChunks(text: string): unknown[] {
@@ -55,14 +64,18 @@ export function getPath(obj: unknown, path?: string): unknown {
   return cur;
 }
 
-/** Keep only the given paths, per item for arrays. */
+/** Keep only the given paths, per item for arrays. `name=path` renames the output key. */
 export function pick(value: unknown, paths: string[]): unknown {
+  const named = paths.map((p) => {
+    const m = /^([\w$-]+)=(.+)$/.exec(p);
+    return m ? [m[1]!, m[2]!] : [p, p];
+  });
   const one = (item: unknown) => {
     if (!item || typeof item !== "object") return item;
     const out: Record<string, unknown> = {};
-    for (const p of paths) {
+    for (const [name, p] of named) {
       const v = getPath(item, p);
-      if (v !== undefined) out[p] = v;
+      if (v !== undefined) out[name] = v;
     }
     return out;
   };

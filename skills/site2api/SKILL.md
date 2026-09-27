@@ -6,8 +6,9 @@ description: Turn a website that only has a GUI into operations you can call dir
 # site2api
 
 site2api learns an operation from one browser run of the site's own frontend. After that, every
-call is a direct HTTP request that takes about 100 ms. When the site changes, the call heals
-itself. Everything is local, under `~/.site2api`.
+call is a direct HTTP request that takes about 100 to 1000 ms (1 to 2 s when a site only answers a
+real Chrome; `reason` then says why). When the site changes, the call heals itself. Everything is
+local, under `~/.site2api` (`SITE2API_HOME` overrides it).
 
 Run the CLI as `site2api` (or `npx -y site2api`). Its output is one line of JSON. A failure also
 prints a `next:` line on stderr. If the MCP server is connected, `list_sites`, `list_operations`
@@ -27,7 +28,15 @@ and `call_operation` do the same as `sites`, `ops` and `call`.
    site2api capture "https://site.com/some/page?q=kittens" --example q=kittens
    ```
    The candidates are ranked, and `carries` lists the example values each request contains. Pick
-   the request whose URL or operationName matches the data you want.
+   the request whose URL or operationName matches the data you want. `kind` is the resource type:
+   `document` is the page itself.
+   - `site2api inspect <captureId> <id> [--path a.b]` prints a candidate's response, with no browser.
+   - If the page is a single-page app and the data request only fires on in-app navigation, add
+     `--soft-from <another page on the site>`: it loads that page first and navigates in-app.
+   - If the data is server-rendered, prefer the `document` itself over hunting for an XHR: it has
+     no rotating ids. Use `--html` for a list in the markup, or `--embedded '<regex>'` for JSON inside
+     a `<script>` (group 1 of the regex marks where the JSON starts). Try recipes with
+     `inspect <captureId> <id> --html '...'` before `add`.
 2. **Add.** Describe how to make the frontend fire that request. The trigger is a URL template.
    `--steps` adds UI actions after the page loads.
    ```
@@ -37,18 +46,26 @@ and `call_operation` do the same as `sites`, `ops` and `call`.
    - Give two different example sets whenever you can. The second run separates params from
      nonces and signatures.
    - Example values must be at least 3 characters and distinct from each other, and they must
-     appear in the request.
+     appear in the request. `add` fails if an example is not in the chosen request: pick another
+     request rather than dropping the param.
    - An op with no args (a feed, a list) needs `--match path=/api/feed` to say which request.
    - If `add` warns that the match is ambiguous, or picks the wrong request, run `capture` again
      and use `add --from <captureId> --pick-request <id>`.
    - For a server-rendered page, use
-     `--html '{"items":"li.result","fields":{"title":"a","url":"a@href"}}'`.
+     `--html '{"items":"li.result","fields":{"title":"a","url":"a@href"}}'` or `--embedded '<regex>'`.
+   - A header that carries a public constant (a web app's shared bearer, the same for every
+     visitor) can stay literal with `--public authorization`. Only do this when it is not the user's.
+   - Check `preview` in the output: it is what a call returns, judged on the captured response. If
+     it is wrong, or a warning says the op fails on the captured response, fix `--extract`, `--pick`,
+     `--html` or `--embedded` and re-run `add --from <captureId>` (ids are in `captures`). That needs
+     no browser. Re-running `add` for an existing op replaces it (`replaced: true`).
 3. **Call** it with a new value: `site2api call site search q=otters`. Check that `data` is what
    the user wanted.
 4. **Verify.** `site2api verify site` calls every read op with its example args.
 
 The `add` output lists `warnings`. Read them. A warning such as "minTier 3" means every call runs
-the browser, which is slow but correct.
+the browser, which is slow but correct. `--pick name=path` renames a field, so positional keys
+such as `[1][0][1]` become `price`.
 
 ## When to ask the user to log in
 
@@ -78,7 +95,7 @@ site.
 | `rate` | the site is throttling | stop; tell the user; do not retry now |
 | `blocked` | bot challenge, even after escalating to the browser | ask the user to log in and clear the challenge |
 | `drift` | the site changed and healing failed | `site2api heal <site> <op>` once; then re-`add` |
-| `input` | bad or missing args, or the thing does not exist | fix the args per `site2api ops <site>` |
+| `input` | bad or missing args, or the thing does not exist (the op's example still answers) | fix the args per `site2api ops <site>`; never heal or re-add for this |
 | `refused` | a write without permission | see the write rules below |
 | `error` | anything else | retry once at most, then report |
 
@@ -109,6 +126,6 @@ site.
 
 ## Sharing
 
-`site2api export <site> --out site.json` writes a copy without examples. It refuses if a live
-cookie or session value is still inside the spec. To contribute a spec, see CONTRIBUTING.md in
-the repo.
+`site2api export <site> --out site.json` writes a copy without examples (`--keep-examples` keeps
+public ones, so `verify` works for others). It refuses if a live cookie or session value is still
+inside the spec. To contribute a spec, see CONTRIBUTING.md in the repo.
