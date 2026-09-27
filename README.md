@@ -6,12 +6,12 @@ your Chrome, replays it as a plain HTTP call, and re-learns it on its own when t
 
 ## Quickstart (30 seconds)
 
-Requires Node 22+ and Google Chrome.
+Requires Node 22+ and Google Chrome. site2api is not on npm yet, so these commands install it from GitHub (the first run takes a few seconds to build).
 
 ```sh
-npx -y site2api add hn front --trigger https://news.ycombinator.com/news --match path=/news \
+npx -y github:Sift-wiki/site2api add hn front --trigger https://news.ycombinator.com/news --match path=/news \
   --html '{"items":"tr.athing","fields":{"title":".titleline > a","url":".titleline > a@href"}}'
-npx -y site2api call hn front
+npx -y github:Sift-wiki/site2api call hn front
 ```
 
 The first command opens the page twice in a headless Chrome and saves an operation to
@@ -39,7 +39,7 @@ search). `site2api sites` lists them; each has notes in `sites/<site>.md`.
 ```json
 {
   "mcpServers": {
-    "site2api": { "command": "npx", "args": ["-y", "site2api", "mcp"] }
+    "site2api": { "command": "npx", "args": ["-y", "github:Sift-wiki/site2api", "mcp"] }
   }
 }
 ```
@@ -50,8 +50,7 @@ server with `site2api mcp --allow-writes`.
 
 `call_operation` takes `{ site, op, args: { name: value } }` and returns the same JSON as the CLI.
 
-**Codex and other agents.** Install the CLI (`npm i -g site2api`; from a checkout, `npm install &&
-npm pack` then `npm i -g ./site2api-<version>.tgz`). Then point the agent at the
+**Codex and other agents.** Install the CLI with `npm i -g github:Sift-wiki/site2api` (it builds on install). Then point the agent at the
 skill file, [`skills/site2api/SKILL.md`](skills/site2api/SKILL.md), or copy it into the agent's
 skills directory (for Codex, `~/.codex/skills/site2api/SKILL.md`). The skill teaches the
 create loop, the failure loop, and the write rules. Every command prints JSON and gives a

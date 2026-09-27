@@ -10,7 +10,7 @@ call is a direct HTTP request that takes about 100 to 1000 ms (1 to 2 s when a s
 real Chrome; `reason` then says why). When the site changes, the call heals itself. Everything is
 local, under `~/.site2api` (`SITE2API_HOME` overrides it).
 
-Run the CLI as `site2api` (or `npx -y site2api`). Its output is one line of JSON. A failure also
+Run the CLI as `site2api` (or `npx -y github:Sift-wiki/site2api`). Its output is one line of JSON. A failure also
 prints a `next:` line on stderr. If the MCP server is connected, `list_sites`, `list_operations`
 and `call_operation` do the same as `sites`, `ops` and `call`.
 

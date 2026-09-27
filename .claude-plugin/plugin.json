@@ -8,6 +8,6 @@
   "license": "MIT",
   "keywords": ["api", "mcp", "browser", "reverse-engineering", "self-healing"],
   "mcpServers": {
-    "site2api": { "command": "npx", "args": ["-y", "site2api", "mcp"] }
+    "site2api": { "command": "npx", "args": ["-y", "github:Sift-wiki/site2api", "mcp"] }
   }
 }
