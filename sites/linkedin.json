@@ -2,7 +2,7 @@
   "name": "linkedin",
   "displayName": "LinkedIn",
   "baseUrl": "https://www.linkedin.com",
-  "description": "LinkedIn read operations over the Voyager API. Needs login: run `api-anything login linkedin` to import your session from Chrome.",
+  "description": "LinkedIn read operations over the Voyager API: your own mini profile, a member profile, a company, people search. Needs login: `api-anything login linkedin --profile <browser/profile>` imports your session.",
   "loginCookies": [
     "li_at",
     "JSESSIONID"
@@ -56,13 +56,80 @@
       "learnedLoggedIn": true
     },
     {
+      "name": "getProfile",
+      "description": "A member's profile by public id (the last path segment of linkedin.com/in/<publicId>): name, headline, about text, country, websites.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.linkedin.com/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity=%7BpublicId%7D",
+        "headers": {
+          "accept": "application/json",
+          "accept-language": "en-US,en;q=0.9",
+          "csrf-token": "",
+          "x-restli-protocol-version": "2.0.0",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "publicId",
+          "at": [
+            "query:memberIdentity"
+          ]
+        },
+        {
+          "ref": "cookie:JSESSIONID",
+          "at": [
+            "header:csrf-token"
+          ],
+          "transform": "strip-quotes"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.linkedin.com/in/{publicId}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.linkedin.com",
+        "path": "/voyager/api/identity/dash/profiles"
+      },
+      "response": {
+        "format": "json",
+        "extract": "elements[0]",
+        "pick": [
+          "firstName",
+          "lastName",
+          "headline",
+          "summary",
+          "publicIdentifier",
+          "countryCode=location.countryCode",
+          "websites",
+          "influencer",
+          "creator",
+          "entityUrn"
+        ]
+      },
+      "params": [
+        {
+          "name": "publicId",
+          "type": "string",
+          "required": true,
+          "description": "public id from linkedin.com/in/<publicId>, e.g. williamhgates",
+          "example": "williamhgates"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": true
+    },
+    {
       "name": "getCompany",
       "description": "A company/organization by its universal name (the last path segment of linkedin.com/company/<name>).",
       "request": {
         "method": "GET",
         "url": "https://www.linkedin.com/voyager/api/organization/companies?q=universalName&universalName=%7BuniversalName%7D",
         "headers": {
-          "accept": "application/vnd.linkedin.normalized+json+2.1",
+          "accept": "application/json",
           "accept-language": "en-US,en;q=0.9",
           "csrf-token": "",
           "x-restli-protocol-version": "2.0.0",
@@ -95,14 +162,17 @@
       },
       "response": {
         "format": "json",
-        "extract": "included",
+        "extract": "elements[0]",
         "pick": [
           "name",
           "universalName",
           "tagline",
           "description",
+          "industry=companyIndustries[0].localizedName",
           "staffCount",
-          "websiteUrl"
+          "website=companyPageUrl",
+          "headquarters=headquarter",
+          "url"
         ]
       },
       "params": [
@@ -112,6 +182,78 @@
           "required": true,
           "description": "universal name from linkedin.com/company/<name>, e.g. microsoft",
           "example": "microsoft"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": true
+    },
+    {
+      "name": "searchPeople",
+      "description": "People search (the first 10 results of linkedin.com/search/results/people/?keywords=...): name, headline, location, profile URL, network distance.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.linkedin.com/voyager/api/search/dash/clusters?q=all&query=(keywords:%7Bkeywords%7D,flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)&start=0&count=10",
+        "headers": {
+          "accept": "application/json",
+          "accept-language": "en-US,en;q=0.9",
+          "csrf-token": "",
+          "x-restli-protocol-version": "2.0.0",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "keywords",
+          "at": [
+            "query:query"
+          ],
+          "template": "(keywords:{keywords},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)",
+          "escape": "url"
+        },
+        {
+          "ref": "cookie:JSESSIONID",
+          "at": [
+            "header:csrf-token"
+          ],
+          "transform": "strip-quotes"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.linkedin.com/search/results/people/?keywords={keywords}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.linkedin.com",
+        "path": "/voyager/api/search/dash/clusters"
+      },
+      "response": {
+        "format": "json",
+        "extract": "elements[1].items",
+        "pick": [
+          "name=itemUnion.entityResult.title.text",
+          "headline=itemUnion.entityResult.primarySubtitle.text",
+          "location=itemUnion.entityResult.secondarySubtitle.text",
+          "url=itemUnion.entityResult.navigationUrl",
+          "distance=itemUnion.entityResult.entityCustomTrackingInfo.memberDistance"
+        ],
+        "shape": {
+          "elements[].items": "array",
+          "elements[].items[]": "object",
+          "elements[].items[].itemUnion": "object",
+          "elements[].items[].itemUnion.entityResult": "object",
+          "elements[].items[].itemUnion.entityResult.title": "object",
+          "elements[].items[].itemUnion.entityResult.title.text": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "keywords",
+          "type": "string",
+          "required": true,
+          "description": "search words, e.g. reid hoffman",
+          "example": "reid hoffman"
         }
       ],
       "readOnly": true,
