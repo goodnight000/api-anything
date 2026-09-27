@@ -102,8 +102,9 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    `authenticity_token`, `csrf*`, `access_token`, `token`, `session_id`), and a header repeating one of
    them (Meta's `x-fb-lsd`) shares its ref. A cookie value inside a longer leaf (`v1:<cookie>`) is a
    templated `cookie:` ref. The spec never holds a credential. At call time a `cookie:` ref takes the
-   cookie sent to the request URL, else one of the same registrable domain (country-code second
-   levels such as co.uk and shared hosts such as github.io count as suffixes), never another site's. A header a human marks public
+   cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
+   List, private section included: co.uk, github.io and run.app are suffixes), never another site's.
+   The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header a human marks public
    (`add --public authorization` for a web app's shared bearer) stays literal; the op lists it in `public`,
    and export allows it.
 5. **Volatile anchors.** A hash-like literal (queryId path segment, doc_id, persisted hash) gets a
@@ -126,11 +127,14 @@ A write must never be performed to learn it. Create/heal for writes runs the UI 
 context-wide route (popups included) that **aborts** before it leaves: every non-GET request, every
 request but stylesheets, fonts and media once the UI steps start (a "Follow" button may send a GET,
 an upvote may be `new Image().src`, a link, a GET form, JSONP or an iframe), and anything matching a
-known write's `match`; WebSocket messages the page sends are dropped too. Service workers are
+known write's `match`; WebSocket messages any of the run's pages sends (a popup's too: the socket
+route is context-wide) are dropped too. Service workers are
 blocked in the profile, since their fetches bypass routing. The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
 run, so a spec that says "read" can't write. Any 2xx to a write is `ok`, whatever the body (204,
-"OK", an HTML page with a password field), because the server took it. A write executes exactly
+"OK", an HTML page with a password field), because the server took it, with one exception: a
+sign-in form (a password field next to a username field, or a form posting to a login path) where
+the op's answer is not a page is `auth`: the session was gone and nothing ran. A write executes exactly
 once per call. Retry only on a definite non-execution (400/401/403/404 answered to the request
 itself: after a redirect, as in Post/Redirect/Get, it ran); timeouts, 5xx and network errors are
 ambiguous and are never retried. Writes need `allowWrites` at every entry point (CLI flag, MCP
@@ -142,11 +146,11 @@ Every response is classified, never by status code alone:
 
 | class | signals | action |
 |---|---|---|
-| `ok` | 2xx, expected content type, extract path present, no GraphQL `errors` with null `data` or next to a null extract target; any 2xx to a write | return |
+| `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`), no GraphQL `errors` with null `data` or next to a null extract target; any 2xx to a write | return |
 | `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once |
-| `auth` | 401, 400/403/422 with login or CSRF markers ("Bad Authentication data"), 419, 200 + HTML login page where JSON expected, `require_login: true`, a trigger that lands on a sign-in page | refresh cookies from the profile; for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
+| `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, `require_login: true`, a trigger that lands on a sign-in page | refresh cookies from the profile; for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429 (with the server's Retry-After), "please wait", "rate limit" | back off, report; no heal |
-| `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page), even at 200 | escalate transport tier; then diagnostic `gated` |
+| `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503) | escalate transport tier; then diagnostic `gated` |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
 | `error` | anything else (a network error names its cause) | return with details |
 
@@ -170,7 +174,7 @@ the browser profile) stops at once and marks nothing stale.
 
 | tier | transport | when |
 |---|---|---|
-| 1 | Node `fetch` + domain/path-scoped cookie jar + session values; redirects followed by hand (cookies set on a hop ride on the next; credential headers dropped on an origin change); Set-Cookie answers are merged into the jar; the body is decoded with its declared charset | default |
+| 1 | Node `fetch` + domain/path-scoped cookie jar + session values; redirects followed by hand (cookies set on a hop ride on the next; credential headers dropped on an origin change; a hop to another origin that would carry a `session:`/`cookie:` value in its body or URL is not taken, and the call fails naming the redirect); Set-Cookie answers are merged into the jar; the body is decoded with its declared charset | default |
 | 2 | `fetch()` inside a real page on the site origin (real TLS, cookies, sec-fetch) | tier 1 `blocked`, or op `minTier: 2` |
 | 3 | run the trigger in the browser, capture the matched response | op `minTier: 3`, or after a heal fails for reads |
 
@@ -208,7 +212,9 @@ the call's args and judges ok (a `softFrom` page fires its own; a WAF interstiti
   The document body is kept raw. Pages load to `domcontentloaded` (a hung tracker or a download URL
   doesn't fail the run). The run waits for the network to go quiet, ignoring streams, an endpoint's
   repeats (beacons, polling) and requests open over 3 s; with an op's match it ends soon after that
-  request answers; with no XHR yet it waits up to 2 s more for a deferred one.
+  request answers; with no XHR yet it waits up to 2 s more for a deferred one. When the page it
+  ended on is a bot challenge's interstitial (a JS challenge that solves itself, often after a second
+  or more), it waits up to 15 s for the real document, then waits for its data as before.
 - Chrome locks a profile to one process. The browser is released after 3 s idle, and a second
   process waits up to 15 s for the profile before it fails with a short hint. SIGTERM exits.
 - After every browser run, cookies are exported (full Playwright cookie objects) to
@@ -223,8 +229,11 @@ the call's args and judges ok (a `softFrom` page fires its own; a WAF interstiti
 ## Response extraction and token efficiency
 
 `response.extract` (dot/bracket path) → optional `pick` (list of paths kept per item, or per
-object) → a hard output cap with a truncation note. Arrays are cut at an item boundary, an item too
-big on its own is cut rather than dropped, strings are cut as strings, and objects stay objects. For HTML-only pages, `response.format:
+object; a picked item left empty, such as a shelf or an ad, is dropped) → a hard output cap (the
+result is never over it) with a truncation note that says what was cut. Arrays are cut at an item
+boundary, an item too big on its own is cut rather than dropped, strings are cut as strings, and
+objects stay objects: members above a common size cap are shortened, then trailing members are
+dropped. It runs in about linear time on 10k-member objects. For HTML-only pages, `response.format:
 "html"` with a selector recipe `{ items: "<css>", fields: { name: "<css>[@attr]" } }` parsed
 in Node. For data embedded in the HTML document (for example Google's `AF_initDataCallback`), `format:
 "embedded"` with a regex whose capture group is JSON, followed by `extract`. Seroval/JS-literal
@@ -259,10 +268,17 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
   SHA-256 of `host_key`, which is stripped. `expires_utc` is microseconds since 1601.
 - **Firefox**: `cookies.sqlite` `moz_cookies` is plaintext on every OS.
 - **Windows chromium** uses app-bound encryption and is not supported: `login` falls back to the window.
-- **Profile choice**: scan every profile of every installed browser; pick the one that has the
-  site's `loginCookies` (or, for an unknown site, the most recently used profile with cookies for the
-  site). `--profile "Chrome/Profile 2"` overrides. Only cookies whose domain is the site's are read.
-  The chosen source (`"chrome:Profile 2"`, `"window"`, `"file"`) is recorded in the session file.
+- **Profile choice**: scan every profile of every installed browser for the site's `loginCookies`
+  (for an unknown site, auth-looking cookie names, else any cookie for the site). One profile holds
+  them: it is used. Several do (a work and a personal profile, or another person's account in the
+  same Chrome): never a guess. `login` answers `ok: false` with each candidate's profile, display name
+  and Google account email (from Chrome's `Local State` `profile.info_cache`) and a `next` of
+  `api-anything login <site> --profile "<Browser/Profile>"`. Only cookies whose domain is the site's
+  are read. The chosen source (`"chrome:Profile 2"`, `"window"`, `"file"`) is recorded in the session
+  file, and success prints the profile's display name and account.
+- **Targets**: a site name, a domain (`linkedin.com`, `www.linkedin.com`) or a URL. A domain or URL
+  on a known site's baseUrl host (with or without `www.`) is that site; any other becomes a site
+  named after its host.
 - Imported cookies go into the jar **and** into api-anything's own Chrome profile (`addCookies`), so
   tier 2/3 and heals are logged in too.
 - `--window` opens a visible Chrome window on api-anything's profile for a by-hand sign-in (an
@@ -270,7 +286,7 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON array (Cookie-Editor / Playwright)
   export, for servers/CI with no browser.
 - **Self-healing auth**: when a call classifies `auth` and the session came from a browser import,
-  the same profile is silently re-imported once (browserless) and the call retried; only if it is
+  exactly the recorded profile is silently re-imported once (browserless) and the call retried; only if it is
   still `auth` does the result carry the "run `api-anything login`" hint.
 - **`logout <site>`** clears the jar and that site's cookies in the profile.
 
@@ -291,13 +307,18 @@ independent alternative.
   - `call <site> <op> [k=v ...] [--allow-writes]`
   - `inspect <captureId> [requestId]` reads a saved capture with no browser: a response at a path, or
     the items an `--html`/`--embedded` recipe would return. Every `add` saves its trigger runs as
-    captures, so `add --from <id>` re-learns (a fixed `--extract`) without Chrome.
+    captures, so `add --from <id>` re-learns (a fixed `--extract`) without Chrome. Captures hold
+    full responses and the run's cookie values (one page can be tens of MB), so each new one prunes
+    the directory to the newest 20, none older than 24 h.
   - `verify [site]` (health-checks every read op with its example, healing as needed)
   - `sites`, `ops <site>`, `heal <site> <op>`, `export <site>`, `mcp`
   - All output is JSON-first, compact, and ends with a `next` hint on failure.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `list_operations`,
-  `call_operation`, and `login` (so an agent can fix an `auth` failure itself: mode import or
-  window), so the tool list costs the same at 2 sites or 200. Writes are hidden unless
+  `call_operation`, and `login` (so an agent can fix an `auth` failure itself), so the tool list
+  costs the same at 2 sites or 200. The agent may be steered by page content, so MCP `login` import
+  only refreshes a site that has a spec and a browser source a human chose with the CLI, from that
+  same profile; anything else answers `next`: ask the user to run `api-anything login <site>`. Mode
+  window is allowed (a human signs in). MCP cannot create operations: capture and add are CLI only. Writes are hidden unless
   it is started with `--allow-writes`.
 - **Skill** `skills/api-anything/SKILL.md`: the create loop (capture → add → call → verify), the
   strict failure loop (follow `next` at most once, then stop and report), and the safety rules.

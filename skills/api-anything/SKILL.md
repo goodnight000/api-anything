@@ -12,13 +12,14 @@ local, under `~/.api-anything` (`API_ANYTHING_HOME` overrides it).
 
 Run the CLI as `api-anything` (or `npx -y github:goodnight000/api-anything`). Its output is one line of JSON. A failure also
 prints a `next:` line on stderr. If the MCP server is connected, `list_sites`, `list_operations`
-and `call_operation` do the same as `sites`, `ops` and `call`.
+and `call_operation` do the same as `sites`, `ops` and `call`, and `login` refreshes a session. MCP
+cannot create operations: `capture` and `add` are CLI only.
 
 ## Using an existing operation
 
 1. `api-anything sites`, then `api-anything ops <site>` to see the operations and their params.
 2. `api-anything call <site> <op> name=value ...`
-3. Read `data`. `tier` shows which transport answered. `healed: true` means the template was repaired
+3. Read `data` (`[]` with `ok: true` is a valid answer: no results). `tier` shows which transport answered. `healed: true` means the template was repaired
    and saved during this call. You don't need to do anything about it.
 
 ## Creating an operation: capture, add, call, verify
@@ -73,16 +74,24 @@ such as `[1][0][1]` become `price`.
 
 ## Logging in
 
-Some sites need an account. `api-anything login <site>` (or `... https://site.com`) by default
-**imports** the site's cookies from the user's everyday browser — no password, no re-doing 2FA. It
-prints the profile and cookie names it used, never values.
+Some sites need an account. `api-anything login <site>` (a site name, a domain such as
+`linkedin.com`, or a URL) by default **imports** the site's cookies from the user's everyday
+browser — no password, no re-doing 2FA. It prints the profile it used (with its display name and
+Google account) and cookie names, never values.
 
-- If you have the `login` MCP tool, call it yourself (mode `import`) when a result is `class: "auth"`,
-  then retry the call once. api-anything also re-imports a browser session on its own before it ever
-  returns `auth`, so a bare `auth` usually means the user is signed out in their browser too.
+- If several browser profiles are signed in to the site, `login` returns `ok: false` with
+  `candidates` (profile, name, email). They may be different people's accounts: **ask the user which
+  one**, then run `api-anything login <site> --profile "<Browser/Profile>"`. Never pick for them.
+- If you have the `login` MCP tool, call it (mode `import`) when a result is `class: "auth"`, then
+  retry the call once. It only refreshes a session the user already imported with the CLI; if it says
+  so, ask the user to run `api-anything login <site>`. api-anything also re-imports from the chosen
+  profile on its own before it ever returns `auth`, so a bare `auth` usually means the user is signed
+  out in their browser too.
 - Only ask the user to act when import cannot: tell them to run `api-anything login <site> --window`
   (a visible window to sign in and clear any 2FA/captcha by hand) or `--cookies <file>` on a server.
   You cannot complete a `--window` sign-in for them, and you must never ask for their password.
+- An imported session is the same one as the user's browser: if the site logs it out, both go. Keep
+  traffic on it light.
 - `api-anything logout <site>` clears the session.
 
 Ask the user before you capture, too, when the data you need is only visible while signed in.
@@ -104,7 +113,7 @@ site.
 | `rate` | the site is throttling | stop; tell the user; do not retry now |
 | `blocked` | bot challenge, even after escalating to the browser | ask the user to log in and clear the challenge |
 | `drift` | the site changed and healing failed | follow `next` once (`api-anything heal <site> <op>`, or re-`add` with a new `--extract` when the response changed); then stop |
-| `input` | bad, unknown or missing args, or the thing does not exist (the op's example still answers) | fix the args per `api-anything ops <site>`; never heal or re-add for this |
+| `input` | bad, unknown or missing args, or the thing does not exist / has no results (the op's example still answers) | fix the args per `api-anything ops <site>`; never heal or re-add for this |
 | `refused` | a write without permission | see the write rules below |
 | `error` | anything else | retry once at most, then report |
 

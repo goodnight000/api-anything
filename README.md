@@ -34,28 +34,39 @@ For sites that need an account, one command signs you in:
 api-anything login linkedin.com
 ```
 
+The target can be a site name (`linkedin`), a domain (`linkedin.com`, `www.linkedin.com`) or a URL.
 By default this **imports** the site's cookies from your everyday browser — you are almost always
-already signed in there, so there is no password to type and no 2FA or captcha to redo. It picks the
-right browser profile automatically, prints which one and the cookie *names* it used (never the
-values), and stores nothing else. Then LinkedIn operations just work:
+already signed in there, so there is no password to type and no 2FA or captcha to redo. It prints
+the browser profile it used, with the profile's display name and Google account, and the cookie
+*names* (never the values). Then LinkedIn operations just work:
 
 ```sh
 api-anything call linkedin getCompany universalName=openai
 ```
 
+**Several profiles signed in.** If more than one browser profile is signed in to the site (a work
+and a personal profile, or someone else's account in your Chrome), `login` does not guess. It
+answers `ok: false` with a `candidates` list, each with its profile, display name and email, and you
+pick one:
+
+```sh
+api-anything login linkedin.com --profile "Chrome/Profile 2"
+```
+
+The choice is remembered: when a call later returns `class: "auth"`, api-anything re-imports from
+that same profile once on its own before asking you to log in again.
+
 On macOS the first import shows one Keychain prompt ("security wants to use the … Safe Storage" key);
 allow it. The imported session is the *same* one as your browser, so if the site logs it out, both
-go — avoid heavy automated traffic on it. Options:
+go — avoid heavy automated traffic on it. Other ways in:
 
-- `--profile "Chrome/Profile 2"` picks a specific browser/profile instead of auto-choosing.
-- `--window` opens a visible Chrome window to sign in by hand (an independent session, and where you
-  clear a 2FA/captcha challenge). It is also the automatic fallback when nothing is importable.
+- `--window` opens a visible Chrome window to sign in by hand (an independent session). Use it when
+  the site asks for 2FA or a captcha, or when you don't want to share your browser's session. It is
+  also the automatic fallback when nothing is importable.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
 - `api-anything logout <site>` clears the stored session.
 
-Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux. If a call later
-returns `class: "auth"` and the session came from a browser, api-anything re-imports it once on its
-own before asking you to log in again.
+Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 
 ## Install
 
@@ -76,11 +87,15 @@ own before asking you to log in again.
 }
 ```
 
-It exposes three fixed tools, `list_sites`, `list_operations` and `call_operation`, so the
-tool list costs the same whether you have 2 sites or 200. Writes are hidden until you start the
+It exposes four fixed tools, `list_sites`, `list_operations`, `call_operation` and `login`, so
+the tool list costs the same whether you have 2 sites or 200. Writes are hidden until you start the
 server with `api-anything mcp --allow-writes`.
 
 `call_operation` takes `{ site, op, args: { name: value } }` and returns the same JSON as the CLI.
+`login` lets an agent recover from `class: "auth"` on its own: mode `import` only refreshes a
+session you already imported with the CLI, from the same profile (an agent reading page content
+can't pull another site's or another account's cookies), and mode `window` opens a window for you
+to sign in. MCP cannot create operations; use the CLI (`capture`, `add`) for that.
 
 **Codex and other agents.** Install the CLI with `npm i -g github:goodnight000/api-anything` (it builds on install). Then point the agent at the
 skill file, [`skills/api-anything/SKILL.md`](skills/api-anything/SKILL.md), or copy it into the agent's
@@ -179,7 +194,9 @@ Transport tiers, cheapest first. The lowest tier that worked is remembered for e
   a redirect). Timeouts and 5xx errors are reported,
   not retried.
 - Credentials stay in `~/.api-anything` (directories 0700, files 0600). Specs hold references
-  such as `cookie:ct0`, never values. `api-anything export` strips your example values, and it
+  such as `cookie:ct0`, never values. Captures (`~/.api-anything/captures`, kept for `inspect` and
+  `add --from`) hold full responses and the run's cookie values, so only the newest 20 are kept and
+  none past 24 hours. `api-anything export` strips your example values, and it
   refuses to write a spec that contains any live cookie or session value from your machine.
 - api-anything does not solve CAPTCHAs or impersonate TLS fingerprints. It runs its own Chrome
   profile; `api-anything login <site>` copies only that site's cookies from your everyday browser
