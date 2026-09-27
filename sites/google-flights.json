@@ -2,7 +2,7 @@
   "name": "google-flights",
   "displayName": "Google Flights",
   "baseUrl": "https://www.google.com",
-  "description": "Logged-out one-way flight search on Google Flights (GetShoppingResults). Prices in USD, en-US. Result fields are positional; see sites/google-flights.md.",
+  "description": "Logged-out one-way flight search on Google Flights (GetShoppingResults). Prices in USD, en-US. See sites/google-flights.md.",
   "operations": [
     {
       "name": "search",
@@ -95,16 +95,16 @@
         "xssiPrefix": ")]}'",
         "extract": "[0][0][2][3][0]",
         "pick": [
-          "[0][1]",
-          "[1][0][1]",
-          "[0][3]",
-          "[0][6]",
-          "[0][4]",
-          "[0][5]",
-          "[0][7]",
-          "[0][8]",
-          "[0][9]",
-          "[0][13]"
+          "airline=[0][1]",
+          "price=[1][0][1]",
+          "from=[0][3]",
+          "to=[0][6]",
+          "departureDate=[0][4]",
+          "departureTime=[0][5]",
+          "arrivalDate=[0][7]",
+          "arrivalTime=[0][8]",
+          "durationMinutes=[0][9]",
+          "stops=[0][13]"
         ],
         "shape": {
           "[]": "array",
@@ -132,18 +132,18 @@
           "type": "string",
           "required": true,
           "description": "departure date YYYY-MM-DD, in the future",
-          "example": "2027-02-10"
+          "example": "2027-04-15"
         }
       ],
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false,
       "learnedAt": "2026-09-27T11:02:21.662Z",
-      "description": "One-way flights: Google's \"other departing flights\" list, sorted by price. Per item: [0][1] airline names, [1][0][1] price USD, [0][3]/[0][6] from/to airport, [0][4]/[0][7] dep/arr date [y,m,d], [0][5]/[0][8] dep/arr local time [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), [0][9] duration minutes, [0][13] layovers (null = nonstop; each [minutes, airport, ...])."
+      "description": "One-way flights: Google's \"other departing flights\" list, sorted by price. Per item: airline (names; several when carriers mix), price (USD, whole one-way itinerary), from/to (airports), departureDate/arrivalDate [y,m,d], departureTime/arrivalTime local [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), durationMinutes, stops (null = nonstop; else one [layover minutes, airport, airport, null, airport name, city, ...] per stop)."
     },
     {
       "name": "top",
-      "description": "One-way flights: Google's \"top departing flights\" (best) list; disjoint from search, together they are the full results page. Per item: [0][1] airline names, [1][0][1] price USD, [0][3]/[0][6] from/to airport, [0][4]/[0][7] dep/arr date [y,m,d], [0][5]/[0][8] dep/arr local time [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), [0][9] duration minutes, [0][13] layovers (null = nonstop; each [minutes, airport, ...]).",
+      "description": "One-way flights: Google's \"top departing flights\" (best) list; disjoint from search, together they are the full results page. Per item: airline (names; several when carriers mix), price (USD, whole one-way itinerary), from/to (airports), departureDate/arrivalDate [y,m,d], departureTime/arrivalTime local [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), durationMinutes, stops (null = nonstop; else one [layover minutes, airport, airport, null, airport name, city, ...] per stop).",
       "request": {
         "method": "POST",
         "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=5052833066978253007&bl=boq_travel-frontend-flights-ui_20260922.02_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=14476&rt=c",
@@ -233,16 +233,16 @@
         "xssiPrefix": ")]}'",
         "extract": "[0][0][2][2][0]",
         "pick": [
-          "[0][1]",
-          "[1][0][1]",
-          "[0][3]",
-          "[0][6]",
-          "[0][4]",
-          "[0][5]",
-          "[0][7]",
-          "[0][8]",
-          "[0][9]",
-          "[0][13]"
+          "airline=[0][1]",
+          "price=[1][0][1]",
+          "from=[0][3]",
+          "to=[0][6]",
+          "departureDate=[0][4]",
+          "departureTime=[0][5]",
+          "arrivalDate=[0][7]",
+          "arrivalTime=[0][8]",
+          "durationMinutes=[0][9]",
+          "stops=[0][13]"
         ],
         "shape": {
           "[]": "array",
@@ -270,7 +270,7 @@
           "type": "string",
           "required": true,
           "description": "departure date YYYY-MM-DD, in the future",
-          "example": "2027-02-10"
+          "example": "2027-04-15"
         }
       ],
       "readOnly": true,

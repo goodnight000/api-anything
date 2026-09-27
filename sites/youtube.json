@@ -8,7 +8,7 @@
       "name": "search",
       "request": {
         "method": "GET",
-        "url": "https://www.youtube.com/results?search_query=%7Bq%7D",
+        "url": "https://www.youtube.com/results?search_query=%7Bq%7D&sp=EgIQAQ%253D%253D",
         "headers": {
           "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
           "accept-language": "en-US,en;q=0.9",
@@ -49,7 +49,7 @@
       ],
       "volatile": [],
       "trigger": {
-        "url": "https://www.youtube.com/results?search_query={q}"
+        "url": "https://www.youtube.com/results?search_query={q}&sp=EgIQAQ%253D%253D"
       },
       "match": {
         "method": "GET",
@@ -82,7 +82,7 @@
       "minTier": 1,
       "learnedLoggedIn": false,
       "learnedAt": "2026-09-27T17:41:32.693Z",
-      "description": "Search YouTube videos: id, title, channel, view count"
+      "description": "Search YouTube videos (the Type: Video filter, so every item is a video): id, title, channel, view count"
     }
   ]
 }
