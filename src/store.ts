@@ -3,7 +3,7 @@ import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync } from
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setAt } from "./codec.js";
-import { ensureDir, home, loadSession, readJson, safeName, writePrivate, type Session } from "./session.js";
+import { ensureDir, home, loadSession, readJson, safeName, withLock, writePrivate, type Session } from "./session.js";
 import { parseSite, type Site } from "./spec.js";
 
 export const BUNDLED_DIR = fileURLToPath(new URL("../sites", import.meta.url));
@@ -16,7 +16,8 @@ export interface Resolved {
 }
 
 export function loadSite(name: string, bundledDir = BUNDLED_DIR): Resolved | undefined {
-  const file = `${safeName(name)}.json`;
+  name = safeName(name);
+  const file = `${name}.json`;
   for (const [dir, source] of [[userSitesDir(), "user"], [bundledDir, "bundled"]] as const) {
     const path = join(dir, file);
     if (!existsSync(path)) continue;
@@ -65,14 +66,26 @@ const stateFile = () => join(home(), "state.json");
 const key = (site: string, op: string) => `${site}/${op}`;
 
 function loadState(): State {
-  const s = readJson<Partial<State>>(stateFile(), {});
+  let s: Partial<State>;
+  try {
+    s = readJson<Partial<State>>(stateFile(), {}) ?? {};
+  } catch {
+    // tier memory and stale marks are hints: a corrupt file is started over, never a failed call
+    s = {};
+  }
   return { stale: s.stale ?? {}, tier: s.tier ?? {}, healedAt: s.healedAt ?? {} };
 }
 
 function updateState(fn: (s: State) => void): void {
-  const s = loadState();
-  fn(s);
-  writePrivate(stateFile(), JSON.stringify(s, null, 1));
+  try {
+    withLock(stateFile(), () => {
+      const s = loadState();
+      fn(s);
+      writePrivate(stateFile(), JSON.stringify(s, null, 1));
+    });
+  } catch {
+    // ponytail: a read-only home loses tier memory and stale marks (hints), never the call's answer
+  }
 }
 
 export interface HealEntry {
@@ -138,6 +151,14 @@ const BEARER = /^Bearer\s+\S{20,}/i;
 // identifiers like __relay_internal__pv__appviewerisloggedinprovider are long too; tokens mix case and digits
 const RANDOM = (s: string) => /\d/.test(s) && /[a-z]/.test(s) && /[A-Z]/.test(s);
 
+function pctDecode(s: string, plus: boolean): string {
+  try {
+    return decodeURIComponent(plus ? s.replace(/\+/g, " ") : s);
+  } catch {
+    return s;
+  }
+}
+
 /**
  * `secrets`: exact hits of live jar/session values (6+ chars, raw, unquoted or URL-decoded): no
  * false positives, so callers fail closed. `warnings`: regex heuristics, which do misfire.
@@ -161,7 +182,10 @@ export function scanSecrets(value: unknown, session: Session, allowed: Set<strin
   const visit = (v: unknown, path: string) => {
     if (allowed.has(path)) return;
     if (typeof v === "string") {
-      for (const [label, s] of live) if (v.includes(s)) secrets.push(`${path} holds the live ${label}`);
+      // a value can sit percent-encoded (a query, a form) or JSON-escaped ("\/") in the spec
+      const forms = new Set([v, v.replace(/\\\//g, "/")]);
+      for (const f of [...forms]) for (const plus of [false, true]) forms.add(pctDecode(f, plus));
+      for (const [label, s] of live) if ([...forms].some((f) => f.includes(s))) secrets.push(`${path} holds the live ${label}`);
       let text = v;
       try {
         text = decodeURIComponent(v); // percent-encoded bodies hide the blob's shape

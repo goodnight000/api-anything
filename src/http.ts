@@ -1,6 +1,7 @@
 /** Tier 1: fill the stored template and send it with Node fetch. */
 import { asText, fillSlotTemplate, setAt, walk } from "./codec.js";
-import { cookieHeaderFor, cookieValue, type Session } from "./session.js";
+import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
+import type { StoredCookie } from "./types.js";
 import type { Operation, Param, Request } from "./spec.js";
 
 export interface Sent {
@@ -10,6 +11,10 @@ export interface Sent {
   /** final URL after redirects */
   url: string;
   ms: number;
+  /** the first answer was a redirect: the server took the request (a write's POST ran) */
+  redirected?: boolean;
+  /** cookies the answers set (every hop), for the jar */
+  setCookies?: StoredCookie[];
 }
 
 export interface SendOptions {
@@ -139,16 +144,27 @@ export async function send(op: Operation, args: Record<string, unknown>, session
   let { url, method, headers } = req;
   let body = method === "GET" || method === "HEAD" ? undefined : req.body;
   const t0 = performance.now();
+  // Cookies set along the way (a consent or session bootstrap hop) ride on the next hop, as in a browser.
+  let jar = session.cookies;
+  const setCookies: StoredCookie[] = [];
+  let redirected: boolean | undefined;
   try {
     for (let hops = 0; ; hops++) {
       const res = await (opts.fetchImpl ?? fetch)(url, { method, headers, body, redirect: "manual", signal });
+      for (const line of res.headers.getSetCookie?.() ?? []) {
+        const c = parseSetCookie(line, url);
+        if (!c) continue;
+        setCookies.push(c);
+        jar = [...jar.filter((x) => !(x.name === c.name && x.domain.toLowerCase() === c.domain.toLowerCase() && x.path === c.path)), c];
+      }
       const location = res.headers.get("location");
+      redirected ??= REDIRECT.has(res.status) && !!location;
       if (REDIRECT.has(res.status) && location && hops < 5) {
         await res.body?.cancel();
         const next = new URL(location, url);
         const cross = next.origin !== new URL(url).origin;
         headers = Object.fromEntries(Object.entries(headers).filter(([k]) => k !== "cookie" && !(cross && secret.has(k.toLowerCase()))));
-        const cookie = cookieHeaderFor(session.cookies, next.href);
+        const cookie = cookieHeaderFor(jar, next.href);
         if (cookie) headers.cookie = cookie;
         if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === "POST")) {
           method = "GET";
@@ -158,11 +174,33 @@ export async function send(op: Operation, args: Record<string, unknown>, session
         url = next.href;
         continue;
       }
-      const text = await res.text();
-      return { status: res.status, headers: Object.fromEntries(res.headers), body: text, url: res.url || url, ms: Math.round(performance.now() - t0) };
+      const text = decodeBody(new Uint8Array(await res.arrayBuffer()), res.headers.get("content-type") ?? "");
+      return {
+        status: res.status,
+        headers: Object.fromEntries(res.headers),
+        body: text,
+        url: res.url || url,
+        ms: Math.round(performance.now() - t0),
+        ...(redirected ? { redirected } : {}),
+        ...(setCookies.length ? { setCookies } : {}),
+      };
     }
   } catch (e) {
     if ((e as Error).name === "TimeoutError") throw new Error(`${op.name}: no response within ${timeoutMs} ms`);
+    // "fetch failed" alone can't tell a refused connection from DNS or TLS: name the cause
+    const cause = (e as { cause?: { code?: string; message?: string } }).cause;
+    if (cause && (e as Error).message === "fetch failed") throw new Error(`fetch failed: ${cause.code ?? cause.message}${cause.code && cause.message ? ` (${cause.message})` : ""}`);
     throw e;
+  }
+}
+
+/** Decode with the declared charset (header, else an HTML <meta>), else UTF-8. A BOM is dropped. */
+export function decodeBody(buf: Uint8Array, contentType: string): string {
+  let charset = /charset=["']?([\w.:-]+)/i.exec(contentType)?.[1];
+  if (!charset && /html/i.test(contentType)) charset = /<meta[^>]+charset=["']?([\w.:-]+)/i.exec(new TextDecoder("latin1").decode(buf.subarray(0, 2048)))?.[1];
+  try {
+    return new TextDecoder(charset ?? "utf-8").decode(buf);
+  } catch {
+    return new TextDecoder().decode(buf);
   }
 }
