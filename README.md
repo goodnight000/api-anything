@@ -23,8 +23,8 @@ Everything lives in `~/.api-anything`; set `API_ANYTHING_HOME` to use another di
 
 Bundled specs, verified live and logged out on 2026-09-27: `x` (getUser, getProfile),
 `instagram` (getProfile, getPosts), `google-flights` (search, top), `hacker-news` (frontPage,
-search), `linkedin` (getMe, getCompany — needs login). `api-anything sites`
-lists them; each has notes in `sites/<site>.md`.
+search), `youtube` (search), `airbnb` (search), `amazon` (search), `linkedin` (getMe, getCompany —
+needs login). `api-anything sites` lists them; each has notes in `sites/<site>.md`.
 
 ## Logging in
 
@@ -175,13 +175,15 @@ Transport tiers, cheapest first. The lowest tier that worked is remembered for e
 - **Writes** (posting, sending, buying) are learned by intercepting the request and aborting it
   in the browser, so learning never performs them. Calling a write needs `--allow-writes` on the
   CLI, the MCP server, or the library. A write is sent once and is retried only when the
-  server certainly did not run it (400, 401, 403 or 404). Timeouts and 5xx errors are reported,
+  server certainly did not run it (a 400, 401, 403 or 404 answered to the write itself, not after
+  a redirect). Timeouts and 5xx errors are reported,
   not retried.
 - Credentials stay in `~/.api-anything` (directories 0700, files 0600). Specs hold references
   such as `cookie:ct0`, never values. `api-anything export` strips your example values, and it
   refuses to write a spec that contains any live cookie or session value from your machine.
-- api-anything does not solve CAPTCHAs, impersonate TLS fingerprints, or read your everyday Chrome
-  profile. It uses its own profile, and you sign in once with `api-anything login <site>`.
+- api-anything does not solve CAPTCHAs or impersonate TLS fingerprints. It runs its own Chrome
+  profile; `api-anything login <site>` copies only that site's cookies from your everyday browser
+  (or signs in through a window), and only when you run it.
 - Many sites' terms restrict automated access. Read them. You are responsible for how you use
   this tool.
 
@@ -211,6 +213,8 @@ Known limits:
   missing data as `drift`.
 - Request pacing (1 s per site) holds within one process: separate CLI runs are not paced
   against each other.
+- Chrome locks its profile to one process. An MCP server releases it after 3 s idle; another
+  process waits up to 15 s for it, then fails with a hint.
 - Optional request structure (a reply block that only some calls have) needs a separate op.
 - Rescan only reads scripts that the page references directly. An id inside a lazily loaded
   chunk heals through recapture instead, which is slower.

@@ -29,7 +29,8 @@ and `call_operation` do the same as `sites`, `ops` and `call`.
    ```
    The candidates are ranked, and `carries` lists the example values each request contains. Pick
    the request whose URL or operationName matches the data you want. `kind` is the resource type:
-   `document` is the page itself.
+   `document` is the page itself. If the output has `blocked`, the site served a bot challenge:
+   follow `next` (the user logs in and clears it) instead of picking a request.
    - `api-anything inspect <captureId> <id> [--path a.b]` prints a candidate's response, with no browser.
    - If the page is a single-page app and the data request only fires on in-app navigation, add
      `--soft-from <another page on the site>`: it loads that page first and navigates in-app.
@@ -59,6 +60,9 @@ and `call_operation` do the same as `sites`, `ops` and `call`.
      it is wrong, or a warning says the op fails on the captured response, fix `--extract`, `--pick`,
      `--html` or `--embedded` and re-run `add --from <captureId>` (ids are in `captures`). That needs
      no browser. Re-running `add` for an existing op replaces it (`replaced: true`).
+   - If a warning says the captured response is `blocked` or `auth`, or `add` fails because the
+     trigger landed on a sign-in page, the recipe is not the problem: ask the user to run
+     `api-anything login <site>`, then add again.
 3. **Call** it with a new value: `api-anything call site search q=otters`. Check that `data` is what
    the user wanted.
 4. **Verify.** `api-anything verify site` calls every read op with its example args.
@@ -99,8 +103,8 @@ site.
 | `auth` | not logged in, or the session expired | ask the user to run `api-anything login <site>` |
 | `rate` | the site is throttling | stop; tell the user; do not retry now |
 | `blocked` | bot challenge, even after escalating to the browser | ask the user to log in and clear the challenge |
-| `drift` | the site changed and healing failed | `api-anything heal <site> <op>` once; then re-`add` |
-| `input` | bad or missing args, or the thing does not exist (the op's example still answers) | fix the args per `api-anything ops <site>`; never heal or re-add for this |
+| `drift` | the site changed and healing failed | follow `next` once (`api-anything heal <site> <op>`, or re-`add` with a new `--extract` when the response changed); then stop |
+| `input` | bad, unknown or missing args, or the thing does not exist (the op's example still answers) | fix the args per `api-anything ops <site>`; never heal or re-add for this |
 | `refused` | a write without permission | see the write rules below |
 | `error` | anything else | retry once at most, then report |
 
@@ -111,8 +115,8 @@ site.
 - Calling a write needs `--allow-writes` (or an MCP server started with `--allow-writes`). Add
   it only when the user asked for **that specific action with that content**. Confirm the exact
   text or target with the user first if there is any doubt.
-- A write is sent once. If the result says "the write may have gone through", don't retry.
-  Tell the user to check the site.
+- A write is sent once. If the result says "the write may have gone through", don't retry, whatever
+  the class. Tell the user to check the site.
 - Before the first real write, run `api-anything call <site> <op> ... --dry`. It prints the exact
   request with the credentials redacted, so you can check that the ids and text are the ones
   intended, byte for byte.

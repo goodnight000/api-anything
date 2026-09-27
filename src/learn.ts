@@ -516,12 +516,12 @@ function diffRuns(req1: Request, req2: Request, slots: Slot[], args2: Args, warn
     const slot = bySlot.get(k);
     const other = second.get(k);
     if (slot?.ref) continue;
+    const header = headerName(leaf.at);
+    if (header && BROWSER_HEADER.test(header)) continue;
     if (!other) {
       missing.push(leaf.at.join(" > "));
       continue;
     }
-    const header = headerName(leaf.at);
-    if (header && BROWSER_HEADER.test(header)) continue;
     if (slot?.param) {
       const want = slot.template !== undefined ? fillSlotTemplate(slot.template, args2, slot.escape) : asText(args2[slot.param]);
       if (other.value.toLowerCase() === want.toLowerCase()) continue;

@@ -217,6 +217,8 @@ const LONG_MS = 3000;
 const REPEATS = 2;
 // Pages that fetch their data a moment after load (deferred hydration): how long to wait for a first XHR.
 const FIRST_XHR_MS = 2000;
+// With an op's match: how long a quiet page may go without firing it before the run gives up on it.
+const MATCH_GRACE_MS = 3000;
 
 export interface TriggerOptions {
   url: string;
@@ -447,7 +449,8 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     for (const s of o.steps ?? []) await runStep(page, s);
     if (o.match) {
       // The op's own request answering is the signal; then a short settle catches a challenge's reload.
-      while (Date.now() < deadline && !answered()) await sleep(50);
+      // A page quiet for a few seconds without it is not going to send it (a login wall, a 404 page).
+      while (Date.now() < deadline && !answered() && !(quiet() && Date.now() - lastActivity > MATCH_GRACE_MS)) await sleep(50);
       await sleep(o.settleMs ?? 300);
       await idle(3000);
     } else {
