@@ -73,7 +73,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
 1. **Pick the request.** Use the `match` if given (then nothing in the pool counts as noise). Otherwise
    take the candidates that carry the example values (searched at every decoded layer) and return
    JSON-ish data, drop noise (subresource assets, analytics, beacons; a document or XHR whose path ends
-   in `.js` is not an asset), and rank them. With a response recipe (`--html`, `--embedded`,
+   in `.js` is not an asset), and rank them. A data-less answer (empty 2xx, `{"success":true}`, `OK`)
+   ranks below every real answer: a read's answer is data. With a response recipe (`--html`, `--embedded`,
    `--extract`), a candidate the recipe resolves on wins over a beacon that echoes the page URL. The
    agent confirms which one when it's ambiguous.
 2. **Decode and substitute.** Walk every decoded layer of URL path, query, form, and JSON (including JSON
@@ -83,25 +84,39 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    A leaf equal to one param's value belongs to that param even if another's value is inside it, and
    several params in one leaf are replaced longest first. Headers the browser computes (user-agent,
    accept*, content-type, sec-*) are never slots. A `true`/`false`/`null` example binds only to the
-   leaf named like the param. An array or object example binds to the equal JSON container. Example
+   leaf named like the param, even when it is the only such flag. An array or object example binds to the equal JSON container. Example
    values must be distinct and at least 3 chars. If a value appears in several unrelated places,
    record all of them but warn. (Google Flights reuses the destination as the return-leg origin.)
-   Referer, Origin and Cookie follow the args, but they are not evidence: an example value found
-   nowhere else in the chosen request is an error, since the param would change nothing the server
-   reads and every call would silently return the example's data.
+   Referer, Origin, Cookie and any other echo of the page's location follow the args, but they are
+   not evidence: an example value found nowhere else in the chosen request is an error, since the
+   param would change nothing the server reads and every call would silently return the example's
+   data. An echo is found structurally from the capture's page URLs (its documents, every Referer,
+   the filled trigger): a leaf holding the page's href or origin anywhere, or starting with its path
+   or search string, at any percent-encoding depth (analytics `context.page.url`, `x-page-path`,
+   `src=`/`redirect=` params). A request whose only hits are echoes (a Segment-style beacon) is no
+   candidate.
 3. **Two-run diff** (create with two example sets, recommended). A position that changes with the args is a
    param. A position that changes although the args did not (including the text around the arg in a
    templated leaf, such as a signed URL; browser-computed headers never count) is a nonce/signature, so the op gets `minTier: 3`,
    unless one tier-1 replay of run 1's template with example 2's args still answers ok: then the value is
    session-scoped (Google's `f.sid`), not a signature, and `minTier` stays 1. Everything else is a constant.
 4. **Session references.** A header, query or JSON leaf whose value equals a cookie value (raw,
-   quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Auth/anti-bot-looking
+   quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Capture also snapshots the
+   final page origin's localStorage and sessionStorage; a leaf equal to a stored value (or to a
+   string inside a JSON entry, as auth SDKs keep tokens; ≥ 8 chars) becomes a `session:` ref named
+   after the storage key. A key or header named like a credential (its words: token, secret, key,
+   auth, sess(ion), sid, signature, password, credential; "author" is not) with a random-looking
+   value (≥ 16 chars, two character classes, ≥ 3 bits/char) is a `session:` ref too, unless the site
+   ships that value in one of its own scripts to every visitor (a public API key): then it stays
+   literal and is listed in `public`. Auth/anti-bot-looking
    headers (authorization, x-*-token, x-csrf*, x-goog-batchexecute-bgr, x-client-transaction-id)
    become `session:` refs, whose values live in the session store and are refreshed by every capture. So do
    per-session fields in forms, queries and JSON bodies (`at`, `fb_dtsg`, `lsd`,
    `authenticity_token`, `csrf*`, `access_token`, `token`, `session_id`), and a header repeating one of
-   them (Meta's `x-fb-lsd`) shares its ref. A cookie value inside a longer leaf (`v1:<cookie>`) is a
-   templated `cookie:` ref. The spec never holds a credential. At call time a `cookie:` ref takes the
+   them (Meta's `x-fb-lsd`) shares its ref. A cookie or stored value (≥ 16 chars) inside a longer
+   leaf (`v1:<cookie>`, percent-encoded in a `next=` URL, JSON-escaped) is a templated ref that
+   re-encodes it the same way; a capture refreshes a templated `session:` value from its place in
+   the leaf. The spec never holds a credential. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.
    The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header a human marks public
@@ -182,8 +197,10 @@ Heal strategies, cheapest first:
 - **rescan**: no browser. Fetch the trigger document and the JS bundles it references (resolved
   against the document's final URL), find a token of the recorded shape within ~300 chars of each
   volatile anchor, swap it in, and validate. The anchor must stand as its own name ("Followers" is
-  not inside "FollowersYouKnow"); a token in the anchor's own statement beats a nearer one across a
-  `;` or `})` boundary (Meta's previous module); a tie is no answer. For a write, whose validation
+  not inside "FollowersYouKnow"), and an occurrence in code beats one in prose (whitespace next to
+  it, a log message). A token in the anchor's own group beats a nearer one outside it: between them
+  no bracket closes the group and no `;` ends a statement at that level (Meta's previous module
+  ends in `}),null);`, while its own `"use strict";` is nested); a tie is no answer. For a write, whose validation
   is a real send, only a token that is the single candidate is tried.
 - **recapture**: run the trigger in the browser, match, re-learn, and validate by replaying at the op's
   tier (at most 2: at tier 3 the site's own request would answer, validating nothing) with the current
@@ -197,7 +214,8 @@ A healed template is saved to the user's spec dir only after validation. Every h
 appended to `~/.api-anything/heals.jsonl` (op, strategy, diff summary). A tier an op escalated to
 (above its own `minTier`) is remembered per op as a speed hint (a lower `--max-tier` still tries
 its own tier), and a call that ran above tier 1 says why in `reason`. The jar, `state.json` and a
-healed spec are read-modify-written under a lock file, so concurrent processes lose nothing.
+spec (every add and heal, re-read under the lock) are read-modify-written under a lock file, so
+concurrent processes and calls lose nothing.
 Tier 2 honours `timeoutMs`; when the origin's root redirects to another origin, it fetches from a
 blank stand-in page on the request's origin. The tier-3 answer is the matching request that carries
 the call's args and judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
@@ -248,9 +266,11 @@ bundled `sites/<site>.json` (community). A heal of a bundled spec writes a user 
 `api-anything export <site>` writes a shareable copy. It strips examples (unless `--keep-examples`:
 a human confirmed they are public, so `verify` works for others) and samples (response shapes,
 whose keys can be user data; typed example values in the request become null), and it runs an
-exact-match secret scan against live jar/session values (also found percent-encoded or
-JSON-escaped in the spec) plus regex heuristics. Headers an op
-lists in `public` (marked by a human) are allowed.
+exact-match secret scan against live jar/session values, found under any encoding the spec may
+carry them in (percent-encoded up to three layers, JSON- or `\u`-escaped, base64), plus regex
+heuristics. It also refuses any literal the learner would have made a ref (a session field or
+header, a random value under a credential's name), and warns about a literal IP address (a client
+`remoteHost` the page reported). Names an op lists in `public` are allowed.
 
 ## Logging in (`login.ts`, `import.ts`)
 

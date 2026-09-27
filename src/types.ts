@@ -44,6 +44,8 @@ export interface CaptureResult {
   cookies: StoredCookie[];
   /** final page URL after the trigger ran */
   finalUrl: string;
+  /** the final page origin's localStorage and sessionStorage, so learning can ref a token kept there */
+  storage?: Record<string, string>;
 }
 
 /** How to make the site's own frontend fire a request. */

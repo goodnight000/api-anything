@@ -196,6 +196,9 @@
         }
       ],
       "readOnly": true,
+      "public": [
+        "x-algolia-api-key"
+      ],
       "minTier": 1,
       "learnedLoggedIn": false,
       "learnedAt": "2026-09-27T11:02:04.098Z"

@@ -130,6 +130,9 @@
         }
       ],
       "readOnly": true,
+      "public": [
+        "x-airbnb-api-key"
+      ],
       "minTier": 1,
       "learnedLoggedIn": false,
       "learnedAt": "2026-09-27T17:44:41.443Z",
