@@ -2,7 +2,7 @@
  * Captured exchanges + example args -> an Operation (DESIGN.md "Learning", steps 1-8).
  * Only example-arg values become params; everything else is kept verbatim.
  */
-import { asText, escapeTemplate, fillSlotTemplate, fillTemplate, getAt, setAt, walk, type Escape, type Leaf, type Step } from "./codec.js";
+import { asText, escapeTemplate, escapeValue, fillSlotTemplate, fillTemplate, getAt, setAt, templateRefs, walk, type Escape, type Leaf, type Step } from "./codec.js";
 import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
 import { loggedIn, parseCookieHeader } from "./session.js";
 import { OperationSchema, type Match, type Operation, type Param, type Request, type ResponseSpec, type Slot, type Trigger, type Volatile } from "./spec.js";
@@ -657,9 +657,13 @@ function diffRuns(req1: Request, req2: Request, slots: Slot[], args2: Args, warn
     }
     if (slot?.param) {
       const want = slot.template !== undefined ? fillSlotTemplate(slot.template, args2, slot.escape) : asText(args2[slot.param]);
-      if (other.value.toLowerCase() === want.toLowerCase()) continue;
+      // a credential hole matches whatever run 2's session held
+      const same = new RegExp(`^${want.split(/\{(?:cookie|session):[^{}]+\}/).map(escapeRe).join(".*?")}$`, "is");
+      if (same.test(other.value)) continue;
       // The text around the arg changed too: a signature inside the leaf (a signed URL in a param).
-      const literals = slot.template !== undefined ? fillSlotTemplate(slot.template, Object.fromEntries(Object.keys(args2).map((k) => [k, "\0"]))).split("\0") : [];
+      // a credential hole is run-specific too: a wildcard like the args
+      const holes = slot.template !== undefined ? [...Object.keys(args2), ...templateRefs(slot.template)] : [];
+      const literals = slot.template !== undefined ? fillSlotTemplate(slot.template, Object.fromEntries(holes.map((k) => [k, "\0"]))).split("\0") : [];
       if (literals.some((l) => l && !other.value.toLowerCase().includes(l.toLowerCase()))) nonces.push(leaf.at.join(" > "));
       else warnings.push(`run 2 has ${JSON.stringify(other.value)} at ${leaf.at.join(" > ")}, expected ${JSON.stringify(want)}`);
       continue;
@@ -749,7 +753,20 @@ export function learnOperation(input: LearnInput): Learned {
   // JSON-escaped copy) is a templated ref, re-encoded like the leaf had it.
   const long = [...live].filter(([v]) => v.length >= 16);
   for (const leaf of leaves) {
-    if (leaf.container || leaf.type !== "string" || taken.has(key(leaf.at))) continue;
+    if (leaf.container || leaf.type !== "string") continue;
+    // A param's templated leaf can carry one too (next=/search?q={q}&auth=<cookie>): its template gets a ref hole.
+    const own = taken.has(key(leaf.at)) ? slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(leaf.at)) : undefined;
+    if (own) {
+      for (const [v, l] of long) {
+        const form = escapeValue(v, own.escape);
+        if (l.transform || !own.template!.includes(escapeTemplate(form))) continue;
+        own.template = own.template!.split(escapeTemplate(form)).join(`{${l.ref}}`);
+        if (l.ref.startsWith("session:") && l.value !== undefined) sessionValues[l.ref.slice(8)] = l.value;
+        request = setAt(request, leaf.at, (getAt(request, leaf.at) as string).split(form).join(""));
+      }
+      continue;
+    }
+    if (taken.has(key(leaf.at))) continue;
     for (const [v, l] of long) {
       const forms: [string, Escape | undefined][] = [[v, undefined], [encodeURIComponent(v), "url"], [JSON.stringify(v).slice(1, -1), "json"]];
       const form = forms.find(([f]) => leaf.value.includes(f));

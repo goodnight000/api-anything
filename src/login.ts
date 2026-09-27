@@ -110,7 +110,7 @@ export async function reimportIfBrowser(site: string, url: string, loginCookies?
 /** logout: clear the jar and this site's cookies in the profile. */
 export async function logout(site: string): Promise<void> {
   safeName(site);
-  saveSession(site, { cookies: [], values: {} });
+  withLock(sessionFile(site), () => saveSession(site, { cookies: [], values: {} }));
   if (chromeAvailable()) {
     try {
       await clearProfileCookies(site, profileDir());

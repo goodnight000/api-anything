@@ -11,7 +11,7 @@ import { buildRequest } from "./http.js";
 import { capOutput, extract } from "./extract.js";
 import { rankCandidates } from "./learn.js";
 import { serveStdio, VERSION } from "./mcp.js";
-import { loadSession, loggedIn, pruneCaptures, saveSession, sessionFile, withLock } from "./session.js";
+import { loadSession, loggedIn, saveSession, sessionFile, withLock } from "./session.js";
 import { AmbiguousProfile } from "./import.js";
 import { cookieNames, importSession, logout, resolveLoginTarget } from "./login.js";
 import { MatchSchema, TriggerStepSchema, type Operation } from "./spec.js";
@@ -53,7 +53,7 @@ const HELP: Record<string, string> = {
   --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser);
                   every add saves its own runs as captures, so a wrong --extract is fixed this way
   --from2 <id>    a second capture made with --example2 values, for the two-run diff
-  --extract <path>  dot/bracket path into the response
+  --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
   --pick a,b.c,name=x.y  fields kept per item; name=path renames the key
   --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages
   --embedded <regex>  JSON inside the page: group 1 marks where the JSON value starts; then --extract
@@ -246,7 +246,6 @@ async function run(argv: string[]): Promise<number> {
       needChrome();
       const limit = positive(v.limit, "limit") ?? 15;
       const c = await capturePage({ url, steps, softFrom: v["soft-from"], write: v.write });
-      pruneCaptures();
       const ranked = rankCandidates(c.exchanges, kv(v.example));
       const candidates = ranked.slice(0, limit).map((x) => ({
         id: x.id,
@@ -348,7 +347,6 @@ async function run(argv: string[]): Promise<number> {
         from: v.from ? { capture: loadCapture(v.from), id: v["pick-request"] ? Number(v["pick-request"]) : undefined } : undefined,
         from2: v.from2 ? loadCapture(v.from2) : undefined,
       });
-      pruneCaptures();
       const op = r.operation;
       out({
         ok: true,

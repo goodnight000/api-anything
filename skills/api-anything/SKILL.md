@@ -135,7 +135,8 @@ site.
 ## Token efficiency
 
 - Set `--extract` to the part of the response you need, and `--pick` to the fields you need per
-  item. `add` suggests an extract path. Output over about 20k characters is cut, and the result
+  item. `add` suggests an extract path. When results are split across sections, `[*]` joins them
+  (`contents[*].items`). Output over about 20k characters is cut, and the result
   carries a `truncated` note.
 - Prefer `ops` over reading spec files, and a single `call` over capture runs. A capture is for
   learning, not for fetching data.

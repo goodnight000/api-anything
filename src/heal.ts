@@ -5,11 +5,11 @@
 import { join } from "node:path";
 import { chromeAvailable, ProfileInUse, runTrigger } from "./browser.js";
 import { botWall, judge, type Class } from "./classify.js";
-import { asText, escapeTemplate, fillTemplate, getAt, setAt, walk } from "./codec.js";
+import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
 import { checkExamples, hashLike, learnOperation, matches, rankCandidates, type Args } from "./learn.js";
-import { cookieHeaderFor, home, loadSession, mergeCapture, readJson, safeName, writePrivate } from "./session.js";
+import { cookieHeaderFor, home, loadSession, mergeCapture, pruneCaptures, readJson, safeName, writePrivate } from "./session.js";
 import type { Match, Operation, ResponseSpec, Site, Trigger, Volatile } from "./spec.js";
 import { appendHeal, clearStale, loadSite, rememberTier, scanSecrets, updateSite } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
@@ -24,7 +24,7 @@ export interface Attempt {
   status?: number;
   data?: unknown;
   ambiguous?: boolean;
-  /** drift with the data missing from an otherwise fine response; see Classified.missing */
+  /** the args may be the problem (data missing, or a bare 403); see Classified.missing */
   missing?: boolean;
   /** the first answer was a redirect, so the server took the request (a write ran) */
   redirected?: boolean;
@@ -82,15 +82,19 @@ const readGuard =
 function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
   const out: Record<string, string> = {};
   for (const s of op.slots) {
-    if (!s.ref?.startsWith("session:")) continue;
+    // a session ref's own leaf, or a session hole in a param's templated leaf
+    const refs = (s.ref ? [s.ref] : s.template !== undefined ? templateRefs(s.template) : []).filter((r) => r.startsWith("session:"));
+    if (!refs.length) continue;
     let v: unknown;
     try {
       v = getAt(e.request, s.at);
     } catch {
       continue;
     }
-    const part = typeof v === "string" && s.template !== undefined ? refPart(s.template, s.ref, v, s.escape) : v;
-    if (typeof part === "string" && part) out[s.ref.slice(8)] = part;
+    for (const ref of refs) {
+      const part = typeof v === "string" && s.template !== undefined ? refPart(s.template, ref, v, s.escape) : v;
+      if (typeof part === "string" && part) out[ref.slice(8)] = part;
+    }
   }
   return out;
 }
@@ -189,6 +193,7 @@ function saveCapture(o: { url: string; steps?: TriggerStep[]; softFrom?: string;
   lastId = id;
   const file: CaptureFile = { id, at: new Date().toISOString(), url: o.url, steps: o.steps, softFrom: o.softFrom, ...(o.write ? { write: true } : {}), ...r };
   writePrivate(captureFile(id), JSON.stringify(file));
+  pruneCaptures();
   return file;
 }
 

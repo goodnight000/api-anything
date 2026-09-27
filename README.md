@@ -23,8 +23,8 @@ Everything lives in `~/.api-anything`; set `API_ANYTHING_HOME` to use another di
 
 Bundled specs, verified live and logged out on 2026-09-27: `x` (getUser, getProfile),
 `instagram` (getProfile, getPosts), `google-flights` (search, top), `hacker-news` (frontPage,
-search), `youtube` (search), `airbnb` (search), `amazon` (search), `linkedin` (getMe, getCompany —
-needs login). `api-anything sites` lists them; each has notes in `sites/<site>.md`.
+search), `youtube` (search), `airbnb` (search), `amazon` (search), `linkedin` (getMe, getProfile,
+getCompany, searchPeople — needs login). `api-anything sites` lists them; each has notes in `sites/<site>.md`.
 
 ## Logging in
 
@@ -42,6 +42,7 @@ the browser profile it used, with the profile's display name and Google account,
 
 ```sh
 api-anything call linkedin getCompany universalName=openai
+api-anything call linkedin getProfile publicId=williamhgates
 ```
 
 **Several profiles signed in.** If more than one browser profile is signed in to the site (a work
@@ -141,7 +142,8 @@ $ api-anything call hn-search search query=duckdb
 
 The `add` and `call` output is real, from 2026-09-27, shortened; the `capture` listing shows its
 shape (ids and sizes vary). `--pick`
-accepts `name=path` to rename a field. If the preview is wrong, fix `--extract`/`--pick` and
+accepts `name=path` to rename a field, and `[*]` in a path collects from every array item
+(`sections[*].items` joins each section's items); items with none of the picked fields are dropped. If the preview is wrong, fix `--extract`/`--pick` and
 re-run `add --from <one of the captures>`: no browser needed. For a server-rendered page, use
 `--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page;
 `inspect` accepts the same flags, so you can try selectors first.

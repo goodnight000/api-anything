@@ -59,7 +59,7 @@
       "response": {
         "format": "embedded",
         "contentType": "text/html; charset=utf-8",
-        "extract": "contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents[0].itemSectionRenderer.contents",
+        "extract": "contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents[*].itemSectionRenderer.contents",
         "pick": [
           "id=videoRenderer.videoId",
           "title=videoRenderer.title.runs[0].text",

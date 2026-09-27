@@ -22,6 +22,19 @@ test("getPath: dots, brackets, index-only paths, dashed keys, quoted keys", () =
   assert.equal(getPath("str", "length"), undefined);
 });
 
+test("getPath [*]: results split across sections (an ad section first) are all collected", () => {
+  // YouTube with a visitor cookie: section 0 holds an ad, a shelf and one video, then an ad slot, then the main list
+  const v = (id: string) => ({ videoRenderer: { videoId: id } });
+  const page = { contents: [{ itemSectionRenderer: { contents: [{ searchPyvRenderer: {} }, { shelfRenderer: {} }, v("a")] } }, { adSlotRenderer: {} }, { itemSectionRenderer: { contents: [v("b"), v("c")] } }] };
+  const path = "contents[*].itemSectionRenderer.contents";
+  assert.equal((getPath(page, path) as unknown[]).length, 5);
+  assert.deepEqual(extract({ format: "json", extract: path, pick: ["id=videoRenderer.videoId"] }, JSON.stringify(page)), [{ id: "a" }, { id: "b" }, { id: "c" }]);
+  assert.deepEqual(getPath({ contents: [] }, path), [], "no sections: no results");
+  assert.equal(getPath({ contents: [{ adSlotRenderer: {} }] }, path), undefined, "sections, none with the path: moved, not empty");
+  assert.equal(getPath({ contents: {} }, path), undefined);
+  assert.deepEqual(getPath({ a: [{ b: 1 }, { c: 2 }, { b: 3 }] }, "a[*].b"), [1, 3]);
+});
+
 test("pick projects per item and per object", () => {
   const items = [{ id: 1, user: { name: "a", bio: "long" }, x: 1 }, { id: 2, user: { name: "b" } }];
   assert.deepEqual(pick(items, ["id", "user.name"]), [{ id: 1, "user.name": "a" }, { id: 2, "user.name": "b" }]);

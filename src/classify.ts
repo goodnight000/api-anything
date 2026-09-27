@@ -7,9 +7,10 @@ export interface Classified {
   class: Class;
   reason: string;
   /**
-   * drift only: the response came back fine but without the data (extract path, selector or
-   * embedded JSON missing). Bad args ("no such user") look the same, so the caller checks the
-   * example args before healing.
+   * drift: the response came back fine but without the data (extract path, selector or embedded
+   * JSON missing). blocked: a bare 403 with no wall or login markers, which is also how a site
+   * refuses one entity ("This profile can't be accessed"). Bad args look the same either way, so
+   * the caller checks the example args before healing or climbing tiers.
    */
   missing?: boolean;
 }
@@ -116,7 +117,7 @@ function shapeScope(op: Operation, data: unknown): { expected: Record<string, st
   const shape = op.response.shape ?? {};
   const ex = op.response.extract;
   if (!ex) return { expected: shape, value: data };
-  const prefix = ex.replace(/\[\d+\]/g, "[]").replace(/\["((?:[^"\\]|\\.)*)"\]/g, (_m, k: string) => `.${JSON.parse(`"${k}"`) as string}`).replace(/^\./, "");
+  const prefix = ex.replace(/\[(\d+|\*)\]/g, "[]").replace(/\["((?:[^"\\]|\\.)*)"\]/g, (_m, k: string) => `.${JSON.parse(`"${k}"`) as string}`).replace(/^\./, "");
   const expected: Record<string, string> = {};
   for (const [k, t] of Object.entries(shape)) {
     if (k.startsWith(`${prefix}.`)) expected[k.slice(prefix.length + 1)] = t;
@@ -166,7 +167,7 @@ export function classify(op: Operation, r: Observed): Classified {
   if (r.status === 403) {
     return LOGIN.test(body) || CSRF_FAILED.test(body)
       ? is("auth", `HTTP 403 with login markers: ${snippet(body)}`)
-      : is("blocked", `HTTP 403 without login markers (likely a bot wall): ${snippet(body)}`);
+      : { ...is("blocked", `HTTP 403 without login markers (likely a bot wall): ${snippet(body)}`), missing: true };
   }
   if (r.url) {
     try {

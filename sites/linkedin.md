@@ -60,11 +60,10 @@ the constant `x-restli-protocol-version: 2.0.0`. The spec holds no credential. N
   classifies the call as `drift` rather than returning the feedback card as a result. Premium
   accounts were not tested. Normalized JSON was not an option: its `included` list loses the ranking
   and adds a feedback entity.
-- **An unknown or restricted `publicId` is slow to fail.** LinkedIn answers
-  `403 {"message":"This profile can't be accessed"}`. The classifier reads a 403 without login
-  markers as a bot wall, so it climbs to the browser (about 40 s), finds nothing to heal and marks the
-  op stale for 30 minutes (calls with good ids still work). Until that is fixed in the classifier, pass `--max-tier 1` when the id might
-  be wrong, or find the id with `searchPeople` first. `getCompany` on an unknown name returns `input`.
+- **An unknown or restricted `publicId` is `input`.** LinkedIn answers
+  `403 {"message":"This profile can't be accessed"}`. A read's bare 403 replays the example args
+  once; they answer, so the call returns `input` at tier 1 with no browser run and no stale mark
+  (not verified live against LinkedIn). `getCompany` on an unknown name returns `input` too.
 - **No location name or follower count in `getProfile`.** The default projection has only
   `location.countryCode` and a `geoLocation.geoUrn`. It has no experience list (only a card URN).
 - **No `searchJobs`.** `/voyager/api/voyagerJobsDashJobCards` answers 500 without a `decorationId`,

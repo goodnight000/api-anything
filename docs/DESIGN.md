@@ -115,8 +115,9 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    `authenticity_token`, `csrf*`, `access_token`, `token`, `session_id`), and a header repeating one of
    them (Meta's `x-fb-lsd`) shares its ref. A cookie or stored value (≥ 16 chars) inside a longer
    leaf (`v1:<cookie>`, percent-encoded in a `next=` URL, JSON-escaped) is a templated ref that
-   re-encodes it the same way; a capture refreshes a templated `session:` value from its place in
-   the leaf. The spec never holds a credential. At call time a `cookie:` ref takes the
+   re-encodes it the same way; in a leaf that also holds an arg (`next=/search?q={q}&auth=<cookie>`)
+   it is a `{cookie:x}` hole in the param's template, filled at call time. A capture refreshes a
+   templated `session:` value from its place in the leaf. The spec never holds a credential. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.
    The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header a human marks public
@@ -165,7 +166,7 @@ Every response is classified, never by status code alone:
 | `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once |
 | `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, `require_login: true`, a trigger that lands on a sign-in page | refresh cookies from the profile; for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429 (with the server's Retry-After), "please wait", "rate limit" | back off, report; no heal |
-| `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503) | escalate transport tier; then diagnostic `gated` |
+| `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers | escalate transport tier; then diagnostic `gated`. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
 | `error` | anything else (a network error names its cause) | return with details |
 
@@ -246,7 +247,7 @@ the call's args and judges ok (a `softFrom` page fires its own; a WAF interstiti
 
 ## Response extraction and token efficiency
 
-`response.extract` (dot/bracket path) → optional `pick` (list of paths kept per item, or per
+`response.extract` (dot/bracket path; `[*]` maps the rest over an array and flattens one level, skipping items without it, undefined when none has it) → optional `pick` (list of paths kept per item, or per
 object; a picked item left empty, such as a shelf or an ad, is dropped) → a hard output cap (the
 result is never over it) with a truncation note that says what was cut. Arrays are cut at an item
 boundary, an item too big on its own is cut rather than dropped, strings are cut as strings, and

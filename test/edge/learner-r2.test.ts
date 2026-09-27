@@ -182,6 +182,32 @@ test("a cookie inside a twice-encoded next= URL is a templated ref, refilled at 
   assert.equal(buildRequest(op, { name: "alice" }, { cookies, values: {} }).url, url);
 });
 
+test("a leaf holding both an arg and a credential (next=/search?q=<arg>&auth=<cookie>) keeps the credential a ref", () => {
+  const next = (q: string, tok: string) => encodeURIComponent(`/search?q=${q}&auth=${encodeURIComponent(tok)}`);
+  const url = (q: string, tok: string) => `https://site.test/api/data?name=${q}&next=${next(q, tok)}`;
+  const COOKIE2 = "Zx9/Qw8vLm7+Kj6HgF5dS4aP3oI2uY1t";
+  const { operation: op, warnings } = learnOperation({
+    exchanges: [xhr({ url: url("alice", COOKIE), headers: { cookie: `tok=${COOKIE}` } })],
+    exchanges2: [xhr({ url: url("bob", COOKIE2), headers: { cookie: `tok=${COOKIE2}` } })],
+    examples: [{ name: "alice" }, { name: "bob" }],
+    cookies: [cookie("tok", COOKIE)],
+    name: "op",
+    trigger: { url: "https://site.test/p?name={name}" },
+    readOnly: true,
+  });
+  const spec = JSON.stringify(op);
+  for (const f of [COOKIE, encodeURIComponent(COOKIE), encodeURIComponent(encodeURIComponent(COOKIE))]) assert.ok(!spec.includes(f), `cookie in the spec as ${f}`);
+  assert.equal(op.minTier, 1, `the session hole is no nonce: ${warnings.join("; ")}`);
+  assert.ok(!warnings.some((w) => /run 2 has/.test(w)), warnings.join("; "));
+  assert.equal(buildRequest(op, { name: "carol" }, { cookies: [cookie("tok", COOKIE2)], values: {} }).url, url("carol", COOKIE2));
+  // a session value in the same place is refilled from the session store
+  const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2lnbmF0dXJl";
+  const s = learn([xhr({ url: `https://site.test/api/data?name=alice&next=${next("alice", jwt)}` })], [{ name: "alice" }], { storage: { at: jwt }, trigger: { url: "https://site.test/p?name={name}" } });
+  assert.ok(!JSON.stringify(s.operation).includes(encodeURIComponent(jwt)));
+  assert.equal(s.sessionValues.at, jwt);
+  assert.equal(buildRequest(s.operation, { name: "bob" }, { cookies: [], values: s.sessionValues }).url, `https://site.test/api/data?name=bob&next=${next("bob", jwt)}`);
+});
+
 test("the secret scan finds a live value percent-encoded once or twice, JSON-escaped, \\u-escaped and base64'd", () => {
   const tok = "ab/cd+ef12=";
   const s = { cookies: [cookie("sid", tok)], values: {} };

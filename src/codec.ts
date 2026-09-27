@@ -341,6 +341,10 @@ export function fillTemplate(template: string, vars: Record<string, unknown>): s
   );
 }
 
+/** The `{cookie:x}`/`{session:x}` holes of a template: a param's leaf can carry a credential too. */
+export const templateRefs = (template: string): string[] =>
+  [...template.matchAll(/\{\{|\}\}|\{((?:cookie|session):[^{}]+)\}/g)].flatMap((m) => (m[1] ? [m[1]] : []));
+
 /** Literal text as a template: every brace doubled. */
 export const escapeTemplate = (text: string) => text.replace(/[{}]/g, (c) => c + c);
 

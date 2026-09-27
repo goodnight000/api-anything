@@ -318,6 +318,7 @@ export async function call(siteName: string, opName: string, args: Record<string
   const notes: string[] = tier > op.minTier ? [`started at tier ${tier}: an earlier call escalated there`] : [];
   const noted = (a: Attempt) => success(a, notes.length ? { reason: notes.join("; ") } : {});
   let authTried = false;
+  let examplesChecked = false;
   for (;;) {
     if (tier > ctx.maxTier) {
       return done({ ok: false, class: "blocked", tier, reason: `needs tier ${tier}, capped at ${ctx.maxTier}`, next: `allow a higher tier (--max-tier ${tier})` });
@@ -334,6 +335,21 @@ export async function call(siteName: string, opName: string, args: Record<string
     }
     const fail = (): CallResult => done({ ok: false, class: a.class, tier, reason: a.reason, next: nextFor(a.class, siteName, op, a) });
     if (write && !notRun(a)) return fail();
+    // A bare 403 is a wall or a refusal of this one entity (a private profile): if the example args
+    // answer through the same tier, the args are the problem, and a browser run would not help.
+    if (a.class === "blocked" && a.missing && !write && !examplesChecked) {
+      examplesChecked = true;
+      const examples = exampleArgs(op);
+      if (examples && !sameArgs(examples, args, op) && (await attempt({ ...ctx, args: examples }, op, tier)).class === "ok") {
+        return done({
+          ok: false,
+          class: "input",
+          tier,
+          reason: `refused for these args (${a.reason}); the example args still return data, so the operation works`,
+          next: `check the args (a private, restricted or missing entity is refused this way) against: api-anything ops ${siteName}; do not heal or re-add`,
+        });
+      }
+    }
     if (a.class === "blocked" && tier < (write ? 2 : 3)) {
       notes.push(`tier ${tier} was blocked (${a.reason})`);
       tier++;

@@ -51,17 +51,31 @@ export function innerJson(s: string): unknown {
   }
 }
 
-/** Resolve "a.b[0].c", "[1][0][2]", `a["x.y"]`, stepping into JSON-encoded strings. Undefined if any step is missing. */
+/**
+ * Resolve "a.b[0].c", "[1][0][2]", `a["x.y"]`, stepping into JSON-encoded strings. Undefined if any step is missing.
+ * `[*]` maps the rest of the path over an array and flattens one level, skipping items where it is
+ * missing (`sections[*].items`: every section's items, whichever section holds them).
+ */
 export function getPath(obj: unknown, path?: string): unknown {
   if (!path) return obj;
-  let cur = obj;
-  for (const m of path.matchAll(/\[(\d+)\]|\["((?:[^"\\]|\\.)*)"\]|[^.[\]]+/g)) {
-    if (typeof cur === "string") cur = innerJson(cur);
-    if (cur == null || typeof cur !== "object") return undefined;
-    const key = m[1] ?? (m[2] !== undefined ? (JSON.parse(`"${m[2]}"`) as string) : m[0]);
-    cur = (cur as Record<string, unknown>)[key];
-  }
-  return cur;
+  const steps = [...path.matchAll(/\[(\d+)\]|\[(\*)\]|\["((?:[^"\\]|\\.)*)"\]|[^.[\]]+/g)];
+  const walk = (cur: unknown, i: number): unknown => {
+    for (; i < steps.length; i++) {
+      const m = steps[i]!;
+      if (typeof cur === "string") cur = innerJson(cur);
+      if (cur == null || typeof cur !== "object") return undefined;
+      if (m[2]) {
+        if (!Array.isArray(cur)) return undefined;
+        const found = cur.map((x) => walk(x, i + 1)).filter((v) => v !== undefined);
+        // items present but none has the rest of the path: the path moved, not "no results"
+        return cur.length && !found.length ? undefined : found.flat();
+      }
+      const key = m[1] ?? (m[3] !== undefined ? (JSON.parse(`"${m[3]}"`) as string) : m[0]);
+      cur = (cur as Record<string, unknown>)[key];
+    }
+    return cur;
+  };
+  return walk(obj, 0);
 }
 
 /** Keep only the given paths, per item for arrays. `name=path` renames the output key. */

@@ -147,6 +147,23 @@ describe("call", () => {
     assert.equal(hits.length, 1, "no example replay");
   });
 
+  test("a read's bare 403 for these args while the examples answer is input: no climb, no heal", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    site("private", {});
+    hits = [];
+    const refused = () => json({ message: "This profile can't be accessed", status: 403 }, 403);
+    const r = await call("private", "o", { q: "bob" }, { ...t1((url) => (url.includes("alice") ? json({ results: [{ id: 1 }] }) : refused())), maxTier: 3 });
+    assert.equal(r.class, "input", JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.match(r.reason ?? "", /refused for these args .*; the example args still return data/);
+    assert.equal(hits.length, 2, "the call and one example replay");
+    // the examples refused too: still a wall, still climbs (capped here)
+    hits = [];
+    const w = await call("private", "o", { q: "bob" }, t1(refused));
+    assert.equal(w.class, "blocked");
+    assert.equal(hits.length, 2);
+  });
+
   test("no data for these args while the examples answer: says the operation works", async () => {
     process.env.API_ANYTHING_HOME = home;
     site("nodata", {});

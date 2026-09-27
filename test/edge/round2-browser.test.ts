@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer as httpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -84,6 +84,20 @@ describe("browser", { skip: noChrome }, () => {
     await capturePage({ url: `${url}/pop`, steps });
     await new Promise((r) => setTimeout(r, 300));
     assert.equal(wsMessages, 1);
+  });
+
+  test("every saved capture prunes the directory, so a library caller (no CLI) never piles them up", async () => {
+    await ready;
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const dir = join(newHome(), "captures");
+    mkdirSync(dir, { recursive: true });
+    const stale = new Date(Date.now() - 25 * 3600_000);
+    for (let i = 0; i < 3; i++) {
+      writeFileSync(join(dir, `cold${i}.json`), "{}");
+      utimesSync(join(dir, `cold${i}.json`), stale, stale);
+    }
+    const c = await capturePage({ url: `${url}/pop` });
+    assert.deepEqual(readdirSync(dir), [`${c.id}.json`]);
   });
 
   test("a run waits out a JS challenge that reloads after a couple of seconds, instead of ending on the interstitial", async () => {

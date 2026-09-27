@@ -1,5 +1,5 @@
 /** Tier 1: fill the stored template and send it with Node fetch. */
-import { asText, fillSlotTemplate, setAt, walk } from "./codec.js";
+import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
 import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
 import type { StoredCookie } from "./types.js";
 import type { Operation, Param, Request } from "./spec.js";
@@ -101,7 +101,8 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
     if (slot.template !== undefined) {
       // A Referer/Origin is a URL: specs learned before `escape` existed still get the arg percent-encoded.
       const escape = slot.escape ?? (slot.param && /^header:(referer|origin)$/i.test(slot.at[0]!) ? "url" : undefined);
-      v = fillSlotTemplate(slot.template, { ...vals, [name]: v }, escape);
+      const refs = Object.fromEntries(templateRefs(slot.template).map((r) => [r, resolveRef(r, session, op.request.url) ?? ""]));
+      v = fillSlotTemplate(slot.template, { ...refs, ...vals, [name]: v }, escape);
     } else if (typeof v !== "string" && typeof v !== "object" && slot.at.at(-1)!.startsWith("json:") && stringLeaf(slot.at)) {
       // the same number can sit in a JSON string ("id":"12345") and a JSON number (ids:[12345]); each leaf keeps its type
       v = asText(v);
@@ -141,11 +142,16 @@ export async function send(op: Operation, args: Record<string, unknown>, session
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const signal = AbortSignal.timeout(timeoutMs);
   const inHeader = (s: Operation["slots"][number]) => s.at.length === 1 && s.at[0]!.startsWith("header:");
-  const secret = new Set(["authorization", "cookie", ...op.slots.flatMap((s) => (s.ref && inHeader(s) ? [s.at[0]!.slice(7).toLowerCase()] : []))]);
+  const holdsRef = (s: Operation["slots"][number]) => !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0);
+  const secret = new Set(["authorization", "cookie", ...op.slots.flatMap((s) => (holdsRef(s) && inHeader(s) ? [s.at[0]!.slice(7).toLowerCase()] : []))]);
   // session/cookie values the body or query carry: no other origin may receive them
   const carried = op.slots.flatMap((s) => {
-    const v = s.ref && !inHeader(s) ? resolveRef(s.ref, session, op.request.url) : undefined;
-    return v && v.length >= 4 ? [transform(v, s.transform)] : [];
+    if (inHeader(s)) return [];
+    const refs = s.ref ? [s.ref] : s.template !== undefined ? templateRefs(s.template) : [];
+    return refs.flatMap((r) => {
+      const v = resolveRef(r, session, op.request.url);
+      return v && v.length >= 4 ? [s.ref ? transform(v, s.transform) : v] : [];
+    });
   });
   const leaks = (target: string, sentBody?: string) =>
     carried.some((v) => [v, encodeURIComponent(v)].some((x) => target.includes(x) || !!sentBody?.includes(x)));
