@@ -2,7 +2,7 @@
   "name": "linkedin",
   "displayName": "LinkedIn",
   "baseUrl": "https://www.linkedin.com",
-  "description": "LinkedIn read operations over the Voyager API: your own mini profile, a member profile, a company, people search. Needs login: `api-anything login linkedin --profile <browser/profile>` imports your session.",
+  "description": "LinkedIn read operations over the Voyager API: your own mini profile, a member profile, a company, people search, company search. Needs login: `api-anything login linkedin --profile <browser/profile>` imports your session.",
   "loginCookies": [
     "li_at",
     "JSESSIONID"
@@ -114,8 +114,9 @@
           "name": "publicId",
           "type": "string",
           "required": true,
-          "description": "public id from linkedin.com/in/<publicId>, e.g. williamhgates",
-          "example": "williamhgates"
+          "description": "public id from linkedin.com/in/<publicId>, e.g. williamhgates (the ACoAA... profile id works too)",
+          "example": "williamhgates",
+          "hint": "the segment after /in/ in a profile URL, e.g. williamhgates; from searchPeople, cut it out of the result's url"
         }
       ],
       "readOnly": true,
@@ -181,7 +182,8 @@
           "type": "string",
           "required": true,
           "description": "universal name from linkedin.com/company/<name>, e.g. microsoft",
-          "example": "microsoft"
+          "example": "microsoft",
+          "hint": "the segment after /company/ in a company URL; names differ from the brand (Anthropic is anthropicresearch), so take it from searchCompanies' url"
         }
       ],
       "readOnly": true,
@@ -190,7 +192,7 @@
     },
     {
       "name": "searchPeople",
-      "description": "People search (the first 10 results of linkedin.com/search/results/people/?keywords=...): name, headline, location, profile URL, network distance.",
+      "description": "People search (the first 10 results of linkedin.com/search/results/people/?keywords=...): name, headline, location, url (linkedin.com/in/<publicId>?...; the segment after /in/ is getProfile's publicId), network distance.",
       "request": {
         "method": "GET",
         "url": "https://www.linkedin.com/voyager/api/search/dash/clusters?q=all&query=(keywords:%7Bkeywords%7D,flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)&start=0&count=10",
@@ -208,8 +210,7 @@
           "at": [
             "query:query"
           ],
-          "template": "(keywords:{keywords},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)",
-          "escape": "url"
+          "template": "(keywords:{keywords},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)"
         },
         {
           "ref": "cookie:JSESSIONID",
@@ -230,22 +231,14 @@
       },
       "response": {
         "format": "json",
-        "extract": "elements[1].items",
+        "extract": "elements[*].items[*].itemUnion.entityResult",
         "pick": [
-          "name=itemUnion.entityResult.title.text",
-          "headline=itemUnion.entityResult.primarySubtitle.text",
-          "location=itemUnion.entityResult.secondarySubtitle.text",
-          "url=itemUnion.entityResult.navigationUrl",
-          "distance=itemUnion.entityResult.entityCustomTrackingInfo.memberDistance"
-        ],
-        "shape": {
-          "elements[].items": "array",
-          "elements[].items[]": "object",
-          "elements[].items[].itemUnion": "object",
-          "elements[].items[].itemUnion.entityResult": "object",
-          "elements[].items[].itemUnion.entityResult.title": "object",
-          "elements[].items[].itemUnion.entityResult.title.text": "string"
-        }
+          "name=title.text",
+          "headline=primarySubtitle.text",
+          "location=secondarySubtitle.text",
+          "url=navigationUrl",
+          "distance=entityCustomTrackingInfo.memberDistance"
+        ]
       },
       "params": [
         {
@@ -253,7 +246,74 @@
           "type": "string",
           "required": true,
           "description": "search words, e.g. reid hoffman",
-          "example": "reid hoffman"
+          "example": "reid hoffman",
+          "hint": "free-text search words, e.g. reid hoffman or rust engineer zurich; words and spaces only, no commas, colons or parentheses (they break LinkedIn's Rest.li query)",
+          "pattern": "^[^(),:]+$"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": true
+    },
+    {
+      "name": "searchCompanies",
+      "description": "Company search (the first 10 results of linkedin.com/search/results/companies/?keywords=...): name, subtitle (industry, and location when set), followers, description, url (linkedin.com/company/<universalName>/; the segment after /company/ is getCompany's universalName).",
+      "request": {
+        "method": "GET",
+        "url": "https://www.linkedin.com/voyager/api/search/dash/clusters?q=all&query=(keywords:%7Bkeywords%7D,flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(COMPANIES)),includeFiltersInResponse:false)&start=0&count=10",
+        "headers": {
+          "accept": "application/json",
+          "accept-language": "en-US,en;q=0.9",
+          "csrf-token": "",
+          "x-restli-protocol-version": "2.0.0",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "keywords",
+          "at": [
+            "query:query"
+          ],
+          "template": "(keywords:{keywords},flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(COMPANIES)),includeFiltersInResponse:false)"
+        },
+        {
+          "ref": "cookie:JSESSIONID",
+          "at": [
+            "header:csrf-token"
+          ],
+          "transform": "strip-quotes"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.linkedin.com/search/results/companies/?keywords={keywords}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.linkedin.com",
+        "path": "/voyager/api/search/dash/clusters"
+      },
+      "response": {
+        "format": "json",
+        "extract": "elements[*].items[*].itemUnion.entityResult",
+        "pick": [
+          "name=title.text",
+          "subtitle=primarySubtitle.text",
+          "followers=secondarySubtitle.text",
+          "description=summary.text",
+          "url=navigationUrl"
+        ]
+      },
+      "params": [
+        {
+          "name": "keywords",
+          "type": "string",
+          "required": true,
+          "description": "company search words, e.g. anthropic",
+          "example": "anthropic",
+          "hint": "free-text company name or words, e.g. anthropic or stripe; words and spaces only, no commas, colons or parentheses (they break LinkedIn's Rest.li query)",
+          "pattern": "^[^(),:]+$"
         }
       ],
       "readOnly": true,
