@@ -1,0 +1,12 @@
+{
+  "name": "site2api",
+  "description": "site2api: turn websites into operations your agent can call.",
+  "owner": { "name": "Sift", "url": "https://github.com/Sift-wiki" },
+  "plugins": [
+    {
+      "name": "site2api",
+      "source": "./",
+      "description": "The site2api skill plus its MCP server (list_sites, list_operations, call_operation)."
+    }
+  ]
+}

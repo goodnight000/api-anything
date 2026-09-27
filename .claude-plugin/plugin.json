@@ -1,0 +1,13 @@
+{
+  "name": "site2api",
+  "version": "0.1.0",
+  "description": "Turn any website into an API your agent can call. Learns requests from the site's own frontend, replays them fast, and heals itself when the site changes.",
+  "author": { "name": "Sift", "url": "https://github.com/Sift-wiki" },
+  "homepage": "https://github.com/Sift-wiki/site2api",
+  "repository": "https://github.com/Sift-wiki/site2api",
+  "license": "MIT",
+  "keywords": ["api", "mcp", "browser", "reverse-engineering", "self-healing"],
+  "mcpServers": {
+    "site2api": { "command": "npx", "args": ["-y", "site2api", "mcp"] }
+  }
+}

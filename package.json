@@ -1,0 +1,59 @@
+{
+  "name": "site2api",
+  "version": "0.1.0",
+  "description": "Turn any website into an API your agent can call. Self-healing when the site changes.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "site2api": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "sites",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json",
+    "cli": "tsx src/cli.ts",
+    "test": "node --import tsx --test test/*.test.ts",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "api",
+    "reverse-engineering",
+    "mcp",
+    "agents",
+    "scraping",
+    "self-healing",
+    "claude-code"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sift-wiki/site2api.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.1",
+    "node-html-parser": "^9.0.4",
+    "playwright-core": "^1.63.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
