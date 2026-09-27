@@ -109,7 +109,9 @@ test("auth and rate signals win over drift when the data is gone (X code 215, In
 
 test("missing data is drift flagged missing, so the caller can check the example args first", () => {
   assert.deepEqual(classify(op(), json(200, { data: {} })), { class: "drift", reason: 'extract path "data.user" missing', missing: true });
-  assert.equal(classify(op(), json(404, "")).missing, undefined, "a 404 on a templated API path is plain drift");
+  // a read's 404 on a query-param API may be "no such user": the example args tell (edge EC-09)
+  assert.equal(classify(op(), json(404, "")).missing, true, "a read's 404 on a templated API path is checked against the examples");
+  assert.equal(classify(op({ readOnly: false }), json(404, "")).missing, undefined, "a write's 404 is plain drift");
   // Next.js /_next/data/<buildId>/u/<name>.json: 404 after a deploy is not "no such user"
   const next = op({
     slots: [{ param: "screen_name", at: ["path:4"], template: "{screen_name}.json" }],
@@ -125,7 +127,8 @@ test("a write's 2xx is ok whatever the body; judge hands back the text; a bad re
     assert.equal(cls(write, r), "ok", r.body);
   }
   assert.deepEqual(judge(write, { status: 200, headers: {}, body: "OK" }), { class: "ok", reason: "HTTP 200, non-JSON body", data: "OK" });
-  assert.equal(cls(write, html(200, '<form><input type="password"></form>')), "auth");
+  // the write ran; a landing page with a change-password form is not a login wall (edge EC-05)
+  assert.equal(cls(write, html(200, '<form><input type="password"></form>')), "ok");
   assert.equal(cls(write, json(200, { errors: [{ message: "denied" }], data: null })), "error");
   const bad = op({ response: { format: "html", html: { items: "li[", fields: {} } } });
   assert.equal(judge(bad, html(200, "<li>x</li>")).class, "error");

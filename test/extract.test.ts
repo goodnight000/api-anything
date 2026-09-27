@@ -64,9 +64,11 @@ test("capOutput truncates arrays at item boundaries and notes it", () => {
   assert.ok(JSON.stringify(out.data).length <= 1000);
   assert.match(out.truncated!, /showing \d+ of 100 items/);
   assert.deepEqual(capOutput({ a: 1 }), { data: { a: 1 } });
+  // an object stays an object, its long string shortened (edge EC-14)
   const s = capOutput({ s: "y".repeat(50) }, 20);
-  assert.equal((s.data as string).length, 20);
-  assert.match(s.truncated!, /cut at 20/);
+  assert.deepEqual(s.data, { s: "y".repeat(12) });
+  assert.match(s.truncated!, /cut to 20/);
+  assert.equal(capOutput("z".repeat(50), 20).data, "z".repeat(18));
 });
 
 test("inferShape records key paths and types, first array item only", () => {

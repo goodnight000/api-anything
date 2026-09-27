@@ -26,8 +26,16 @@ const CHALLENGES: [string, RegExp][] = [
   ["Akamai", /bm-verify|\/_sec\/cp_challenge|errors\.edgesuite\.net/i],
   ["DataDome", /captcha-delivery\.com|datadome/i],
   ["PerimeterX", /px-captcha|_pxAppId|perimeterx|Press & Hold/i],
+  ["AWS WAF", /awsWafCookieDomainList|AwsWafIntegration|gokuProps|\.awswaf\.com|\/__challenge_[\w-]+\/[^"']*challenge\.js|<title>Human Verification<\/title>/i],
+  ["Amazon", /automated access to Amazon data|\/errors\/validateCaptcha/i],
+  ["Imperva", /_Incapsula_Resource|Incapsula incident/i],
+  ["Kasada", /\/[0-9a-f]{8}-[0-9a-f-]{27}\/[0-9a-f]{8}-[0-9a-f-]{27}\/ips\.js/i],
+  // a proof-of-work page that solves itself and resubmits (Reddit)
+  ["JS challenge", /name=["']?js_challenge|[?&]js_challenge=1/i],
   ["reCAPTCHA", /google\.com\/recaptcha|g-recaptcha|hcaptcha\.com|Prove your humanity/i],
 ];
+// An interstitial's title gives it away even when the page is too big for the body scan.
+const CHALLENGE_TITLE = /<title[^>]*>[^<]*(prove your humanity|human verification|just a moment|attention required|are you a (human|robot)|verify you are (a )?human|robot check)/i;
 
 const LOGIN =
   /"require_login"\s*:\s*true|login_required|not logged in|(log|sign) ?in to continue|please (log|sign) ?in|authentication required|bad authentication|could not authenticate|bad guest token|invalid session|session (has )?expired|type=["']password["']|accounts\.google\.com\/ServiceLogin/i;
@@ -49,6 +57,40 @@ function challenge(body: string): string | undefined {
   return CHALLENGES.find(([, re]) => re.test(head))?.[0];
 }
 
+/** " (retry after 120 s)" from a Retry-After header in seconds or as an HTTP date. */
+function retryAfter(headers: Record<string, string>): string {
+  const v = headers["retry-after"]?.trim();
+  if (!v) return "";
+  if (/^\d+$/.test(v)) return ` (the server says retry after ${v} s)`;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? "" : ` (the server says retry after ${new Date(t).toISOString()})`;
+}
+
+/** A GraphQL errors array's verdict; `input` for a not-found entity. */
+function graphqlErrors(errors: unknown[], extra = ""): Classified {
+  const msg = errors.map((e) => (e as { message?: unknown })?.message ?? JSON.stringify(e)).join("; ");
+  const types = errors.map((e) => String((e as { type?: unknown; extensions?: { code?: unknown } })?.type ?? (e as { extensions?: { code?: unknown } })?.extensions?.code ?? "")).join(" ");
+  if (DRIFT.test(msg)) return is("drift", `GraphQL: ${snippet(msg)}`);
+  if (LOGIN.test(msg)) return is("auth", `GraphQL: ${snippet(msg)}`);
+  if (RATE.test(msg)) return is("rate", `GraphQL: ${snippet(msg)}`);
+  if (/NOT_FOUND/i.test(types) || /not found|could not resolve|does not exist|no such/i.test(msg)) return is("input", `GraphQL: ${snippet(msg)}`);
+  return is("error", `GraphQL errors${extra}: ${snippet(msg)}`);
+}
+
+/** Learned shape and value, scoped to the extract path when it resolves: other subtrees may come and go. */
+function shapeScope(op: Operation, data: unknown): { expected: Record<string, string>; value: unknown } {
+  const shape = op.response.shape ?? {};
+  const ex = op.response.extract;
+  if (!ex) return { expected: shape, value: data };
+  const prefix = ex.replace(/\[\d+\]/g, "[]").replace(/\["((?:[^"\\]|\\.)*)"\]/g, (_m, k: string) => `.${JSON.parse(`"${k}"`) as string}`).replace(/^\./, "");
+  const expected: Record<string, string> = {};
+  for (const [k, t] of Object.entries(shape)) {
+    if (k.startsWith(`${prefix}.`)) expected[k.slice(prefix.length + 1)] = t;
+    else if (k.startsWith(`${prefix}[]`)) expected[k.slice(prefix.length)] = t;
+  }
+  return { expected, value: getPath(data, ex) };
+}
+
 /** Share of the learned shape still present with the same type; null matches anything. */
 function shapeKept(expected: Record<string, string>, data: unknown): number {
   const now = inferShape(data, 2000);
@@ -61,8 +103,10 @@ function mentionsParam(op: Operation, body: string): boolean {
   const names = new Set(op.params.map((p) => p.name));
   for (const s of op.slots) {
     if (!s.param) continue;
-    const last = s.at[s.at.length - 1]!;
-    names.add(last.slice(last.lastIndexOf(last.startsWith("json:") ? "/" : ":") + 1));
+    // the nearest named step: json:/legs/0/origin/airports/0 names "airports", not "0"
+    const tokens = s.at.flatMap((st) => (st.startsWith("json:") ? st.slice(5).split("/") : [st.slice(st.indexOf(":") + 1)]));
+    const name = tokens.reverse().find((t) => t && !/^\d+$/.test(t));
+    if (name) names.add(name);
   }
   return [...names].some((n) => n && new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(body));
 }
@@ -74,15 +118,22 @@ export function classify(op: Operation, r: Observed): Classified {
   const wantsJson = op.response.format === "json";
 
   if (r.headers["cf-mitigated"] === "challenge") return is("blocked", "Cloudflare challenge (cf-mitigated)");
+  if (Object.keys(r.headers).some((k) => k.toLowerCase().startsWith("x-kpsdk"))) return is("blocked", `Kasada challenge (HTTP ${r.status})`);
   // A real HTML page may mention recaptcha in a login form; challenge pages are small or non-2xx.
   if (r.status >= 400 || (isHtml && (wantsJson || body.length < 64_000))) {
     const vendor = challenge(body);
     if (vendor) return is("blocked", `${vendor} challenge page (HTTP ${r.status})`);
   }
+  if (isHtml && CHALLENGE_TITLE.test(body.slice(0, 20_000))) return is("blocked", `challenge page (HTTP ${r.status})`);
 
-  if (r.status === 429) return is("rate", "HTTP 429");
+  const wait = retryAfter(r.headers);
+  if (r.status === 429) return is("rate", `HTTP 429${wait}`);
   if (r.status >= 400 && REQUIRE_LOGIN.test(body)) return is("auth", `HTTP ${r.status}: ${snippet(body)}`);
-  if (r.status >= 400 && RATE.test(body)) return is("rate", `HTTP ${r.status}: ${snippet(body)}`);
+  if (r.status >= 400 && RATE.test(body)) return is("rate", `HTTP ${r.status}${wait}: ${snippet(body)}`);
+  // Laravel answers a stale CSRF token with 419, Rails with 422 InvalidAuthenticityToken.
+  if (r.status === 419 || ((r.status === 400 || r.status === 422) && (CSRF.test(body) || /authenticity.?token/i.test(body)))) {
+    return is("auth", `HTTP ${r.status} with CSRF markers: ${snippet(body)}`);
+  }
   if (r.status === 401) return is("auth", `HTTP 401: ${snippet(body)}`);
   if (r.status === 403) {
     return LOGIN.test(body) || CSRF.test(body)
@@ -102,7 +153,10 @@ export function classify(op: Operation, r: Observed): Classified {
   if (r.status === 404 || r.status === 410) {
     // With the param in the path, 404 usually means that entity doesn't exist. With a rotating id
     // in the path too (Next.js /_next/data/<buildId>/...), it may be a deploy: let the caller check.
-    if (!op.slots.some((s) => s.param && s.at[0]!.startsWith("path:"))) return is("drift", `HTTP ${r.status} on a templated API path`);
+    // A read's 404 is ambiguous either way (/api/user?name=nosuch): the example args tell.
+    if (!op.slots.some((s) => s.param && s.at[0]!.startsWith("path:"))) {
+      return op.readOnly ? missing(`HTTP ${r.status} on a templated API path`) : is("drift", `HTTP ${r.status} on a templated API path`);
+    }
     return op.volatile.some((v) => v.at[0]!.startsWith("path:")) ? missing(`HTTP ${r.status}`) : is("input", `HTTP ${r.status}: not found`);
   }
   if (r.status === 400) {
@@ -127,22 +181,22 @@ export function classify(op: Operation, r: Observed): Classified {
   try {
     data = parseBody(body, op.response.xssiPrefix);
   } catch {
-    if (isHtml && LOGIN.test(body)) return is("auth", "HTML login page where JSON was expected");
-    // A 2xx to a write means the server took it; many answer 204, "OK" or an HTML page.
+    // A 2xx to a write means the server took it; many answer 204, "OK" or an HTML page (even one with a password form).
     if (!op.readOnly) return ok(`HTTP ${r.status}, ${body.trim() ? "non-JSON body" : "empty body"}`);
+    if (isHtml && LOGIN.test(body)) return is("auth", "HTML login page where JSON was expected");
+    // "no results" is often an empty 204: the example args tell it from drift
+    if (!body.trim()) return missing(`HTTP ${r.status} with an empty body`);
     return is("drift", isHtml ? "HTML where JSON was expected" : `response is not JSON: ${snippet(body)}`);
   }
   const d = data as { errors?: unknown; data?: unknown } | null;
-  if (d && typeof d === "object" && Array.isArray(d.errors) && d.errors.length && d.data == null) {
-    const msg = d.errors.map((e) => (e as { message?: unknown })?.message ?? JSON.stringify(e)).join("; ");
-    if (DRIFT.test(msg)) return is("drift", `GraphQL: ${snippet(msg)}`);
-    if (LOGIN.test(msg)) return is("auth", `GraphQL: ${snippet(msg)}`);
-    if (RATE.test(msg)) return is("rate", `GraphQL: ${snippet(msg)}`);
-    return is("error", `GraphQL errors with null data: ${snippet(msg)}`);
-  }
+  const errors = d && typeof d === "object" && Array.isArray(d.errors) && d.errors.length ? d.errors : undefined;
+  if (errors && d!.data == null) return graphqlErrors(errors, " with null data");
+  // Partial data: errors next to a null target (a rate limit, a not-found user) are the answer, not a successful null.
+  if (errors && op.response.extract && getPath(data, op.response.extract) == null) return graphqlErrors(errors, ` and a null "${op.response.extract}"`);
   let gone: string | undefined;
+  const scope = op.response.shape ? shapeScope(op, data) : undefined;
   if (op.response.extract && getPath(data, op.response.extract) === undefined) gone = `extract path "${op.response.extract}" missing`;
-  else if (op.response.shape && Object.keys(op.response.shape).length >= 4 && shapeKept(op.response.shape, data) < 0.5) {
+  else if (scope && Object.keys(scope.expected).length >= 4 && shapeKept(scope.expected, scope.value) < 0.5) {
     gone = "response shape changed (under half of the learned key paths remain)";
   }
   if (!gone) return ok();

@@ -125,29 +125,67 @@ export function extract(res: ResponseSpec, body: string): unknown {
   return data;
 }
 
-/** Hard cap on what goes back to the agent. Arrays are cut at an item boundary. */
-export function capOutput(value: unknown, maxChars = 20_000): { data: unknown; truncated?: string } {
-  const json = JSON.stringify(value) ?? "null";
-  if (json.length <= maxChars) return { data: value };
-  if (Array.isArray(value)) {
-    let size = 2;
-    let n = 0;
-    for (; n < value.length; n++) {
-      size += (JSON.stringify(value[n]) ?? "null").length + 1;
-      if (size > maxChars) break;
-    }
-    return {
-      data: value.slice(0, n),
-      truncated: `showing ${n} of ${value.length} items (cap ${maxChars} chars); narrow with pick or extract`,
-    };
+const size = (v: unknown) => (JSON.stringify(v) ?? "null").length;
+
+/** v shrunk to about budget JSON chars: strings cut, arrays cut at an item boundary (never below one item), objects by their biggest members. */
+function cut(v: unknown, budget: number): unknown {
+  if (size(v) <= budget) return v;
+  if (typeof v === "string") {
+    let s = v.slice(0, Math.max(0, budget - 2));
+    while (s && size(s) > budget) s = s.slice(0, s.length - Math.max(1, size(s) - budget));
+    return s;
   }
-  return {
-    data: json.slice(0, maxChars),
-    truncated: `cut at ${maxChars} of ${json.length} chars; narrow with pick or extract`,
-  };
+  if (Array.isArray(v)) {
+    const out: unknown[] = [];
+    let used = 2;
+    for (const item of v) {
+      const n = size(item) + 1;
+      if (used + n > budget) {
+        if (!out.length) out.push(cut(item, budget - 2));
+        break;
+      }
+      out.push(item);
+      used += n;
+    }
+    return out;
+  }
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = { ...(v as Record<string, unknown>) };
+    for (let guard = 0; guard < 100 && size(out) > budget; guard++) {
+      const [k, x] = Object.entries(out).reduce((a, b) => (size(b[1]) > size(a[1]) ? b : a));
+      const smaller = cut(x, Math.max(0, size(x) - (size(out) - budget)));
+      if (size(smaller) >= size(x)) break;
+      out[k] = smaller;
+    }
+    return out;
+  }
+  return v;
 }
 
-/** Key paths -> types (first array item only), for drift detection. */
+/**
+ * Hard cap on what goes back to the agent. Arrays are cut at an item boundary, and an item too big
+ * on its own is cut rather than dropped, so the output never reads as "no results". Strings are
+ * cut as strings and objects stay objects (their biggest members shortened), never cut JSON text.
+ */
+export function capOutput(value: unknown, maxChars = 20_000): { data: unknown; truncated?: string } {
+  const total = size(value);
+  if (total <= maxChars) return { data: value };
+  const data = cut(value, maxChars);
+  if (Array.isArray(value)) {
+    const n = (data as unknown[]).length;
+    const whole = n && size((data as unknown[])[n - 1]) === size(value[n - 1]);
+    return {
+      data,
+      truncated: `showing ${n} of ${value.length} items${whole ? "" : " (the last one cut to fit)"} (cap ${maxChars} chars); narrow with pick or extract`,
+    };
+  }
+  return { data, truncated: `cut to ${maxChars} of ${total} chars (long strings and arrays shortened); narrow with pick or extract` };
+}
+
+// numeric ids, short upper-case codes (SFO, US), and ids with digits (item-85809106, u_123)
+const ID_KEY = /^(\d+|[A-Z0-9]{2,5}|[\w:.-]*\d[\w:.-]*)$/;
+
+/** Key paths -> types (first array item only; an id-keyed map as "*"), for drift detection. */
 export function inferShape(value: unknown, maxPaths = 200): Record<string, string> {
   const out: Record<string, string> = {};
   let n = 0;
@@ -162,7 +200,13 @@ export function inferShape(value: unknown, maxPaths = 200): Record<string, strin
     if (Array.isArray(v)) {
       if (v.length) visit(v[0], `${path}[]`, depth + 1);
     } else if (type === "object") {
-      for (const [k, c] of Object.entries(v as Record<string, unknown>)) visit(c, path ? `${path}.${k}` : k, depth + 1);
+      const entries = Object.entries(v as Record<string, unknown>);
+      // An id-keyed map (airports: {SFO: {...}}) has different keys for other args: its keys are "*".
+      if (entries.length && entries.every(([k, c]) => ID_KEY.test(k) && c !== null && typeof c === "object")) {
+        visit(entries[0]![1], path ? `${path}.*` : "*", depth + 1);
+      } else {
+        for (const [k, c] of entries) visit(c, path ? `${path}.${k}` : k, depth + 1);
+      }
     }
   };
   visit(value, "", 0);
