@@ -140,7 +140,15 @@ export async function send(op: Operation, args: Record<string, unknown>, session
   await pace(opts.site, opts.minIntervalMs ?? 1000);
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const signal = AbortSignal.timeout(timeoutMs);
-  const secret = new Set(["authorization", "cookie", ...op.slots.flatMap((s) => (s.ref && s.at.length === 1 && s.at[0]!.startsWith("header:") ? [s.at[0]!.slice(7).toLowerCase()] : []))]);
+  const inHeader = (s: Operation["slots"][number]) => s.at.length === 1 && s.at[0]!.startsWith("header:");
+  const secret = new Set(["authorization", "cookie", ...op.slots.flatMap((s) => (s.ref && inHeader(s) ? [s.at[0]!.slice(7).toLowerCase()] : []))]);
+  // session/cookie values the body or query carry: no other origin may receive them
+  const carried = op.slots.flatMap((s) => {
+    const v = s.ref && !inHeader(s) ? resolveRef(s.ref, session, op.request.url) : undefined;
+    return v && v.length >= 4 ? [transform(v, s.transform)] : [];
+  });
+  const leaks = (target: string, sentBody?: string) =>
+    carried.some((v) => [v, encodeURIComponent(v)].some((x) => target.includes(x) || !!sentBody?.includes(x)));
   let { url, method, headers } = req;
   let body = method === "GET" || method === "HEAD" ? undefined : req.body;
   const t0 = performance.now();
@@ -170,6 +178,10 @@ export async function send(op: Operation, args: Record<string, unknown>, session
           method = "GET";
           body = undefined;
           headers = Object.fromEntries(Object.entries(headers).filter(([k]) => k.toLowerCase() !== "content-type"));
+        }
+        // A 307/308 resends the body; a location may copy the query. Neither may carry a credential elsewhere.
+        if (cross && leaks(next.href, body)) {
+          throw new Error(`not following the HTTP ${res.status} redirect to ${next.origin}: the request would carry this session's values to another origin`);
         }
         url = next.href;
         continue;

@@ -8,7 +8,7 @@ import { judge, type Class } from "./classify.js";
 import { capOutput } from "./extract.js";
 import { healOperation, judgeExchange, PROFILE_HINT, profileDir, runOpTrigger, type Attempt, type HealResult } from "./heal.js";
 import { buildRequest, send } from "./http.js";
-import { cookieHeaderFor, loadSession, loggedIn, mergeCapture, saveSession, sessionFile } from "./session.js";
+import { cookieHeaderFor, loadSession, loggedIn, mergeCapture, saveSession, sessionFile, withLock } from "./session.js";
 import { reimportIfBrowser } from "./login.js";
 import type { Operation, Site } from "./spec.js";
 import { lastHealAt, loadSite, markStale, rememberTier, rememberedTier, staleMark } from "./store.js";
@@ -61,10 +61,10 @@ function nextFor(c: CallResult["class"], site: string, op: Operation, a?: Attemp
   if (a?.hint) return a.hint;
   // A write the server may have run: never invite a second send.
   const ran = !op.readOnly && a !== undefined && !notRun(a);
-  if (ran && c !== "drift") return "the write may have gone through: check the site before any retry";
+  if (ran && c !== "drift" && c !== "auth") return "the write may have gone through: check the site before any retry";
   switch (c) {
     case "auth":
-      return `ask the user to run: api-anything login ${site}; then retry once`;
+      return `ask the user to run: api-anything login ${site}; then ${ran ? "check the site, and retry only if the write is not there" : "retry once"}`;
     case "rate":
       return /retry after/.test(a?.reason ?? "") ? "rate limited: do not retry before the time in reason" : "rate limited: do not retry now; wait a few minutes";
     case "blocked":
@@ -142,16 +142,18 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
 /** Replace the jar with the profile's cookies. True when that changes what op's request would carry. */
 async function refreshCookies(site: string, op: Operation): Promise<boolean> {
   if (!chromeAvailable()) return false;
-  const s = loadSession(site);
   let fresh;
   try {
     fresh = await profileCookies({ url: op.request.url, profileDir: profileDir() });
   } catch {
     return false;
   }
-  const before = cookieHeaderFor(s.cookies, op.request.url);
-  saveSession(site, { ...s, cookies: fresh });
-  return cookieHeaderFor(fresh, op.request.url) !== before;
+  return withLock(sessionFile(site), () => {
+    const s = loadSession(site);
+    const before = cookieHeaderFor(s.cookies, op.request.url);
+    saveSession(site, { ...s, cookies: fresh });
+    return cookieHeaderFor(fresh, op.request.url) !== before;
+  });
 }
 
 async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise<Result> {
@@ -182,7 +184,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
         return fail(
           { ...a, class: "input" },
           {
-            reason: `no data for these args (${a.reason}), while the example args still return data: the thing probably does not exist or has no results`,
+            reason: `no results for these args (${a.reason}); the example args still return data, so the operation works`,
             next: `check the args against: api-anything ops ${ctx.site}; do not heal or re-add`,
           },
         );

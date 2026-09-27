@@ -79,7 +79,9 @@ export function pick(value: unknown, paths: string[]): unknown {
     }
     return out;
   };
-  return Array.isArray(value) ? value.map(one) : one(value);
+  if (!Array.isArray(value)) return one(value);
+  // an item with none of the fields (a shelf, an ad, a logo entity) is not a result: drop it, not {}
+  return value.map(one).filter((x) => !(x && typeof x === "object" && !Object.keys(x).length));
 }
 
 /** `fields` values are "<css>" (text) or "<css>@attr"; an empty css means the item itself. */
@@ -126,60 +128,100 @@ export function extract(res: ResponseSpec, body: string): unknown {
 }
 
 const size = (v: unknown) => (JSON.stringify(v) ?? "null").length;
+// A member at most this big is kept whole or dropped, never shortened: a number or a short string can't be.
+const ATOM = 200;
 
-/** v shrunk to about budget JSON chars: strings cut, arrays cut at an item boundary (never below one item), objects by their biggest members. */
-function cut(v: unknown, budget: number): unknown {
-  if (size(v) <= budget) return v;
+/**
+ * v in at most `budget` JSON chars: strings cut, arrays cut at an item boundary (never below one
+ * item while one fits), objects keep their members in order with the biggest ones shortened to a
+ * common cap, then drop trailing members. undefined when not even an empty container fits.
+ */
+function cut(v: unknown, budget: number, total = size(v)): unknown {
+  if (total <= budget) return v;
   if (typeof v === "string") {
     let s = v.slice(0, Math.max(0, budget - 2));
     while (s && size(s) > budget) s = s.slice(0, s.length - Math.max(1, size(s) - budget));
-    return s;
+    return size(s) <= budget ? s : undefined;
   }
+  if (budget < 2) return undefined;
   if (Array.isArray(v)) {
     const out: unknown[] = [];
     let used = 2;
     for (const item of v) {
-      const n = size(item) + 1;
-      if (used + n > budget) {
-        if (!out.length) out.push(cut(item, budget - 2));
+      const n = size(item);
+      if (used + n + (out.length ? 1 : 0) > budget) {
+        if (!out.length) {
+          const one = cut(item, budget - 2, n);
+          if (one !== undefined) out.push(one);
+        }
         break;
       }
       out.push(item);
-      used += n;
+      used += n + (out.length > 1 ? 1 : 0);
     }
     return out;
   }
   if (v && typeof v === "object") {
-    const out: Record<string, unknown> = { ...(v as Record<string, unknown>) };
-    for (let guard = 0; guard < 100 && size(out) > budget; guard++) {
-      const [k, x] = Object.entries(out).reduce((a, b) => (size(b[1]) > size(a[1]) ? b : a));
-      const smaller = cut(x, Math.max(0, size(x) - (size(out) - budget)));
-      if (size(smaller) >= size(x)) break;
-      out[k] = smaller;
+    const entries = Object.entries(v as Record<string, unknown>).filter(([, x]) => x !== undefined);
+    // one pass for every member's size: "key":value
+    const cost = entries.map(([k, x]) => ({ key: size(k) + 1, value: size(x) }));
+    // Water-fill: the largest cap (>= ATOM) at which every member fits, members above it shortened.
+    const room = budget - 2 - Math.max(0, entries.length - 1);
+    const sorted = cost.map((c) => c.key + c.value).sort((a, b) => a - b);
+    let cap = Infinity;
+    let below = 0;
+    for (let i = 0; i < sorted.length; i++) {
+      const left = sorted.length - i;
+      if (below + sorted[i]! * left > room) {
+        cap = Math.max(Math.min(ATOM, budget - 2), Math.floor((room - below) / left));
+        break;
+      }
+      below += sorted[i]!;
+    }
+    const out: Record<string, unknown> = {};
+    let used = 2;
+    for (let i = 0; i < entries.length; i++) {
+      const [k, x] = entries[i]!;
+      const c = cost[i]!;
+      const value = c.key + c.value <= cap ? x : cut(x, cap - c.key, c.value);
+      if (value === undefined) continue;
+      const n = c.key + (value === x ? c.value : size(value)) + (used > 2 ? 1 : 0);
+      // ponytail: once the members stop fitting the rest are dropped; the note counts them
+      if (used + n > budget) break;
+      out[k] = value;
+      used += n;
     }
     return out;
   }
-  return v;
+  return undefined;
 }
 
 /**
- * Hard cap on what goes back to the agent. Arrays are cut at an item boundary, and an item too big
- * on its own is cut rather than dropped, so the output never reads as "no results". Strings are
- * cut as strings and objects stay objects (their biggest members shortened), never cut JSON text.
+ * Hard cap on what goes back to the agent: the result is never over maxChars. Arrays are cut at an
+ * item boundary, and an item too big on its own is cut rather than dropped, so the output never
+ * reads as "no results". Strings are cut as strings; objects stay objects (their biggest members
+ * shortened, then trailing members dropped), never cut JSON text. The note says what was cut.
  */
 export function capOutput(value: unknown, maxChars = 20_000): { data: unknown; truncated?: string } {
   const total = size(value);
   if (total <= maxChars) return { data: value };
-  const data = cut(value, maxChars);
+  const data = cut(value, maxChars, total) ?? null;
+  const hint = "narrow with pick or extract";
   if (Array.isArray(value)) {
     const n = (data as unknown[]).length;
-    const whole = n && size((data as unknown[])[n - 1]) === size(value[n - 1]);
+    const whole = n > 0 && (data as unknown[])[n - 1] === value[n - 1];
+    return { data, truncated: `showing ${n} of ${value.length} items${n && !whole ? " (the last one cut to fit)" : ""} (cap ${maxChars} chars); ${hint}` };
+  }
+  if (value && typeof value === "object" && data && typeof data === "object") {
+    const all = Object.keys(value);
+    const kept = Object.keys(data);
+    const shortened = kept.filter((k) => (data as Record<string, unknown>)[k] !== (value as Record<string, unknown>)[k]).length;
     return {
       data,
-      truncated: `showing ${n} of ${value.length} items${whole ? "" : " (the last one cut to fit)"} (cap ${maxChars} chars); narrow with pick or extract`,
+      truncated: `cut to ${size(data)} of ${total} chars (cap ${maxChars}): showing ${kept.length} of ${all.length} keys${shortened ? `, ${shortened} of them shortened` : ""}; ${hint}`,
     };
   }
-  return { data, truncated: `cut to ${maxChars} of ${total} chars (long strings and arrays shortened); narrow with pick or extract` };
+  return { data, truncated: `cut to ${size(data)} of ${total} chars (cap ${maxChars}); ${hint}` };
 }
 
 // numeric ids, short upper-case codes (SFO, US), and ids with digits (item-85809106, u_123)
