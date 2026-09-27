@@ -1,7 +1,8 @@
 # google-flights
 
 Verified 2026-09-27, logged out, US IP, with `api-anything verify google-flights` passing from a clean
-`API_ANYTHING_HOME` (no cookies, no session values). No account is needed.
+`API_ANYTHING_HOME` (no cookies, no session values). The named fields were also checked on
+PIT→HNL (2027-05-06, two stops) and BOS→MIA (2027-04-22, `top`). No account is needed.
 
 | op | args | returns | tier |
 |---|---|---|---|
@@ -12,28 +13,30 @@ Verified 2026-09-27, logged out, US IP, with `api-anything verify google-flights
 are the whole results page, which costs two requests.
 
 ```sh
-api-anything call google-flights search origin=SFO destination=JFK date=2027-02-10
-api-anything call google-flights top origin=BOS destination=MIA date=2026-11-18
+api-anything call google-flights search origin=SFO destination=JFK date=2027-04-15
+api-anything call google-flights top origin=BOS destination=MIA date=2027-04-22
 ```
 
-## Result fields (positional JSPB)
+## Result fields
 
 The response is `)]}'` followed by length-prefixed chunks. Chunk 0 is `[["wrb.fr",null,"<JSON string>"]]`,
 and the payload is at `[0][0][2]`, where `getPath` steps into the JSON string. Inside the payload,
-`[2][0]` is the top list and `[3][0]` is the other list. `pick` keys are the raw paths:
+`[2][0]` is the top list and `[3][0]` is the other list. Each item is positional JSPB; the spec's
+`pick` gives the fields names (`name=path`):
 
-| key | meaning | example |
-|---|---|---|
-| `[0][1]` | airline names (several when the itinerary mixes carriers) | `["Delta"]` |
-| `[1][0][1]` | price, USD, for the whole one-way itinerary | `209` |
-| `[0][3]` / `[0][6]` | departure / arrival airport | `"SFO"` / `"JFK"` |
-| `[0][4]` / `[0][7]` | departure / arrival date `[y,m,d]` | `[2026,11,12]` |
-| `[0][5]` / `[0][8]` | departure / arrival local time `[h,m]`. A missing entry is 0: `[9]` = 09:00, `[null,56]` = 00:56 | `[13,50]` |
-| `[0][9]` | total duration, minutes | `333` |
-| `[0][13]` | layovers: `null` for nonstop, else one `[minutes, airport, airport, null, name, city, ...]` per stop, so stops = its length | `[[154,"BOS",...]]` |
+| key | path | meaning | example |
+|---|---|---|---|
+| `airline` | `[0][1]` | airline names (several when the itinerary mixes carriers) | `["Delta"]` |
+| `price` | `[1][0][1]` | price, USD, for the whole one-way itinerary | `209` |
+| `from` / `to` | `[0][3]` / `[0][6]` | departure / arrival airport | `"SFO"` / `"JFK"` |
+| `departureDate` / `arrivalDate` | `[0][4]` / `[0][7]` | date `[y,m,d]` | `[2027,4,15]` |
+| `departureTime` / `arrivalTime` | `[0][5]` / `[0][8]` | local time `[h,m]`. A missing entry is 0: `[9]` = 09:00, `[null,56]` = 00:56 | `[13,50]` |
+| `durationMinutes` | `[0][9]` | total duration, minutes | `333` |
+| `stops` | `[0][13]` | `null` for nonstop, else one `[layover minutes, airport, airport, null, airport name, city, ...]` per stop, so the stop count is its length | `[[58,"IAH",...]]` |
 
 The unpicked item also holds `[0][0]` (carrier code), `[0][2]` (legs; `[0][2][i][22]` is the flight
 number `["DL","606",null,"Delta"]` and `[0][2][i][17]` the aircraft), and `[1][1]` (a booking token).
+Add them to `pick` in your copy of the spec if you need them.
 
 ## Known limits
 
@@ -43,7 +46,7 @@ number `["DL","606",null,"Delta"]` and `[0][2][i][17]` the aircraft), and `[1][1
   are session-scoped, not per-request signatures: stale values replay fine at tier 1, even from a
   clean home with no cookies and no `x-goog-batchexecute-bgr`. `add` now checks this with one
   replay and keeps `minTier: 1` (the first version of this spec needed a hand edit).
-- The example date `2027-02-10` goes stale. Bump it before that date, or `verify` fails.
+- The example date `2027-04-15` goes stale. Bump it before that date, or `verify` fails.
 - A bad input (past date, unknown airport, no flights) returns no list. api-anything replays the
   example route, which still answers, and returns `input` in about 1 s.
 - Prices and names follow the `x-goog-ext-259736195-jspb` header (`en-US`, `US`, `USD`), which is
