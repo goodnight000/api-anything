@@ -1,0 +1,88 @@
+{
+  "name": "youtube",
+  "displayName": "YouTube",
+  "baseUrl": "https://www.youtube.com",
+  "description": "YouTube video search, from the results page",
+  "operations": [
+    {
+      "name": "search",
+      "request": {
+        "method": "GET",
+        "url": "https://www.youtube.com/results?search_query=%7Bq%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "device-memory": "16",
+          "priority": "u=0, i",
+          "sec-ch-dpr": "1",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-arch": "\"x86\"",
+          "sec-ch-ua-bitness": "\"64\"",
+          "sec-ch-ua-form-factors": "\"Desktop\"",
+          "sec-ch-ua-full-version": "\"153.0.8010.53\"",
+          "sec-ch-ua-full-version-list": "\"Google Chrome\";v=\"153.0.8010.53\", \"Not_A Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"153.0.8010.53\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-ua-wow64": "?0",
+          "sec-ch-viewport-width": "1280",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+          "x-browser-channel": "stable",
+          "x-browser-copyright": "Copyright 2026 Google LLC. All Rights Reserved.",
+          "x-browser-validation": "i4EyS5V7KAFMVdi4watYsPhpgkI=",
+          "x-browser-year": "2026"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:search_query"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.youtube.com/results?search_query={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.youtube.com",
+        "path": "/results"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "contents.twoColumnSearchResultsRenderer.primaryContents.sectionListRenderer.contents[0].itemSectionRenderer.contents",
+        "pick": [
+          "id=videoRenderer.videoId",
+          "title=videoRenderer.title.runs[0].text",
+          "channel=videoRenderer.ownerText.runs[0].text",
+          "views=videoRenderer.viewCountText.simpleText"
+        ],
+        "embedded": {
+          "regex": "var ytInitialData = (\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "kittens"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-27T17:41:32.693Z",
+      "description": "Search YouTube videos: id, title, channel, view count"
+    }
+  ]
+}
