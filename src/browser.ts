@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import { chromium, type BrowserContext, type Cookie, type Page, type Request, type Response, type Route } from "playwright-core";
+import { botWall } from "./classify.js";
 import { siteOf } from "./session.js";
 import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
 
@@ -219,6 +220,37 @@ const REPEATS = 2;
 const FIRST_XHR_MS = 2000;
 // With an op's match: how long a quiet page may go without firing it before the run gives up on it.
 const MATCH_GRACE_MS = 3000;
+// How long a bot challenge's interstitial may take to solve itself and load the real page.
+const CHALLENGE_WAIT_MS = 15_000;
+
+type SocketGuard = (e: Exchange) => boolean;
+const socketGuards = new WeakMap<BrowserContext, { guards: Set<SocketGuard>; ready: Promise<void> }>();
+
+/**
+ * Drop WebSocket messages a page sends while `guard` says so, in every page of the context (a
+ * popup's socket opens before a per-page route could be set). One context-wide route, installed
+ * once; returns the function that removes this guard.
+ * ponytail: a socket can't be traced to its page, so a concurrent run's sends are guarded too
+ * while a write is being learned; that errs on the side of not sending.
+ */
+async function guardSockets(ctx: BrowserContext, guard: SocketGuard): Promise<() => void> {
+  let g = socketGuards.get(ctx);
+  if (!g) {
+    const guards = new Set<SocketGuard>();
+    const ready = ctx.routeWebSocket(/.*/, (ws) => {
+      const server = ws.connectToServer();
+      ws.onMessage((m) => {
+        const ex: Exchange = { id: 0, resourceType: "websocket", request: { method: "SEND", url: ws.url(), headers: {} } };
+        if (![...guards].some((drop) => drop(ex))) server.send(m);
+      });
+    });
+    g = { guards, ready };
+    socketGuards.set(ctx, g);
+  }
+  g.guards.add(guard);
+  await g.ready;
+  return () => g.guards.delete(guard);
+}
 
 export interface TriggerOptions {
   url: string;
@@ -325,6 +357,8 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   };
 
   const exchanges: Exchange[] = [];
+  /** top-level documents of the run's first page, in order */
+  const docs: Exchange[] = [];
   const byReq = new Map<Request, Exchange>();
   const reads: Promise<unknown>[] = [];
   const pending = new Map<Request, number>();
@@ -351,6 +385,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const onRequest = (req: Request) => {
     if (!mine(req)) return;
     const ex = record(req);
+    if (req.isNavigationRequest() && req.frame() === page.mainFrame()) docs.push(ex);
     // allHeaders() is what went on the wire: cookie, sec-fetch-*, origin, referer.
     bounded(req.allHeaders().then((h) => (ex.request.headers = h), () => {}));
     let endpoint = req.url();
@@ -408,19 +443,35 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     while (Date.now() < end && !quiet()) await sleep(50);
   };
   const answered = () => exchanges.some((e) => o.match!(e) && (e.response || e.aborted));
+  let dropSocketSends: (() => void) | undefined;
+  const waitForData = async () => {
+    if (o.match) {
+      // The op's own request answering is the signal; then a short settle.
+      // A page quiet for a few seconds without it is not going to send it (a login wall, a 404 page).
+      while (Date.now() < deadline && !answered() && !(quiet() && Date.now() - lastActivity > MATCH_GRACE_MS)) await sleep(50);
+      await sleep(o.settleMs ?? 300);
+      await idle(3000);
+      return;
+    }
+    await idle();
+    await sleep(o.settleMs ?? 300);
+    await idle();
+    if (!exchanges.some((e) => e.resourceType === "xhr" || e.resourceType === "fetch")) {
+      const end = Math.min(deadline, Date.now() + FIRST_XHR_MS);
+      while (Date.now() < end && !exchanges.some((e) => e.resourceType === "xhr" || e.resourceType === "fetch")) await sleep(50);
+      await idle();
+    }
+  };
+  // The latest top-level document of this run's first page, when it is a bot challenge's interstitial.
+  const walled = () => {
+    const d = docs.at(-1);
+    return !!d?.response && !!botWall({ status: d.response.status, headers: d.response.headers, body: d.response.body ?? "" });
+  };
 
   try {
     if (guard) await ctx.route("**/*", guard);
-    if (intercept) {
-      // A chat "send" goes over an open socket, where no HTTP route sees it.
-      await page.routeWebSocket(/.*/, (ws) => {
-        const server = ws.connectToServer();
-        ws.onMessage((m) => {
-          const ex: Exchange = { id: 0, resourceType: "websocket", request: { method: "SEND", url: ws.url(), headers: {} } };
-          if (!intercept(ex, acting)) server.send(m);
-        });
-      });
-    }
+    // A chat "send" goes over an open socket, where no HTTP route sees it; a popup's socket too.
+    if (intercept) dropSocketSends = await guardSockets(ctx, (ex) => intercept(ex, acting));
     if (o.softFrom) {
       await goto(page, o.softFrom);
       await idle(5000);
@@ -447,21 +498,14 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     }
     acting = true;
     for (const s of o.steps ?? []) await runStep(page, s);
-    if (o.match) {
-      // The op's own request answering is the signal; then a short settle catches a challenge's reload.
-      // A page quiet for a few seconds without it is not going to send it (a login wall, a 404 page).
-      while (Date.now() < deadline && !answered() && !(quiet() && Date.now() - lastActivity > MATCH_GRACE_MS)) await sleep(50);
-      await sleep(o.settleMs ?? 300);
-      await idle(3000);
-    } else {
-      await idle();
-      await sleep(o.settleMs ?? 300);
-      await idle();
-      if (!exchanges.some((e) => e.resourceType === "xhr" || e.resourceType === "fetch")) {
-        const end = Math.min(deadline, Date.now() + FIRST_XHR_MS);
-        while (Date.now() < end && !exchanges.some((e) => e.resourceType === "xhr" || e.resourceType === "fetch")) await sleep(50);
-        await idle();
-      }
+    await waitForData();
+    // A JS challenge (AWS WAF, Cloudflare) solves itself and reloads, often after a second or more:
+    // judging now would take the interstitial for the page. Wait (bounded) for a real document.
+    if (walled()) {
+      const end = Math.min(deadline, Date.now() + CHALLENGE_WAIT_MS);
+      const seen = docs.length;
+      while (Date.now() < end && (docs.length === seen || !docs.at(-1)!.response || walled())) await sleep(100);
+      if (docs.length > seen && !walled()) await waitForData();
     }
     // Bodies still arriving get a short grace, not the whole budget: a hung long poll is not the data.
     const grace = new Promise((r) => setTimeout(r, Math.min(5000, Math.max(0, deadline - Date.now()))).unref());
@@ -480,6 +524,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     ctx.off("requestfailed", onDone);
     ctx.off("response", onResponse);
     if (guard) await ctx.unroute("**/*", guard).catch(() => {});
+    dropSocketSends?.();
     for (const p of own) await p.close().catch(() => {});
     release();
   }
