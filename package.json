@@ -29,7 +29,7 @@
     "build": "tsc -p tsconfig.json",
     "prepare": "tsc -p tsconfig.json",
     "cli": "tsx src/cli.ts",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import tsx --test test/*.test.ts test/edge/*.test.ts",
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [

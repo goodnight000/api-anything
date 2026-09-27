@@ -4,12 +4,16 @@ import { z } from "zod";
 /** A step through decoded request layers; see codec.ts. */
 const Step = z
   .string()
-  .regex(/^(path:\d+|query:.+|header:.+|form:.+|json:(\/.*)?|body)$/, "step must be path:<i>, query:<k>, header:<n>, form:<k>, json:<pointer>, or body");
+  .regex(/^(path:\d+|(query|form)(\[\d+\])?:.+|header:.+|json:(\/.*)?|b64|body)$/, "step must be path:<i>, query:<k>, header:<n>, form:<k>, json:<pointer>, or body");
 
 export const RequestSchema = z.object({
   method: z.string(),
   url: z.string(),
-  headers: z.record(z.string(), z.string()).default({}),
+  // Lower-cased, as the codec writes them: a hand-written "X-CSRF-Token" would otherwise be sent twice.
+  headers: z
+    .record(z.string(), z.string())
+    .default({})
+    .transform((h) => Object.fromEntries(Object.entries(h).map(([k, v]) => [k.toLowerCase(), v]))),
   body: z.string().optional(),
 });
 
@@ -21,6 +25,8 @@ export const SlotSchema = z
     /** the leaf's text with `{param}` where the value goes (value is a substring of the leaf) */
     template: z.string().optional(),
     transform: z.enum(["strip-quotes", "url-decode"]).optional(),
+    /** with a template: how the value is escaped inside the leaf (see codec.ts Escape) */
+    escape: z.enum(["url", "json"]).optional(),
   })
   .refine((s) => (s.param === undefined) !== (s.ref === undefined), "a slot needs exactly one of param or ref");
 

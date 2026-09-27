@@ -2,7 +2,7 @@
  * Captured exchanges + example args -> an Operation (DESIGN.md "Learning", steps 1-8).
  * Only example-arg values become params; everything else is kept verbatim.
  */
-import { escapeTemplate, fillTemplate, getAt, setAt, walk, type Leaf, type Step } from "./codec.js";
+import { asText, escapeTemplate, fillSlotTemplate, getAt, setAt, walk, type Escape, type Leaf, type Step } from "./codec.js";
 import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
 import { loggedIn, parseCookieHeader } from "./session.js";
 import { OperationSchema, type Match, type Operation, type Param, type Request, type ResponseSpec, type Slot, type Trigger, type Volatile } from "./spec.js";
@@ -25,6 +25,8 @@ export interface LearnInput {
   loginCookies?: string[];
   /** header names a human marked as public constants: kept literal, never session refs */
   public?: string[];
+  /** when several requests carry the values, prefer one this accepts (the response recipe resolves on it) */
+  accepts?: (e: Exchange) => boolean;
 }
 
 export interface Learned {
@@ -45,7 +47,9 @@ const DENY_RESOURCE = new Set([
 ]);
 const DENY_MIME = /^(image|font|video|audio)\/|^text\/(css|javascript)|^application\/(javascript|x-javascript|font|octet-stream|wasm)/i;
 const ANALYTICS =
-  /google-analytics\.com|googletagmanager\.com|doubleclick\.net|sentry\.io|\/sentry\/|segment\.(io|com)|mixpanel\.com|amplitude\.com|hotjar\.com|facebook\.com\/tr|clarity\.ms|nr-data\.net|datadoghq|\/(collect|beacon|log_event|telemetry|jot|csp-report|client_event)(\/|\?|$)/i;
+  /google-analytics\.com|googletagmanager\.com|doubleclick\.net|sentry\.io|\/sentry\/|segment\.(io|com)|mixpanel\.com|amplitude\.com|hotjar\.com|facebook\.com\/tr|clarity\.ms|nr-data\.net|datadoghq|\/(collect|beacon|log_event|telemetry|jot|csp-report|client_event|tracking|logging)(\/|\?|$)/i;
+// Pages and APIs can end in .js (github.com/vercel/next.js, /repos/chart.js): the extension only means an asset for subresources.
+const DATA_RESOURCE = new Set(["document", "xhr", "fetch"]);
 
 function isNoise(e: Exchange): boolean {
   if (e.request.method.toUpperCase() === "OPTIONS") return true;
@@ -56,7 +60,7 @@ function isNoise(e: Exchange): boolean {
   } catch {
     return true;
   }
-  if (ASSET_EXT.test(url.pathname) || ANALYTICS.test(e.request.url)) return true;
+  if ((!DATA_RESOURCE.has(e.resourceType) && ASSET_EXT.test(url.pathname)) || ANALYTICS.test(e.request.url)) return true;
   if (e.aborted) return false;
   if (!e.response) return true;
   if (e.response.status >= 300 && e.response.status < 400) return true;
@@ -87,8 +91,14 @@ const NOT_EVIDENCE = new Set(["header:cookie", "header:referer", "header:origin"
 // Telemetry posts the page URL in its body (web-vitals, perf logs); a value seen only inside a URL is weak evidence.
 const URLISH = /^[a-z][a-z0-9+.-]*:\/\//i;
 
+/** The text an example is searched by; an array example by its first element. */
+function exampleText(v: unknown): string {
+  if (Array.isArray(v)) return asText(v.find((x) => asText(x).length >= 3) ?? v[0]).toLowerCase();
+  return asText(v).toLowerCase();
+}
+
 function exampleValues(args: Args): [string, string][] {
-  return Object.entries(args).map(([k, v]) => [k, String(v).toLowerCase()]);
+  return Object.entries(args).map(([k, v]) => [k, exampleText(v)]);
 }
 
 function tryParse(body: string | undefined): unknown {
@@ -100,16 +110,20 @@ function tryParse(body: string | undefined): unknown {
   }
 }
 
-/** Noise-filtered requests, best first: carries the example values, succeeded, returned JSON. */
-export function rankCandidates(exchanges: Exchange[], args: Args = {}): Candidate[] {
+/**
+ * Noise-filtered requests, best first: carries the example values, succeeded, returned JSON.
+ * `all`: the caller already chose the pool (a match), so only preflights are dropped.
+ */
+export function rankCandidates(exchanges: Exchange[], args: Args = {}, o: { all?: boolean } = {}): Candidate[] {
   const values = exampleValues(args).filter(([, v]) => v.length >= 3);
   return exchanges
-    .filter((e) => !isNoise(e))
+    .filter((e) => (o.all ? e.request.method.toUpperCase() !== "OPTIONS" : !isNoise(e)))
     .map((e) => {
       const leaves = walk(e.request).filter((l) => !NOT_EVIDENCE.has(l.at[0]!));
       const has = (v: string, ls: Leaf[]) => ls.some((l) => l.value.toLowerCase().includes(v));
-      const direct = leaves.filter((l) => !l.container && !URLISH.test(l.value));
-      const hits = values.filter(([, v]) => has(v, direct)).map(([k]) => k);
+      // a URL-valued example (a link preview's ?url=) is evidence in a URL-valued leaf
+      const direct = (v: string) => leaves.filter((l) => !l.container && (!URLISH.test(l.value) || URLISH.test(v)));
+      const hits = values.filter(([, v]) => has(v, direct(v))).map(([k]) => k);
       const urlHits = values.filter(([k, v]) => !hits.includes(k) && has(v, leaves)).length;
       const body = e.response?.body ?? "";
       const parsed = tryParse(body);
@@ -151,11 +165,22 @@ function tryGet(req: Request, at: Step[]): unknown {
   }
 }
 
-/** GraphQL-ish operation name from the body, form, query, or Meta's friendly-name header. */
+const GQL_NAME = /(?:^|\})\s*(?:query|mutation|subscription)\s+([A-Za-z_]\w*)/;
+
+/**
+ * GraphQL-ish operation name from the body (a batch's first op too), form, query, or Meta's
+ * friendly-name header; else the name in the query text (`query SearchProducts(...)`).
+ */
 export function operationNameOf(req: Request): string | undefined {
-  for (const at of [["body", "json:/operationName"], ["form:fb_api_req_friendly_name"], ["form:operationName"], ["query:operationName"], ["header:x-fb-friendly-name"]]) {
+  const fields = [["body", "json:/operationName"], ["body", "json:/0/operationName"], ["form:fb_api_req_friendly_name"], ["form:operationName"], ["query:operationName"], ["header:x-fb-friendly-name"]];
+  for (const at of fields) {
     const v = tryGet(req, at);
     if (typeof v === "string" && v) return v;
+  }
+  for (const at of [["body", "json:/query"], ["body", "json:/0/query"], ["form:query"], ["query:query"]]) {
+    const v = tryGet(req, at);
+    const m = typeof v === "string" ? GQL_NAME.exec(v) : null;
+    if (m) return m[1];
   }
   return undefined;
 }
@@ -195,13 +220,24 @@ function buildMatch(req: Request, paramSegments: Set<number>): Match {
 
 /* --------------------------------------------------------------- learning */
 
-const DROP_HEADER = /^(:.*|host|content-length|connection|cookie|accept-encoding)$/i;
-const SESSION_HEADER = /^(authorization|x-[a-z0-9-]*token|x-csrf[a-z0-9-]*|x-xsrf[a-z0-9-]*|x-goog-batchexecute-bgr|x-client-transaction-id)$/i;
-// Per-session anti-CSRF fields sent in forms, queries or JSON bodies: Google's `at`, Meta's fb_dtsg/lsd, Rails', ASP.NET's.
-const SESSION_FIELD = /^(at|fb_dtsg|lsd|authenticity_token|__RequestVerificationToken|_?csrf(_?token)?|_?xsrf(_?token)?|csrfmiddlewaretoken)$/i;
+// Conditional headers (a revalidating browser's If-None-Match) would turn every replay into a 304.
+// The body is stored decoded, so its content-encoding goes too.
+const DROP_HEADER = /^(:.*|host|content-length|connection|cookie|accept-encoding|content-encoding|if-[a-z-]+)$/i;
+const SESSION_HEADER = /^(authorization|x-[a-z0-9-]*token|x-csrf[a-z0-9-]*|x-xsrf[a-z0-9-]*|x-goog-batchexecute-bgr|x-client-transaction-id|x-fb-lsd|x-ig-www-claim)$/i;
+// Per-session credentials sent in forms, queries or JSON bodies: Google's `at`, Meta's fb_dtsg/lsd,
+// Rails', ASP.NET's anti-CSRF fields, and OAuth-style access tokens.
+const SESSION_FIELD =
+  /^(at|fb_dtsg|lsd|authenticity_token|__RequestVerificationToken|_?csrf(_?token)?|_?xsrf(_?token)?|csrfmiddlewaretoken|(access_?)?token|session_?id)$/i;
+// Headers the browser computes itself: an example inside them is a coincidence ("apple" in the
+// user-agent, "app" in application/json), and they never carry a nonce of the site's.
+const BROWSER_HEADER =
+  /^(user-agent|accept(-[a-z-]+)?|content-(type|language)|sec-[a-z0-9-]+|if-[a-z-]+|priority|dnt|upgrade-insecure-requests|cache-control|pragma|x-requested-with)$/i;
+const URL_HEADER = new Set(["header:referer", "header:origin"]);
+const URL_SHAPED = /^([a-z][a-z0-9+.-]*:\/\/|\/)\S*$/i;
 const VOLATILE_KEY = /^(doc_?id|query_?id|document_?id|sha256_?hash|query_?hash|persisted_?query_?hash|hash)$/i;
 
 const key = (at: Step[]) => JSON.stringify(at);
+const headerName = (at: Step[]) => (at[0]!.startsWith("header:") ? at[0]!.slice(7) : undefined);
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const lastToken = (at: Step[]) => {
   const s = at[at.length - 1]!;
@@ -211,7 +247,7 @@ const lastToken = (at: Step[]) => {
 export function checkExamples(args: Args, label: string): void {
   const seen = new Map<string, string>();
   for (const [name, v] of Object.entries(args)) {
-    const s = String(v).toLowerCase();
+    const s = asText(v).toLowerCase();
     if (s.length < 3) throw new Error(`${label} ${name}=${JSON.stringify(v)}: example values need at least 3 characters to be located`);
     const other = seen.get(s);
     if (other) throw new Error(`${label}: ${other} and ${name} share the value ${JSON.stringify(v)}; example values must be distinct`);
@@ -232,7 +268,7 @@ function pickExchange(input: LearnInput, exchanges: Exchange[], args: Args, warn
     return e;
   }
   const pool = input.match ? exchanges.filter((e) => matches(input.match!, e.request)) : exchanges;
-  const ranked = rankCandidates(pool, args).filter((c) => input.match || c.hits.length);
+  const ranked = rankCandidates(pool, args, { all: !!input.match }).filter((c) => input.match || c.hits.length);
   if (!ranked.length) {
     throw new Error(
       input.match
@@ -240,51 +276,132 @@ function pickExchange(input: LearnInput, exchanges: Exchange[], args: Args, warn
         : "no captured request carries the example values; check the trigger, or pass match/id",
     );
   }
+  const byId = (id: number) => exchanges.find((e) => e.id === id)!;
+  // A response recipe (--html/--embedded/--extract) names the answer: a beacon echoing the page URL doesn't resolve it.
+  const accepted = input.accepts && ranked.find((c) => input.accepts!(byId(c.id)));
+  if (accepted) return byId(accepted.id);
   const [top, next] = ranked;
   if (next && next.score === top!.score) {
     warnings.push(`ambiguous: requests #${top!.id} and #${next.id} rank equally; learned #${top!.id}, pass id or match to choose`);
   }
-  return exchanges.find((e) => e.id === top!.id)!;
+  return byId(top!.id);
 }
 
+/** Pointers inside a JSON text whose value equals want (an array or object example). */
+function jsonPointers(root: unknown, want: string, ptr = ""): string[] {
+  if (JSON.stringify(root) === want) return [ptr];
+  if (!root || typeof root !== "object") return [];
+  return Object.entries(root).flatMap(([k, c]) => jsonPointers(c, want, `${ptr}/${k.replace(/~/g, "~0").replace(/\//g, "~1")}`));
+}
+
+interface Hit {
+  leaf: Leaf;
+  /** the text found in the leaf: the example, or its percent-encoded form */
+  text: string;
+  encoded: boolean;
+}
+
+/**
+ * How the arg is escaped inside a templated leaf: URL-valued leaves take it percent-encoded, JSON
+ * string literals escaped. Referer/Origin are always URLs, so filling implies "url" there.
+ */
+function escapeOf(leaf: Leaf, hits: Hit[]): Escape | undefined {
+  if (URL_HEADER.has(leaf.at[0]!)) return undefined;
+  if (hits.some((h) => h.encoded) || URL_SHAPED.test(leaf.value)) return "url";
+  const i = leaf.value.toLowerCase().indexOf(hits[0]!.text);
+  const quotes = leaf.value.slice(0, Math.max(0, i)).match(/(?<!\\)"/g)?.length ?? 0;
+  return quotes % 2 ? "json" : undefined;
+}
+
+/**
+ * Slots for the example args. An exact leaf is a slot; a leaf holding the value inside other text
+ * (never a number, flag or browser header) is a templated slot. Referer/Origin/Cookie follow the
+ * args but are not evidence: a value found only there changes nothing the server reads.
+ */
 function paramSlots(leaves: Leaf[], args: Args, warnings: string[]): { slots: Slot[]; types: Map<string, Param["type"]> } {
   const slots: Slot[] = [];
   const types = new Map<string, Param["type"]>();
-  const partial = new Map<string, { leaf: Leaf; names: string[] }>();
+  const found = new Map<string, { exact: Leaf[]; part: Hit[] }>();
   for (const [name, raw] of Object.entries(args)) {
-    const v = String(raw).toLowerCase();
-    const places: string[] = [];
-    let found = false;
+    if (raw !== null && typeof raw === "object") {
+      // an array/object example binds to the JSON container equal to it
+      const want = JSON.stringify(raw);
+      const at = leaves.filter((l) => l.container).flatMap((l) => jsonPointers(JSON.parse(l.value), want).map((p) => [...l.at, `json:${p}`]));
+      if (!at.length) throw notFound(name, raw);
+      for (const a of at) slots.push({ param: name, at: a });
+      types.set(name, Array.isArray(raw) ? "array" : "object");
+      continue;
+    }
+    const v = asText(raw).toLowerCase();
+    const literal = /^(true|false|null)$/.test(v);
+    const digits = /^\d+$/.test(v);
+    const enc = encodeURIComponent(asText(raw)).toLowerCase();
+    const forms = [...new Set([enc, enc.replace(/%20/g, "+")])].filter((f) => f !== v);
+    // digits inside a longer number (a timestamp, a cache-buster) are not the arg
+    const inside = (text: string, t: string) => (digits ? new RegExp(`(?<!\\d)${t}(?!\\d)`).test(text) : text.includes(t));
+    let exact: Leaf[] = [];
+    const part: Hit[] = [];
     for (const leaf of leaves) {
-      if (leaf.at[0] === "header:cookie") continue;
+      const header = headerName(leaf.at);
+      if (header === "cookie" || (header && BROWSER_HEADER.test(header))) continue;
       const text = leaf.value.toLowerCase();
       if (text === v) {
-        slots.push({ param: name, at: leaf.at });
-        if (leaf.type === "number") types.set(name, "number");
-        if (leaf.type === "boolean") types.set(name, "boolean");
-      } else if (!leaf.container && text.includes(v)) {
-        const p = partial.get(key(leaf.at)) ?? { leaf, names: [] };
-        p.names.push(name);
-        partial.set(key(leaf.at), p);
-      } else continue;
-      found = true;
-      if (!leaf.at[0]!.startsWith("header:")) places.push(leaf.at.join(" > "));
+        exact.push(leaf);
+        continue;
+      }
+      if (leaf.container || leaf.type !== "string" || literal) continue;
+      if (header && !URL_HEADER.has(leaf.at[0]!) && !header.startsWith("x-")) continue;
+      if (inside(text, v)) part.push({ leaf, text: v, encoded: false });
+      else {
+        const f = forms.find((x) => inside(text, x));
+        if (f) part.push({ leaf, text: f, encoded: true });
+      }
     }
-    if (!found) {
-      throw new Error(
-        `example value for "${name}" (${JSON.stringify(raw)}) is not in the learned request, so the param would change nothing. ` +
-          "Pick the request that carries it (capture, then add --from <id> --pick-request <n>), or drop the param",
-      );
+    if (literal && exact.length > 1) {
+      // X-style GraphQL sends dozens of true flags: bind the one named like the param
+      const named = exact.filter((l) => lastToken(l.at).toLowerCase() === name.toLowerCase());
+      if (named.length !== 1) {
+        throw new Error(
+          `example value for "${name}" (${JSON.stringify(raw)}) matches ${exact.length} flags (${exact.map((l) => l.at.join(" > ")).join("; ")}); name the param after its key so it binds to one`,
+        );
+      }
+      exact = named;
     }
-    if (places.length > 1) warnings.push(`"${name}" appears in ${places.length} places, all will be filled: ${places.join("; ")}`);
+    found.set(name, { exact, part });
   }
-  for (const { leaf, names } of partial.values()) {
-    let template = escapeTemplate(leaf.value);
-    for (const name of names) template = template.replace(new RegExp(escapeRe(escapeTemplate(String(args[name]))), "gi"), `{${name}}`);
-    slots.push({ param: names[0]!, at: leaf.at, template });
+  // A leaf that equals one param's value belongs to that param, even if another's value is inside it.
+  const exactKeys = new Set([...found.values()].flatMap((f) => f.exact.map((l) => key(l.at))));
+  const partial = new Map<string, Hit[]>();
+  for (const [name, f] of found) {
+    const part = f.part.filter((h) => !exactKeys.has(key(h.leaf.at)));
+    const places = [...f.exact, ...part.map((h) => h.leaf)].filter((l) => !NOT_EVIDENCE.has(l.at[0]!)).map((l) => l.at.join(" > "));
+    if (!places.length) throw notFound(name, args[name]);
+    if (places.length > 1) warnings.push(`"${name}" appears in ${places.length} places, all will be filled: ${places.join("; ")}`);
+    for (const leaf of f.exact) {
+      slots.push({ param: name, at: leaf.at });
+      if (leaf.type === "number") types.set(name, "number");
+      if (leaf.type === "boolean") types.set(name, "boolean");
+    }
+    for (const h of part) partial.set(key(h.leaf.at), [...(partial.get(key(h.leaf.at)) ?? []), { ...h, text: `${name}\0${h.text}` }]);
+  }
+  for (const hits of partial.values()) {
+    const leaf = hits[0]!.leaf;
+    const byText = new Map(hits.map((h) => [h.text.slice(h.text.indexOf("\0") + 1), h.text.slice(0, h.text.indexOf("\0"))]));
+    // one alternation, longest first, so "nasa" never splits "nasagov"
+    const alts = [...byText.keys()].sort((a, b) => b.length - a.length).map((t) => (/^\d+$/.test(t) ? `(?<!\\d)${t}(?!\\d)` : escapeRe(escapeTemplate(t))));
+    const template = escapeTemplate(leaf.value).replace(new RegExp(alts.join("|"), "gi"), (m) => `{${byText.get(m.toLowerCase())}}`);
+    const plain = hits.map((h) => ({ ...h, text: h.text.slice(h.text.indexOf("\0") + 1) }));
+    const escape = escapeOf(leaf, plain);
+    slots.push({ param: byText.values().next().value!, at: leaf.at, template, ...(escape ? { escape } : {}) });
   }
   return { slots, types };
 }
+
+const notFound = (name: string, raw: unknown) =>
+  new Error(
+    `example value for "${name}" (${JSON.stringify(raw)}) is not in the learned request, so the param would change nothing. ` +
+      "Pick the request that carries it (capture, then add --from <id> --pick-request <n>), or drop the param",
+  );
 
 function cookieCandidates(cookies: StoredCookie[], cookieHeader: string | undefined): Map<string, Pick<Slot, "ref" | "transform">> {
   const all = [...cookies.map((c) => [c.name, c.value] as const), ...Object.entries(parseCookieHeader(cookieHeader ?? ""))];
@@ -403,11 +520,15 @@ function diffRuns(req1: Request, req2: Request, slots: Slot[], args2: Args, warn
       missing.push(leaf.at.join(" > "));
       continue;
     }
+    const header = headerName(leaf.at);
+    if (header && BROWSER_HEADER.test(header)) continue;
     if (slot?.param) {
-      const want = slot.template !== undefined ? fillTemplate(slot.template, args2) : String(args2[slot.param]);
-      if (other.value.toLowerCase() !== want.toLowerCase()) {
-        warnings.push(`run 2 has ${JSON.stringify(other.value)} at ${leaf.at.join(" > ")}, expected ${JSON.stringify(want)}`);
-      }
+      const want = slot.template !== undefined ? fillSlotTemplate(slot.template, args2, slot.escape) : asText(args2[slot.param]);
+      if (other.value.toLowerCase() === want.toLowerCase()) continue;
+      // The text around the arg changed too: a signature inside the leaf (a signed URL in a param).
+      const literals = slot.template !== undefined ? fillSlotTemplate(slot.template, Object.fromEntries(Object.keys(args2).map((k) => [k, "\0"]))).split("\0") : [];
+      if (literals.some((l) => l && !other.value.toLowerCase().includes(l.toLowerCase()))) nonces.push(leaf.at.join(" > "));
+      else warnings.push(`run 2 has ${JSON.stringify(other.value)} at ${leaf.at.join(" > ")}, expected ${JSON.stringify(want)}`);
       continue;
     }
     if (other.value === leaf.value) continue;
@@ -449,7 +570,7 @@ export function learnOperation(input: LearnInput): Learned {
   const { slots, types } = paramSlots(leaves, args1, warnings);
   const taken = new Set(slots.map((s) => key(s.at)));
 
-  // 4. session refs: cookie echoes anywhere, then auth/anti-bot headers by name
+  // 4. session refs: cookie echoes anywhere, per-session fields, then auth/anti-bot headers
   const sessionValues: Record<string, string> = {};
   const cookieRefs = cookieCandidates(input.cookies, ex.request.headers.cookie);
   for (const leaf of leaves) {
@@ -459,14 +580,6 @@ export function learnOperation(input: LearnInput): Learned {
     slots.push({ ...ref, at: leaf.at });
     taken.add(key(leaf.at));
   }
-  const publicHeaders = new Set((input.public ?? []).map((h) => h.toLowerCase()));
-  for (const [name, value] of Object.entries(request.headers)) {
-    const at = [`header:${name}`];
-    if (!SESSION_HEADER.test(name) || publicHeaders.has(name) || taken.has(key(at))) continue;
-    slots.push({ ref: `session:${name}`, at });
-    taken.add(key(at));
-    sessionValues[name] = value;
-  }
   for (const leaf of leaves) {
     if (leaf.container || leaf.type !== "string" || leaf.at[0]!.startsWith("header:") || taken.has(key(leaf.at))) continue;
     const name = lastToken(leaf.at);
@@ -474,6 +587,28 @@ export function learnOperation(input: LearnInput): Learned {
     slots.push({ ref: `session:${name}`, at: leaf.at });
     taken.add(key(leaf.at));
     sessionValues[name] = leaf.value;
+  }
+  const publicHeaders = new Set((input.public ?? []).map((h) => h.toLowerCase()));
+  const fieldOf = new Map(Object.entries(sessionValues).map(([k, v]) => [v, k]));
+  for (const [name, value] of Object.entries(request.headers)) {
+    const at = [`header:${name}`];
+    if (publicHeaders.has(name) || taken.has(key(at))) continue;
+    // Meta's x-fb-lsd repeats the lsd field: one credential, one ref.
+    const same = value.length >= 8 ? fieldOf.get(value) : undefined;
+    if (!same && !SESSION_HEADER.test(name)) continue;
+    slots.push({ ref: `session:${same ?? name}`, at });
+    taken.add(key(at));
+    if (!same) sessionValues[name] = value;
+  }
+  // A cookie inside a longer value ("v1:<session cookie>" in a query) is a templated ref.
+  const long = [...cookieRefs].filter(([v]) => v.length >= 16);
+  for (const leaf of leaves) {
+    if (leaf.container || leaf.type !== "string" || taken.has(key(leaf.at))) continue;
+    const hit = long.find(([v]) => leaf.value.includes(v));
+    if (!hit) continue;
+    const [v, ref] = hit;
+    slots.push({ ...ref, at: leaf.at, template: escapeTemplate(leaf.value).split(escapeTemplate(v)).join(`{${ref.ref}}`) });
+    taken.add(key(leaf.at));
   }
   // The spec never holds a credential: blank every ref'd leaf.
   for (const s of slots) if (s.ref) request = setAt(request, s.at, "");
@@ -492,7 +627,7 @@ export function learnOperation(input: LearnInput): Learned {
   let minTier: 1 | 2 | 3 = 1;
   if (input.exchanges2 && args2) {
     const pool = input.exchanges2.filter((e) => matches(match, e.request));
-    const top = rankCandidates(pool, args2)[0];
+    const top = rankCandidates(pool, args2, { all: true })[0];
     const ex2 = top && pool.find((e) => e.id === top.id);
     if (!ex2) {
       warnings.push("run 2 produced no matching request; skipped the two-run diff");

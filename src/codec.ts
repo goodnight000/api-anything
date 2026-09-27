@@ -7,7 +7,9 @@
  * parens, big integers, the site's own percent-encoding) stays identical.
  *
  * Root steps: path:<i> (i-th segment after the leading slash), query:<key>, header:<name>,
- * form:<key> (urlencoded body), body. Below them only json:<RFC 6901 pointer>.
+ * form:<key> (urlencoded body), body. A repeated key's later occurrences are query[<n>]:<key> and
+ * form[<n>]:<key> (n counts from 0). Below them json:<RFC 6901 pointer>, and b64 (the current
+ * string is base64 of JSON, as some apps pack their state into one query param).
  */
 import type { Request } from "./spec.js";
 
@@ -188,11 +190,17 @@ function parsePairs(raw: string): Pair[] {
   });
 }
 
-/** Rewrite one pair (first with that key) in a raw a=b&c=d string; untouched pairs keep their bytes. */
-function setPair(raw: string, key: string, value: string): string {
+/** The n-th pair with that key. */
+function nthPair(pairs: Pair[], key: string, n: number): number {
+  for (let i = 0; i < pairs.length; i++) if (pairs[i]!.key === key && n-- === 0) return i;
+  return -1;
+}
+
+/** Rewrite one pair (the n-th with that key) in a raw a=b&c=d string; untouched pairs keep their bytes. */
+function setPair(raw: string, key: string, value: string, n = 0): string {
   const parts = raw ? raw.split("&") : [];
   const pairs = parsePairs(raw);
-  const idx = pairs.findIndex((p) => p.key === key);
+  const idx = nthPair(pairs, key, n);
   if (idx < 0) {
     parts.push(`${encodeURIComponent(key)}=${encodeLike(value, raw, true)}`);
   } else {
@@ -207,14 +215,16 @@ export function isFormBody(req: Request): boolean {
   return /application\/x-www-form-urlencoded/i.test(ct);
 }
 
-function parseStep(step: Step): [string, string] {
+function parseStep(step: Step): [string, string, number] {
   const i = step.indexOf(":");
-  return i < 0 ? [step, ""] : [step.slice(0, i), step.slice(i + 1)];
+  const [kind, arg] = i < 0 ? [step, ""] : [step.slice(0, i), step.slice(i + 1)];
+  const m = /^(query|form)\[(\d+)\]$/.exec(kind);
+  return m ? [m[1]!, arg, Number(m[2])] : [kind, arg, 0];
 }
 
 /** The text at a root step and how to write it back. */
 function rootLayer(req: Request, step: Step): { value: string | undefined; put: (v: string) => Request } {
-  const [kind, arg] = parseStep(step);
+  const [kind, arg, n] = parseStep(step);
   switch (kind) {
     case "path": {
       const u = splitUrl(req.url);
@@ -231,10 +241,11 @@ function rootLayer(req: Request, step: Step): { value: string | undefined; put: 
     }
     case "query": {
       const u = splitUrl(req.url);
-      const p = parsePairs(u.query ?? "").find((x) => x.key === arg);
+      const pairs = parsePairs(u.query ?? "");
+      const p = pairs[nthPair(pairs, arg, n)];
       return {
         value: p ? decode(p.rawValue, true) : undefined,
-        put: (v) => ({ ...req, url: joinUrl({ ...u, query: setPair(u.query ?? "", arg, v) }) }),
+        put: (v) => ({ ...req, url: joinUrl({ ...u, query: setPair(u.query ?? "", arg, v, n) }) }),
       };
     }
     case "header": {
@@ -245,10 +256,11 @@ function rootLayer(req: Request, step: Step): { value: string | undefined; put: 
       };
     }
     case "form": {
-      const p = parsePairs(req.body ?? "").find((x) => x.key === arg);
+      const pairs = parsePairs(req.body ?? "");
+      const p = pairs[nthPair(pairs, arg, n)];
       return {
         value: p ? decode(p.rawValue, true) : undefined,
-        put: (v) => ({ ...req, body: setPair(req.body ?? "", arg, v) }),
+        put: (v) => ({ ...req, body: setPair(req.body ?? "", arg, v, n) }),
       };
     }
     case "body":
@@ -272,6 +284,10 @@ export function getAt(req: Request, steps: Step[]): unknown {
   let text = rootLayer(req, first).value;
   if (text === undefined) return undefined;
   for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "b64") {
+      text = fromB64(text);
+      continue;
+    }
     const [a, b] = locate(text, jsonPointer(rest[i]!));
     const v = parseJson(text.slice(a, b));
     if (i === rest.length - 1) return v;
@@ -281,8 +297,18 @@ export function getAt(req: Request, steps: Step[]): unknown {
   return text;
 }
 
+const B64 = /^[A-Za-z0-9+/_-]{16,}={0,2}$/;
+const fromB64 = (s: string) => Buffer.from(s, "base64").toString("utf8");
+/** Encode like the original: base64url when it used - or _, padding only when it had some. */
+function toB64Like(text: string, original: string): string {
+  const url = /[-_]/.test(original);
+  const out = Buffer.from(text, "utf8").toString(url ? "base64url" : "base64");
+  return original.endsWith("=") ? out.padEnd(Math.ceil(out.length / 4) * 4, "=") : out.replace(/=+$/, "");
+}
+
 function setNested(text: string, steps: Step[], value: unknown): string {
   const [step, ...rest] = steps;
+  if (step === "b64") return toB64Like(rest.length ? setNested(fromB64(text), rest, value) : asText(value), text);
   const [a, b] = locate(text, jsonPointer(step!));
   let replacement: string;
   if (rest.length) {
@@ -318,6 +344,26 @@ export function fillTemplate(template: string, vars: Record<string, unknown>): s
 /** Literal text as a template: every brace doubled. */
 export const escapeTemplate = (text: string) => text.replace(/[{}]/g, (c) => c + c);
 
+/**
+ * How a value is written inside a templated leaf: "url" percent-encodes it (the leaf is a URL, so
+ * the arg sits one encoding layer deeper: a referer, a next= path), "json" escapes it for a JSON
+ * string literal (an inline GraphQL `search(q: "{q}")`).
+ */
+export type Escape = "url" | "json";
+
+export function escapeValue(v: unknown, escape: Escape | undefined): string {
+  const s = asText(v);
+  if (escape === "url") return encodeURIComponent(s);
+  if (escape === "json") return JSON.stringify(s).slice(1, -1);
+  return s;
+}
+
+/** fillTemplate with every var escaped for the leaf's encoding layer. */
+export function fillSlotTemplate(template: string, vars: Record<string, unknown>, escape?: Escape): string {
+  if (!escape) return fillTemplate(template, vars);
+  return fillTemplate(template, Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, v === undefined ? v : escapeValue(v, escape)])));
+}
+
 function walkJsonString(s: string, at: Step[], out: Leaf[]): boolean {
   const start = skipWs(s, 0);
   if (s[start] !== "{" && s[start] !== "[") return false;
@@ -334,7 +380,7 @@ function walkJsonString(s: string, at: Step[], out: Leaf[]): boolean {
     if (c === '"') {
       const leaf: Leaf = { at: steps, value: JSON.parse(span) as string, type: "string" };
       out.push(leaf);
-      if (walkJsonString(leaf.value, steps, out)) leaf.container = true;
+      if (walkInner(leaf.value, steps, out)) leaf.container = true;
     } else {
       out.push({ at: steps, value: span, type: c === "t" || c === "f" ? "boolean" : c === "n" ? "null" : "number" });
     }
@@ -343,32 +389,40 @@ function walkJsonString(s: string, at: Step[], out: Leaf[]): boolean {
   return true;
 }
 
+/** Walk a string that holds JSON, directly or base64-encoded. */
+function walkInner(s: string, at: Step[], out: Leaf[]): boolean {
+  if (walkJsonString(s, at, out)) return true;
+  if (!B64.test(s)) return false;
+  const text = fromB64(s);
+  // only a clean round trip counts: a hash or token decodes to bytes that are not JSON text
+  return /^\s*[[{]/.test(text) && Buffer.from(text, "utf8").toString("base64").replace(/=+$/, "") === s.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "") && walkJsonString(text, [...at, "b64"], out);
+}
+
 /** Every decoded leaf of the request with its step path, including JSON inside strings, recursively. */
 export function walk(req: Request): Leaf[] {
   const out: Leaf[] = [];
   const add = (at: Step[], value: string) => {
     const leaf: Leaf = { at, value, type: "string" };
     out.push(leaf);
-    if (walkJsonString(value, at, out)) leaf.container = true;
+    if (walkInner(value, at, out)) leaf.container = true;
   };
   const u = splitUrl(req.url);
   u.segments.forEach((seg, i) => seg && add([`path:${i}`], decode(seg, false)));
-  const seen = new Set<string>();
-  for (const p of parsePairs(u.query ?? "")) {
-    if (seen.has(p.key)) continue;
-    seen.add(p.key);
-    add([`query:${p.key}`], decode(p.rawValue, true));
-  }
+  // A repeated key (tag=a&tag=b) is walked at every occurrence: query:tag, query[1]:tag, ...
+  const pairs = (kind: string, raw: string) => {
+    const seen = new Map<string, number>();
+    for (const p of parsePairs(raw)) {
+      const n = seen.get(p.key) ?? 0;
+      seen.set(p.key, n + 1);
+      add([n ? `${kind}[${n}]:${p.key}` : `${kind}:${p.key}`], decode(p.rawValue, true));
+    }
+  };
+  pairs("query", u.query ?? "");
   for (const [name, value] of Object.entries(req.headers)) add([`header:${name.toLowerCase()}`], value);
   if (req.body !== undefined && req.body !== "") {
     // Some clients (Algolia's) send a JSON body labeled form-urlencoded to skip the CORS preflight.
     if (isFormBody(req) && !/^\s*[[{]/.test(req.body)) {
-      seen.clear();
-      for (const p of parsePairs(req.body)) {
-        if (seen.has(p.key)) continue;
-        seen.add(p.key);
-        add([`form:${p.key}`], decode(p.rawValue, true));
-      }
+      pairs("form", req.body);
     } else {
       add(["body"], req.body);
     }

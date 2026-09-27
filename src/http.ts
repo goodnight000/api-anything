@@ -1,5 +1,5 @@
 /** Tier 1: fill the stored template and send it with Node fetch. */
-import { fillTemplate, setAt } from "./codec.js";
+import { asText, fillSlotTemplate, setAt, walk } from "./codec.js";
 import { cookieHeaderFor, cookieValue, type Session } from "./session.js";
 import type { Operation, Param, Request } from "./spec.js";
 
@@ -80,6 +80,8 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
   }
 
   let req: Request = { ...op.request, method: op.request.method.toUpperCase(), headers: { ...op.request.headers } };
+  let leafTypes: Map<string, string> | undefined;
+  const stringLeaf = (at: string[]) => (leafTypes ??= new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]))).get(JSON.stringify(at)) === "string";
   delete req.headers.cookie;
   for (const slot of op.slots) {
     const name = slot.param ?? slot.ref!;
@@ -91,14 +93,25 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
       continue;
     }
     if (slot.ref) v = transform(v as string, slot.transform);
-    if (slot.template !== undefined) v = fillTemplate(slot.template, { ...vals, [name]: v });
+    if (slot.template !== undefined) {
+      // A Referer/Origin is a URL: specs learned before `escape` existed still get the arg percent-encoded.
+      const escape = slot.escape ?? (slot.param && /^header:(referer|origin)$/i.test(slot.at[0]!) ? "url" : undefined);
+      v = fillSlotTemplate(slot.template, { ...vals, [name]: v }, escape);
+    } else if (typeof v !== "string" && typeof v !== "object" && slot.at.at(-1)!.startsWith("json:") && stringLeaf(slot.at)) {
+      // the same number can sit in a JSON string ("id":"12345") and a JSON number (ids:[12345]); each leaf keeps its type
+      v = asText(v);
+    }
     req = setAt(req, slot.at, v);
   }
 
+  // Header values must be bytes: a value that is not ASCII goes percent-encoded, as a browser sends a URL.
+  for (const [k, h] of Object.entries(req.headers)) if (/[^\x00-\x7f]/.test(h)) req.headers[k] = h.replace(/[^\x00-\x7f]+/g, encodeURIComponent);
   const cookie = cookieHeaderFor(session.cookies, req.url);
   if (cookie) req.headers.cookie = cookie;
   return req;
 }
+
+
 
 const lastSend = new Map<string, number>();
 

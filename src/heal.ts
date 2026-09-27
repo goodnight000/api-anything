@@ -164,15 +164,62 @@ export interface AddResult {
   replaced: boolean;
 }
 
-/** Put `{name}` back where an example value sits in a literal URL or step. */
-function templatize(text: string, args: Args, encoded: boolean): string {
+/** Put `{name}` back where an example value sits in a literal step (a typed value, a selector). */
+function templatize(text: string, args: Args): string {
   let out = escapeTemplate(text);
   for (const [k, v] of Object.entries(args)) {
     const s = asText(v);
-    if (s.length >= 3) out = out.split(escapeTemplate(encoded ? encodeURIComponent(s) : s)).join(`{${k}}`);
+    if (s.length >= 3) out = out.split(escapeTemplate(s)).join(`{${k}}`);
   }
   return out;
 }
+
+const decodeLoose = (raw: string, plus: boolean) => {
+  try {
+    return decodeURIComponent(plus ? raw.replace(/\+/g, " ") : raw);
+  } catch {
+    return raw;
+  }
+};
+
+/**
+ * Put `{name}` back where an example value sits in a captured page URL: a query value equal to it
+ * (however it was encoded: + or %20, any case), else a path segment equal to it, else a substring
+ * of the path or query. The host and other positions that merely equal the value stay literal.
+ */
+export function templatizeUrl(url: string, args: Args): string {
+  const hashAt = url.indexOf("#");
+  const noHash = hashAt < 0 ? url : url.slice(0, hashAt);
+  const hash = hashAt < 0 ? "" : url.slice(hashAt);
+  const qAt = noHash.indexOf("?");
+  const base = qAt < 0 ? noHash : noHash.slice(0, qAt);
+  const pathAt = base.indexOf("/", base.indexOf("//") + 2);
+  const origin = pathAt < 0 ? base : base.slice(0, pathAt);
+  let segs = pathAt < 0 ? [] : base.slice(pathAt).split("/");
+  let pairs = qAt < 0 ? undefined : noHash.slice(qAt + 1).split("&");
+  const lit = (t: string) => escapeTemplate(t);
+  segs = segs.map(lit);
+  pairs = pairs?.map(lit);
+  for (const [k, v] of Object.entries(args)) {
+    const want = asText(v).toLowerCase();
+    if (want.length < 3) continue;
+    const hole = `{${k}}`;
+    const valueOf = (p: string) => decodeLoose(p.slice(p.indexOf("=") + 1), true).toLowerCase();
+    if (pairs?.some((p) => p.includes("=") && valueOf(p) === want)) {
+      pairs = pairs.map((p) => (p.includes("=") && valueOf(p) === want ? `${p.slice(0, p.indexOf("="))}=${hole}` : p));
+    } else if (segs.some((seg) => decodeLoose(seg, false).toLowerCase() === want)) {
+      segs = segs.map((seg) => (decodeLoose(seg, false).toLowerCase() === want ? hole : seg));
+    } else {
+      const forms = [...new Set([encodeURIComponent(asText(v)), encodeURIComponent(asText(v)).replace(/%20/g, "+"), asText(v)])].map((f) => escapeRe(lit(f)));
+      const re = new RegExp(forms.join("|"), "gi");
+      segs = segs.map((seg) => seg.replace(re, hole));
+      pairs = pairs?.map((p) => (p.includes("=") ? `${p.slice(0, p.indexOf("=") + 1)}${p.slice(p.indexOf("=") + 1).replace(re, hole)}` : p));
+    }
+  }
+  return `${lit(origin)}${segs.join("/")}${pairs ? `?${pairs.join("&")}` : ""}${lit(hash)}`;
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export function putOperation(site: Site, op: Operation): Site {
   const rest = site.operations.filter((o) => o.name !== op.name);
@@ -201,10 +248,10 @@ export async function addOperation(i: AddInput): Promise<AddResult> {
     const c = i.from.capture;
     const step = (s: TriggerStep): TriggerStep => ({
       ...s,
-      ...(s.selector ? { selector: templatize(s.selector, ex1, false) } : {}),
-      ...(s.value ? { value: templatize(s.value, ex1, s.action === "goto") } : {}),
+      ...(s.selector ? { selector: templatize(s.selector, ex1) } : {}),
+      ...(s.value ? { value: s.action === "goto" ? templatizeUrl(s.value, ex1) : templatize(s.value, ex1) } : {}),
     });
-    trigger = { url: templatize(c.url, ex1, true), ...(c.softFrom ? { softFrom: c.softFrom } : {}), ...(c.steps ? { steps: c.steps.map(step) } : {}) };
+    trigger = { url: templatizeUrl(c.url, ex1), ...(c.softFrom ? { softFrom: c.softFrom } : {}), ...(c.steps ? { steps: c.steps.map(step) } : {}) };
   }
   if (!trigger) throw new Error("a trigger url is needed (or --from a capture)");
   if (trigger.url.startsWith("/")) {
