@@ -9,7 +9,7 @@ export interface CookieRow {
   name: string;
   value: string;
   path?: string;
-  expires_utc?: number;
+  expires_utc?: number | bigint;
   secure?: boolean;
   httpOnly?: boolean;
   samesite?: number;
@@ -35,7 +35,8 @@ export function makeChromiumDb(profileDir: string, rows: CookieRow[], o: { passw
   );
   const stmt = db.prepare("INSERT INTO cookies VALUES(?,?,?,?,?,?,?,?,?)");
   for (const r of rows) {
-    stmt.run(r.host_key, r.name, "", encrypt(r.value, key, metaVersion, r.host_key), r.path ?? "/", r.expires_utc ?? 0, r.secure ? 1 : 0, r.httpOnly ? 1 : 0, r.samesite ?? -1);
+    // expires_utc can exceed JS safe-integer range; bind it as BigInt so it stores exactly.
+    stmt.run(r.host_key, r.name, "", encrypt(r.value, key, metaVersion, r.host_key), r.path ?? "/", BigInt(r.expires_utc ?? 0), r.secure ? 1 : 0, r.httpOnly ? 1 : 0, r.samesite ?? -1);
   }
   db.close();
 }

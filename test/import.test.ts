@@ -28,6 +28,16 @@ test("decrypts a v10 Chromium cookie (meta version >= 24 strips the host_key has
   assert.equal(byName.JSESSIONID, '"ajax:1234567890"', "quotes preserved for the csrf transform");
 });
 
+test("a real-world expires_utc (beyond JS safe-integer range) is read without throwing", () => {
+  const root = tmp();
+  makeChromiumDb(join(root, "Default"), [{ host_key: ".linkedin.com", name: "li_at", value: "AQEDtoken12345678", expires_utc: 13399829086694638n }], { password: "pw" });
+  inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
+  const r = importFromBrowsers({ url: "https://linkedin.com" });
+  const c = r?.cookies.find((x) => x.name === "li_at");
+  assert.equal(c?.value, "AQEDtoken12345678");
+  assert.ok(c && c.expires > 1_700_000_000 && Number.isFinite(c.expires), `expires should be a sane unix time, got ${c?.expires}`);
+});
+
 test("meta version < 24 does not strip a prefix", () => {
   const root = tmp();
   makeChromiumDb(join(root, "Default"), [{ host_key: ".x.com", name: "auth_token", value: "0123456789abcdef" }], { password: "pw", metaVersion: 18 });

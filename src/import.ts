@@ -217,10 +217,11 @@ function readChromium(root: BrowserRoot, dbPath: string, site: string): StoredCo
   return withDb(dbPath, (db) => {
     const metaRow = db.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value: string | number } | undefined;
     const metaVersion = metaRow ? Number(metaRow.value) : 0;
-    const rows = db
-      .prepare("SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite FROM cookies")
-      .all() as {
-      host_key: string; name: string; value: string; encrypted_value: Uint8Array; path: string; expires_utc: number; is_secure: number; is_httponly: number; samesite: number;
+    const stmt = db.prepare("SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite FROM cookies");
+    // expires_utc (microseconds since 1601) overflows a JS number; read every integer as BigInt.
+    stmt.setReadBigInts(true);
+    const rows = stmt.all() as unknown as {
+      host_key: string; name: string; value: string; encrypted_value: Uint8Array; path: string; expires_utc: bigint; is_secure: bigint; is_httponly: bigint; samesite: bigint;
     }[];
     const out: StoredCookie[] = [];
     for (const r of rows) {
@@ -232,10 +233,10 @@ function readChromium(root: BrowserRoot, dbPath: string, site: string): StoredCo
         value,
         domain: r.host_key,
         path: r.path || "/",
-        expires: r.expires_utc ? Math.floor(r.expires_utc / 1_000_000 - CHROME_EPOCH_OFFSET) : -1,
-        httpOnly: !!r.is_httponly,
-        secure: !!r.is_secure,
-        sameSite: SAMESITE[r.samesite],
+        expires: r.expires_utc > 0n ? Math.floor(Number(r.expires_utc) / 1_000_000 - CHROME_EPOCH_OFFSET) : -1,
+        httpOnly: !!Number(r.is_httponly),
+        secure: !!Number(r.is_secure),
+        sameSite: SAMESITE[Number(r.samesite)],
       });
     }
     return out;

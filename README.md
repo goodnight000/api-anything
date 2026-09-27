@@ -23,7 +23,7 @@ Everything lives in `~/.api-anything`; set `API_ANYTHING_HOME` to use another di
 
 Bundled specs, verified live and logged out on 2026-09-27: `x` (getUser, getProfile),
 `instagram` (getProfile, getPosts), `google-flights` (search, top), `hacker-news` (frontPage,
-search), `linkedin` (getProfile, searchPeople, getCompany — needs login). `api-anything sites`
+search), `linkedin` (getMe, getCompany — needs login). `api-anything sites`
 lists them; each has notes in `sites/<site>.md`.
 
 ## Logging in
@@ -40,7 +40,7 @@ right browser profile automatically, prints which one and the cookie *names* it 
 values), and stores nothing else. Then LinkedIn operations just work:
 
 ```sh
-api-anything call linkedin getProfile publicId=williamhgates
+api-anything call linkedin getCompany universalName=openai
 ```
 
 On macOS the first import shows one Keychain prompt ("security wants to use the … Safe Storage" key);
