@@ -54,7 +54,7 @@ const HELP: Record<string, string> = {
                   every add saves its own runs as captures, so a wrong --extract is fixed this way
   --from2 <id>    a second capture made with --example2 values, for the two-run diff
   --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
-  --pick a,b.c,name=x.y  fields kept per item; name=path renames the key
+  --pick a,b.c,name=x.y  fields kept per item; name=path renames the key, name=path~regex keeps regex group 1
   --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages
   --embedded <regex>  JSON inside the page: group 1 marks where the JSON value starts; then --extract
   --public <header,...>  headers holding public constants (a web app's bearer): kept literal, allowed by export

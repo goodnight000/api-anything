@@ -1,16 +1,28 @@
 /** Bundled site specs: their recipes against trimmed copies of the live responses, and their param rules. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after } from "node:test";
 import { parseSite, type Operation } from "../src/spec.ts";
 import { judge } from "../src/classify.ts";
+import { call } from "../src/execute.ts";
 import { buildRequest } from "../src/http.ts";
 import type { StoredCookie } from "../src/types.ts";
 
 const raw = (site: string) => JSON.parse(readFileSync(new URL(`../sites/${site}.json`, import.meta.url), "utf8"));
 const op = (site: string, name: string): Operation => parseSite(raw(site)).operations.find((o) => o.name === name)!;
-const rawParams = (site: string, name: string): { name: string; pattern?: string; hint?: string }[] =>
-  raw(site).operations.find((o: { name: string }) => o.name === name).params;
+// the parsed spec's params: the schema keeps pattern and hint
+const rawParams = (site: string, name: string) => op(site, name).params;
+// a clean home, so call() runs the bundled spec
+const HOME = mkdtempSync(join(tmpdir(), "aa-sites-"));
+mkdirSync(join(HOME, "sites"));
+after(() => rmSync(HOME, { recursive: true, force: true }));
+const callBundled = (site: string, name: string, args: Record<string, unknown>, fetchImpl: typeof fetch) => {
+  process.env.API_ANYTHING_HOME = HOME;
+  return call(site, name, args, { fetchImpl, maxTier: 1, minIntervalMs: 0 });
+};
 const noSession = { cookies: [] as StoredCookie[], values: {} as Record<string, string> };
 const ok = (o: Operation, body: string, contentType = "application/json") => {
   const j = judge(o, { status: 200, headers: { "content-type": contentType }, body });
@@ -92,6 +104,31 @@ test("google-flights params carry a pattern and a hint; the calendar refuses met
   assert.ok(!accepts(start!, "next month"));
 });
 
+test("google-flights search with a malformed date is input with the param's hint, and nothing is sent", async () => {
+  let sent = 0;
+  const r = await callBundled("google-flights", "search", { origin: "SFO", destination: "NYC", date: "tomorrowish-bad" }, (async () => (sent++, new Response(""))) as typeof fetch);
+  assert.equal(r.class, "input", JSON.stringify(r));
+  assert.match(r.reason ?? "", /param "date" must be a departure date as YYYY-MM-DD, e\.g\. 2027-04-15, got "tomorrowish-bad"/);
+  assert.equal(sent, 0);
+  const kw = await callBundled("linkedin", "searchCompanies", { keywords: "rust, zurich" }, (async () => (sent++, new Response(""))) as typeof fetch);
+  assert.equal(kw.class, "input", JSON.stringify(kw));
+  assert.equal(sent, 0);
+});
+
+test("google-flights search for a past date (Google's Explore page, with a Sign-in link to ServiceLogin) is input, not auth", async () => {
+  const explore = `<html><head><title>Explore</title></head><body><a href="https://accounts.google.com/ServiceLogin?hl=en-US&continue=https://www.google.com/travel/explore">Sign in</a>` +
+    `<script nonce="x">AF_initDataCallback({key: 'ds:0', hash: '1', data:[[null,null,0,"x"]], sideChannel: {}});</script></body></html>`;
+  const results = flightsPage([flight(219, "EWR")], [flight(149, "EWR")]);
+  const dates: string[] = [];
+  const r = await callBundled("google-flights", "search", { origin: "SFO", destination: "NYC", date: "2020-01-01" }, (async (u: string | URL | Request) => {
+    const q = new URL(String(u)).searchParams.get("q") ?? "";
+    dates.push(q.slice(-18, -8));
+    return new Response(q.includes("2020-01-01") ? explore : results, { headers: { "content-type": "text/html; charset=utf-8" } });
+  }) as typeof fetch);
+  assert.equal(r.class, "input", JSON.stringify(r));
+  assert.deepEqual(dates, ["2020-01-01", "2027-04-15"]);
+});
+
 // ---------------------------------------------------------------- youtube
 
 const video = (id: string) => ({ videoRenderer: { videoId: id, title: { runs: [{ text: `t${id}` }] }, ownerText: { runs: [{ text: "c" }] }, viewCountText: { simpleText: "1 view" } } });
@@ -118,11 +155,11 @@ test("linkedin searchPeople/searchCompanies collect results from whichever clust
   const upsell = { items: [{ itemUnion: { fifComponentCard: {} } }] };
   const feedback = { items: [{ itemUnion: { feedbackCard: { entityUrn: "x" } } }] };
   const people = ok(op("linkedin", "searchPeople"), clusters(upsell, { items: [entity("Reid Hoffman", "https://www.linkedin.com/in/reidhoffman?miniProfileUrn=x")] }, feedback));
-  assert.deepEqual(people.map((p) => [p.name, p.url]), [["Reid Hoffman", "https://www.linkedin.com/in/reidhoffman?miniProfileUrn=x"]]);
+  assert.deepEqual(people.map((p) => [p.name, p.url, p.publicId]), [["Reid Hoffman", "https://www.linkedin.com/in/reidhoffman?miniProfileUrn=x", "reidhoffman"]]);
   // no upsell card (a Premium account): the people are cluster 0 and still found
   assert.equal(ok(op("linkedin", "searchPeople"), clusters({ items: [entity("A", "u")] }, feedback)).length, 1);
   const companies = ok(op("linkedin", "searchCompanies"), clusters({ items: [{ itemUnion: { simpleTextV2: {} } }] }, { items: [entity("Anthropic", "https://www.linkedin.com/company/anthropicresearch/")] }));
-  assert.deepEqual(companies[0], { name: "Anthropic", subtitle: "sub", followers: "sec", url: "https://www.linkedin.com/company/anthropicresearch/" });
+  assert.deepEqual(companies[0], { name: "Anthropic", subtitle: "sub", followers: "sec", url: "https://www.linkedin.com/company/anthropicresearch/", universalName: "anthropicresearch" });
   // no matches: LinkedIn answers no clusters at all
   assert.deepEqual(ok(op("linkedin", "searchCompanies"), clusters()), []);
   // results that moved out of entityResult are drift, not an empty "no results"

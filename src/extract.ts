@@ -78,17 +78,27 @@ export function getPath(obj: unknown, path?: string): unknown {
   return walk(obj, 0);
 }
 
-/** Keep only the given paths, per item for arrays. `name=path` renames the output key. */
+/**
+ * Keep only the given paths, per item for arrays. `name=path` renames the output key, and
+ * `name=path~regex` keeps the part of a string that the regex's group 1 (or whole match) finds
+ * (`publicId=navigationUrl~/in/([^/?]+)`); a non-string or no match drops the field.
+ */
 export function pick(value: unknown, paths: string[]): unknown {
   const named = paths.map((p) => {
-    const m = /^([\w$-]+)=(.+)$/.exec(p);
-    return m ? [m[1]!, m[2]!] : [p, p];
+    const [, name, rest] = /^([\w$-]+)=(.+)$/.exec(p) ?? [p, undefined, p];
+    const cut = rest.indexOf("~");
+    const path = cut < 0 ? rest : rest.slice(0, cut);
+    return { name: name ?? path, path, re: cut < 0 ? undefined : new RegExp(rest.slice(cut + 1)) };
   });
   const one = (item: unknown) => {
     if (!item || typeof item !== "object") return item;
     const out: Record<string, unknown> = {};
-    for (const [name, p] of named) {
-      const v = getPath(item, p);
+    for (const { name, path, re } of named) {
+      let v = getPath(item, path);
+      if (re) {
+        const m = typeof v === "string" ? re.exec(v) : null;
+        v = m ? (m[1] ?? m[0]) : undefined;
+      }
       if (v !== undefined) out[name] = v;
     }
     return out;

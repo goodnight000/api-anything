@@ -442,9 +442,11 @@ function paramSlots(leaves: Leaf[], args: Args, locs: Locations, warnings: strin
       }
       if (leaf.container || leaf.type !== "string" || literal) continue;
       if (header && !URL_HEADER.has(leaf.at[0]!) && !header.startsWith("x-")) continue;
-      if (inside(text, v)) part.push({ leaf, text: v, encoded: false });
+      // a short example ("SFO") turns up by chance inside a random token: there it must stand alone
+      const within = v.length <= 4 && highEntropy(leaf.value) ? (t: string, x: string) => new RegExp(`(?<![a-z0-9])${escapeRe(x)}(?![a-z0-9])`).test(t) : inside;
+      if (within(text, v)) part.push({ leaf, text: v, encoded: false });
       else {
-        const f = forms.find((x) => inside(text, x));
+        const f = forms.find((x) => within(text, x));
         if (f) part.push({ leaf, text: f, encoded: true });
       }
     }

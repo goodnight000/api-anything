@@ -22,9 +22,9 @@ HTTP clients answer through Chrome instead, in 1 to 2 s; the result's `reason` s
 Everything lives in `~/.api-anything`; set `API_ANYTHING_HOME` to use another directory.
 
 Bundled specs, verified live and logged out on 2026-09-27: `x` (getUser, getProfile),
-`instagram` (getProfile, getPosts), `google-flights` (search, top), `hacker-news` (frontPage,
-search), `youtube` (search), `airbnb` (search), `amazon` (search), `linkedin` (getMe, getProfile,
-getCompany, searchPeople — needs login). `api-anything sites` lists them; each has notes (caveats, arg formats) in `sites/<site>.md`,
+`instagram` (getProfile, getPosts), `google-flights` (search, top, priceCalendar), `hacker-news`
+(frontPage, search), `youtube` (search), `airbnb` (search), `amazon` (search), `linkedin` (getMe,
+getProfile, getCompany, searchPeople, searchCompanies; needs login). `api-anything sites` lists them; each has notes (caveats, arg formats) in `sites/<site>.md`,
 which `api-anything ops <site>` and MCP `list_operations` print.
 
 ## Logging in
@@ -145,7 +145,8 @@ $ api-anything call hn-search search query=duckdb
 
 The `add` and `call` output is real, from 2026-09-27, shortened; the `capture` listing shows its
 shape (ids and sizes vary). `--pick`
-accepts `name=path` to rename a field, and `[*]` in a path collects from every array item
+accepts `name=path` to rename a field, `name=path~regex` to keep the part of a string the
+regex's group 1 finds (`publicId=navigationUrl~/in/([^/?]+)`), and `[*]` in a path collects from every array item
 (`sections[*].items` joins each section's items); items with none of the picked fields are dropped. If the preview is wrong, fix `--extract`/`--pick` and
 re-run `add --from <one of the captures>`: no browser needed. For a server-rendered page, use
 `--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page;

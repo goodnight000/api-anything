@@ -92,6 +92,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    leaf named like the param, even when it is the only such flag. An array or object example binds to the equal JSON container. Example
    values must be distinct and at least 3 chars. If a value appears in several unrelated places,
    record all of them but warn. (Google Flights reuses the destination as the return-leg origin.)
+   A short example (4 chars or fewer, "SFO") inside a random-looking leaf counts only where it
+   stands alone between non-alphanumerics: inside a base64 blob it is chance.
    Referer, Origin, Cookie and any other echo of the page's location follow the args, but they are
    not evidence: an example value found nowhere else in the chosen request is an error, since the
    param would change nothing the server reads and every call would silently return the example's
@@ -188,7 +190,7 @@ Every response is classified, never by status code alone:
 |---|---|---|
 | `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`; for an html recipe whose items selector is `<container> <item>`, the container present with no element of the item's tag), no GraphQL `errors` with null `data` or next to a null extract target; any 2xx to a write | return |
 | `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once |
-| `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, `require_login: true`, a trigger that lands on a sign-in page | refresh cookies from the profile; for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
+| `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, an html/embedded op's page without its data that says "sign in" or shows a sign-in form (a mere Sign-in link, like Google's ServiceLogin button, is not one), a redirect to a login path, `require_login: true`, a trigger that lands on a sign-in page | refresh cookies from the profile; for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429 (with the server's Retry-After), "please wait", "rate limit" | back off, report; no heal |
 | `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers | escalate transport tier; then diagnostic `gated`. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
@@ -277,7 +279,7 @@ the call's args and judges ok (a `softFrom` page fires its own; a WAF interstiti
 ## Response extraction and token efficiency
 
 `response.extract` (dot/bracket path; `[*]` maps the rest over an array and flattens one level, skipping items without it, undefined when none has it) → optional `pick` (list of paths kept per item, or per
-object; a picked item left empty, such as a shelf or an ad, is dropped) → a hard output cap (the
+object; `name=path` renames, `name=path~regex` keeps what the regex's group 1 finds in a string; a picked item left empty, such as a shelf or an ad, is dropped) → a hard output cap (the
 result is never over it) with a truncation note that says what was cut. Arrays are cut at an item
 boundary, an item too big on its own is cut rather than dropped, strings are cut as strings, and
 objects stay objects: members above a common size cap are shortened, then trailing members are

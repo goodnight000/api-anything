@@ -2,7 +2,7 @@
   "name": "x",
   "displayName": "X (Twitter)",
   "baseUrl": "https://x.com",
-  "description": "Public X (Twitter) profiles by screen name, logged out: full profile via the UserByScreenName GraphQL query, or the profile card from the server-rendered page. No tweets (the logged-out timeline query 404s). See sites/x.md.",
+  "description": "Public X (Twitter) profiles by screen name, logged out: full profile via the UserByScreenName GraphQL query, or the profile card from the server-rendered page. No tweets (the logged-out timeline query 404s).",
   "operations": [
     {
       "name": "getProfile",

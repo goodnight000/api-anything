@@ -1,7 +1,7 @@
 # linkedin
 
 Verified live on 2026-09-27, signed in, from a clean `API_ANYTHING_HOME`:
-`api-anything login linkedin --profile "Chrome/Profile 2"`, then `api-anything verify linkedin` passes
+`api-anything login linkedin --profile "Chrome/Profile 1"`, then `api-anything verify linkedin` passes
 (all five ops at tier 1). All ops are plain HTTP with the imported cookies, no browser. **Needs an
 account**: there is no logged-out LinkedIn.
 
@@ -10,11 +10,11 @@ account**: there is no logged-out LinkedIn.
 | `getMe` | none | your own `firstName`, `lastName`, `occupation` (headline), `publicIdentifier` | 1 (about 300 ms) |
 | `getProfile` | `publicId` (example `williamhgates`) | `firstName`, `lastName`, `headline`, `summary` (the About text), `publicIdentifier`, `countryCode`, `websites`, `influencer`, `creator`, `entityUrn` | 1 (about 250 ms) |
 | `getCompany` | `universalName` (example `microsoft`) | `name`, `universalName`, `tagline` (when set), `description`, `industry`, `staffCount`, `website`, `headquarters` (`{country, geographicArea, city, ...}`), `url` | 1 (about 500 ms) |
-| `searchPeople` | `keywords` (example `reid hoffman`) | the first 10 people results: `name`, `headline`, `location`, `url` (`https://www.linkedin.com/in/<publicId>?miniProfileUrn=...`), `distance` (`DISTANCE_2`, `DISTANCE_3`, ...) | 1 (about 1 s) |
-| `searchCompanies` | `keywords` (example `anthropic`) | the first 10 company results: `name`, `subtitle` (industry, plus location when set), `followers`, `description`, `url` (`https://www.linkedin.com/company/<universalName>/`) | 1 (about 0.6 s) |
+| `searchPeople` | `keywords` (example `reid hoffman`) | the first 10 people results: `name`, `headline`, `location`, `url` (`https://www.linkedin.com/in/<publicId>?miniProfileUrn=...`), `publicId`, `distance` (`DISTANCE_2`, `DISTANCE_3`, ...) | 1 (about 1 s) |
+| `searchCompanies` | `keywords` (example `anthropic`) | the first 10 company results: `name`, `subtitle` (industry, plus location when set), `followers`, `description`, `url` (`https://www.linkedin.com/company/<universalName>/`), `universalName` | 1 (about 0.6 s) |
 
 ```sh
-api-anything login linkedin --profile "Chrome/Profile 2"   # see "Several signed-in profiles" below
+api-anything login linkedin --profile "Chrome/Profile 1"   # see "Several signed-in profiles" below
 api-anything call linkedin getMe                           # check WHO you are signed in as
 api-anything call linkedin getProfile publicId=satyanadella
 api-anything call linkedin getCompany universalName=openai
@@ -24,12 +24,11 @@ api-anything call linkedin searchCompanies "keywords=boston dynamics"
 
 ## Chaining search into get
 
-The search results carry no bare `publicIdentifier` or `universalName` field; LinkedIn's search API
-returns only the profile or company URL. Take the id from `url`:
+LinkedIn's search API returns only the profile or company URL, so the ops cut the id out of it
+(`pick` with `publicId=navigationUrl~/in/([^/?]+)`):
 
-- `searchPeople` `url` `https://www.linkedin.com/in/satyanadella?miniProfileUrn=...` -> `getProfile publicId=satyanadella`
-  (the path segment after `/in/`, without the `?...` query).
-- `searchCompanies` `url` `https://www.linkedin.com/company/anthropicresearch/` -> `getCompany universalName=anthropicresearch`.
+- `searchPeople` `publicId` `satyanadella` -> `getProfile publicId=satyanadella`.
+- `searchCompanies` `universalName` `anthropicresearch` -> `getCompany universalName=anthropicresearch`.
 
 Search first when you only know a name: a company's universal name often differs from its brand
 (`anthropic` is an unrelated investment fund; the AI company is `anthropicresearch`; Boston Dynamics

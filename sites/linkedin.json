@@ -116,7 +116,7 @@
           "required": true,
           "description": "public id from linkedin.com/in/<publicId>, e.g. williamhgates (the ACoAA... profile id works too)",
           "example": "williamhgates",
-          "hint": "the segment after /in/ in a profile URL, e.g. williamhgates; from searchPeople, cut it out of the result's url"
+          "hint": "the segment after /in/ in a profile URL, e.g. williamhgates; searchPeople returns it as publicId"
         }
       ],
       "readOnly": true,
@@ -183,7 +183,7 @@
           "required": true,
           "description": "universal name from linkedin.com/company/<name>, e.g. microsoft",
           "example": "microsoft",
-          "hint": "the segment after /company/ in a company URL; names differ from the brand (Anthropic is anthropicresearch), so take it from searchCompanies' url"
+          "hint": "the segment after /company/ in a company URL; names differ from the brand (Anthropic is anthropicresearch), so take universalName from searchCompanies"
         }
       ],
       "readOnly": true,
@@ -192,7 +192,7 @@
     },
     {
       "name": "searchPeople",
-      "description": "People search (the first 10 results of linkedin.com/search/results/people/?keywords=...): name, headline, location, url (linkedin.com/in/<publicId>?...; the segment after /in/ is getProfile's publicId), network distance.",
+      "description": "People search (the first 10 results of linkedin.com/search/results/people/?keywords=...): name, headline, location, url (linkedin.com/in/<publicId>?...), publicId (getProfile's arg), network distance.",
       "request": {
         "method": "GET",
         "url": "https://www.linkedin.com/voyager/api/search/dash/clusters?q=all&query=(keywords:%7Bkeywords%7D,flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(PEOPLE)),includeFiltersInResponse:false)&start=0&count=10",
@@ -237,6 +237,7 @@
           "headline=primarySubtitle.text",
           "location=secondarySubtitle.text",
           "url=navigationUrl",
+          "publicId=navigationUrl~/in/([^/?]+)",
           "distance=entityCustomTrackingInfo.memberDistance"
         ]
       },
@@ -257,7 +258,7 @@
     },
     {
       "name": "searchCompanies",
-      "description": "Company search (the first 10 results of linkedin.com/search/results/companies/?keywords=...): name, subtitle (industry, and location when set), followers, description, url (linkedin.com/company/<universalName>/; the segment after /company/ is getCompany's universalName).",
+      "description": "Company search (the first 10 results of linkedin.com/search/results/companies/?keywords=...): name, subtitle (industry, and location when set), followers, description, url (linkedin.com/company/<universalName>/), universalName (getCompany's arg).",
       "request": {
         "method": "GET",
         "url": "https://www.linkedin.com/voyager/api/search/dash/clusters?q=all&query=(keywords:%7Bkeywords%7D,flagshipSearchIntent:SEARCH_SRP,queryParameters:(resultType:List(COMPANIES)),includeFiltersInResponse:false)&start=0&count=10",
@@ -302,7 +303,8 @@
           "subtitle=primarySubtitle.text",
           "followers=secondarySubtitle.text",
           "description=summary.text",
-          "url=navigationUrl"
+          "url=navigationUrl",
+          "universalName=navigationUrl~/company/([^/?]+)"
         ]
       },
       "params": [

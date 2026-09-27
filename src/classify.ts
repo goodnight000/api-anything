@@ -53,7 +53,13 @@ const LOGIN = new RegExp(`${LOGIN_SAID.source}|type=["']password["']|accounts\\.
 const signInForm = (body: string) =>
   /type=["']?password/i.test(body) &&
   /<input[^>]*name=["']?(user(name)?|e-?mail|login|session_key)\b|autocomplete=["']?(current-password|username)|<form[^>]*action=["']?[^"'>\s]*(log_?in|sign_?in|sign-in|session)/i.test(body);
-const LOGIN_URL = /\/(login|signin|sign_in|sign-in|accounts\/login|i\/flow\/login|onboarding)(\/|$|\?)/i;
+const LOGIN_URL = /\/(login|signin|sign_in|sign-in|accounts\/login|i\/flow\/login|onboarding|ServiceLogin)(\/|$|\?)/i;
+/**
+ * A document that is a login page. Only what the page says or shows counts: every logged-out page
+ * can link a sign-in page (Google's Sign-in button goes to ServiceLogin), and a login redirect is
+ * judged by the final URL.
+ */
+const loginPage = (body: string) => LOGIN_SAID.test(body) || signInForm(body);
 const RATE = /rate.?limit|too many requests|please wait a few minutes|slow down/i;
 const DRIFT =
   /PersistedQueryNotFound|persisted query not found|must be defined|cannot be null|query not found|unknown (field|argument|operation)|cannot query field/i;
@@ -259,13 +265,13 @@ export function classify(op: Operation, r: Observed): Classified {
   if (op.response.format === "html") {
     if (!op.response.html) return ok();
     if (extractHtml(body, op.response.html).length) return ok();
-    if (LOGIN.test(body)) return is("auth", "login page instead of content");
+    if (loginPage(body)) return is("auth", "login page instead of content");
     if (emptyResults(body, op.response.html.items)) return ok("no results");
     return missing(`selector "${op.response.html.items}" matched nothing`);
   }
   if (op.response.format === "embedded") {
     if (extract(op.response, body) !== undefined) return ok();
-    return LOGIN.test(body) ? is("auth", "login page instead of content") : missing("embedded data not found");
+    return loginPage(body) ? is("auth", "login page instead of content") : missing("embedded data not found");
   }
 
   let data: unknown;

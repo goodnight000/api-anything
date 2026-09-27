@@ -72,10 +72,8 @@ places Google resolved (`[["/m/02_286",4],"New York",...]`).
 - The example dates (`2027-04-15`, `2027-04-01` to `2027-04-30`) go stale. Bump them before then,
   or `verify` fails.
 - A date in the past or a place Google can't resolve makes `search`/`top` fall back to Google's
-  Explore page, which has no results list. That page carries a "Sign in" link to
-  `accounts.google.com/ServiceLogin`, and the classifier currently reads that as a login page, so
-  the call returns `auth` ("login page instead of content"). google-flights needs no login: treat
-  that answer as "no results for these args" and check the date and places. `priceCalendar` with an
-  empty range returns `input`.
+  Explore page, which has no results list. The call replays the example args once; they answer, so
+  it returns `input`: check the date and places. A malformed date (`Oct 21`) is refused by the
+  param's `pattern` before anything is sent. `priceCalendar` with an empty range returns `input`.
 - Prices and names follow `hl=en-US&gl=US&curr=USD` in the page URL and the calendar's
   `x-goog-ext-259736195-jspb` header. No pagination. The EU consent wall was not tested.

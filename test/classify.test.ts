@@ -133,3 +133,18 @@ test("a write's 2xx is ok whatever the body; judge hands back the text; a bad re
   const bad = op({ response: { format: "html", html: { items: "li[", fields: {} } } });
   assert.equal(judge(bad, html(200, "<li>x</li>")).class, "error");
 });
+
+test("a logged-out page that only links a sign-in page (Google's ServiceLogin button) is not auth; a sign-in form or a ServiceLogin redirect is", () => {
+  const link = `<html><body><a href="https://accounts.google.com/ServiceLogin?hl=en">Sign in</a><div>Explore destinations</div></body></html>`;
+  const embedded = op({ request: { method: "GET", url: "https://www.google.com/travel/flights?q=x", headers: {} }, response: { format: "embedded", embedded: { regex: "key: 'ds:1'[^[]*data:(\\[)" } } });
+  const listed = op({ request: { method: "GET", url: "https://s.test/search?q=x", headers: {} }, response: { format: "html", html: { items: "li.r", fields: { t: "" } } } });
+  for (const o of [embedded, listed]) {
+    const c = classify(o, html(200, link));
+    assert.equal(c.class, "drift", c.reason);
+    assert.equal(c.missing, true);
+    const form = `<html><form action="/signin"><input name="email"><input type="password" name="pw"></form></html>`;
+    assert.equal(cls(o, html(200, form)), "auth");
+    assert.equal(cls(o, { ...html(200, link), url: "https://accounts.google.com/ServiceLogin?continue=x" }), "auth");
+    assert.equal(cls(o, html(200, "<html><p>Please sign in to continue</p></html>")), "auth");
+  }
+});

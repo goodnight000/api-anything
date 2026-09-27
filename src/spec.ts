@@ -64,12 +64,22 @@ export const MatchSchema = z.object({
   operationName: z.string().optional(),
 });
 
+function validRegex(p: string): boolean {
+  try {
+    new RegExp(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const ResponseSchema = z.object({
   format: z.enum(["json", "html", "embedded"]).default("json"),
   contentType: z.string().optional(),
   xssiPrefix: z.string().optional(),
   extract: z.string().optional(),
-  pick: z.array(z.string()).optional(),
+  /** paths kept per item; `name=path~regex` keeps what the regex's group 1 finds in a string */
+  pick: z.array(z.string().refine((p) => !p.includes("~") || validRegex(p.slice(p.indexOf("~") + 1)), "the regex after ~ in pick must be valid")).optional(),
   /** key path -> type, for drift detection */
   shape: z.record(z.string(), z.string()).optional(),
   html: z.object({ items: z.string(), fields: z.record(z.string(), z.string()) }).optional(),
@@ -85,17 +95,7 @@ export const ParamSchema = z.object({
   example: z.unknown().optional(),
   default: z.unknown().optional(),
   /** a regex the whole value must match; a call with an arg that doesn't is `input`, and nothing is sent */
-  pattern: z
-    .string()
-    .refine((p) => {
-      try {
-        new RegExp(p);
-        return true;
-      } catch {
-        return false;
-      }
-    }, "pattern must be a valid regular expression")
-    .optional(),
+  pattern: z.string().refine(validRegex, "pattern must be a valid regular expression").optional(),
   /** what a valid value looks like, said to the agent when an arg fails `pattern` ("YYYY-MM-DD") */
   hint: z.string().optional(),
 });

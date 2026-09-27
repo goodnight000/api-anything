@@ -423,3 +423,22 @@ test("telemetry that logs the page URL does not count as carrying the args", () 
   const video: Exchange = { ...ex(3, "https://video.test/seg-1.m4s?nasa"), response: { status: 200, headers: {}, contentType: "video/mp4", body: "x" } };
   assert.deepEqual(rankCandidates([video], { screen_name: "nasa" }), [], "media fetched by XHR is noise");
 });
+
+test("a short example found by chance inside a random header token is not a slot; the same value standing alone is", () => {
+  const exchanges: Exchange[] = [
+    {
+      id: 1,
+      resourceType: "xhr",
+      request: {
+        method: "GET",
+        url: "https://g.test/api/calendar?origin=SFO&dest=JFK",
+        // Google's x-goog-batchexecute-bgr: a random blob that happens to hold "SFO"
+        headers: { "x-goog-batchexecute-bgr": "q7ZkSFOb2Xw9LmT4pRvN8cYd", "x-route": "k9Qz2Lw7Rt4Xy8/SFO/Mn3Vb6" },
+      },
+      response: { status: 200, headers: {}, contentType: "application/json", body: '{"days":[{"from":"SFO","price":80},{"from":"SFO","price":95}]}' },
+    },
+  ];
+  const { operation } = learnOperation({ exchanges, examples: [{ origin: "SFO" }], cookies: [], name: "cal", trigger: { url: "https://g.test/" }, readOnly: true });
+  const at = operation.slots.filter((s) => s.param === "origin").map((s) => s.at[0]);
+  assert.deepEqual(at.sort(), ["header:x-route", "query:origin"]);
+});

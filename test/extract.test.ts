@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { ResponseSchema } from "../src/spec.ts";
 import { capOutput, extract, extractEmbedded, extractHtml, getPath, inferShape, parseBody, pick } from "../src/extract.ts";
 
 test("parseBody strips XSSI and keeps big integers exact", () => {
@@ -113,4 +114,14 @@ test("pick: name=path renames the output key", () => {
   ]);
   assert.deepEqual(pick({ "[1][0][1]": 1 }, []), {});
   assert.deepEqual(pick([[["UA"], [0, 209]]], ["price=[1][1]"]), [{ price: 209 }]);
+});
+
+test("pick name=path~regex keeps group 1 (or the whole match) of a string; no match drops the field", () => {
+  const items = [{ u: "https://www.linkedin.com/in/satyanadella?miniProfileUrn=x" }, { u: "https://www.linkedin.com/company/openai/" }, { u: 7 }];
+  assert.deepEqual(pick(items, ["id=u~/in/([^/?]+)", "co=u~/company/([^/?]+)", "host=u~linkedin\\.com"]), [
+    { id: "satyanadella", host: "linkedin.com" },
+    { co: "openai", host: "linkedin.com" },
+  ]);
+  assert.deepEqual(pick({ a: { b: "v-12" } }, ["a.b~\\d+"]), { "a.b": "12" });
+  assert.throws(() => ResponseSchema.parse({ pick: ["id=u~/in/(["] }), /regex after ~/);
 });

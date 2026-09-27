@@ -2,7 +2,7 @@
   "name": "google-flights",
   "displayName": "Google Flights",
   "baseUrl": "https://www.google.com",
-  "description": "Logged-out one-way flight search and a cheapest-date price calendar on Google Flights. Prices in USD, en-US. See sites/google-flights.md.",
+  "description": "Logged-out one-way flight search and a cheapest-date price calendar on Google Flights. Prices in USD, en-US.",
   "operations": [
     {
       "name": "search",
@@ -98,7 +98,7 @@
           "description": "departure date YYYY-MM-DD, today or later",
           "example": "2027-04-15",
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-          "hint": "departure date as YYYY-MM-DD, e.g. 2027-04-15; not 'Oct 21'"
+          "hint": "a departure date as YYYY-MM-DD, e.g. 2027-04-15"
         }
       ],
       "readOnly": true,
@@ -200,7 +200,7 @@
           "description": "departure date YYYY-MM-DD, today or later",
           "example": "2027-04-15",
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-          "hint": "departure date as YYYY-MM-DD, e.g. 2027-04-15; not 'Oct 21'"
+          "hint": "a departure date as YYYY-MM-DD, e.g. 2027-04-15"
         }
       ],
       "readOnly": true,
@@ -364,7 +364,7 @@
           "description": "first departure date",
           "example": "2027-04-01",
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-          "hint": "first departure date, as YYYY-MM-DD"
+          "hint": "the first departure date, as YYYY-MM-DD"
         },
         {
           "name": "end",
@@ -373,7 +373,7 @@
           "description": "last departure date, at most about 3 months after start",
           "example": "2027-04-30",
           "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
-          "hint": "last departure date, at most about 3 months after start, as YYYY-MM-DD"
+          "hint": "the last departure date as YYYY-MM-DD, at most about 3 months after start"
         }
       ],
       "readOnly": true,
