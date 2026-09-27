@@ -13,12 +13,12 @@
  */
 import { execFileSync } from "node:child_process";
 import { pbkdf2Sync, createDecipheriv } from "node:crypto";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { basename, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { siteOf } from "./session.js";
+import { AUTH_COOKIE, siteOf } from "./session.js";
 import type { StoredCookie } from "./types.js";
 
 // node:sqlite is still flagged "experimental" and prints a warning on first use; drop just that one.
@@ -52,6 +52,28 @@ export interface ImportedSession {
   source: string;
   browser: string;
   profile: string;
+  /** the profile's display name and Google account, from Chrome's Local State, so a human can tell whose it is */
+  name?: string;
+  email?: string;
+}
+
+/** One browser profile a human can pick with --profile. */
+export interface ProfileChoice {
+  /** the --profile value: "Chrome/Profile 2" */
+  profile: string;
+  name?: string;
+  email?: string;
+}
+
+/** Several profiles hold the site's login: importing one would be a guess between accounts. */
+export class AmbiguousProfile extends Error {
+  constructor(
+    readonly site: string,
+    readonly candidates: ProfileChoice[],
+  ) {
+    super(`${candidates.length} browser profiles are signed in to ${site}; pick one: ${candidates.map((c) => `"${c.profile}"${c.name || c.email ? ` (${[c.name, c.email].filter(Boolean).join(", ")})` : ""}`).join(", ")}`);
+    this.name = "AmbiguousProfile";
+  }
 }
 
 const CHROMIUM_MAC: [string, string][] = [
@@ -136,7 +158,6 @@ interface Candidate {
   dbPath: string;
   /** cookie names present for the site (plaintext, no decryption) */
   names: Set<string>;
-  mtimeMs: number;
 }
 
 /** Every profile of every browser that holds at least one cookie for the site's registrable domain. */
@@ -148,7 +169,7 @@ function candidatesFor(site: string): Candidate[] {
         const db = join(root.root, entry, "cookies.sqlite");
         if (!existsSync(db)) continue;
         const names = firefoxNames(db, site);
-        if (names.size) out.push({ browser: root.name, profile: entry, family: "firefox", root, dbPath: db, names, mtimeMs: statSync(db).mtimeMs });
+        if (names.size) out.push({ browser: root.name, profile: entry, family: "firefox", root, dbPath: db, names });
       }
       continue;
     }
@@ -157,7 +178,7 @@ function candidatesFor(site: string): Candidate[] {
       const db = chromiumCookieDb(profileDir);
       if (!db) continue;
       const names = chromiumNames(db, site);
-      if (names.size) out.push({ browser: root.name, profile: entry, family: "chromium", root, dbPath: db, names, mtimeMs: statSync(db).mtimeMs });
+      if (names.size) out.push({ browser: root.name, profile: entry, family: "chromium", root, dbPath: db, names });
     }
   }
   return out;
@@ -172,7 +193,7 @@ function safeReaddir(dir: string): string[] {
 }
 
 /** true when a cookie's host_key/host belongs to the site's registrable domain. */
-const belongs = (host: string, site: string) => {
+export const belongs = (host: string, site: string) => {
   const h = host.replace(/^\./, "").toLowerCase();
   return h === site || h.endsWith("." + site) || siteOf(h) === site;
 };
@@ -283,24 +304,40 @@ export function parsePin(text: string): ImportPin {
 
 const matchesPin = (c: Candidate, pin: ImportPin) => c.profile === pin.profile && (!pin.browser || c.browser.toLowerCase() === pin.browser.toLowerCase());
 
+/** A chromium profile's display name and signed-in Google account, from the browser's "Local State". */
+function profileInfo(c: Candidate): { name?: string; email?: string } {
+  if (c.family !== "chromium") return {};
+  try {
+    const state = JSON.parse(readFileSync(join(c.root.root, "Local State"), "utf8")) as { profile?: { info_cache?: Record<string, { name?: string; user_name?: string }> } };
+    const info = state.profile?.info_cache?.[c.profile];
+    return { ...(info?.name ? { name: info.name } : {}), ...(info?.user_name ? { email: info.user_name } : {}) };
+  } catch {
+    return {};
+  }
+}
+
 /**
- * Import the site's cookies from the everyday browser. Chooses the profile with all `loginCookies`
- * (or, for an unknown site, the most recently used profile with cookies for the site), unless `pin`
- * fixes one. Returns undefined when nothing is importable (caller falls back to the window flow).
+ * Import the site's cookies from the everyday browser: the one profile that holds the site's
+ * `loginCookies` (for an unknown site, auth-looking cookies, else any cookies for it), or the
+ * `pin`ned one. Never a guess: when several profiles qualify (two people's accounts), it throws
+ * AmbiguousProfile with their display names and emails. Undefined when nothing is importable
+ * (the caller falls back to the window flow).
  */
 export function importFromBrowsers(o: { url: string; loginCookies?: string[]; pin?: ImportPin }): ImportedSession | undefined {
   const site = siteOf(new URL(o.url).hostname.toLowerCase());
-  let candidates = candidatesFor(site).sort((a, b) => b.mtimeMs - a.mtimeMs); // most recently used first
+  let candidates = candidatesFor(site);
   if (o.pin) {
     candidates = candidates.filter((c) => matchesPin(c, o.pin!));
     if (!candidates.length) throw new Error(`no browser profile "${o.pin.browser ? `${o.pin.browser}/` : ""}${o.pin.profile}" has cookies for ${site}`);
   }
-  const login = o.loginCookies?.length ? candidates.filter((c) => o.loginCookies!.every((n) => c.names.has(n))) : [];
-  const chosen = login[0] ?? candidates[0];
+  const signedIn = candidates.filter((c) => (o.loginCookies?.length ? o.loginCookies.every((n) => c.names.has(n)) : [...c.names].some((n) => AUTH_COOKIE.test(n))));
+  const pool = signedIn.length ? signedIn : candidates;
+  if (pool.length > 1) throw new AmbiguousProfile(site, pool.map((c) => ({ profile: `${c.browser}/${c.profile}`, ...profileInfo(c) })));
+  const chosen = pool[0];
   if (!chosen) return undefined;
   const cookies = chosen.family === "chromium" ? readChromium(chosen.root, chosen.dbPath, site) : readFirefox(chosen.dbPath, site);
   if (!cookies.length) return undefined;
-  return { cookies, source: `${chosen.browser.toLowerCase()}:${chosen.profile}`, browser: chosen.browser, profile: chosen.profile };
+  return { cookies, source: `${chosen.browser.toLowerCase()}:${chosen.profile}`, browser: chosen.browser, profile: chosen.profile, ...profileInfo(chosen) };
 }
 
 /* --------------------------------------------------------------- file import */

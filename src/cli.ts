@@ -11,8 +11,9 @@ import { buildRequest } from "./http.js";
 import { capOutput, extract } from "./extract.js";
 import { rankCandidates } from "./learn.js";
 import { serveStdio, VERSION } from "./mcp.js";
-import { loadSession, loggedIn, saveSession } from "./session.js";
-import { cookieNames, importSession, logout } from "./login.js";
+import { loadSession, loggedIn, pruneCaptures, saveSession, sessionFile, withLock } from "./session.js";
+import { AmbiguousProfile } from "./import.js";
+import { cookieNames, importSession, logout, resolveLoginTarget } from "./login.js";
 import { MatchSchema, TriggerStepSchema, type Operation } from "./spec.js";
 import { exportSite, listSites, loadSite } from "./store.js";
 
@@ -20,8 +21,13 @@ const HELP: Record<string, string> = {
   login: `api-anything login <site|url> [--profile "Chrome/Profile 2"] [--window] [--cookies <file>]
   By default imports the site's cookies from your everyday browser (you are almost always already
   signed in there, so no password and no re-doing 2FA). Prints which profile was used and the cookie
-  NAMES only. The imported session is the SAME one as your browser: if the site logs it out, both go.
-  --profile   pick a browser/profile instead of auto-choosing (scans every profile otherwise)
+  NAMES only (plus the profile's display name and Google account). The imported session is the SAME
+  one as your browser: if the site logs it out, both go.
+  <site|url>  a site name (linkedin), a domain (linkedin.com, www.linkedin.com) or a URL
+  --profile   the browser profile to import from, e.g. "Chrome/Profile 2". Needed when several
+              profiles are signed in to the site (possibly different people's accounts): login
+              then lists them with their names and emails instead of guessing. The choice is
+              remembered: a later automatic re-import uses the same profile.
   --window    open a visible Chrome window to sign in by hand (an independent session); also the
               automatic fallback when nothing is importable. This is where you solve 2FA/captchas.
   --cookies   import a cookies.txt (Netscape) or JSON export (Cookie-Editor / Playwright), for CI`,
@@ -30,7 +36,7 @@ const HELP: Record<string, string> = {
   capture: `api-anything capture <url> [--steps <json>] [--soft-from <url>] [--example k=v]... [--write] [--limit n]
   Loads the page in Chrome and lists the requests it made, noise filtered and ranked (requests carrying
   the --example values first). Saves everything as a capture id for: add --from <id> --pick-request <n>,
-  and for: inspect <id> <n>.
+  and for: inspect <id> <n>. Captures hold cookie values; the newest 20 are kept, none past 24 h.
   --steps      JSON array of {action: click|fill|press|wait|goto, selector?, value?, ms?}
   --soft-from  load this page first, then navigate in-app to <url> (SPAs only fire their data XHRs that way)
   --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser`,
@@ -69,7 +75,8 @@ const HELP: Record<string, string> = {
   Writes a shareable spec: examples and response shapes stripped, and refused if a live cookie or
   session value is inside. --keep-examples keeps param examples you confirmed are public (so verify works).`,
   mcp: `api-anything mcp [--allow-writes]
-  Serves list_sites, list_operations and call_operation over stdio MCP.`,
+  Serves list_sites, list_operations, call_operation and login over stdio MCP. MCP cannot create
+  operations (use capture/add here), and its login only refreshes a session a human imported here.`,
 };
 
 const USAGE = `api-anything ${VERSION}: turn a website into operations an agent can call.
@@ -180,37 +187,46 @@ async function run(argv: string[]): Promise<number> {
     case "login": {
       const target = pos[0];
       if (!target) throw new Fail("missing <site|url>", "api-anything login <site|url>");
-      const known = /^https?:\/\//.test(target) ? undefined : requireSite(target);
-      const url = known ? known.site.baseUrl : target;
-      const host = new URL(url).hostname;
-      const site = known ? target : (listSites().find((n) => new URL(loadSite(n)!.site.baseUrl).hostname === host) ?? host.replace(/^www\./, ""));
-      const loginCookies = known?.site.loginCookies;
+      let t: ReturnType<typeof resolveLoginTarget>;
+      try {
+        t = resolveLoginTarget(target);
+      } catch (e) {
+        throw new Fail((e as Error).message, "api-anything sites lists known sites; or pass a domain (linkedin.com) or a full https:// URL");
+      }
+      const { site, url, loginCookies } = t;
 
       // The visible-window flow: --window, or the automatic fallback when nothing is importable.
       const runWindow = async (reason?: string) => {
         needChrome();
         process.stderr.write(`${reason ? reason + " " : ""}Sign in to ${url} in the Chrome window, then close it or press Enter here.\n`);
         const cookies = await login({ url, profileDir: profileDir() });
-        saveSession(site, { ...loadSession(site), cookies, source: "window" });
+        withLock(sessionFile(site), () => saveSession(site, { ...loadSession(site), cookies, source: "window" }));
         out({ ok: true, site, source: "window", cookies: cookieNames(cookies), loggedIn: loggedIn(cookies, loginCookies) });
         return 0;
       };
 
       if (v.window) return runWindow();
 
-      const imported = await importSession(site, url, { loginCookies, profile: v.profile, file: v.cookies });
+      let imported;
+      try {
+        imported = await importSession(site, url, { loginCookies, profile: v.profile, file: v.cookies });
+      } catch (e) {
+        if (!(e instanceof AmbiguousProfile)) throw e;
+        throw new Fail(e.message, `ask the user which account to use, then: api-anything login ${site} --profile "<Browser/Profile>" (one of candidates[].profile)`, { candidates: e.candidates });
+      }
       if (!imported) {
         if (v.cookies) throw new Fail(`no cookies for ${site} in ${v.cookies}`, "check the export is for the right site");
         if (v.profile) throw new Fail(`no importable cookies in profile "${v.profile}"`, "run: api-anything login " + site + " (scans every profile), or --window");
         return runWindow("No signed-in session found in your browsers.");
       }
-      const names = cookieNames(imported.cookies);
       out({
         ok: true,
         site,
         source: imported.source,
         ...(imported.source !== "file" ? { profile: `${imported.browser}/${imported.profile}` } : {}),
-        cookies: names,
+        ...(imported.name ? { profileName: imported.name } : {}),
+        ...(imported.email ? { account: imported.email } : {}),
+        cookies: cookieNames(imported.cookies),
         loggedIn: loggedIn(imported.cookies, loginCookies),
       });
       return 0;
@@ -230,6 +246,7 @@ async function run(argv: string[]): Promise<number> {
       needChrome();
       const limit = positive(v.limit, "limit") ?? 15;
       const c = await capturePage({ url, steps, softFrom: v["soft-from"], write: v.write });
+      pruneCaptures();
       const ranked = rankCandidates(c.exchanges, kv(v.example));
       const candidates = ranked.slice(0, limit).map((x) => ({
         id: x.id,
@@ -331,6 +348,7 @@ async function run(argv: string[]): Promise<number> {
         from: v.from ? { capture: loadCapture(v.from), id: v["pick-request"] ? Number(v["pick-request"]) : undefined } : undefined,
         from2: v.from2 ? loadCapture(v.from2) : undefined,
       });
+      pruneCaptures();
       const op = r.operation;
       out({
         ok: true,

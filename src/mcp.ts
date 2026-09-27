@@ -1,6 +1,8 @@
 /**
- * stdio MCP server with three fixed meta-tools, so the tool list costs the same at 2 sites or 200.
+ * stdio MCP server with four fixed meta-tools, so the tool list costs the same at 2 sites or 200.
  * Writes are hidden from list_operations and refused by call_operation unless started with allowWrites.
+ * It cannot create operations (that is the CLI's capture/add), and its login cannot import cookies
+ * a human did not already choose to import: page content may be steering the agent.
  */
 import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -9,8 +11,8 @@ import { z } from "zod";
 import { closeBrowser, login } from "./browser.js";
 import { call } from "./execute.js";
 import { profileDir } from "./heal.js";
-import { cookieNames, importSession, loggedIn, resolveLoginTarget } from "./login.js";
-import { loadSession, saveSession } from "./session.js";
+import { browserSource, cookieNames, importSession, loggedIn, resolveLoginTarget } from "./login.js";
+import { loadSession, saveSession, sessionFile, withLock } from "./session.js";
 import { listSites, loadSite } from "./store.js";
 
 export const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -99,10 +101,10 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     "login",
     {
       description:
-        "Sign in to a site so its operations work; use after a call returns class 'auth'. mode 'import' (default) copies the session from the user's everyday browser (no password); 'window' opens a visible browser for the user to sign in and clear 2FA/captcha by hand.",
+        "Sign in to a site so its operations work; use after a call returns class 'auth'. mode 'import' (default) refreshes the session from the browser profile the user already chose with `api-anything login` (no password); 'window' opens a visible browser for the user to sign in and clear 2FA/captcha by hand.",
       inputSchema: {
         site: z.string().optional().describe("site name from list_sites"),
-        url: z.string().optional().describe("a full URL, if the site is not yet known"),
+        url: z.string().optional().describe("a full URL, if the site is not yet known (window mode only)"),
         mode: z.enum(["import", "window"]).optional(),
       },
       annotations: { openWorldHint: true },
@@ -117,22 +119,33 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
         return reply({ error: (e as Error).message, next: "list_sites" }, true);
       }
       if (mode === "window") {
+        // a human signs in by hand: they see which site and which account
         const cookies = await login({ url: t.url, profileDir: profileDir(), waitForEnter: false });
-        saveSession(t.site, { ...loadSession(t.site), cookies, source: "window" });
+        withLock(sessionFile(t.site), () => saveSession(t.site, { ...loadSession(t.site), cookies, source: "window" }));
         return reply({ ok: true, site: t.site, source: "window", cookies: cookieNames(cookies), loggedIn: loggedIn(cookies, t.loginCookies) });
+      }
+      // An agent may be acting on injected page text: it may only refresh a known site's session from
+      // the profile a human already picked, never pull another domain's or another account's cookies.
+      const source = loadSite(t.site) ? browserSource(t.site) : undefined;
+      if (!source) {
+        return reply(
+          { ok: false, site: t.site, error: "MCP can only refresh a session the user imported with the CLI", next: `ask the user to run in a terminal: api-anything login ${t.site} (or use mode "window")` },
+          true,
+        );
       }
       let imported;
       try {
-        imported = await importSession(t.site, t.url, { loginCookies: t.loginCookies });
+        imported = await importSession(t.site, t.url, { loginCookies: t.loginCookies, profile: source });
       } catch (e) {
-        return reply({ ok: false, site: t.site, error: (e as Error).message, next: `ask the user to run: api-anything login ${t.site} --window` }, true);
+        return reply({ ok: false, site: t.site, error: (e as Error).message, next: `ask the user to run: api-anything login ${t.site}` }, true);
       }
-      if (!imported) return reply({ ok: false, site: t.site, error: "no signed-in session found in the user's browsers", next: `ask the user to run: api-anything login ${t.site} --window` }, true);
+      if (!imported) return reply({ ok: false, site: t.site, error: `no signed-in session in ${source}`, next: `ask the user to run: api-anything login ${t.site}` }, true);
       return reply({
         ok: true,
         site: t.site,
         source: imported.source,
-        ...(imported.source !== "file" ? { profile: `${imported.browser}/${imported.profile}` } : {}),
+        profile: `${imported.browser}/${imported.profile}`,
+        ...(imported.name ? { profileName: imported.name } : {}),
         cookies: cookieNames(imported.cookies),
         loggedIn: loggedIn(imported.cookies, t.loginCookies),
       });

@@ -1,7 +1,8 @@
 /** Per-site cookie jar and session values under ~/.api-anything (0700 dirs, 0600 files). */
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { getDomain } from "tldts";
 import type { StoredCookie } from "./types.js";
 
 export interface Session {
@@ -87,6 +88,29 @@ export function withLock<T>(file: string, fn: () => T): T {
   }
 }
 
+const CAPTURE_TTL_MS = 24 * 60 * 60_000;
+const CAPTURES_KEPT = 20;
+
+/**
+ * Captures hold every response body and the run's cookie values, and one page can be tens of MB:
+ * keep the newest 20, none older than 24 h. Runs after each new capture.
+ */
+export function pruneCaptures(now = Date.now()): void {
+  const dir = join(home(), "captures");
+  let files: { file: string; at: number }[];
+  try {
+    files = readdirSync(dir)
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => ({ file: join(dir, f), at: statSync(join(dir, f)).mtimeMs }));
+  } catch {
+    return; // no captures yet
+  }
+  files.sort((a, b) => b.at - a.at);
+  files.forEach((f, i) => {
+    if (i >= CAPTURES_KEPT || now - f.at > CAPTURE_TTL_MS) rmSync(f.file, { force: true });
+  });
+}
+
 export const sessionFile = (site: string) => join(home(), "sessions", `${safeName(site)}.json`);
 
 export function loadSession(site: string): Session {
@@ -144,23 +168,14 @@ export function cookieHeaderFor(cookies: StoredCookie[], url: string, now = Date
     .join("; ");
 }
 
-// Shared hosting suffixes: every subdomain is someone else's site.
-const SHARED =
-  /(?:^|\.)(github\.io|gitlab\.io|vercel\.app|netlify\.app|pages\.dev|workers\.dev|herokuapp\.com|appspot\.com|web\.app|firebaseapp\.com|blogspot\.com|cloudfront\.net|azurewebsites\.net|onrender\.com|fly\.dev|glitch\.me|ngrok\.io|ngrok-free\.app|s3\.amazonaws\.com|myshopify\.com|wordpress\.com|substack\.com|tumblr\.com)$/;
-const CC_SECOND = /^(co|com|net|org|gov|edu|ac|or|ne|go|gob|mil|ltd|plc|sch|nhs|gv|nom)$/;
-
 /**
- * The registrable domain ("site") of a host, so a cookie ref never takes another site's cookie.
- * ponytail: a compact public-suffix rule, not the full PSL: country codes with a generic second
- * level (co.uk, com.au, ne.jp) and common shared hosts (github.io, vercel.app); swap in a PSL
- * package if a site falls through.
+ * The registrable domain ("site") of a host, by the Public Suffix List including its private
+ * section (github.io, run.app, amazonaws.com hosts), so a cookie ref, a Set-Cookie Domain or a
+ * browser import never reaches another site. An IP, localhost or a bare suffix is its own site.
  */
-export const siteOf = (host: string) => {
-  if (/^[\d.]+$|:/.test(host)) return host;
-  const labels = host.toLowerCase().split(".");
-  const shared = SHARED.exec(host.toLowerCase());
-  const n = shared ? shared[1]!.split(".").length + 1 : labels.length >= 3 && /^[a-z]{2}$/.test(labels.at(-1)!) && CC_SECOND.test(labels.at(-2)!) ? 3 : 2;
-  return labels.slice(-n).join(".");
+export const siteOf = (host: string): string => {
+  const h = host.toLowerCase();
+  return getDomain(h, { allowPrivateDomains: true }) ?? h;
 };
 
 /**
@@ -198,7 +213,8 @@ export function parseSetCookie(line: string, url: string, now = Date.now()): Sto
       // never a cookie for another site, or for a public suffix
       const site = siteOf(host);
       if ((host !== d && !host.endsWith(`.${d}`)) || (d !== site && !d.endsWith(`.${site}`))) return undefined;
-      c.domain = `.${d}`;
+      // a host that is itself a suffix (s3.amazonaws.com, localhost) gets a host-only cookie, as in a browser
+      if (getDomain(d, { allowPrivateDomains: true })) c.domain = `.${d}`;
     } else if (k === "path" && v.startsWith("/")) c.path = v;
     else if (k === "max-age" && /^-?\d+$/.test(v)) maxAge = Number(v);
     else if (k === "expires" && !Number.isNaN(Date.parse(v))) c.expires = Date.parse(v) / 1000;
@@ -224,7 +240,7 @@ export function parseCookieHeader(raw: string): Record<string, string> {
 }
 
 // ponytail: name heuristic for "logged in"; a site's spec can pin exact names via loginCookies.
-const AUTH_COOKIE =
+export const AUTH_COOKIE =
   /^(auth_token|sessionid|session_id|li_at|sid|ssid|__secure-\dpsid|user_session|reddit_session|remember_\w+|\w*_session|\w*_sess)$/i;
 
 export function loggedIn(cookies: StoredCookie[], loginCookies?: string[], now = Date.now()): boolean {

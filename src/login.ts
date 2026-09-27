@@ -7,21 +7,44 @@
 import { readFileSync } from "node:fs";
 import { addCookiesToProfile, chromeAvailable, clearProfileCookies } from "./browser.js";
 import { profileDir } from "./heal.js";
-import { cookiesFromFile, importFromBrowsers, parsePin, type ImportPin, type ImportedSession } from "./import.js";
-import { loadSession, loggedIn, safeName, saveSession, siteOf } from "./session.js";
+import { belongs, cookiesFromFile, importFromBrowsers, parsePin, type ImportPin, type ImportedSession } from "./import.js";
+import { loadSession, loggedIn, safeName, saveSession, sessionFile, siteOf, withLock } from "./session.js";
 import { listSites, loadSite } from "./store.js";
 import type { StoredCookie } from "./types.js";
 
-/** Turn a login target (site name or url) into { site, url, loginCookies }. */
+/** The known site whose baseUrl is on this host (www. or not). */
+function siteOnHost(host: string): string | undefined {
+  const bare = (h: string) => h.toLowerCase().replace(/^www\./, "");
+  return listSites().find((n) => {
+    try {
+      return bare(new URL(loadSite(n)!.site.baseUrl).hostname) === bare(host);
+    } catch {
+      return false; // a corrupt spec is reported by the commands that use it
+    }
+  });
+}
+
+/**
+ * Turn a login target into { site, url, loginCookies }: a site name ("linkedin"), a domain
+ * ("linkedin.com", "www.linkedin.com") or a URL. A domain or URL on a known site's host is that
+ * site; any other one is a new site named after its host.
+ */
 export function resolveLoginTarget(target: string): { site: string; url: string; loginCookies?: string[] } {
-  if (/^https?:\/\//.test(target)) {
-    const host = new URL(target).hostname;
-    const site = listSites().find((n) => new URL(loadSite(n)!.site.baseUrl).hostname === host) ?? host.replace(/^www\./, "");
-    return { site, url: target, loginCookies: loadSite(site)?.site.loginCookies };
+  let url = target;
+  if (!/^https?:\/\//i.test(target)) {
+    const known = /^[a-z0-9][a-z0-9._-]*$/i.test(target) ? loadSite(target) : undefined;
+    if (known) return { site: known.site.name, url: known.site.baseUrl, loginCookies: known.site.loginCookies };
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?(\/.*)?$/i.test(target)) throw new Error(`no site "${target}": give a site name from api-anything sites, a domain (example.com) or a URL`);
+    url = `https://${target}`;
   }
-  const known = loadSite(target);
-  if (!known) throw new Error(`no site "${target}"`);
-  return { site: target, url: known.site.baseUrl, loginCookies: known.site.loginCookies };
+  const host = new URL(url).hostname.toLowerCase();
+  const name = siteOnHost(host);
+  if (name) {
+    const s = loadSite(name)!.site;
+    // a bare domain means the site itself; a full URL may name its sign-in page
+    return { site: s.name, url: url === target ? url : s.baseUrl, loginCookies: s.loginCookies };
+  }
+  return { site: host.replace(/^www\./, ""), url };
 }
 
 export interface ImportOptions {
@@ -48,8 +71,7 @@ export async function importSession(site: string, url: string, o: ImportOptions 
     imported = importFromBrowsers({ url, loginCookies: o.loginCookies, pin });
   }
   if (!imported || !imported.cookies.length) return undefined;
-  const prev = loadSession(site);
-  saveSession(site, { ...prev, cookies: imported.cookies, source: imported.source });
+  withLock(sessionFile(site), () => saveSession(site, { ...loadSession(site), cookies: imported.cookies, source: imported.source }));
   if (o.pushProfile !== false && chromeAvailable()) {
     try {
       await addCookiesToProfile(imported.cookies, profileDir());
@@ -60,11 +82,13 @@ export async function importSession(site: string, url: string, o: ImportOptions 
   return imported;
 }
 
-const forSite = (c: StoredCookie, url: string) => {
-  const site = siteOf(new URL(url).hostname.toLowerCase());
-  const h = c.domain.replace(/^\./, "").toLowerCase();
-  return h === site || h.endsWith("." + site) || siteOf(h) === site;
-};
+const forSite = (c: StoredCookie, url: string) => belongs(c.domain, siteOf(new URL(url).hostname.toLowerCase()));
+
+/** The browser profile a human chose for this site ("chrome:Profile 2"), if its session came from one. */
+export function browserSource(site: string): string | undefined {
+  const source = loadSession(site).source;
+  return source && source !== "window" && source !== "file" ? source : undefined;
+}
 
 /**
  * Self-heal an imported session: re-import from the same browser profile once. Used when a call
@@ -72,8 +96,8 @@ const forSite = (c: StoredCookie, url: string) => {
  * "window" (independent session) and "file" (no path to re-read) sources.
  */
 export async function reimportIfBrowser(site: string, url: string, loginCookies?: string[]): Promise<boolean> {
-  const source = loadSession(site).source;
-  if (!source || source === "window" || source === "file") return false;
+  const source = browserSource(site);
+  if (!source) return false;
   const pin: ImportPin = parsePin(source);
   try {
     const r = await importSession(site, url, { loginCookies, profile: `${pin.browser}/${pin.profile}` });

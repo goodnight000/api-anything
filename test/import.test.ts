@@ -3,11 +3,11 @@
  * browser, no Keychain: API_ANYTHING_BROWSER_ROOTS injects roots and the Safe Storage password.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, utimesSync } from "node:fs";
+import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { cookiesFromFile, importFromBrowsers, type BrowserRoot } from "../src/import.ts";
+import { AmbiguousProfile, cookiesFromFile, importFromBrowsers, type BrowserRoot } from "../src/import.ts";
 import { makeChromiumDb, makeFirefoxDb } from "./fixture/cookie-db.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "aa-import-"));
@@ -59,17 +59,48 @@ test("chooses the profile that has all loginCookies, not merely the most recent 
   assert.equal(r?.source, "chrome:Profile 2");
 });
 
-test("unknown site: most recently used profile with cookies for the site wins", () => {
+test("two signed-in profiles: refuses to guess (not the most recently used), listing each profile's name and Google account", () => {
   const root = tmp();
   makeChromiumDb(join(root, "Default"), [{ host_key: ".reddit.com", name: "reddit_session", value: "oldsessionvalue1" }], { password: "pw" });
   makeChromiumDb(join(root, "Profile 1"), [{ host_key: ".reddit.com", name: "reddit_session", value: "newsessionvalue2" }], { password: "pw" });
   utimesSync(join(root, "Default", "Network", "Cookies"), new Date(Date.now() - 100000), new Date(Date.now() - 100000));
   utimesSync(join(root, "Profile 1", "Network", "Cookies"), new Date(), new Date());
+  writeFileSync(
+    join(root, "Local State"),
+    JSON.stringify({ profile: { info_cache: { Default: { name: "Work", user_name: "someone.else@example.com" }, "Profile 1": { name: "Me", user_name: "me@example.com" } } } }),
+  );
   inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
 
-  const r = importFromBrowsers({ url: "https://reddit.com" });
+  let err: unknown;
+  try {
+    importFromBrowsers({ url: "https://reddit.com" });
+  } catch (e) {
+    err = e;
+  }
+  assert.ok(err instanceof AmbiguousProfile, `expected a refusal, got ${String(err)}`);
+  assert.deepEqual(
+    err.candidates.sort((a, b) => a.profile.localeCompare(b.profile)),
+    [
+      { profile: "Chrome/Default", name: "Work", email: "someone.else@example.com" },
+      { profile: "Chrome/Profile 1", name: "Me", email: "me@example.com" },
+    ],
+  );
+  // a known site's loginCookies narrow it the same way: both hold them, so still no guess
+  assert.throws(() => importFromBrowsers({ url: "https://reddit.com", loginCookies: ["reddit_session"] }), AmbiguousProfile);
+  // the human's pick is honoured, and the chosen profile's name comes back for printing
+  const r = importFromBrowsers({ url: "https://reddit.com", pin: { browser: "Chrome", profile: "Profile 1" } });
   assert.equal(r?.source, "chrome:Profile 1");
   assert.equal(r?.cookies[0]!.value, "newsessionvalue2");
+  assert.equal(r?.name, "Me");
+  assert.equal(r?.email, "me@example.com");
+});
+
+test("one profile signed in, another with only tracking cookies: the signed-in one, no question asked", () => {
+  const root = tmp();
+  makeChromiumDb(join(root, "Default"), [{ host_key: ".reddit.com", name: "csv", value: "trackingcookie1" }], { password: "pw" });
+  makeChromiumDb(join(root, "Profile 1"), [{ host_key: ".reddit.com", name: "reddit_session", value: "realsessionvalue" }], { password: "pw" });
+  inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
+  assert.equal(importFromBrowsers({ url: "https://www.reddit.com" })?.source, "chrome:Profile 1");
 });
 
 test("--profile pin overrides selection; a missing pin throws", () => {
