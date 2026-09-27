@@ -4,13 +4,61 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type BrowserContext, type Cookie, type Page, type Request, type Route } from "playwright-core";
+import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
+import { chromium, type BrowserContext, type Cookie, type Page, type Request, type Response, type Route } from "playwright-core";
 import { siteOf } from "./session.js";
 import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
 
 let current: { profileDir: string; headless: boolean; ctx: Promise<BrowserContext> } | undefined;
 let headlessUA: string | undefined;
 const originPages = new Map<string, Page>();
+
+// Chrome locks a profile to one process. A long-lived process (the MCP server) releases it after
+// this much idle time (an agent's calls are seconds apart, so Chrome would mostly relaunch anyway),
+// and a second process waits up to LOCK_WAIT_MS for it.
+const IDLE_CLOSE_MS = 3_000;
+const LOCK_WAIT_MS = 15_000;
+const LOCKED = /ProcessSingleton|profile (directory )?is already in use|SingletonLock/i;
+
+/** Another process holds api-anything's Chrome profile. */
+export class ProfileInUse extends Error {
+  constructor(dir: string) {
+    super(`the api-anything Chrome profile is in use by another process (an MCP server or another api-anything command): ${dir}`);
+    this.name = "ProfileInUse";
+  }
+}
+
+let users = 0;
+let idleTimer: NodeJS.Timeout | undefined;
+function scheduleIdleClose(): void {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => void (users === 0 && closeBrowser()), IDLE_CLOSE_MS);
+  idleTimer.unref();
+}
+/** Mark the browser busy; the returned function releases it (and starts the idle clock). */
+function hold(): () => void {
+  users++;
+  clearTimeout(idleTimer);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (--users === 0) scheduleIdleClose();
+  };
+}
+
+async function launch(profileDir: string, options: Parameters<typeof chromium.launchPersistentContext>[1]): Promise<BrowserContext> {
+  const until = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      return await chromium.launchPersistentContext(profileDir, options);
+    } catch (e) {
+      if (!LOCKED.test((e as Error).message)) throw e;
+      if (Date.now() > until) throw new ProfileInUse(profileDir);
+      await sleep(500);
+    }
+  }
+}
 
 /** Paths Playwright's "chrome" channel launches; checked up front so callers can skip cleanly. */
 export function chromeAvailable(): boolean {
@@ -43,18 +91,21 @@ async function probeHeadlessUA(): Promise<string> {
  * first, since Chrome locks a profile to one running instance.
  */
 export function openBrowser({ profileDir, headless = true }: { profileDir: string; headless?: boolean }): Promise<BrowserContext> {
+  if (users === 0) scheduleIdleClose();
   if (current && current.profileDir === profileDir && current.headless === headless) return current.ctx;
   const prev = current;
   const ctx = (async () => {
     if (prev) await closeContext(prev.ctx);
     if (headless) headlessUA ??= await probeHeadlessUA();
-    const c = await chromium.launchPersistentContext(profileDir, {
+    const c = await launch(profileDir, {
       channel: "chrome",
       headless,
       userAgent: headless ? headlessUA : undefined,
       viewport: headless ? undefined : null,
       // A service worker's fetches bypass routing (so write interception) and hide requests from capture.
       serviceWorkers: "block",
+      // Playwright's own SIGTERM handler keeps the process alive; Chrome exits with its pipe anyway.
+      handleSIGTERM: false,
     });
     c.on("close", () => {
       if (current?.ctx === ctx) current = undefined;
@@ -110,13 +161,20 @@ function siteCookies(cookies: Cookie[], url: string): StoredCookie[] {
 
 /** The profile's current cookies for url's site: the cheap auth refresh, no page load. */
 export async function profileCookies({ url, profileDir }: { url: string; profileDir: string }): Promise<StoredCookie[]> {
-  const ctx = await openBrowser({ profileDir });
-  return siteCookies(await ctx.cookies(), url);
+  const release = hold();
+  try {
+    const ctx = await openBrowser({ profileDir });
+    return siteCookies(await ctx.cookies(), url);
+  } finally {
+    release();
+  }
 }
 
 /** Put imported cookies into api-anything's own Chrome profile, so tier 2/3 and heals are logged in too. */
 export async function addCookiesToProfile(cookies: StoredCookie[], profileDir: string): Promise<void> {
   if (!cookies.length) return;
+  const release = hold();
+  try {
   const ctx = await openBrowser({ profileDir });
   // Playwright wants a domain that starts with a dot or an exact host; a leading-dot domain plus path is safe.
   await ctx.addCookies(
@@ -131,19 +189,34 @@ export async function addCookiesToProfile(cookies: StoredCookie[], profileDir: s
       sameSite: c.sameSite,
     })),
   );
+  } finally {
+    release();
+  }
 }
 
 /** Clear one site's cookies from the profile: any host under the registrable domain. */
 export async function clearProfileCookies(site: string, profileDir: string): Promise<void> {
-  const ctx = await openBrowser({ profileDir });
-  const esc = site.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  await ctx.clearCookies({ domain: new RegExp(`(^|\\.)${esc}$`) });
+  const release = hold();
+  try {
+    const ctx = await openBrowser({ profileDir });
+    const esc = site.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    await ctx.clearCookies({ domain: new RegExp(`(^|\\.)${esc}$`) });
+  } finally {
+    release();
+  }
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-// Binary resources: their bodies are never useful to the learner and are not valid UTF-8.
-const NO_BODY = new Set(["image", "media", "font", "stylesheet"]);
+// Binary resources: their bodies are never useful to the learner and are not valid UTF-8. A stream's never ends.
+const NO_BODY = new Set(["image", "media", "font", "stylesheet", "eventsource", "websocket"]);
 const QUIET_MS = 500;
+// Streams never finish; a request open this long is a long poll or a hung tracker, not the data.
+const LONG_LIVED = new Set(["eventsource", "websocket"]);
+const LONG_MS = 3000;
+// An endpoint hit more often than this is polling or a beacon: its repeats are not "still loading".
+const REPEATS = 2;
+// Pages that fetch their data a moment after load (deferred hydration): how long to wait for a first XHR.
+const FIRST_XHR_MS = 2000;
 
 export interface TriggerOptions {
   url: string;
@@ -153,14 +226,29 @@ export interface TriggerOptions {
   headless?: boolean;
   profileDir: string;
   /**
-   * requests it matches are aborted before leaving the browser (in any tab of the context) and
-   * recorded with aborted:true; `acting` is true once the page has loaded and the steps run
+   * requests it matches are aborted before leaving the browser (in any tab the run opens) and
+   * recorded with aborted:true; `acting` is true once the page has loaded and the steps run. A
+   * WebSocket message the page sends is asked as resourceType "websocket", method "SEND".
    */
   intercept?: (e: Exchange, acting: boolean) => boolean;
+  /**
+   * the op's own request: the run waits for one to answer (up to the budget), then ends after a
+   * short settle instead of waiting for the whole page to go quiet
+   */
+  match?: (e: Exchange) => boolean;
   /** extra wait after the network first goes quiet (default 300) */
   settleMs?: number;
   /** overall budget; also the per-action Playwright timeout (default 30000) */
   timeoutMs?: number;
+}
+
+/** A page load that treats "this URL is a download" as loaded (the request is still captured). */
+async function goto(page: Page, url: string, referer?: string): Promise<void> {
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", ...(referer ? { referer } : {}) });
+  } catch (e) {
+    if (!/Download is starting|net::ERR_ABORTED/.test((e as Error).message)) throw e;
+  }
 }
 
 async function runStep(page: Page, s: TriggerStep): Promise<void> {
@@ -180,23 +268,65 @@ async function runStep(page: Page, s: TriggerStep): Promise<void> {
       else await page.waitForTimeout(s.ms ?? 1000);
       return;
     case "goto":
-      await page.goto(need(s.value ?? s.selector, "a url in value"));
-      return;
+      return goto(page, need(s.value ?? s.selector, "a url in value"));
   }
+}
+
+/** The request body as the server gets it: a gzip/deflate/br-encoded body (YouTube's innertube) decoded. */
+function requestBody(req: Request): string | undefined {
+  const enc = (req.headers()["content-encoding"] ?? "").toLowerCase();
+  const buf = enc ? req.postDataBuffer() : null;
+  if (buf) {
+    try {
+      return (enc.includes("gzip") ? gunzipSync(buf) : enc.includes("br") ? brotliDecompressSync(buf) : inflateSync(buf)).toString("utf8");
+    } catch {
+      /* not really encoded: fall through */
+    }
+  }
+  return req.postData() ?? undefined;
 }
 
 /** Load the trigger in the browser and return every exchange it caused, with bodies and cookies. */
 export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const timeout = o.timeoutMs ?? 30_000;
   const deadline = Date.now() + timeout;
-  const ctx = await openBrowser(o);
-  const page = await ctx.newPage();
+  const release = hold();
+  let ctx: BrowserContext;
+  let page: Page;
+  try {
+    ctx = await openBrowser(o);
+    page = await ctx.newPage();
+  } catch (e) {
+    release();
+    throw e;
+  }
   page.setDefaultTimeout(timeout);
+
+  // This run's pages: its own and any popup they open. The context is shared with concurrent runs.
+  const own = new Set<Page>([page]);
+  const ownerOf = (req: Request): Page | undefined => {
+    try {
+      return req.frame().page();
+    } catch {
+      return undefined; // a service worker's request
+    }
+  };
+  const adopt = async (p: Page | undefined) => {
+    if (!p || own.has(p)) return !!p;
+    const opener = await p.opener().catch(() => null);
+    if (opener && own.has(opener)) own.add(p);
+    return own.has(p);
+  };
+  const mine = (req: Request) => {
+    const p = ownerOf(req);
+    return !!p && own.has(p);
+  };
 
   const exchanges: Exchange[] = [];
   const byReq = new Map<Request, Exchange>();
   const reads: Promise<unknown>[] = [];
-  let inflight = 0;
+  const pending = new Map<Request, number>();
+  const hits = new Map<string, number>();
   let lastActivity = Date.now();
 
   const record = (req: Request): Exchange => {
@@ -205,7 +335,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       ex = {
         id: exchanges.length + 1,
         resourceType: req.resourceType(),
-        request: { method: req.method(), url: req.url(), headers: req.headers(), body: req.postData() ?? undefined },
+        request: { method: req.method(), url: req.url(), headers: req.headers(), body: requestBody(req) },
       };
       exchanges.push(ex);
       byReq.set(req, ex);
@@ -216,21 +346,30 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const bounded = (p: Promise<unknown>) =>
     reads.push(Promise.race([p, new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now())).unref())]));
 
-  page.on("request", (req) => {
-    inflight++;
-    lastActivity = Date.now();
+  const onRequest = (req: Request) => {
+    if (!mine(req)) return;
     const ex = record(req);
     // allHeaders() is what went on the wire: cookie, sec-fetch-*, origin, referer.
     bounded(req.allHeaders().then((h) => (ex.request.headers = h), () => {}));
-  });
-  const settle = () => {
-    inflight--;
+    let endpoint = req.url();
+    try {
+      const u = new URL(endpoint);
+      endpoint = `${req.method()} ${u.origin}${u.pathname}`;
+    } catch {
+      /* keep the raw url */
+    }
+    const n = (hits.get(endpoint) ?? 0) + 1;
+    hits.set(endpoint, n);
+    if (LONG_LIVED.has(req.resourceType()) || n > REPEATS) return;
+    pending.set(req, Date.now());
     lastActivity = Date.now();
   };
-  page.on("requestfinished", settle);
-  page.on("requestfailed", settle);
+  const onDone = (req: Request) => {
+    if (pending.delete(req)) lastActivity = Date.now();
+  };
   // Bodies must be read here: after the next navigation the browser discards them.
-  page.on("response", (res) => {
+  const onResponse = (res: Response) => {
+    if (!mine(res.request())) return;
     const ex = record(res.request());
     bounded(
       (async () => {
@@ -239,30 +378,49 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
         ex.response = { status: res.status(), headers, body, contentType: headers["content-type"] ?? "" };
       })(),
     );
-  });
+  };
+  const onPage = (p: Page) => void adopt(p);
+  ctx.on("page", onPage);
+  ctx.on("request", onRequest);
+  ctx.on("requestfinished", onDone);
+  ctx.on("requestfailed", onDone);
+  ctx.on("response", onResponse);
 
   let acting = false;
   const intercept = o.intercept;
-  // Context-wide, so a popup the trigger opens is covered too.
+  // Context-wide, so a popup the run opens is covered too; other runs' requests pass through.
   const guard = intercept
-    ? (route: Route) => {
-        const ex = record(route.request());
+    ? async (route: Route) => {
+        const req = route.request();
+        if (!(await adopt(ownerOf(req)))) return route.fallback();
+        const ex = record(req);
         if (!intercept(ex, acting)) return route.fallback();
         ex.aborted = true;
         return route.abort();
       }
     : undefined;
-  if (guard) await ctx.route("**/*", guard);
 
-  // ponytail: sites that long-poll never go quiet, so they pay the whole timeout; add a per-op idle cap if that bites.
+  const quiet = () => ![...pending.values()].some((t) => Date.now() - t < LONG_MS) && Date.now() - lastActivity >= QUIET_MS;
   const idle = async (capMs = timeout) => {
     const end = Math.min(deadline, Date.now() + capMs);
-    while (Date.now() < end && (inflight > 0 || Date.now() - lastActivity < QUIET_MS)) await sleep(50);
+    while (Date.now() < end && !quiet()) await sleep(50);
   };
+  const answered = () => exchanges.some((e) => o.match!(e) && (e.response || e.aborted));
 
   try {
+    if (guard) await ctx.route("**/*", guard);
+    if (intercept) {
+      // A chat "send" goes over an open socket, where no HTTP route sees it.
+      await page.routeWebSocket(/.*/, (ws) => {
+        const server = ws.connectToServer();
+        ws.onMessage((m) => {
+          const ex: Exchange = { id: 0, resourceType: "websocket", request: { method: "SEND", url: ws.url(), headers: {} } };
+          if (!intercept(ex, acting)) server.send(m);
+        });
+      });
+    }
     if (o.softFrom) {
-      await page.goto(o.softFrom);
+      await goto(page, o.softFrom);
       await idle(5000);
       const from = page.url();
       const before = exchanges.length;
@@ -281,23 +439,46 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       await idle(5000);
       // ponytail: "fired anything" is the routed signal; a page whose analytics fire on pushState fools it.
       const routed = exchanges.slice(before).some((e) => ["xhr", "fetch", "document"].includes(e.resourceType));
-      if (!routed) await page.goto(o.url, { referer: from });
+      if (!routed) await goto(page, o.url, from);
     } else {
-      await page.goto(o.url);
+      await goto(page, o.url);
     }
     acting = true;
     for (const s of o.steps ?? []) await runStep(page, s);
-    await idle();
-    await sleep(o.settleMs ?? 300);
-    await idle();
-    for (let n = -1; n !== reads.length; ) {
-      n = reads.length;
-      await Promise.allSettled(reads);
+    if (o.match) {
+      // The op's own request answering is the signal; then a short settle catches a challenge's reload.
+      while (Date.now() < deadline && !answered()) await sleep(50);
+      await sleep(o.settleMs ?? 300);
+      await idle(3000);
+    } else {
+      await idle();
+      await sleep(o.settleMs ?? 300);
+      await idle();
+      if (!exchanges.some((e) => e.resourceType === "xhr" || e.resourceType === "fetch")) {
+        const end = Math.min(deadline, Date.now() + FIRST_XHR_MS);
+        while (Date.now() < end && !exchanges.some((e) => e.resourceType === "xhr" || e.resourceType === "fetch")) await sleep(50);
+        await idle();
+      }
     }
+    // Bodies still arriving get a short grace, not the whole budget: a hung long poll is not the data.
+    const grace = new Promise((r) => setTimeout(r, Math.min(5000, Math.max(0, deadline - Date.now()))).unref());
+    const settled = (async () => {
+      for (let n = -1; n !== reads.length; ) {
+        n = reads.length;
+        await Promise.allSettled(reads);
+      }
+    })();
+    await Promise.race([settled, grace]);
     return { exchanges, cookies: siteCookies(await ctx.cookies(), o.url), finalUrl: page.url() };
   } finally {
+    ctx.off("page", onPage);
+    ctx.off("request", onRequest);
+    ctx.off("requestfinished", onDone);
+    ctx.off("requestfailed", onDone);
+    ctx.off("response", onResponse);
     if (guard) await ctx.unroute("**/*", guard).catch(() => {});
-    await page.close().catch(() => {});
+    for (const p of own) await p.close().catch(() => {});
+    release();
   }
 }
 
@@ -307,6 +488,30 @@ export interface PageFetchResult {
   body: string;
   url: string;
   ms: number;
+  /** the fetch followed a redirect */
+  redirected?: boolean;
+}
+
+/** A page on `origin` to fetch from: its root, or a blank stand-in when the root redirects elsewhere (api.* to www). */
+async function originPage(ctx: BrowserContext, origin: string, timeout: number): Promise<Page> {
+  let page = originPages.get(origin);
+  if (page && !page.isClosed()) return page;
+  page = await ctx.newPage();
+  await page.goto(origin, { waitUntil: "domcontentloaded", timeout }).catch(() => {});
+  let here = "";
+  try {
+    here = new URL(page.url()).origin;
+  } catch {
+    /* about:blank */
+  }
+  if (here !== origin) {
+    // Same-origin is what matters for fetch(): serve a blank document at an unused path, never sent to the site.
+    const blank = `${origin}/__api_anything_blank__`;
+    await page.route(blank, (r) => r.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title></title>" }));
+    await page.goto(blank, { waitUntil: "domcontentloaded", timeout });
+  }
+  originPages.set(origin, page);
+  return page;
 }
 
 /** Tier 2: fetch() from inside a page on the site origin, so TLS, cookies and sec-fetch are the browser's own. */
@@ -318,28 +523,43 @@ export async function pageFetch(o: {
   body?: string;
   profileDir: string;
   headless?: boolean;
+  timeoutMs?: number;
 }): Promise<PageFetchResult> {
-  const ctx = await openBrowser(o);
-  let page = originPages.get(o.origin);
-  if (!page || page.isClosed()) {
-    page = await ctx.newPage();
-    await page.goto(o.origin, { waitUntil: "domcontentloaded" });
-    originPages.set(o.origin, page);
+  const timeoutMs = o.timeoutMs ?? 30_000;
+  const release = hold();
+  try {
+    const ctx = await openBrowser(o);
+    const page = await originPage(ctx, o.origin, timeoutMs);
+    // Pseudo-headers are invalid names for fetch(); forbidden ones (cookie, host, ...) the browser drops itself.
+    const headers = Object.fromEntries(Object.entries(o.headers).filter(([k]) => !k.startsWith(":")));
+    const body = o.method === "GET" || o.method === "HEAD" ? undefined : o.body;
+    const run = page.evaluate(
+      async ({ url, method, headers, body, timeoutMs }) => {
+        const t = performance.now();
+        const r = await fetch(url, { method, headers, body, credentials: "include", signal: AbortSignal.timeout(timeoutMs) });
+        const h: Record<string, string> = {};
+        r.headers.forEach((v, k) => (h[k] = v));
+        const text = await r.text();
+        return { status: r.status, headers: h, body: text, url: r.url, ms: Math.round(performance.now() - t), redirected: r.redirected };
+      },
+      { url: o.url, method: o.method, headers, body, timeoutMs },
+    );
+    // the page itself can hang (a stuck renderer): the budget holds either way
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`no response within ${timeoutMs} ms`)), timeoutMs + 1000);
+    });
+    try {
+      return await Promise.race([run, late]);
+    } catch (e) {
+      if (/TimeoutError|timed out|signal timed out/i.test((e as Error).message)) throw new Error(`no response within ${timeoutMs} ms`);
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  } finally {
+    release();
   }
-  // Pseudo-headers are invalid names for fetch(); forbidden ones (cookie, host, ...) the browser drops itself.
-  const headers = Object.fromEntries(Object.entries(o.headers).filter(([k]) => !k.startsWith(":")));
-  const body = o.method === "GET" || o.method === "HEAD" ? undefined : o.body;
-  return page.evaluate(
-    async ({ url, method, headers, body }) => {
-      const t = performance.now();
-      const r = await fetch(url, { method, headers, body, credentials: "include" });
-      const h: Record<string, string> = {};
-      r.headers.forEach((v, k) => (h[k] = v));
-      const text = await r.text();
-      return { status: r.status, headers: h, body: text, url: r.url, ms: Math.round(performance.now() - t) };
-    },
-    { url: o.url, method: o.method, headers, body },
-  );
 }
 
 /**
@@ -347,6 +567,15 @@ export async function pageFetch(o: {
  * in the terminal; what counts as logged in is the caller's call. Returns the site's cookies.
  */
 export async function login({ url, profileDir, waitForEnter = true }: { url: string; profileDir: string; waitForEnter?: boolean }): Promise<StoredCookie[]> {
+  const release = hold();
+  try {
+    return await loginWindow(url, profileDir, waitForEnter);
+  } finally {
+    release();
+  }
+}
+
+async function loginWindow(url: string, profileDir: string, waitForEnter: boolean): Promise<StoredCookie[]> {
   const ctx = await openBrowser({ profileDir, headless: false });
   const page = ctx.pages()[0] ?? (await ctx.newPage());
   await page.goto(url);

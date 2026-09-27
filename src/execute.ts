@@ -3,12 +3,12 @@
  * the heal-loop guards, and the write rules. Always sends the stored template first; healing is
  * reactive only.
  */
-import { chromeAvailable, pageFetch, profileCookies } from "./browser.js";
+import { chromeAvailable, pageFetch, profileCookies, ProfileInUse } from "./browser.js";
 import { judge, type Class } from "./classify.js";
 import { capOutput } from "./extract.js";
-import { healOperation, judgeExchange, profileDir, runOpTrigger, type Attempt, type HealResult } from "./heal.js";
+import { healOperation, judgeExchange, PROFILE_HINT, profileDir, runOpTrigger, type Attempt, type HealResult } from "./heal.js";
 import { buildRequest, send } from "./http.js";
-import { cookieHeaderFor, loadSession, saveSession } from "./session.js";
+import { cookieHeaderFor, loadSession, loggedIn, mergeCapture, saveSession, sessionFile } from "./session.js";
 import { reimportIfBrowser } from "./login.js";
 import type { Operation, Site } from "./spec.js";
 import { lastHealAt, loadSite, markStale, rememberTier, rememberedTier, staleMark } from "./store.js";
@@ -45,6 +45,8 @@ type Result = Omit<CallResult, "ms">;
 const HEAL_GUARD_MS = 10 * 60_000;
 // A write is retried only when the server certainly did not run it; timeouts and 5xx are ambiguous.
 const NOT_EXECUTED = new Set([400, 401, 403, 404]);
+/** Certainly not run: a 400/401/403/404 answered to the request itself. After a redirect (Post/Redirect/Get) it ran. */
+const notRun = (a?: Attempt) => a?.status !== undefined && NOT_EXECUTED.has(a.status) && !a.redirected;
 
 interface Ctx {
   site: string;
@@ -54,29 +56,26 @@ interface Ctx {
 }
 
 function nextFor(c: CallResult["class"], site: string, op: Operation, a?: Attempt): string | undefined {
+  if (c === "ok") return undefined;
+  if (c === "refused") return "only if the user asked for this write: rerun with --allow-writes (MCP: start the server with --allow-writes)";
+  if (a?.hint) return a.hint;
+  // A write the server may have run: never invite a second send.
+  const ran = !op.readOnly && a !== undefined && !notRun(a);
+  if (ran && c !== "drift") return "the write may have gone through: check the site before any retry";
   switch (c) {
-    case "ok":
-      return undefined;
     case "auth":
       return `ask the user to run: api-anything login ${site}; then retry once`;
     case "rate":
-      return "rate limited: do not retry now; wait a few minutes";
+      return /retry after/.test(a?.reason ?? "") ? "rate limited: do not retry before the time in reason" : "rate limited: do not retry now; wait a few minutes";
     case "blocked":
       return `the site is challenging automated requests: ask the user to run api-anything login ${site} and clear the challenge, then retry once`;
     case "drift":
-      if (!op.readOnly) {
-        const ran = a?.status === undefined || !NOT_EXECUTED.has(a.status) ? "the write may have run: check the site first, then " : "";
-        return `${ran}re-learn it with api-anything add ${site} ${op.name} ... --write`;
-      }
+      if (!op.readOnly) return `${ran ? "the write may have run: check the site first, then " : ""}re-learn it with api-anything add ${site} ${op.name} ... --write`;
       return `api-anything heal ${site} ${op.name}; if that fails, re-learn it with api-anything add ${site} ${op.name} ...`;
     case "input":
       return `check the args against: api-anything ops ${site}`;
-    case "refused":
-      return "only if the user asked for this write: rerun with --allow-writes (MCP: start the server with --allow-writes)";
     default:
-      return !op.readOnly && (a?.ambiguous || (a?.status ?? 0) >= 500)
-        ? "the write may have gone through: check the site before any retry"
-        : "retry once; if it fails the same way, stop and report the reason";
+      return "retry once; if it fails the same way, stop and report the reason";
   }
 }
 
@@ -106,7 +105,9 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       // For a write this is the UI sending it: the one attempt.
       const run = await runOpTrigger(ctx.site, op, ctx.args);
       const judged = run.matched && judgeExchange(op, run.matched);
-      return judged ?? { tier, class: "drift", reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` };
+      if (judged) return judged;
+      if (run.loginWall) return { tier, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` };
+      return { tier, class: "drift", reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` };
     }
     const session = loadSession(ctx.site);
     let r;
@@ -117,14 +118,24 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         timeoutMs: ctx.opts.timeoutMs,
         minIntervalMs: ctx.opts.minIntervalMs,
       });
+      // A rotating cookie (a rolling session, __cf_bm) must ride on the next call.
+      if (r.setCookies) {
+        try {
+          mergeCapture(ctx.site, r.setCookies);
+        } catch {
+          /* a read-only home still answers this call */
+        }
+      }
     } else {
       const req = buildRequest(op, ctx.args, session);
       const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
-      r = await pageFetch({ origin: new URL(req.url).origin, url: req.url, method: req.method, headers, body: req.body, profileDir: profileDir() });
+      r = await pageFetch({ origin: new URL(req.url).origin, url: req.url, method: req.method, headers, body: req.body, profileDir: profileDir(), timeoutMs: ctx.opts.timeoutMs });
     }
-    return { tier, status: r.status, ...judge(op, r) };
+    return { tier, status: r.status, ...(r.redirected ? { redirected: true } : {}), ...judge(op, r) };
   } catch (e) {
-    return { tier, class: "error", reason: (e as Error).message, ambiguous: true };
+    // nothing was sent when the browser could not start
+    if (e instanceof ProfileInUse) return { tier, class: "error", reason: e.message, hint: PROFILE_HINT };
+    return { tier, class: "error", reason: (e as Error).message.split("\n")[0]!, ambiguous: true };
   }
 }
 
@@ -153,19 +164,32 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     ...extra,
   });
 
+  // An op learned signed in, called with no login cookie: the site hides the data from guests; it did not move.
+  if (a.missing && op.learnedLoggedIn && !loggedIn(loadSession(ctx.site).cookies, site.loginCookies)) {
+    return fail({ ...a, class: "auth" }, { reason: `${a.reason}; the op was learned signed in and the session has no login cookie` });
+  }
+
   // "No such user" and "no results" look exactly like a moved extract path. If the example args
   // still return data through the same template, nothing drifted: the args are the problem.
   const examples = exampleArgs(op);
-  if (a.missing && op.readOnly && examples && !sameArgs(examples, ctx.args, op)) {
-    const b = await attempt({ ...ctx, args: examples }, op, a.tier);
-    if (b.class === "ok") {
-      return fail(
-        { ...a, class: "input" },
-        {
-          reason: `no data for these args (${a.reason}), while the example args still return data: the thing probably does not exist or has no results`,
-          next: `check the args against: api-anything ops ${ctx.site}; do not heal or re-add`,
-        },
-      );
+  /** the op's own example args got no data either: the args are not the problem */
+  let examplesFail = false;
+  if (a.missing && op.readOnly && examples) {
+    if (sameArgs(examples, ctx.args, op)) examplesFail = true;
+    else {
+      const b = await attempt({ ...ctx, args: examples }, op, a.tier);
+      if (b.class === "ok") {
+        return fail(
+          { ...a, class: "input" },
+          {
+            reason: `no data for these args (${a.reason}), while the example args still return data: the thing probably does not exist or has no results`,
+            next: `check the args against: api-anything ops ${ctx.site}; do not heal or re-add`,
+          },
+        );
+      }
+      // throttled or challenged while checking: stop, don't spend a heal (a browser run) against it
+      if (b.class === "rate" || b.class === "blocked" || b.class === "auth") return fail(b);
+      examplesFail = true;
     }
   }
 
@@ -184,9 +208,13 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       const b = await attempt(ctx, op, 3);
       if (b.class === "ok") return success(b, { reason: guard });
       // the site's own request doesn't answer either: stop paying a browser run per call
-      markStale(ctx.site, op.name, stale?.reason ?? guard, undefined, undefined, { tier3: false });
+      if (!b.hint && b.class !== "auth") markStale(ctx.site, op.name, stale?.reason ?? guard, undefined, undefined, { tier3: false });
     }
-    return fail(a, { reason: `${a.reason}; ${guard}`, next: `wait for the stale mark to expire, or force it: api-anything heal ${ctx.site} ${op.name}` });
+    // `heal` refuses writes: a stale write is re-learned
+    const next = op.readOnly
+      ? `wait for the stale mark to expire, or force it: api-anything heal ${ctx.site} ${op.name}`
+      : `wait for the stale mark to expire, or re-learn it: api-anything add ${ctx.site} ${op.name} ... --write`;
+    return fail(a, { reason: `${a.reason}; ${guard}`, next });
   }
 
   // A candidate is validated by replaying it; at tier 3 the site's own request would answer instead, validating nothing.
@@ -199,11 +227,26 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     }),
   );
   if (h.outcome === "healed") return success(h.attempt, { healed: true });
+  // Throttled, challenged, logged out, or no browser: nothing was learned about the op, so it is not stale.
+  if (h.outcome === "failed" && h.transient) {
+    const b = h.attempt ?? a;
+    return fail(b, { reason: `${a.reason}; heal stopped: ${h.reason}` });
+  }
   // A heal that tried everything and failed would fail the same way on the next call: don't rerun the browser each time.
   if (h.outcome === "failed" && ctx.maxTier > 1) markStale(ctx.site, op.name, `heal failed: ${h.reason}`, undefined, undefined, { tier3: h.fallback?.class === "ok" });
   // The template can't be replayed, but the site's own request answered: that is the tier-3 read.
   if (h.fallback?.class === "ok" && ctx.maxTier >= 3) return success(h.fallback, { reason: `heal failed (${h.reason}); answered by the site's own request` });
   if (h.outcome === "identical") {
+    if (examplesFail) {
+      // Same request, and even the examples get no data: the response recipe drifted (a renamed field), or the site is down.
+      return fail(
+        { ...a, class: "drift" },
+        {
+          reason: `the site takes the same request but its response lacks the data (${a.reason}), for the op's example args too`,
+          next: `if the site works in a browser, re-learn the response recipe: api-anything add ${ctx.site} ${op.name} ... --extract <path> (api-anything capture <trigger url> shows the response); otherwise report it`,
+        },
+      );
+    }
     return fail(
       { ...a, class: "input" },
       {
@@ -217,10 +260,21 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
 }
 
 function resolve(siteName: string, opName: string): { site: Site; op: Operation } | Result {
-  const r = loadSite(siteName);
+  let r;
+  try {
+    r = loadSite(siteName);
+  } catch (e) {
+    const bad = /invalid site name/.test((e as Error).message);
+    return {
+      ok: false,
+      class: bad ? "input" : "error",
+      reason: (e as Error).message.split("\n")[0],
+      next: bad ? "api-anything sites lists what exists" : "fix or delete that spec file, then retry once",
+    };
+  }
   if (!r) return { ok: false, class: "input", reason: `no site "${siteName}"`, next: "api-anything sites lists what exists; api-anything add creates one" };
   const op = r.site.operations.find((o) => o.name === opName);
-  if (!op) return { ok: false, class: "input", reason: `no operation "${opName}" on ${siteName}`, next: `api-anything ops ${siteName}` };
+  if (!op) return { ok: false, class: "input", reason: `no operation "${opName}" on ${r.site.name}`, next: `api-anything ops ${r.site.name}` };
   return { site: r.site, op };
 }
 
@@ -231,19 +285,33 @@ export async function call(siteName: string, opName: string, args: Record<string
   const found = resolve(siteName, opName);
   if ("ok" in found) return done(found);
   const { site, op } = found;
+  siteName = site.name;
   const write = !op.readOnly;
   if (write && !opts.allowWrites) {
     return done({ ok: false, class: "refused", reason: `${op.name} is a write and writes are not allowed`, next: nextFor("refused", siteName, op) });
   }
+  // A misspelled optional arg would silently fall back to its default: refuse it.
+  const unknown = Object.keys(args).filter((k) => !op.params.some((p) => p.name === k));
+  if (unknown.length) {
+    const takes = op.params.map((p) => p.name).join(", ") || "no args";
+    return done({ ok: false, class: "input", reason: `unknown arg ${unknown.join(", ")}; ${op.name} takes ${takes}`, next: nextFor("input", siteName, op) });
+  }
+  let session;
   try {
-    buildRequest(op, args, loadSession(siteName));
+    session = loadSession(siteName);
+  } catch (e) {
+    return done({ ok: false, class: "error", reason: (e as Error).message, next: `delete ${sessionFile(siteName)}, then ask the user to run api-anything login ${siteName} if the site needs an account` });
+  }
+  try {
+    buildRequest(op, args, session);
   } catch (e) {
     return done({ ok: false, class: "input", reason: (e as Error).message, next: nextFor("input", siteName, op) });
   }
 
   const ctx: Ctx = { site: siteName, args, opts, maxTier: opts.maxTier ?? 3 };
   const remembered = rememberedTier(siteName, op.name);
-  let tier = Math.max(op.minTier, remembered ?? 1) as Tier;
+  // A remembered escalation is a speed hint, not a requirement: under a lower cap, start at the op's own tier.
+  let tier = Math.max(op.minTier, remembered !== undefined && remembered <= ctx.maxTier ? remembered : 1) as Tier;
   // Why a call ran above tier 1, so a slow call explains itself.
   const notes: string[] = tier > op.minTier ? [`started at tier ${tier}: an earlier call escalated there`] : [];
   const noted = (a: Attempt) => success(a, notes.length ? { reason: notes.join("; ") } : {});
@@ -263,7 +331,7 @@ export async function call(siteName: string, opName: string, args: Record<string
       return done(noted(a));
     }
     const fail = (): CallResult => done({ ok: false, class: a.class, tier, reason: a.reason, next: nextFor(a.class, siteName, op, a) });
-    if (write && !(a.status !== undefined && NOT_EXECUTED.has(a.status))) return fail();
+    if (write && !notRun(a)) return fail();
     if (a.class === "blocked" && tier < (write ? 2 : 3)) {
       notes.push(`tier ${tier} was blocked (${a.reason})`);
       tier++;
@@ -294,6 +362,7 @@ export async function heal(siteName: string, opName: string, args: Record<string
   const found = resolve(siteName, opName);
   if ("ok" in found) return { ...found, ms: Date.now() - t0 };
   const { site, op } = found;
+  siteName = site.name;
   if (!op.readOnly) {
     return {
       ok: false,

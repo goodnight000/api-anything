@@ -3,9 +3,10 @@
 import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { z } from "zod";
-import { chromeAvailable, closeBrowser, login } from "./browser.js";
+import { chromeAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
+import { botWall } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
-import { addOperation, capturePage, loadCapture, profileDir } from "./heal.js";
+import { addOperation, capturePage, loadCapture, PROFILE_HINT, profileDir } from "./heal.js";
 import { buildRequest } from "./http.js";
 import { capOutput, extract } from "./extract.js";
 import { rankCandidates } from "./learn.js";
@@ -108,6 +109,12 @@ function json<T>(text: string | undefined, schema: z.ZodType<T>, flag: string): 
   } catch (e) {
     throw new Fail(`--${flag}: ${(e as Error).message.split("\n")[0]}`, `api-anything --help shows the --${flag} format`);
   }
+}
+
+function positive(text: string | undefined, flag: string): number | undefined {
+  if (text === undefined) return undefined;
+  if (!/^[1-9]\d*$/.test(text)) throw new Fail(`--${flag} must be a positive integer, got "${text}"`, `api-anything --help`);
+  return Number(text);
 }
 
 const needChrome = () => {
@@ -221,8 +228,8 @@ async function run(argv: string[]): Promise<number> {
       const url = pos[0];
       if (!url) throw new Fail("missing <url>", "api-anything capture <url>");
       needChrome();
+      const limit = positive(v.limit, "limit") ?? 15;
       const c = await capturePage({ url, steps, softFrom: v["soft-from"], write: v.write });
-      const limit = Number(v.limit ?? 15);
       const ranked = rankCandidates(c.exchanges, kv(v.example));
       const candidates = ranked.slice(0, limit).map((x) => ({
         id: x.id,
@@ -237,12 +244,19 @@ async function run(argv: string[]): Promise<number> {
       }));
       const top = ranked[0];
       const html = top && /html/i.test(top.contentType ?? "");
+      // a bot wall is not fixed by picking another request or writing a recipe
+      const doc = c.exchanges.filter((e) => e.resourceType === "document" && e.response).at(-1);
+      const topEx = top && c.exchanges.find((e) => e.id === top.id);
+      const wall = [doc, topEx].map((e) => e?.response && botWall({ status: e.response.status, headers: e.response.headers, body: e.response.body ?? "" })).find(Boolean);
       out({
         capture: c.id,
         finalUrl: c.finalUrl,
         requests: c.exchanges.length,
         candidates,
-        next: html
+        ...(wall ? { blocked: wall } : {}),
+        next: wall
+          ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> (clear the challenge in the window), then capture again`
+          : html
           ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
           : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`,
       });
@@ -341,6 +355,7 @@ async function run(argv: string[]): Promise<number> {
     case "call": {
       const [site, name, ...rest] = pos;
       if (!site || !name) throw new Fail("missing <site> <op>", "api-anything call --help");
+      if (v["max-tier"] !== undefined && !/^[123]$/.test(v["max-tier"])) throw new Fail(`--max-tier must be 1, 2 or 3, got "${v["max-tier"]}"`, "pass --max-tier 1, 2 or 3");
       let base: Record<string, unknown> = {};
       if (v.json) {
         base = json(v.json, z.record(z.string(), z.unknown()), "json") ?? {};
@@ -467,7 +482,9 @@ try {
 } catch (e) {
   await closeBrowser();
   const f = e instanceof Fail ? e : undefined;
-  out({ ok: false, error: (e as Error).message, ...(f?.extra ?? {}) });
-  process.stderr.write(`next: ${f?.next ?? `api-anything ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " ")}\n`);
+  // Playwright errors carry the whole Chrome command line after the first line
+  out({ ok: false, error: (e as Error).message.split("\n")[0], ...(f?.extra ?? {}) });
+  const next = f?.next ?? (e instanceof ProfileInUse ? PROFILE_HINT : `api-anything ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " "));
+  process.stderr.write(`next: ${next}\n`);
   process.exitCode = 1;
 }

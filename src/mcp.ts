@@ -17,6 +17,18 @@ export const VERSION = (JSON.parse(readFileSync(new URL("../package.json", impor
 
 const reply = (v: unknown, isError = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(v) }], isError });
 
+/** Every failure comes back as {error, next} JSON, like call_operation's, never as a bare exception text. */
+const guarded =
+  <A>(fn: (a: A) => Promise<ReturnType<typeof reply>>) =>
+  async (a: A) => {
+    try {
+      return await fn(a);
+    } catch (e) {
+      const msg = (e as Error).message.split("\n")[0]!;
+      return reply({ ok: false, error: msg, next: /invalid site name|no site/.test(msg) ? "list_sites" : "fix or delete the file named in error, then retry once" }, true);
+    }
+  };
+
 export function createServer({ allowWrites = false }: { allowWrites?: boolean } = {}): McpServer {
   const server = new McpServer({ name: "api-anything", version: VERSION });
 
@@ -47,7 +59,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
       inputSchema: { site: z.string().describe("site name from list_sites") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ site }) => {
+    guarded(async ({ site }: { site: string }) => {
       const r = loadSite(site);
       if (!r) return reply({ error: `no site "${site}"`, next: "list_sites" }, true);
       return reply({
@@ -61,7 +73,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
             params: o.params.map((p) => ({ name: p.name, type: p.type, required: p.required, ...(p.description ? { description: p.description } : {}), ...(p.example !== undefined ? { example: p.example } : {}) })),
           })),
       });
-    },
+    }),
   );
 
   server.registerTool(
@@ -77,10 +89,10 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
       },
       annotations: { readOnlyHint: !allowWrites, destructiveHint: allowWrites, openWorldHint: true },
     },
-    async ({ site, op, args }) => {
+    guarded(async ({ site, op, args }: { site: string; op: string; args?: Record<string, unknown> }) => {
       const r = await call(site, op, args ?? {}, { allowWrites });
       return reply(r, !r.ok);
-    },
+    }),
   );
 
   server.registerTool(
@@ -95,7 +107,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
       },
       annotations: { openWorldHint: true },
     },
-    async ({ site, url, mode }) => {
+    guarded(async ({ site, url, mode }: { site?: string; url?: string; mode?: "import" | "window" }) => {
       const target = site ?? url;
       if (!target) return reply({ error: "give a site or a url" }, true);
       let t: ReturnType<typeof resolveLoginTarget>;
@@ -124,7 +136,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
         cookies: cookieNames(imported.cookies),
         loggedIn: loggedIn(imported.cookies, t.loginCookies),
       });
-    },
+    }),
   );
   return server;
 }

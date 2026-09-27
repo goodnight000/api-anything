@@ -15,8 +15,9 @@ import { execFileSync } from "node:child_process";
 import { pbkdf2Sync, createDecipheriv } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { basename, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { siteOf } from "./session.js";
 import type { StoredCookie } from "./types.js";
 
@@ -27,6 +28,10 @@ process.emitWarning = ((w: unknown, ...rest: unknown[]) => {
   if (typeof msg === "string" && msg.includes("SQLite is an experimental")) return;
   return (realEmitWarning as (...a: unknown[]) => void)(w, ...rest);
 }) as typeof process.emitWarning;
+
+// Loaded on first use, after the filter above: a static import would warn before this module body runs.
+let sqlite: typeof import("node:sqlite") | undefined;
+const openDb = (file: string) => new (sqlite ??= createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite")).DatabaseSync(file, { readOnly: true });
 
 /** One installed browser to scan. Tests inject these via API_ANYTHING_BROWSER_ROOTS. */
 export interface BrowserRoot {
@@ -106,7 +111,7 @@ function withDb<T>(dbPath: string, fn: (db: DatabaseSync) => T): T {
     const copy = join(dir, basename(dbPath));
     copyFileSync(dbPath, copy);
     for (const ext of ["-wal", "-journal", "-shm"]) if (existsSync(dbPath + ext)) copyFileSync(dbPath + ext, copy + ext);
-    const db = new DatabaseSync(copy, { readOnly: true });
+    const db = openDb(copy);
     try {
       return fn(db);
     } finally {

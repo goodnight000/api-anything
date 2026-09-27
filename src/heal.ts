@@ -3,15 +3,15 @@
  * add (create), recapture (heal), and the tier-3 read. Rescan is the browserless heal.
  */
 import { join } from "node:path";
-import { chromeAvailable, runTrigger } from "./browser.js";
+import { chromeAvailable, ProfileInUse, runTrigger } from "./browser.js";
 import { judge, type Class } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, walk } from "./codec.js";
-import { capOutput } from "./extract.js";
+import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
-import { checkExamples, hashLike, learnOperation, matches, type Args } from "./learn.js";
-import { cookieHeaderFor, home, loadSession, mergeCapture, readJson, safeName, writePrivate } from "./session.js";
+import { checkExamples, hashLike, learnOperation, matches, rankCandidates, type Args } from "./learn.js";
+import { cookieHeaderFor, home, loadSession, mergeCapture, readJson, safeName, withLock, writePrivate } from "./session.js";
 import type { Match, Operation, ResponseSpec, Site, Trigger, Volatile } from "./spec.js";
-import { appendHeal, clearStale, loadSite, rememberTier, saveSite, scanSecrets } from "./store.js";
+import { appendHeal, clearStale, loadSite, rememberTier, saveSite, scanSecrets, userSitesDir } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
 
 export const profileDir = () => join(home(), "profile");
@@ -26,7 +26,14 @@ export interface Attempt {
   ambiguous?: boolean;
   /** drift with the data missing from an otherwise fine response; see Classified.missing */
   missing?: boolean;
+  /** the first answer was a redirect, so the server took the request (a write ran) */
+  redirected?: boolean;
+  /** a specific `next` for the agent (a local problem, not the site's) */
+  hint?: string;
 }
+
+export const PROFILE_HINT =
+  "another api-anything process (an MCP server?) holds the browser profile; it lets go after a few seconds idle: wait, or stop it, then retry once";
 
 /** Fill `{param}` in a trigger. URL parts are percent-encoded; step values are typed as given. */
 export function fillTrigger(t: Trigger, args: Args): Trigger {
@@ -44,18 +51,32 @@ export function fillTrigger(t: Trigger, args: Args): Trigger {
 }
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+// Once the steps run, only these may still load: they can't carry a write the way an image ping,
+// a link, a GET form, a JSONP script or an iframe can.
+const INERT = new Set(["stylesheet", "font", "media"]);
 /**
- * While learning a write: abort every unsafe request, and once the UI steps run, every xhr/fetch
- * (a "Follow" button may send a GET). A known write's own match is aborted whatever its method.
+ * While learning a write: abort every unsafe request, and once the UI steps run, every request
+ * but stylesheets, fonts and media (a "Follow" button may send a GET, an upvote may be
+ * `new Image().src`). A known write's own match is aborted whatever its method. WebSocket
+ * messages the page sends are dropped by the browser layer.
  * ponytail: also aborts requests the page needs after the click; a narrower matcher would risk
  * letting the write itself through when the match is wrong.
  */
-const writeGuard =
+export const writeGuard =
   (m?: Match) =>
   (e: Exchange, acting: boolean): boolean =>
     !SAFE_METHODS.has(e.request.method.toUpperCase()) ||
-    (acting && (e.resourceType === "xhr" || e.resourceType === "fetch")) ||
+    (acting && !INERT.has(e.resourceType)) ||
     (!!m && Object.keys(m).length > 0 && matches(m, e.request));
+
+/**
+ * A read's trigger must not write either: a shared spec that says "read" but clicks a button that
+ * POSTs. Once the steps run, unsafe requests other than the op's own are aborted.
+ */
+const readGuard =
+  (m: Match) =>
+  (e: Exchange, acting: boolean): boolean =>
+    acting && e.resourceType !== "websocket" && !SAFE_METHODS.has(e.request.method.toUpperCase()) && !(Object.keys(m).length > 0 && matches(m, e.request));
 
 /** Values of the op's session: refs as the browser just sent them. */
 function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
@@ -75,17 +96,53 @@ function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
 
 export interface TriggerRun {
   capture: CaptureResult;
-  /** first request matching op.match that got a response (or was aborted) */
+  /** the request matching op.match that answers this run (see pickHit) */
   matched?: Exchange;
+  /** the trigger landed on a sign-in page instead of the content */
+  loginWall?: string;
+}
+
+/**
+ * The matching exchange that is this run's answer: one carrying the run's args (a softFrom page
+ * fires its own request first) and judged ok (a bot interstitial may precede the real page),
+ * the latest on a tie.
+ */
+function pickHit(op: Operation, hits: Exchange[], args: Args): Exchange | undefined {
+  const answered = hits.filter((e) => e.response || e.aborted);
+  if (!answered.length) return hits[0];
+  const want = Object.values(args).filter((v) => asText(v).length >= 3).length;
+  const carries = new Map(rankCandidates(answered, args, { all: true }).map((c) => [c.id, c.hits.length >= want]));
+  const score = (e: Exchange) => (carries.get(e.id) ? 2 : 0) + (e.aborted || judgeExchange(op, e)?.class === "ok" ? 1 : 0);
+  return answered.reduce((best, e) => (score(e) >= score(best) ? e : best));
+}
+
+/** The final page of a run, when it is a sign-in page the trigger was redirected to. */
+export function loginWall(capture: CaptureResult, triggerUrl: string): string | undefined {
+  let f: URL;
+  let t: URL;
+  try {
+    f = new URL(capture.finalUrl);
+    t = new URL(triggerUrl);
+  } catch {
+    return undefined;
+  }
+  if (f.pathname === t.pathname) return undefined;
+  const doc = capture.exchanges.filter((e) => e.resourceType === "document" && e.response?.body).at(-1);
+  const password = /type=["']?password/i.test(doc?.response?.body ?? "");
+  return password || /(log|sign)[-_]?in|\/accounts\/login|\/i\/flow\/login/i.test(f.pathname) ? f.pathname : undefined;
 }
 
 /** Run an op's trigger with args in the shared profile and refresh the session from it. */
 export async function runOpTrigger(site: string, op: Operation, args: Args, o: { intercept?: boolean } = {}): Promise<TriggerRun> {
-  const capture = await runTrigger({ ...fillTrigger(op.trigger, args), profileDir: profileDir(), intercept: o.intercept ? writeGuard(op.match) : undefined });
-  const hits = capture.exchanges.filter((e) => matches(op.match, e.request));
-  const matched = hits.find((e) => e.response || e.aborted) ?? hits[0];
+  const t = fillTrigger(op.trigger, args);
+  const isHit = (e: Exchange) => matches(op.match, e.request);
+  // A write's tier-3 run is the UI sending it for real; learning or healing one intercepts it.
+  const intercept = o.intercept ? writeGuard(op.match) : op.readOnly ? readGuard(op.match) : undefined;
+  const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit });
+  const matched = pickHit(op, capture.exchanges.filter(isHit), args);
   mergeCapture(site, capture.cookies, matched ? sessionValuesOf(op, matched) : {});
-  return { capture, matched };
+  const wall = matched?.response ? undefined : loginWall(capture, t.url);
+  return { capture, matched, ...(wall ? { loginWall: wall } : {}) };
 }
 
 /** A tier-3 result: the site's own request, answered. */
@@ -226,6 +283,17 @@ export function putOperation(site: Site, op: Operation): Site {
   return { ...site, operations: [...rest, op] };
 }
 
+/** The recipe finds data in this body (a non-empty list, or a value). */
+function resolves(spec: ResponseSpec, body: string | undefined): boolean {
+  if (!body) return false;
+  try {
+    const d = extract(spec, body);
+    return d !== undefined && d !== null && !(Array.isArray(d) && !d.length);
+  } catch {
+    return false;
+  }
+}
+
 function previewOf(data: unknown): AddResult["preview"] {
   const first = Array.isArray(data) ? data[0] : data;
   const cut = capOutput(first, 600);
@@ -236,8 +304,8 @@ function previewOf(data: unknown): AddResult["preview"] {
  * Learn an op and save it to the user spec dir. Without `from`, the trigger runs twice (with
  * example 2, or example 1 again) so nonces show up. A write is learned from aborted requests only.
  */
-export async function addOperation(i: AddInput): Promise<AddResult> {
-  safeName(i.site);
+export async function addOperation(input: AddInput): Promise<AddResult> {
+  const i = { ...input, site: safeName(input.site) };
   const existing = loadSite(i.site)?.site;
   const [ex1, ex2] = i.examples;
   for (const c of [i.from?.capture, i.from2]) {
@@ -258,6 +326,8 @@ export async function addOperation(i: AddInput): Promise<AddResult> {
     if (!existing) throw new Error(`relative trigger ${trigger.url} needs an existing site; use a full URL`);
     trigger = { ...trigger, url: existing.baseUrl.replace(/\/$/, "") + trigger.url };
   }
+  const t0 = trigger;
+  const unplaced = Object.keys(ex1).filter((k) => ![t0.url, t0.softFrom ?? "", ...(t0.steps ?? []).flatMap((st) => [st.selector ?? "", st.value ?? ""])].some((x) => x.includes(`{${k}}`)));
 
   let run1: CaptureResult;
   let run2: CaptureResult | undefined;
@@ -274,8 +344,12 @@ export async function addOperation(i: AddInput): Promise<AddResult> {
       return saved;
     };
     run1 = await run(ex1);
+    const wall = loginWall(run1, fillTrigger(trigger, ex1).url);
+    if (wall) throw new Error(`the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${i.site}; then add again`);
     run2 = await run(ex2 ?? ex1);
   }
+  const r = i.response ?? {};
+  const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
   const learned = learnOperation({
     exchanges: run1.exchanges,
     exchanges2: run2?.exchanges,
@@ -288,10 +362,12 @@ export async function addOperation(i: AddInput): Promise<AddResult> {
     readOnly: !i.write,
     loginCookies: existing?.loginCookies,
     public: i.public,
+    // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
+    ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
   });
-  const r = i.response ?? {};
   const recipe = r.html ?? r.embedded;
   const warnings = learned.warnings.filter((w) => !(recipe && w.startsWith("response is HTML")));
+  if (unplaced.length) warnings.push(`the trigger has no {${unplaced.join("}, {")}}: tier-3 runs and heals would load the example's page; put the param in --trigger`);
   let operation: Operation = {
     ...learned.operation,
     ...(i.description ? { description: i.description } : {}),
@@ -324,7 +400,13 @@ export async function addOperation(i: AddInput): Promise<AddResult> {
     const j = judge(operation, { status: res.status, headers: res.headers, body: res.body ?? "", url: learned.exchange.request.url });
     const again = captures[0] ?? i.from?.capture.id;
     if (j.class === "ok") preview = previewOf(j.data);
-    else warnings.push(`on the captured response this op says ${j.class}: ${j.reason}. Fix --extract/--pick/--html/--embedded and re-run add --from ${again} (no browser needed)`);
+    else if (j.class === "blocked" || j.class === "auth" || j.class === "rate") {
+      // a bot wall or a login page is not fixed by editing the recipe
+      warnings.push(
+        `the captured response is ${j.class}: ${j.reason}. The op was learned from ${j.class === "rate" ? "a throttled answer" : "a challenge or sign-in page"}: ` +
+          (j.class === "rate" ? "wait a few minutes, then add again" : `ask the user to run api-anything login ${i.site} (and clear any challenge), then add again`),
+      );
+    } else warnings.push(`on the captured response this op says ${j.class}: ${j.reason}. Fix --extract/--pick/--html/--embedded and re-run add --from ${again} (no browser needed)`);
   }
 
   const replaced = !!existing?.operations.some((o) => o.name === operation.name);
@@ -348,13 +430,23 @@ const CHARSET: Record<Volatile["shape"]["charset"], [string, string]> = {
 };
 const NEAR = 300;
 
-/** The token of the recorded shape closest to any occurrence of the anchor. */
-function nearestToken(texts: string[], v: Volatile): string | undefined {
+// A statement or module boundary between a token and its anchor (Meta's `}),null);__d(`, X's `};`).
+const BOUNDARY = /;|\}\)/;
+
+/**
+ * The token of the recorded shape next to the anchor. The anchor must stand as its own name
+ * ("Followers" is not inside "FollowersYouKnow"); a token in the anchor's own statement beats a
+ * nearer one across a boundary (the previous module's id); a tie between two tokens is no answer.
+ * `strict` (writes, whose validation is a real send): only a token that is the one candidate.
+ */
+function nearestToken(texts: string[], v: Volatile, strict = false): string | undefined {
   const [chars, bound] = CHARSET[v.shape.charset];
   const re = new RegExp(`(?<![${bound}])[${chars}]{${v.shape.length}}(?![${bound}])`, "g");
-  let best: { token: string; d: number } | undefined;
+  const anchor = new RegExp(`(?<![A-Za-z0-9$])${escapeRe(v.anchor)}(?![A-Za-z0-9$])`, "g");
+  const found: { token: string; d: number; same: boolean }[] = [];
   for (const text of texts) {
-    for (let i = text.indexOf(v.anchor); i >= 0; i = text.indexOf(v.anchor, i + 1)) {
+    for (const a of text.matchAll(anchor)) {
+      const i = a.index;
       const from = Math.max(0, i - NEAR);
       const anchorEnd = i + v.anchor.length;
       for (const m of text.slice(from, anchorEnd + NEAR).matchAll(re)) {
@@ -363,20 +455,27 @@ function nearestToken(texts: string[], v: Volatile): string | undefined {
         const start = from + m.index;
         const end = start + token.length;
         if (end > i && start < anchorEnd) continue; // overlaps the anchor itself
-        const d = end <= i ? i - end : start - anchorEnd;
-        if (!best || d < best.d) best = { token, d };
+        const between = end <= i ? text.slice(end, i) : text.slice(anchorEnd, start);
+        found.push({ token, d: between.length, same: !BOUNDARY.test(between) });
       }
     }
   }
-  return best?.token;
+  const pool = found.some((f) => f.same) ? found.filter((f) => f.same) : strict ? [] : found;
+  if (strict) {
+    const distinct = new Set(pool.map((f) => f.token));
+    return distinct.size === 1 ? [...distinct][0] : undefined;
+  }
+  const best = Math.min(...pool.map((f) => f.d));
+  const tied = new Set(pool.filter((f) => f.d === best).map((f) => f.token));
+  return tied.size === 1 ? [...tied][0] : undefined;
 }
 
-async function fetchText(url: string, headers: Record<string, string>, fetchImpl: typeof fetch): Promise<string> {
+async function fetchText(url: string, headers: Record<string, string>, fetchImpl: typeof fetch): Promise<{ text: string; url: string }> {
   try {
     const r = await fetchImpl(url, { headers, redirect: "follow", signal: AbortSignal.timeout(15_000) });
-    return r.ok ? await r.text() : "";
+    return { text: r.ok ? await r.text() : "", url: r.url || url };
   } catch {
-    return "";
+    return { text: "", url };
   }
 }
 
@@ -396,14 +495,15 @@ export async function rescan(site: string, op: Operation, args: Args, fetchImpl:
     if (cookie) h.cookie = cookie;
     return h;
   };
-  const doc = await fetchText(url, headers(url), fetchImpl);
+  const { text: doc, url: docUrl } = await fetchText(url, headers(url), fetchImpl);
   if (!doc) return undefined;
+  // relative to the document's final URL: a redirect (a locale prefix) moves where "../static" points
   const refs = [
     ...doc.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi),
     ...doc.matchAll(/<link\b[^>]*\bhref=["']([^"']+\.m?js(?:\?[^"']*)?)["']/gi),
-  ].map((m) => new URL(m[1]!, url).href);
+  ].map((m) => new URL(m[1]!, docUrl).href);
   // ponytail: only scripts the document references directly; ids in lazily loaded chunks need recapture.
-  const scripts = await Promise.all([...new Set(refs)].slice(0, 40).map((s) => fetchText(s, headers(s), fetchImpl)));
+  const scripts = await Promise.all([...new Set(refs)].slice(0, 40).map(async (s) => (await fetchText(s, headers(s), fetchImpl)).text));
   const texts = [doc, ...scripts];
 
   const types = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]));
@@ -411,7 +511,7 @@ export async function rescan(site: string, op: Operation, args: Args, fetchImpl:
   const changes: string[] = [];
   for (const v of op.volatile) {
     const old = asText(getAt(op.request, v.at));
-    const token = nearestToken(texts, v);
+    const token = nearestToken(texts, v, !op.readOnly);
     if (!token || token === old) continue;
     const numeric = types.get(JSON.stringify(v.at)) === "number";
     request = setAt(request, v.at, numeric ? BigInt(token) : token);
@@ -453,12 +553,22 @@ export type HealResult =
       attempt?: Attempt;
       /** reads: the site's own response from the recapture run (the tier-3 answer) */
       fallback?: Attempt;
+      /**
+       * nothing was learned about the op: the site throttled or challenged the check, the session
+       * is logged out, or the browser could not start. Not a reason to mark the op stale.
+       */
+      transient?: boolean;
     };
 
+// A check answered with these says nothing about the candidate: stop, and don't spend a browser run on it.
+const STOP: ReadonlySet<Class> = new Set(["rate", "blocked", "auth"]);
+
 function saveHealed(site: string, op: Operation, strategy: "rescan" | "recapture", diff: string, attempt: Attempt): HealResult {
-  const r = loadSite(site);
-  if (!r) throw new Error(`site "${site}" disappeared during heal`);
-  saveSite(putOperation(r.site, op));
+  withLock(join(userSitesDir(), `${safeName(site)}.json`), () => {
+    const r = loadSite(site);
+    if (!r) throw new Error(`site "${site}" disappeared during heal`);
+    saveSite(putOperation(r.site, op));
+  });
   appendHeal({ site, op: op.name, strategy, diff });
   clearStale(site, op.name);
   return { outcome: "healed", strategy, operation: op, attempt };
@@ -501,14 +611,17 @@ export async function healOperation(
   const callArgs = withDefaults(op, args);
 
   const scanned = await rescan(site, op, callArgs, o.fetchImpl).catch(() => undefined);
+  const swapped = scanned ? `rescan swapped ${scanned.diff}, replay said ${"%s"}` : "";
   if (scanned) {
     budget--;
     last = await o.validate(scanned.operation);
     if (last.class === "ok") return saveHealed(site, scanned.operation, "rescan", scanned.diff, last);
-    if (!budget) return { outcome: "failed", attempt: last, reason: `rescan swapped ${scanned.diff}, replay said ${last.reason}` };
+    if (STOP.has(last.class)) return { outcome: "failed", attempt: last, transient: true, reason: swapped.replace("%s", last.reason) };
+    if (!budget) return { outcome: "failed", attempt: last, reason: swapped.replace("%s", last.reason) };
   }
-  if (o.browser === false) return { outcome: "failed", attempt: last, reason: "rescan found nothing new; recapture needs the browser (maxTier 1)" };
-  if (!chromeAvailable()) return { outcome: "failed", attempt: last, reason: "rescan found nothing new; recapture needs Google Chrome" };
+  const tried = scanned ? swapped.replace("%s", last!.reason) : "rescan found nothing new";
+  if (o.browser === false) return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs the browser (maxTier 1)` };
+  if (!chromeAvailable()) return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs Google Chrome` };
 
   const examples = withDefaults(op, Object.fromEntries(op.params.flatMap((p) => (p.example !== undefined ? [[p.name, p.example]] : []))));
   const learnArgs = learnable(op, callArgs) || !learnable(op, examples) ? callArgs : examples;
@@ -516,14 +629,23 @@ export async function healOperation(
   try {
     run = await runOpTrigger(site, op, learnArgs, { intercept: !op.readOnly });
   } catch (e) {
-    return { outcome: "failed", attempt: last, reason: `the browser run failed: ${(e as Error).message.split("\n")[0]}` };
+    const reason = `the browser run failed: ${(e as Error).message.split("\n")[0]}`;
+    // another process holds the profile: nothing about the op was learned
+    if (e instanceof ProfileInUse) return { outcome: "failed", attempt: { tier: 3, class: "error", reason, hint: PROFILE_HINT }, transient: true, reason };
+    return { outcome: "failed", attempt: last, reason };
+  }
+  if (!run.matched && run.loginWall) {
+    return { outcome: "failed", transient: true, attempt: { tier: 3, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` }, reason: `the trigger landed on a sign-in page (${run.loginWall})` };
   }
   if (!run.matched) return { outcome: "failed", attempt: last, reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` };
+  const seen = judgeExchange(op, run.matched);
+  if (seen && STOP.has(seen.class)) return { outcome: "failed", attempt: seen, transient: true, reason: `the site's own request says ${seen.class}: ${seen.reason}` };
   // The site's own answer is this call's answer only when the trigger ran with this call's args.
   const fallback = op.readOnly && learnArgs === callArgs ? judgeExchange(op, run.matched) : undefined;
   let fresh: Operation;
+  let sessionValues: Record<string, string>;
   try {
-    fresh = learnOperation({
+    ({ operation: fresh, sessionValues } = learnOperation({
       exchanges: run.capture.exchanges,
       examples: [learnArgs],
       cookies: run.capture.cookies,
@@ -533,10 +655,25 @@ export async function healOperation(
       readOnly: op.readOnly,
       loginCookies: o.loginCookies,
       public: op.public,
-    }).operation;
+    }));
   } catch (e) {
     return { outcome: "failed", attempt: last, fallback, reason: `re-learning failed: ${(e as Error).message}` };
   }
+  // A deploy that adds an auth/anti-bot header: its value is needed to validate (and later send) the candidate.
+  mergeCapture(site, [], sessionValues);
+  // An arg equal to a constant the old template had there ("search" in /api/search) is not a param position.
+  const oldLeaves = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.value.toLowerCase()]));
+  const oldSlots = new Set(op.slots.map((sl) => JSON.stringify(sl.at)));
+  fresh = {
+    ...fresh,
+    slots: fresh.slots.filter((sl) => {
+      if (!sl.param) return true;
+      const k = JSON.stringify(sl.at);
+      if (oldSlots.has(k)) return true;
+      const now = asText(getAt(fresh.request, sl.at)).toLowerCase();
+      return oldLeaves.get(k) !== now;
+    }),
+  };
   // The interface (params, trigger, match, what to extract) is the caller's contract; only the wire template heals.
   const candidate: Operation = {
     ...fresh,
@@ -556,5 +693,5 @@ export async function healOperation(
   }
   last = await o.validate(candidate);
   if (last.class === "ok") return saveHealed(site, candidate, "recapture", summarize(op, candidate), last);
-  return { outcome: "failed", attempt: last, fallback, reason: `recaptured template failed replay: ${last.reason}` };
+  return { outcome: "failed", attempt: last, fallback, ...(STOP.has(last.class) ? { transient: true } : {}), reason: `recaptured template failed replay: ${last.reason}` };
 }

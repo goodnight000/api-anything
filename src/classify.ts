@@ -57,6 +57,24 @@ function challenge(body: string): string | undefined {
   return CHALLENGES.find(([, re]) => re.test(head))?.[0];
 }
 
+/**
+ * The bot wall this response is, if any ("Cloudflare challenge page (HTTP 403)"). A real HTML page
+ * may mention recaptcha in a login form; challenge pages are small, non-2xx, or where data was expected.
+ */
+export function botWall(r: Observed, wantsJson = false): string | undefined {
+  const body = r.body ?? "";
+  const ct = (r.headers["content-type"] ?? "").toLowerCase();
+  const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
+  if (r.headers["cf-mitigated"] === "challenge") return "Cloudflare challenge (cf-mitigated)";
+  if (Object.keys(r.headers).some((k) => k.toLowerCase().startsWith("x-kpsdk"))) return `Kasada challenge (HTTP ${r.status})`;
+  if (r.status >= 400 || (isHtml && (wantsJson || body.length < 64_000))) {
+    const vendor = challenge(body);
+    if (vendor) return `${vendor} challenge page (HTTP ${r.status})`;
+  }
+  if (isHtml && CHALLENGE_TITLE.test(body.slice(0, 20_000))) return `challenge page (HTTP ${r.status})`;
+  return undefined;
+}
+
 /** " (retry after 120 s)" from a Retry-After header in seconds or as an HTTP date. */
 function retryAfter(headers: Record<string, string>): string {
   const v = headers["retry-after"]?.trim();
@@ -117,14 +135,8 @@ export function classify(op: Operation, r: Observed): Classified {
   const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
   const wantsJson = op.response.format === "json";
 
-  if (r.headers["cf-mitigated"] === "challenge") return is("blocked", "Cloudflare challenge (cf-mitigated)");
-  if (Object.keys(r.headers).some((k) => k.toLowerCase().startsWith("x-kpsdk"))) return is("blocked", `Kasada challenge (HTTP ${r.status})`);
-  // A real HTML page may mention recaptcha in a login form; challenge pages are small or non-2xx.
-  if (r.status >= 400 || (isHtml && (wantsJson || body.length < 64_000))) {
-    const vendor = challenge(body);
-    if (vendor) return is("blocked", `${vendor} challenge page (HTTP ${r.status})`);
-  }
-  if (isHtml && CHALLENGE_TITLE.test(body.slice(0, 20_000))) return is("blocked", `challenge page (HTTP ${r.status})`);
+  const wall = botWall(r, wantsJson);
+  if (wall) return is("blocked", wall);
 
   const wait = retryAfter(r.headers);
   if (r.status === 429) return is("rate", `HTTP 429${wait}`);

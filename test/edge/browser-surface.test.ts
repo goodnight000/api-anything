@@ -77,6 +77,9 @@ function cli(home: string, args: string[], o: { onSpawn?: (pid: number) => void;
   });
 }
 
+/** A step that keeps a capture running, so a signal lands mid-capture. */
+const BUSY = JSON.stringify([{ action: "wait", ms: 20_000 }]);
+
 /** Chrome processes launched on this home's profile. */
 const chromes = (home: string) =>
   execFileSync("ps", ["-axo", "command"]).toString().split("\n").filter((l) => l.includes(`${home}/profile`) && !l.includes("ps -axo")).length;
@@ -422,7 +425,8 @@ describe("two processes sharing the Chrome profile; signals and zombies", { skip
 
   test("Ctrl-C mid-capture exits 130 and kills Chrome", async () => {
     let pid = 0;
-    const running = cli(home, ["capture", `${fx.url}/sse-page`], { onSpawn: (p) => (pid = p), killAfterMs: 30_000 });
+    // a wait step keeps the capture busy (the SSE page alone no longer holds a capture open)
+    const running = cli(home, ["capture", `${fx.url}/sse-page`, "--steps", BUSY], { onSpawn: (p) => (pid = p), killAfterMs: 30_000 });
     assert.ok(await until(() => chromes(home) > 0, 15_000), "Chrome never started");
     process.kill(pid, "SIGINT");
     const r = await running;
@@ -432,7 +436,8 @@ describe("two processes sharing the Chrome profile; signals and zombies", { skip
 
   test("SIGKILL mid-capture leaves no Chrome behind, and the next run can launch on the profile", async () => {
     let pid = 0;
-    const running = cli(home, ["capture", `${fx.url}/sse-page`], { onSpawn: (p) => (pid = p), killAfterMs: 30_000 });
+    // a wait step keeps the capture busy (the SSE page alone no longer holds a capture open)
+    const running = cli(home, ["capture", `${fx.url}/sse-page`, "--steps", BUSY], { onSpawn: (p) => (pid = p), killAfterMs: 30_000 });
     assert.ok(await until(() => chromes(home) > 0, 15_000), "Chrome never started");
     await sleep(1000);
     process.kill(pid, "SIGKILL");
@@ -451,7 +456,8 @@ describe("two processes sharing the Chrome profile; signals and zombies", { skip
 
   test("BUG SIGTERM mid-capture exits promptly (Playwright's handler swallows it; the CLI runs on to its 30 s deadline)", async () => {
     let pid = 0;
-    const running = cli(home, ["capture", `${fx.url}/sse-page`], { onSpawn: (p) => (pid = p), killAfterMs: 40_000 });
+    // a wait step keeps the capture busy (the SSE page alone no longer holds a capture open)
+    const running = cli(home, ["capture", `${fx.url}/sse-page`, "--steps", BUSY], { onSpawn: (p) => (pid = p), killAfterMs: 40_000 });
     assert.ok(await until(() => chromes(home) > 0, 15_000), "Chrome never started");
     await sleep(2000); // the page is loaded and the capture is waiting for the network to go quiet
     const t0 = Date.now();
