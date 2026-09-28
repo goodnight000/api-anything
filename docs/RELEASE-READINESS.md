@@ -8,6 +8,8 @@ This is not a claim that every website, every operation, or unattended account a
 - `npm run check` and `npm test`: 416 tests passed, zero skipped, including real Chrome against
   localhost fixtures. Tests do not make external requests.
 - `npm audit --omit=dev`: zero reported vulnerabilities at release time.
+- Fresh GitHub clone → `npm ci` → pack → global install passed. Direct GitHub `npx` also passed.
+  Global `npm install -g github:...` failed under npm 11.6.2; the documented pack-first route avoids it.
 - A packed production-only install exposes all eight sites and 17 operations. A real stdio MCP
   client discovers all four tools, calls Hacker News, and receives structured failures.
 - All 17 bundled read operations returned successful direct-HTTP responses in live checks.
