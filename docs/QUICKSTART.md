@@ -59,7 +59,16 @@ If a desktop app cannot find the executable, use the absolute path from `command
 
 ## Demo 1: teach once, call with new arguments
 
-This learns an HTML page, then requests a different domain without navigating a browser:
+From the clone, with Chrome and `jq` installed:
+
+```sh
+./examples/teach-once.sh arxiv.org
+```
+
+The script learns `hn-demo.links` from the Hacker News pages for `github.com` and `github.io`.
+It prints the saved slot, then calls the operation with `arxiv.org` over plain HTTP
+(`--max-tier 1`). It exits nonzero unless every returned URL is on the requested domain. The
+commands it runs:
 
 ```sh
 api-anything add hn-demo links --trigger 'https://news.ycombinator.com/from?site={domain}' \
@@ -68,9 +77,10 @@ api-anything add hn-demo links --trigger 'https://news.ycombinator.com/from?site
 api-anything call hn-demo links domain=arxiv.org --max-tier 1
 ```
 
-Check the preview after learning and inspect the returned URLs after the call. This demonstrates
-one reusable operation; it does not map every feature of Hacker News. A new site usually needs
-an agent to select requests, identify arguments and choose the response fields.
+This shows one reusable operation. It doesn't map every feature of Hacker News. A new site
+usually needs an agent to choose the request, identify the arguments and pick the response fields.
+To call the same operation the way an MCP client does, run
+`node examples/mcp-call.mjs hn-demo links domain=nature.com`.
 
 ## Demo 2: an internal research workflow
 
@@ -81,30 +91,27 @@ npm ci
 npm run demo -- 'agent memory'
 ```
 
-Or, with the global install:
-
-```sh
-node "$(npm root -g)/api-anything/examples/research.mjs" 'agent memory'
-```
-
-The example returns the first five Hacker News search results as JSON. It checks `ok` and
-truncation before using the result and exits with an error when a call fails.
+The example returns a short brief. It contains the first five Hacker News search results and a
+`calls` log with each call's transport tier and time. It checks `ok` and truncation before using
+a result, and exits with an error if a call fails.
 
 For company research, import your existing LinkedIn session once, then run the same workflow
-with enrichment. If several profiles are found, select your account from the candidates; the
-example profile name below is a placeholder, not an account to assume.
+with enrichment. If several profiles are found, choose your account from the candidates. The
+profile name below is a placeholder, not an account to assume.
 
 ```sh
 api-anything login linkedin
 # If prompted: api-anything login linkedin --profile 'Chrome/<your profile>'
 api-anything call linkedin getMe
-node "$(npm root -g)/api-anything/examples/research.mjs" anthropic --linkedin
+node examples/research.mjs anthropic --linkedin
 ```
 
-This searches companies and uses each returned ID to fetch company details, for at most three
-companies. It sends no messages. The JSON can feed an agent's brief, a local report, or your
-existing job runner. Use one persistent MCP process for shared pacing; independent CLI processes
-have independent rate limits. Treat `auth`, `rate`, `blocked` and `drift` as incomplete work.
+This searches companies, then uses each returned `universalName` to fetch company details, for
+at most three companies. It sends no messages. The JSON can feed an agent's brief, a local
+report, or your existing job runner. Use one persistent MCP process for shared pacing, because
+independent CLI processes are rate-limited separately. Treat `auth`, `rate`, `blocked` and
+`drift` as incomplete work. Recordings and captured output for both demos are in
+[docs/demos](demos/README.md).
 
 ## Writes and limits
 

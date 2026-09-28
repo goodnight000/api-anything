@@ -1,7 +1,7 @@
 {
   "name": "api-anything",
   "version": "0.1.0",
-  "description": "Turn any website into an API your agent can call. Self-healing when the site changes.",
+  "description": "Learn reusable operations from a website's browser traffic and call them from a CLI, library or MCP server.",
   "license": "MIT",
   "type": "module",
   "bin": {

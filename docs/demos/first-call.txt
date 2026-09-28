@@ -1,0 +1,43 @@
+$ # Demo 1: install from GitHub, then call a bundled operation. Live, no cuts.
+$ node -v; npm -v
+v25.1.0
+11.6.2
+$ git clone -q https://github.com/goodnight000/api-anything.git && cd api-anything
+$ npm ci --no-audit --no-fund
+
+> api-anything@0.1.0 prepare
+> tsc -p tsconfig.json
+
+
+added 116 packages in 10s
+$ npm install -g "$(npm pack --silent)" --no-audit --no-fund
+
+added 109 packages in 4s
+$ api-anything sites | jq -r '.[] | "\(.name): \(.operations) ops"'
+airbnb: 1 ops
+amazon: 1 ops
+google-flights: 3 ops
+hacker-news: 2 ops
+instagram: 2 ops
+linkedin: 5 ops
+x: 2 ops
+youtube: 1 ops
+$ api-anything call hacker-news search query=sqlite | jq '{ok, class, tier, ms, results: (.data | len
+gth), first: .data[0]}'
+{
+  "ok": true,
+  "class": "ok",
+  "tier": 1,
+  "ms": 138,
+  "results": 30,
+  "first": {
+    "title": "Hosting SQLite databases on GitHub Pages or any static file hoster",
+    "url": "https://phiresky.github.io/blog/2021/hosting-sqlite-databases-on-github-pages/",
+    "points": 1812,
+    "num_comments": 244,
+    "objectID": "27016630",
+    "author": "phiresky",
+    "created_at": "2021-05-02T16:43:15Z"
+  }
+}
+$

@@ -1,0 +1,22 @@
+$ # Demo 3: HN story search + LinkedIn company search, then details by returned ID.
+$ # Live, no cuts, reads only. LinkedIn session imported earlier (api-anything login).
+$ node examples/research.mjs anthropic --linkedin > /tmp/brief.json && echo saved
+saved
+$ jq -r '.stories[] | [.points, .date, .title] | @tsv' /tmp/brief.json
+2192    2025-12-02      Anthropic acquires Bun
+1554    2026-07-13      Zig Creator Calls Spade a Spade, Anthropic Blows Smoke
+1484    2026-06-06      S&P 500 rejects SpaceX, also blocking entry for OpenAI and Anthropic
+1431    2026-05-19      I’ve joined Anthropic
+1362    2026-02-27      I am directing the Department of War to designate Anthropic a supply-chain ri
+sk
+$ jq -r '.companies[] | [.universalName, .staff, .name, .industry] | @tsv' /tmp/brief.json
+anthropicresearch       6114    Anthropic       Research Services
+odeai   126     Ode with Anthropic      Software Development
+anthropic       17      Anthropic       Venture Capital and Private Equity Principals
+$ jq -r '.calls[] | [.op, (.args | tostring), "tier \(.tier)", "\(.ms) ms"] | @tsv' /tmp/brief.json
+hacker-news.search      {"query":"anthropic"}   tier 1  147 ms
+linkedin.searchCompanies        {"keywords":"anthropic"}        tier 1  431 ms
+linkedin.getCompany     {"universalName":"anthropicresearch"}   tier 1  842 ms
+linkedin.getCompany     {"universalName":"odeai"}       tier 1  993 ms
+linkedin.getCompany     {"universalName":"anthropic"}   tier 1  993 ms
+$

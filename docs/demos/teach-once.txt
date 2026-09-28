@@ -1,0 +1,67 @@
+$ # Demo 2: learn an operation from two examples, then call it with new input. Live, no cuts.
+$ ./examples/teach-once.sh arxiv.org
+# 1. Learn from two examples. Headless Chrome opens the page twice. Summarized with jq.
+$ api-anything add hn-demo links \
+  --trigger 'https://news.ycombinator.com/from?site={domain}' \
+  --example domain=github.com --example2 domain=github.io --match path=/from \
+  --html '{"items":"tr.athing","fields":{"title":".titleline > a","url":".titleline > a@href"}}'
+{
+  "ok": true,
+  "request": "GET https://news.ycombinator.com/from",
+  "params": [
+    "domain:string"
+  ],
+  "minTier": 1,
+  "preview_items": 30,
+  "preview_first": "https://github.com/sevenDatabase/SevenDB"
+}
+
+# 2. The saved template has a slot where the domain goes.
+$ jq -c '.operations[] | select(.name == "links").slots' "/tmp/api-anything-demo/home/sites/hn-demo.j
+son"
+[{"param":"domain","at":["query:site"]}]
+
+# 3. Call it with a new input, plain HTTP only. Summarized with jq.
+$ api-anything call hn-demo links domain=arxiv.org --max-tier 1
+{
+  "ok": true,
+  "class": "ok",
+  "tier": 1,
+  "ms": 539,
+  "reason": null,
+  "results": 30,
+  "from_domain": 30,
+  "first": [
+    "https://arxiv.org/abs/2110.01834",
+    "https://arxiv.org/abs/2504.03888",
+    "https://arxiv.org/abs/1710.05060"
+  ]
+}
+$ clear
+
+$ # Same operation over MCP with another input (a scripted MCP client, no LLM):
+$ node examples/mcp-call.mjs hn-demo links domain=nature.com
+tools: list_sites, list_operations, call_operation, login
+call_operation {"site":"hn-demo","op":"links","args":{"domain":"nature.com"}}
+{
+  "ok": true,
+  "class": "ok",
+  "tier": 1,
+  "ms": 107,
+  "results": 30,
+  "first": [
+    {
+      "title": "RFPeptides: De novo design of protein-binding macrocycles using deep learning",
+      "url": "https://www.nature.com/articles/s41589-025-01929-w"
+    },
+    {
+      "title": "Sham scientific societies are misleading star researchers",
+      "url": "https://www.nature.com/articles/d41586-026-02980-w"
+    },
+    {
+      "title": "How do I rekindle my motivation for earning my PhD?",
+      "url": "https://www.nature.com/articles/d41586-026-02563-9"
+    }
+  ]
+}
+$

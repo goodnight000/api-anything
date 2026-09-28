@@ -1,7 +1,7 @@
 {
   "name": "api-anything",
   "version": "0.1.0",
-  "description": "Turn any website into an API your agent can call. Learns requests from the site's own frontend, replays them fast, and heals itself when the site changes.",
+  "description": "Learn reusable operations from a website's browser traffic and call them over MCP. Replays over HTTP, with browser fallback and bounded repair.",
   "author": { "name": "Tianjun Zheng", "url": "https://github.com/goodnight000" },
   "homepage": "https://github.com/goodnight000/api-anything",
   "repository": "https://github.com/goodnight000/api-anything",

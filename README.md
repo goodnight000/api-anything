@@ -1,261 +1,280 @@
-# api-anything
+# API Anything
 
-api-anything turns a website that only has a GUI into operations an agent can call directly, such as
-`hn.front` or `flights.search`. It learns each request from the site's own frontend running in
-your Chrome, replays it as a plain HTTP call, and attempts to re-learn it when the site changes. A failed repair returns an error.
+API Anything learns reusable operations from a website's own browser traffic. You show it a page
+with two example inputs. It records the request the page makes, works out which parts of that
+request are the input, and saves a template. After that you call the operation with new inputs
+from a CLI, a TypeScript library, or an MCP server. Calls use plain HTTP when the site accepts
+them. If a site blocks plain HTTP, the call falls back to Chrome, and if a request stops working,
+API Anything makes a limited number of repair attempts.
+
+Everything runs on your machine. It needs no API Anything account, hosted service or model key.
+When an operation is created, an agent (or you) chooses the request and the fields to return.
+API Anything then builds the template without an LLM.
+
+[![Recording: learn an operation from github.com and github.io, then call it with arxiv.org](docs/demos/teach-once.png)](docs/demos/teach-once.gif)
+
+<sub>Recorded live on 2026-09-27, 25 s, no cuts. Click the still to play the GIF. The same run as
+text is in [docs/demos](docs/demos/README.md#2-teach-once-call-with-new-inputs).</sub>
+
+## Teach once, then call with new inputs
+
+This is more than replaying a recorded response. The operation below was learned from Hacker News
+pages for `github.com` and `github.io`. It was then called with `arxiv.org`, a domain it had not
+seen, and returned arxiv.org stories:
+
+```sh
+api-anything add hn-demo links \
+  --trigger 'https://news.ycombinator.com/from?site={domain}' \
+  --example domain=github.com --example2 domain=github.io --match path=/from \
+  --html '{"items":"tr.athing","fields":{"title":".titleline > a","url":".titleline > a@href"}}'
+
+api-anything call hn-demo links domain=arxiv.org
+```
+
+- `--trigger` is the page URL, with `{domain}` where the input goes. Headless Chrome loads it
+  once for each example.
+- `--match path=/from` picks the request to learn from what the page loaded.
+- `--html` says which fields to return. JSON APIs use `--extract` and `--pick` instead.
+- With two examples, the learner can separate the input (it changes with the example) from
+  one-time values such as nonces (they change on every run). The input is stored as a slot:
+  `{"param":"domain","at":["query:site"]}`.
+
+In the recorded run, `call` used tier 1 (Node `fetch`, no browser) and returned 30 results.
+All 30 URLs were on arxiv.org. [`examples/teach-once.sh`](examples/teach-once.sh) runs these
+steps and checks that the results come from the domain you asked for.
 
 ## Quickstart
 
-Requires Node 22.13+. Learning, browser fallback and interactive login also need Google Chrome. Public HTTP operations can run without Chrome. api-anything is not on npm yet, so these commands install it from GitHub (the first run takes a few seconds to build).
+You need Node 22.13 or newer, npm, and git. The bundled public operations run without Chrome.
+Learning operations, browser fallback and `login --window` need Google Chrome. The package is
+not on npm yet. Install it from GitHub like this:
 
 ```sh
-npx -y github:goodnight000/api-anything add hn front --trigger https://news.ycombinator.com/news --match path=/news \
-  --html '{"items":"tr.athing","fields":{"title":".titleline > a","url":".titleline > a@href"}}'
-npx -y github:goodnight000/api-anything call hn front
+git clone https://github.com/goodnight000/api-anything.git
+cd api-anything
+npm ci
+npm install -g "$(npm pack --silent)"
+api-anything call hacker-news search query=sqlite
 ```
 
-The first command opens the page twice in a headless Chrome and saves an operation to
-`~/.api-anything/sites/hn.json`. Its output includes a `preview` of what a call returns. The second
-returns JSON through HTTP when the site accepts replay. Sites that challenge plain HTTP clients
-may need the slower Chrome fallback; the result reports its transport tier and elapsed time.
-
-Everything lives in `~/.api-anything`; set `API_ANYTHING_HOME` to use another directory.
-
-Bundled specs, verified live on 2026-09-27 (logged out except LinkedIn): `x` (getUser, getProfile),
-`instagram` (getProfile, getPosts), `google-flights` (search, top, priceCalendar), `hacker-news`
-(frontPage, search), `youtube` (search), `airbnb` (search), `amazon` (search), `linkedin` (getMe,
-getProfile, getCompany, searchPeople, searchCompanies; needs login). `api-anything sites` lists them; each has notes (caveats, arg formats) in `sites/<site>.md`,
-which `api-anything ops <site>` and MCP `list_operations` print.
-
-## Logging in
-
-For sites that need an account, one command signs you in:
-
-```sh
-api-anything login linkedin.com
-```
-
-The target can be a site name (`linkedin`), a domain (`linkedin.com`, `www.linkedin.com`) or a URL.
-By default this **imports** the site's cookies from your everyday browser — you are almost always
-already signed in there, so there is no password to type and no 2FA or captcha to redo. It prints
-the browser profile it used, with the profile's display name and Google account, and the cookie
-*names* (never the values). Then LinkedIn operations just work:
-
-```sh
-api-anything call linkedin getCompany universalName=openai
-api-anything call linkedin getProfile publicId=williamhgates
-```
-
-**Several profiles signed in.** If more than one browser profile is signed in to the site (a work
-and a personal profile, or someone else's account in your Chrome), `login` does not guess. It
-answers `ok: false` with a `candidates` list, each with its profile, display name and email, and you
-pick one:
-
-```sh
-api-anything login linkedin.com --profile "Chrome/Profile 1"
-```
-
-The choice is remembered: when a call later returns `class: "auth"`, api-anything re-imports from
-that same profile once on its own before asking you to log in again.
-
-On macOS the first import shows one Keychain prompt ("security wants to use the … Safe Storage" key);
-allow it. The imported session is the *same* one as your browser, so if the site logs it out, both
-go — avoid heavy automated traffic on it. Other ways in:
-
-- `--window` opens a visible Chrome window to sign in by hand (an independent session). Use it when
-  the site asks for 2FA or a captcha, or when you don't want to share your browser's session. It is
-  also the automatic fallback when nothing is importable.
-- `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
-- `api-anything logout <site>` clears the stored session.
-
-Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
-
-## Install
-
-**Claude Code** (skill + MCP server):
-
-```
-/plugin marketplace add goodnight000/api-anything
-/plugin install api-anything@api-anything
-```
-
-**Any MCP client.** Add this server entry:
+The call prints one line of JSON. It starts like this (shortened here):
 
 ```json
-{
-  "mcpServers": {
-    "api-anything": { "command": "npx", "args": ["-y", "github:goodnight000/api-anything", "mcp"] }
-  }
-}
+{"ok":true,"class":"ok","tier":1,"data":[{"title":"Hosting SQLite databases on GitHub Pages or any static file hoster","url":"https://phiresky.github.io/blog/2021/hosting-sqlite-databases-on-github-pages/","points":1812,"num_comments":244,"objectID":"27016630","author":"phiresky","created_at":"2021-05-02T16:43:15Z"}, ...],"ms":111}
 ```
 
-It exposes four fixed tools, `list_sites`, `list_operations`, `call_operation` and `login`, so
-the tool list costs the same whether you have 2 sites or 200. Writes are hidden until you start the
-server with `api-anything mcp --allow-writes`.
+`ok: true` and `tier: 1` mean the call succeeded over plain HTTP. A failure prints
+`ok: false` with a `class`, a `reason` and a `next` step, and the command exits nonzero.
+[Recording and transcript of this install](docs/demos/README.md#1-first-successful-call), made
+from a fresh clone with an empty npm cache.
 
-`call_operation` takes `{ site, op, args: { name: value } }` and returns the same JSON as the CLI,
-except that `next` names MCP tools (`list_operations {"site":"x"}`, the `login` tool) and marks
-CLI-only commands (heal, add) as ones to ask the user to run in a terminal.
-`login` lets an agent recover from `class: "auth"` on its own: mode `import` only refreshes a
-session you already imported with the CLI, from the same profile (an agent reading page content
-can't pull another site's or another account's cookies), and mode `window` opens a window for you
-to sign in. MCP cannot create operations; use the CLI (`capture`, `add`) for that.
+- To try it without installing, run `npx -y github:goodnight000/api-anything call hacker-news search query=sqlite`.
+- To use it as a library, run `npm install github:goodnight000/api-anything` inside your project.
+- Don't use `npm install -g github:goodnight000/api-anything`. It failed under npm 11.6.2 because
+  the build dependencies were left out. The `npm pack` step above avoids that.
+- Pin a version with `git checkout <commit>` before `npm ci`, or with
+  `github:goodnight000/api-anything#<commit>`.
 
-**Codex and other coding agents.** Follow [setup and demos](docs/QUICKSTART.md) for the CLI,
-MCP registration, the skill, and a read-only research workflow. Every command returns JSON
-and gives a `next` hint on failure. MCP calls existing operations; an agent with shell access
-uses the CLI to create new ones.
+State lives in `~/.api-anything`. Set `API_ANYTHING_HOME` to use another directory.
 
-**Library:**
+## Using it from an agent
+
+Agents use two separate paths. **Calling** existing operations works through MCP.
+**Creating** operations needs an agent that can run shell commands, because `capture` and `add`
+are CLI-only.
+
+### Calling operations over MCP
+
+The MCP server always has the same four tools: `list_sites`, `list_operations`,
+`call_operation` and `login`. The tool list stays the same size however many sites you add.
+`call_operation` takes `{ "site", "op", "args" }` and returns the same JSON as the CLI.
+
+```sh
+# Codex, after the global install above
+codex mcp add api-anything -- api-anything mcp
+```
+
+```json
+{ "mcpServers": { "api-anything": { "command": "api-anything", "args": ["mcp"] } } }
+```
+
+The JSON above is the entry for other MCP clients. In Claude Code,
+`/plugin marketplace add goodnight000/api-anything`, then
+`/plugin install api-anything@api-anything`, installs the MCP server and the skill together. An
+operation you create with the CLI can be called over MCP right away. To check the server without
+an agent, run `node examples/mcp-call.mjs hacker-news search query=sqlite`. That starts
+`api-anything mcp` and calls it the way a client does.
+
+Over MCP, write operations are hidden unless the server was started with `--allow-writes`.
+The `login` tool can open a sign-in window for you. Otherwise, it can only re-import a session
+that you already imported with the CLI, from the same browser profile. An agent reading web
+content therefore can't pull cookies from another profile or site.
+
+### Creating operations with a shell-capable agent
+
+Give the agent the skill in [`skills/api-anything/SKILL.md`](skills/api-anything/SKILL.md). For
+Codex, copy it to `~/.agents/skills/api-anything/SKILL.md`. The skill covers this loop:
+
+1. `api-anything capture <url> --example q=value` loads the page in Chrome and lists the requests
+   that carry the example value.
+2. `api-anything inspect <capture> <id>` shows a candidate's response without opening a browser.
+3. `api-anything add <site> <op> --trigger ... --example ... --example2 ...` learns the operation.
+   The agent chooses the request, the example values, and `--extract`/`--pick`/`--html`.
+4. `api-anything call` checks the result with a new input. `api-anything verify <site>` checks it
+   again later.
+
+The agent decides what the operation should be. API Anything handles finding the input in the
+request, keeping cookies and tokens out of the spec, replaying, and repair.
+[Reference: creating an operation](docs/REFERENCE.md#creating-an-operation-from-captured-traffic).
+
+### Library
 
 ```ts
-import { call } from "api-anything";
-const r = await call("hn", "front", {});
-// { ok, class, data, tier, healed?, ms, next? }
+import { call, closeBrowser } from "api-anything";
+
+const r = await call("hacker-news", "search", { query: "sqlite" });
+// r: { ok, class, data, tier, healed?, ms, reason?, next? }; data is unknown until you check ok
+if (r.ok) console.log(r.tier, (r.data as { title: string }[])[0].title);
+await closeBrowser();
 ```
 
-## Worked example
+## Research workflow
 
-Suppose you want Hacker News search as an operation. Start by seeing which requests the page makes:
+[`examples/research.mjs`](examples/research.mjs) searches Hacker News stories, searches LinkedIn
+companies, and then looks up each company using the ID that the search returned. The result is
+a short JSON brief an agent can use:
 
 ```sh
-$ api-anything capture "https://hn.algolia.com/?q=sqlite" --example q=sqlite
-{"capture":"cmujqsybh","requests":38,"candidates":[
-  {"id":21,"kind":"fetch","method":"POST","url":"https://uj5wyc0l7x-dsn.algolia.net/1/indexes/Item_dev/query?x-algolia-agent=...","status":200,"type":"application/json","carries":["q"],"size":61234},
-  {"id":1,"kind":"document","method":"GET","url":"https://hn.algolia.com/?q=sqlite","status":200,"type":"text/html","size":2841}, ...]}
+api-anything login linkedin          # imports the session from your everyday browser
+node examples/research.mjs anthropic --linkedin > brief.json
 ```
 
-`api-anything inspect <capture> <id>` shows a candidate's response, without a browser. Then describe
-how to make the page fire that request. Give two example values, so the learner can tell params
-from nonces:
+[![Recording: HN stories, three LinkedIn companies, and a tier-1 log of each call](docs/demos/research.png)](docs/demos/research.gif)
 
-```sh
-$ api-anything add hn-search search --trigger "https://hn.algolia.com/?q={query}" \
-    --example query=sqlite --example2 query=postgres --match host=uj5wyc0l7x-dsn.algolia.net \
-    --extract hits --pick "title,url,points,comments=num_comments"
-{"ok":true,"site":"hn-search","op":"search","request":"POST https://uj5wyc0l7x-dsn.algolia.net/1/indexes/Item_dev/query",
- "params":["query:string"],"readOnly":true,"minTier":1,"match":{"host":"uj5wyc0l7x-dsn.algolia.net"},"extract":"hits",
- "preview":{"count":30,"first":{"title":"Hosting SQLite databases on GitHub Pages or any static file hoster","url":"https://phiresky.github.io/blog/2021/hosting-sqlite-databases-on-github-pages/","points":1812,"comments":244}},
- "warnings":[],"captures":["cmujqsybh","cmujqszcj"],"next":"api-anything call hn-search search query=..."}
+<sub>Recorded live on 2026-09-27, 20 s, no cuts. [Full output](docs/demos/research-brief.json)
+and [transcript](docs/demos/research.txt).</sub>
 
-$ api-anything call hn-search search query=duckdb
-{"ok":true,"class":"ok","tier":1,"data":[{"title":"The DuckDB Local UI","url":"https://duckdb.org/2025/03/12/duckdb-ui.html","points":926,"comments":188}, ...],"ms":990}
+All five calls were reads and used tier 1. Without `--linkedin`, the script needs no account.
+If LinkedIn isn't signed in, the script stops with `class: "auth"` and
+`next: ask the user to run: api-anything login linkedin`.
+
+## How it works
+
+```text
+LEARN   trigger URL + two example inputs
+          │  headless Chrome loads the page for each example and records its requests
+          ▼
+        the matching request (method, host, path; never a rotating query id)
+          │  values that followed the examples  → slots
+          │  cookies and tokens                 → references to a local session store
+          ▼
+        spec: template + slots + trigger + match      ~/.api-anything/sites/<site>.json
+
+CALL    args → fill slots → tier 1: Node fetch ───────────────► data
+                              │ blocked by the site
+                              ▼
+                            tier 2: fetch() inside a Chrome page on the site
+                              │ drift (rotated id, moved field)
+                              ▼
+                            repair: rescan the page's scripts, or re-run the trigger;
+                            save the new template only if a replay succeeds
+                              │ repair failed or request is signed per call (reads only)
+                              ▼
+                            tier 3: run the trigger, return the site's own response
+                            if it matches the call's arguments; otherwise fail
 ```
 
-The `add` and `call` output is real, from 2026-09-27, shortened; the `capture` listing shows its
-shape (ids and sizes vary). `--pick`
-accepts `name=path` to rename a field, `name=path~regex` to keep the part of a string the
-regex's group 1 finds (`publicId=navigationUrl~/in/([^/?]+)`), and `[*]` in a path collects from every array item
-(`sections[*].items` joins each section's items); items with none of the picked fields are dropped. If the preview is wrong, fix `--extract`/`--pick` and
-re-run `add --from <one of the captures>`: no browser needed. For a server-rendered page, use
-`--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page;
-`inspect` accepts the same flags, so you can try selectors first.
+The diagram is simplified. Each call sends the stored template first. Repair runs only after a
+response is classified as `drift`. Other results are handled without repair. `auth` refreshes
+the session once. `blocked` moves up a tier. `rate` and `input` are returned to the caller. Two
+guards stop repair loops. Every repair is logged to
+`~/.api-anything/heals.jsonl`. The result reports the tier that answered, and for a call above
+tier 1, it says why. [Details](docs/REFERENCE.md#replay-fallback-and-repair) ·
+[design](docs/DESIGN.md).
 
-## How self-healing works
+## Bundled operations
 
-Besides its request template, each operation stores two things:
+Release 0.1 bundles 17 read operations across eight sites. They cover selected features of each
+site, not the whole site. `api-anything ops <site>` prints each operation's parameters and the
+site's notes.
 
-- **trigger**: how to make the site's own frontend fire the request. This is a URL template,
-  plus optional UI steps.
-- **match**: how to recognize that request in captured traffic by stable identity only
-  (method, host, path with hash-like segments wildcarded, GraphQL operation name). It never
-  uses a queryId or hash.
+| site | operations | account | notes |
+|---|---|---|---|
+| `hacker-news` | `frontPage`, `search` | no | [notes](sites/hacker-news.md) |
+| `google-flights` | `search`, `top`, `priceCalendar` | no | [notes](sites/google-flights.md) |
+| `x` | `getUser`, `getProfile` | no | [notes](sites/x.md) (profiles only, no posts) |
+| `instagram` | `getProfile`, `getPosts` | no | [notes](sites/instagram.md) |
+| `youtube` | `search` | no | [notes](sites/youtube.md) |
+| `airbnb` | `search` | no | [notes](sites/airbnb.md) |
+| `amazon` | `search` | no | [notes](sites/amazon.md) |
+| `linkedin` | `getMe`, `getProfile`, `getCompany`, `searchPeople`, `searchCompanies` | yes | [notes](sites/linkedin.md) |
 
-One routine, run the trigger, match the request, learn the template, does three jobs:
+In the release checks on 2026-09-27, all 17 returned successful direct-HTTP responses
+([release readiness](docs/RELEASE-READINESS.md)). The checks ran on macOS. LinkedIn was signed
+in and the other sites were logged out. For these docs, `hacker-news.search`,
+`linkedin.searchCompanies`, `linkedin.getCompany` and `linkedin.getMe` were run again the same
+day. These are dated checks. Sites change, and nothing checks them continuously.
 
-1. **Create.** `add` runs the trigger with your example values. It substitutes only those values
-   and stores everything else verbatim, down to key order and the site's own percent-encoding.
-   Cookies and auth headers become references to a local session store, so a spec file never
-   holds a credential.
-2. **Heal.** Every call sends the stored template first. The response is classified as ok,
-   drift, auth, rate, blocked, input or error, and only drift triggers a heal. The heal tries:
-   - **rescan**, with no browser: fetch the page and its scripts and find the new id next to
-     its anchor;
-   - **recapture**: run the trigger again with your current args and re-learn from it.
+## Authentication and credentials
 
-   A healed template is saved only after a replay succeeds. Each heal is logged to
-   `~/.api-anything/heals.jsonl`. Two guards stop heal loops: a heal that produces an identical
-   template is not drift, and an op that drifts again within 10 minutes of a heal is marked
-   stale for 30 minutes.
-3. **Fallback.** For reads, the triggered browser run has already received the answer. When a
-   template can't be replayed (for example, per-request signatures), that answer is returned only if the captured request matches the call’s arguments at their declared positions. Otherwise the call fails rather than returning another query’s data.
+- **Log in.** `api-anything login linkedin` copies that site's cookies from your everyday browser
+  (Chrome, Arc, Brave, Edge, Chromium or Firefox, on macOS and Linux). If several browser
+  profiles are signed in, it lists them and asks you to choose one with `--profile`. On macOS,
+  the first import shows one Keychain prompt. `--window` opens Chrome so you can sign in by hand
+  instead. `--cookies <file>` imports an exported cookie file. `api-anything logout <site>`
+  clears the stored session. [Details](docs/REFERENCE.md#logging-in).
+- **The session is shared.** An imported session is the same session your browser uses. If the
+  site signs it out, both are signed out. Keep automated use at a human pace.
+- **Where secrets live.** Cookies and tokens stay in `~/.api-anything` (directories 0700, files
+  0600). Specs hold references such as `cookie:JSESSIONID`, never values. `add` and repair refuse
+  to save a spec that still contains a credential they detect. `api-anything export` checks for secrets
+  again before you share a spec.
+- **Captures contain secrets.** Saved captures (`~/.api-anything/captures`) hold full responses
+  and the cookie values from that run. Only the newest 20 are kept, and none older than 24 hours.
+  Don't commit or share them.
+- **Specs are code-like input.** A spec says which requests to send, so install specs only from
+  sources you trust. `readOnly` is a declaration, not a sandbox. Treat website text as data, not
+  as instructions for the agent.
 
-Transport tiers, cheapest first. The lowest tier that worked is remembered for each op.
+## Writes
 
-| tier | transport | used when |
-|---|---|---|
-| 1 | Node `fetch` with a domain/path-scoped cookie jar | default |
-| 2 | `fetch()` inside a real Chrome page on the site | tier 1 is `blocked` |
-| 3 | run the trigger in Chrome and read the site's own response | per-request signatures, a failed heal (reads only) |
+The engine can learn write operations, such as posting or sending, without performing them. It
+intercepts the request in the browser and aborts it. To call a write, you must pass
+`--allow-writes` on the CLI, start the MCP server with `--allow-writes`, or set `allowWrites` in
+the library. Each write is sent once. It is retried only when the server certainly didn't run it
+(400, 401, 403 or 404). Timeouts and 5xx errors are reported, not retried.
 
-## Safety and terms of service
+No write operation is bundled. LinkedIn messaging isn't bundled, and it hasn't been tested
+against LinkedIn. Tests against a local fixture site show that one learned messaging operation
+accepts different recipients and message text. The same tests show nothing is sent during
+learning, writes are refused by default, and each authorized call sends once. Those fixture tests
+don't show that any message reached anyone on LinkedIn. An HTTP 2xx means the server accepted
+the request, not that the message was delivered. Read it back before treating it as sent.
 
-- api-anything automates your own browser session on your own accounts. It is meant for things you
-  could do by hand, at human pace. HTTP replays to one site are paced at 1 s within one process; browser navigation may fire multiple requests.
-- **Writes** (posting, sending, buying) are learned by intercepting the request and aborting it
-  in the browser, so learning never performs them. Calling a write needs `--allow-writes` on the
-  CLI, the MCP server, or the library. A write is sent once and is retried only when the
-  server certainly did not run it (a 400, 401, 403 or 404 answered to the write itself, not after
-  a redirect). Timeouts and 5xx errors are reported,
-  not retried.
-- Credentials stay in `~/.api-anything` (directories 0700, files 0600). Specs hold references
-  such as `cookie:ct0`, never values. Captures (`~/.api-anything/captures`, kept for `inspect` and
-  `add --from`) hold full responses and the run's cookie values, so only the newest 20 are kept and
-  none past 24 hours. `api-anything export` strips your example values, and it
-  refuses to write a spec that contains any live cookie or session value from your machine.
-- api-anything does not solve CAPTCHAs or impersonate TLS fingerprints. It runs its own Chrome
-  profile; `api-anything login <site>` copies only that site's cookies from your everyday browser
-  (or signs in through a window), and only when you run it.
+## Limits
+
+- It is a local framework, not a hosted REST API. Calls run on your machine with your sessions.
+- It doesn't support every feature of every website. Each operation covers one request and
+  returns one value. Pagination isn't modeled. An input that the site derives from another
+  request, such as a numeric id looked up from a handle, needs its own operation.
+- Repair can fail. When it does, the call returns an error with a reason and doesn't return
+  another query's data. A site that challenges real Chrome too needs you to clear the challenge
+  by hand. There is no CAPTCHA solving and no TLS impersonation.
+- Pacing is one request per second per site within one process. Separate CLI runs aren't paced
+  against each other, so use one MCP server process for shared pacing.
 - Many sites' terms restrict automated access. Read them. You are responsible for how you use
   this tool.
 
-## Prior art
+[All known limits](docs/REFERENCE.md#status-and-known-limits) ·
+[prior art and how this differs](docs/REFERENCE.md#prior-art)
 
-| project | the honest difference |
-|---|---|
-| [unbrowse](https://github.com/unbrowse-ai/unbrowse) | Learns routes passively from browsing; its inference runs on a closed server, and drift is handed back to the agent to re-capture. api-anything is local, learns from known example values, and repairs the template itself. |
-| [Integuru](https://github.com/Integuru-AI/Integuru) | An LLM picks the request and writes Python code for it (AGPL). api-anything learns deterministically, with no LLM, and stores data rather than code, so a single executor can heal any site. |
-| [reverse-api-engineer](https://github.com/kalil0321/reverse-api-engineer) | A coding agent writes a per-site client and hardcodes the captured credentials in it. api-anything keeps credentials out of specs, and it heals at runtime instead of re-running an agent. |
-| [mitmproxy2swagger](https://github.com/alufers/mitmproxy2swagger) | Turns proxy captures into OpenAPI docs, with a human editing templates in between. It is a documentation tool: it has no replay, auth, or drift handling. |
+## Documentation
 
-## Status and limits
+- [Demos](docs/demos/README.md): commands, recordings, transcripts and how they were recorded
+- [Setup for agents](docs/QUICKSTART.md): CLI, Codex/MCP registration, skill install
+- [Reference](docs/REFERENCE.md): creating operations, repair, login, safety, known limits
+- [Design](docs/DESIGN.md): the specification, and the reasons behind it
+- [Release readiness](docs/RELEASE-READINESS.md): what was checked for 0.1, and when
+- [Contributing](CONTRIBUTING.md): adding a site spec
 
-This is an early release for developers and agents. It ships 17 read operations across eight
-sites. Those operations cover selected features, not the entire sites. LinkedIn messaging and
-posting are not bundled. The engine's write handling is tested against a local fixture, not
-against every site's real write endpoints. Check the returned receipt and read back a real write
-before treating delivery as confirmed.
-
-Site specs are executable request/interaction instructions. Install specs from sources you trust
-and review their destinations and write declarations. A `readOnly` declaration is not a sandbox
-for a malicious spec, and website text is data, not instructions for the agent.
-
-This is version 0.1. The offline suite covers the learning, healing, tier and write paths
-against a local fixture site. Individual real sites vary and are not continuously verified.
-Known limits:
-
-- An arg a site derives from another request (a numeric user id looked up from a handle, or a
-  page-2 cursor) cannot be substituted. Model the lookup as its own op, or rely on tier 3.
-  `add` refuses an example value that the chosen request does not carry.
-- Example values need at least 3 characters and must appear in the request (multi-word values
-  are fine; they are matched decoded, so `mcp server` finds `mcp%20server`).
-- An op extracts one value from one request. Data in two places of one page takes two ops.
-- `--html` returns text and attributes as they are in the page (relative `href`s stay relative).
-- "Not found" is detected by replaying the op's example args, so a spec without examples reports
-  missing data as `drift`. An empty result is `ok` with `[]` when the page shows it structurally:
-  an empty JSON list at the extract path, or, for `--html`, an items selector written as
-  `"<container> <item>"` whose container is on the page with no item-tag element in it.
-- A param may declare a `pattern` (a regex the whole value must match) and a `hint`; a call whose
-  arg fails it is `input`, with the hint, and nothing is sent.
-- Request pacing (1 s per site) holds within one process: separate CLI runs are not paced
-  against each other.
-- Chrome locks its profile to one process. An MCP server releases it after 3 s idle; another
-  process waits up to 15 s for it, then fails with a hint.
-- Optional request structure (a reply block that only some calls have) needs a separate op.
-- Rescan only reads scripts that the page references directly. An id inside a lazily loaded
-  chunk heals through recapture instead, which is slower.
-- A site behind a bot wall that challenges a real Chrome as well needs you to clear it by hand
-  (`api-anything login`). There is no CAPTCHA solving and no TLS impersonation.
-- Pagination is not modeled.
-
-MIT licensed. See [CONTRIBUTING.md](CONTRIBUTING.md) to add a site spec.
+MIT licensed.

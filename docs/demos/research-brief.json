@@ -1,0 +1,113 @@
+{
+  "query": "anthropic",
+  "stories": [
+    {
+      "title": "Anthropic acquires Bun",
+      "url": "https://bun.com/blog/bun-joins-anthropic",
+      "points": 2192,
+      "comments": 1072,
+      "date": "2025-12-02"
+    },
+    {
+      "title": "Zig Creator Calls Spade a Spade, Anthropic Blows Smoke",
+      "url": "https://raymyers.org/post/zed-creator-calls-spade-a-spade/",
+      "points": 1554,
+      "comments": 785,
+      "date": "2026-07-13"
+    },
+    {
+      "title": "S&P 500 rejects SpaceX, also blocking entry for OpenAI and Anthropic",
+      "url": "https://arstechnica.com/tech-policy/2026/06/sp-500-blocks-fast-spacex-entry-wont-waive-rule-for-unprofitable-ai-firms/",
+      "points": 1484,
+      "comments": 502,
+      "date": "2026-06-06"
+    },
+    {
+      "title": "I’ve joined Anthropic",
+      "url": "https://twitter.com/karpathy/status/2056753169888334312",
+      "points": 1431,
+      "comments": 618,
+      "date": "2026-05-19"
+    },
+    {
+      "title": "I am directing the Department of War to designate Anthropic a supply-chain risk",
+      "url": "https://twitter.com/secwar/status/2027507717469049070",
+      "points": 1362,
+      "comments": 1085,
+      "date": "2026-02-27"
+    }
+  ],
+  "companies": [
+    {
+      "name": "Anthropic",
+      "universalName": "anthropicresearch",
+      "tagline": "Anthropic is an AI safety and research company working to build reliable, interpretable, and steerable AI systems.",
+      "industry": "Research Services",
+      "staff": 6114,
+      "website": "https://www.anthropic.com/"
+    },
+    {
+      "name": "Ode with Anthropic",
+      "universalName": "odeai",
+      "tagline": "Frontier AI, meets reality. ",
+      "industry": "Software Development",
+      "staff": 126,
+      "hq": "San Francisco, US",
+      "website": "http://www.ode.com"
+    },
+    {
+      "name": "Anthropic",
+      "universalName": "anthropic",
+      "industry": "Venture Capital and Private Equity Principals",
+      "staff": 17,
+      "website": "http://www.anthropic.io"
+    }
+  ],
+  "calls": [
+    {
+      "op": "hacker-news.search",
+      "args": {
+        "query": "anthropic"
+      },
+      "ok": true,
+      "tier": 1,
+      "ms": 147
+    },
+    {
+      "op": "linkedin.searchCompanies",
+      "args": {
+        "keywords": "anthropic"
+      },
+      "ok": true,
+      "tier": 1,
+      "ms": 431
+    },
+    {
+      "op": "linkedin.getCompany",
+      "args": {
+        "universalName": "anthropicresearch"
+      },
+      "ok": true,
+      "tier": 1,
+      "ms": 842
+    },
+    {
+      "op": "linkedin.getCompany",
+      "args": {
+        "universalName": "odeai"
+      },
+      "ok": true,
+      "tier": 1,
+      "ms": 993
+    },
+    {
+      "op": "linkedin.getCompany",
+      "args": {
+        "universalName": "anthropic"
+      },
+      "ok": true,
+      "tier": 1,
+      "ms": 993
+    }
+  ]
+}

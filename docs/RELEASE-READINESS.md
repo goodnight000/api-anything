@@ -26,6 +26,16 @@ This is not a claim that every website, every operation, or unattended account a
 - A forced live Google Flights browser fallback refused the datepicker's unrelated date range.
   Direct calendar replay works; automatic repair of arbitrary datepicker ranges is not promised.
 
+## Launch demos, later on 2026-09-27
+
+The three README demos were run again and recorded, each against a fresh `API_ANYTHING_HOME`.
+First, a fresh GitHub clone went through `npm ci` and the pack install with an empty npm cache,
+then made a Hacker News call at tier 1. Second, `hn-demo.links` was learned from two domains and
+returned 30 of 30 arxiv.org links at tier 1. Third, the research workflow ran five reads, all at
+tier 1, using a copied LinkedIn session. After the example scripts changed, `npm run check` and
+all 416 tests passed again. Commands, recordings and captured output are in
+[demos](demos/README.md).
+
 ## Release fixes
 
 - Keep distinct session tokens separate by operation and request position. Preserve and refresh
