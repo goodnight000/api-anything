@@ -25,7 +25,8 @@ One routine, *capture → match → learn*, does three jobs:
 
 1. **Create**: run the trigger with example args, capture, pick the matching request, learn the template.
 2. **Heal**: on classified drift, run the trigger with the current args, capture, re-learn,
-   validate, save, and retry. No site-specific code.
+   validate, save, and retry. A moved parameter can heal, but a change to its established encoding
+   requires re-adding the operation to confirm its meaning. No site-specific code.
 3. **Fallback**: for reads, the triggered browser run already produced the response. If
    the template can't be replayed (per-request signatures), return that captured response.
 
@@ -138,7 +139,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    re-encodes it the same way; in a leaf that also holds an arg (`next=/search?q={q}&auth=<cookie>`)
    it is a `{cookie:x}` hole in the param's template, filled at call time. When that slot has no
    escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. A capture refreshes a
-   templated `session:` value from its place in the leaf. The spec never holds a credential. At call time a `cookie:` ref takes the
+   templated `session:` value from its place in the leaf. Newly learned session references are scoped by operation, with distinct request positions
+   for different tokens that share a name. All discovered credentials participate in compound-copy
+   removal. Add and heal refuse to save any spec that still contains a detected live credential.
+   The spec never holds a credential. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.
    The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header a human marks public
@@ -176,7 +180,8 @@ steps are not running yet: its own verify POSTs (AWS WAF's `mp_verify`, Cloudfla
 document on. Any 2xx to a write is `ok`, whatever the body (204,
 "OK", an HTML page with a password field), because the server took it, with one exception: a
 sign-in form (a password field next to a username field, or a form posting to a login path) where
-the op's answer is not a page is `auth`: the session was gone and nothing ran. A write executes exactly
+the op's answer is not a page is `auth`: the session was gone and nothing ran. An explicit JSON `ok: false` or `success: false` rejects a write even with HTTP 200.
+A write executes exactly
 once per call. Retry only on a definite non-execution (400/401/403/404 answered to the request
 itself: after a redirect, as in Post/Redirect/Get, it ran); timeouts, 5xx and network errors are
 ambiguous and are never retried. Writes need `allowWrites` at every entry point (CLI flag, MCP
@@ -246,8 +251,8 @@ concurrent processes and calls lose nothing.
 Tier 2 honours `timeoutMs`; when the origin's root redirects to another origin, it fetches from a
 blank stand-in page on the request's origin. When the origin page navigates mid-fetch (its own
 challenge or redirect destroys the context), a read waits for the new document and fetches once
-more; a write is never resent. The tier-3 answer is the matching request that carries
-the call's args and judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
+more; a write is never resent. The tier-3 answer is the matching request whose declared parameter positions equal the
+materialized call, including short and structured values, and whose response judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
 
 ## Browser
 

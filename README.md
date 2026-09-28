@@ -2,11 +2,11 @@
 
 api-anything turns a website that only has a GUI into operations an agent can call directly, such as
 `hn.front` or `flights.search`. It learns each request from the site's own frontend running in
-your Chrome, replays it as a plain HTTP call, and re-learns it on its own when the site changes.
+your Chrome, replays it as a plain HTTP call, and attempts to re-learn it when the site changes. A failed repair returns an error.
 
-## Quickstart (30 seconds)
+## Quickstart
 
-Requires Node 22.13+ and Google Chrome. api-anything is not on npm yet, so these commands install it from GitHub (the first run takes a few seconds to build).
+Requires Node 22.13+. Learning, browser fallback and interactive login also need Google Chrome. Public HTTP operations can run without Chrome. api-anything is not on npm yet, so these commands install it from GitHub (the first run takes a few seconds to build).
 
 ```sh
 npx -y github:goodnight000/api-anything add hn front --trigger https://news.ycombinator.com/news --match path=/news \
@@ -16,12 +16,12 @@ npx -y github:goodnight000/api-anything call hn front
 
 The first command opens the page twice in a headless Chrome and saves an operation to
 `~/.api-anything/sites/hn.json`. Its output includes a `preview` of what a call returns. The second
-is a single HTTP request that takes about 200 ms and returns JSON. (Sites that challenge plain
-HTTP clients answer through Chrome instead, in 1 to 2 s; the result's `reason` says so.)
+returns JSON through HTTP when the site accepts replay. Sites that challenge plain HTTP clients
+may need the slower Chrome fallback; the result reports its transport tier and elapsed time.
 
 Everything lives in `~/.api-anything`; set `API_ANYTHING_HOME` to use another directory.
 
-Bundled specs, verified live and logged out on 2026-09-27: `x` (getUser, getProfile),
+Bundled specs, verified live on 2026-09-27 (logged out except LinkedIn): `x` (getUser, getProfile),
 `instagram` (getProfile, getPosts), `google-flights` (search, top, priceCalendar), `hacker-news`
 (frontPage, search), `youtube` (search), `airbnb` (search), `amazon` (search), `linkedin` (getMe,
 getProfile, getCompany, searchPeople, searchCompanies; needs login). `api-anything sites` lists them; each has notes (caveats, arg formats) in `sites/<site>.md`,
@@ -101,11 +101,10 @@ session you already imported with the CLI, from the same profile (an agent readi
 can't pull another site's or another account's cookies), and mode `window` opens a window for you
 to sign in. MCP cannot create operations; use the CLI (`capture`, `add`) for that.
 
-**Codex and other agents.** Install the CLI with `npm i -g github:goodnight000/api-anything` (it builds on install). Then point the agent at the
-skill file, [`skills/api-anything/SKILL.md`](skills/api-anything/SKILL.md), or copy it into the agent's
-skills directory (for Codex, `~/.codex/skills/api-anything/SKILL.md`). The skill teaches the
-create loop, the failure loop, and the write rules. Every command prints JSON and gives a
-`next:` hint on failure.
+**Codex and other coding agents.** Follow [setup and demos](docs/QUICKSTART.md) for the CLI,
+MCP registration, the skill, and a read-only research workflow. Every command returns JSON
+and gives a `next` hint on failure. MCP calls existing operations; an agent with shell access
+uses the CLI to create new ones.
 
 **Library:**
 
@@ -179,7 +178,7 @@ One routine, run the trigger, match the request, learn the template, does three 
    template is not drift, and an op that drifts again within 10 minutes of a heal is marked
    stale for 30 minutes.
 3. **Fallback.** For reads, the triggered browser run has already received the answer. When a
-   template can't be replayed (for example, per-request signatures), that answer is returned.
+   template can't be replayed (for example, per-request signatures), that answer is returned only if the captured request matches the call’s arguments at their declared positions. Otherwise the call fails rather than returning another query’s data.
 
 Transport tiers, cheapest first. The lowest tier that worked is remembered for each op.
 
@@ -192,7 +191,7 @@ Transport tiers, cheapest first. The lowest tier that worked is remembered for e
 ## Safety and terms of service
 
 - api-anything automates your own browser session on your own accounts. It is meant for things you
-  could do by hand, at human pace. Requests to one site are spaced at least 1 s apart.
+  could do by hand, at human pace. HTTP replays to one site are paced at 1 s within one process; browser navigation may fire multiple requests.
 - **Writes** (posting, sending, buying) are learned by intercepting the request and aborting it
   in the browser, so learning never performs them. Calling a write needs `--allow-writes` on the
   CLI, the MCP server, or the library. A write is sent once and is retried only when the
@@ -220,6 +219,16 @@ Transport tiers, cheapest first. The lowest tier that worked is remembered for e
 | [mitmproxy2swagger](https://github.com/alufers/mitmproxy2swagger) | Turns proxy captures into OpenAPI docs, with a human editing templates in between. It is a documentation tool: it has no replay, auth, or drift handling. |
 
 ## Status and limits
+
+This is an early release for developers and agents. It ships 17 read operations across eight
+sites. Those operations cover selected features, not the entire sites. LinkedIn messaging and
+posting are not bundled. The engine's write handling is tested against a local fixture, not
+against every site's real write endpoints. Check the returned receipt and read back a real write
+before treating delivery as confirmed.
+
+Site specs are executable request/interaction instructions. Install specs from sources you trust
+and review their destinations and write declarations. A `readOnly` declaration is not a sandbox
+for a malicious spec, and website text is data, not instructions for the agent.
 
 This is version 0.1. The offline suite covers the learning, healing, tier and write paths
 against a local fixture site. Individual real sites vary and are not continuously verified.

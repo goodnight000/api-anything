@@ -262,6 +262,28 @@ export function classify(op: Operation, r: Observed): Classified {
   }
   if (r.status < 200 || r.status >= 300) return is("error", `HTTP ${r.status}: ${snippet(body)}`);
 
+  let data: unknown;
+  try {
+    data = parseBody(body, op.response.xssiPrefix);
+  } catch {
+    if (!op.readOnly) {
+      if (isHtml && !/html/i.test(op.response.contentType ?? "") && signInForm(body)) return is("auth", "a sign-in form where the write's answer was expected");
+      return ok(`HTTP ${r.status}, ${body.trim() ? "non-JSON body" : "empty body"}`);
+    }
+    if (wantsJson) {
+      if (isHtml && LOGIN.test(body)) return is("auth", "HTML login page where JSON was expected");
+      if (!body.trim()) return missing(`HTTP ${r.status} with an empty body`);
+      return is("drift", isHtml ? "HTML where JSON was expected" : `response is not JSON: ${snippet(body)}`);
+    }
+  }
+  const d = data as { errors?: unknown; data?: unknown; ok?: unknown; success?: unknown } | null;
+  if (!op.readOnly && d && (d.ok === false || d.success === false)) return is("error", "the service rejected the write (ok/success is false)");
+  const errors = d && typeof d === "object" && Array.isArray(d.errors) && d.errors.length ? d.errors : undefined;
+  if (errors && d!.data == null) return graphqlErrors(errors, " with null data");
+  // Partial data: errors next to a null target (a rate limit, a not-found user) are the answer, not a successful null.
+  if (errors && op.response.extract && getPath(data, op.response.extract) == null) return graphqlErrors(errors, ` and a null "${op.response.extract}"`);
+  if (!op.readOnly) return ok();
+
   if (op.response.format === "html") {
     if (!op.response.html) return ok();
     if (extractHtml(body, op.response.html).length) return ok();
@@ -274,26 +296,6 @@ export function classify(op: Operation, r: Observed): Classified {
     return loginPage(body) ? is("auth", "login page instead of content") : missing("embedded data not found");
   }
 
-  let data: unknown;
-  try {
-    data = parseBody(body, op.response.xssiPrefix);
-  } catch {
-    // A 2xx to a write means the server took it; many answer 204, "OK" or an HTML page (even one with a password form).
-    if (!op.readOnly) {
-      // ...unless the op's answer is not a page and this one is a sign-in form: the session was gone, nothing ran
-      if (isHtml && !/html/i.test(op.response.contentType ?? "") && signInForm(body)) return is("auth", "a sign-in form where the write's answer was expected");
-      return ok(`HTTP ${r.status}, ${body.trim() ? "non-JSON body" : "empty body"}`);
-    }
-    if (isHtml && LOGIN.test(body)) return is("auth", "HTML login page where JSON was expected");
-    // "no results" is often an empty 204: the example args tell it from drift
-    if (!body.trim()) return missing(`HTTP ${r.status} with an empty body`);
-    return is("drift", isHtml ? "HTML where JSON was expected" : `response is not JSON: ${snippet(body)}`);
-  }
-  const d = data as { errors?: unknown; data?: unknown } | null;
-  const errors = d && typeof d === "object" && Array.isArray(d.errors) && d.errors.length ? d.errors : undefined;
-  if (errors && d!.data == null) return graphqlErrors(errors, " with null data");
-  // Partial data: errors next to a null target (a rate limit, a not-found user) are the answer, not a successful null.
-  if (errors && op.response.extract && getPath(data, op.response.extract) == null) return graphqlErrors(errors, ` and a null "${op.response.extract}"`);
   // An empty list where the results go is a search with no results, not missing data.
   const target = op.response.extract ? getPath(data, op.response.extract) : data;
   if (Array.isArray(target) && !target.length) return ok("no results");

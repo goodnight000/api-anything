@@ -65,7 +65,9 @@ places Google resolved (`[["/m/02_286",4],"New York",...]`).
 - `search` and `top` are disjoint: the cheapest flight on a date can be in either. Together they are
   the whole results page, and each costs one 3 to 4 MB page download.
 - Calendar ranges were tested up to 3 months per call. The trigger (tier 3) opens the date picker,
-  which requests the page's own range, not `start`/`end`; tier 1 needs no trigger.
+  which requests the page's own range, not `start`/`end`. The runtime refuses that response
+  when its request differs from the requested range. If direct replay fails, the calendar may
+  need re-capture or a repaired trigger; it will not claim the UI's default dates are your answer.
 - The session tokens in the calendar's `f.req` (`json:/0/3`) and `f.sid` are session-scoped, not
   per-request signatures: stale values replay fine at tier 1 from a clean home. The export's base64
   warning refers to that token. It is issued to every logged-out visitor, not a credential.

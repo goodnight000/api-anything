@@ -104,7 +104,7 @@ describe("a token an earlier response issued is a session: ref, whatever its nam
       const { operation: op, sessionValues } = learn([boot(), ex("fetch", req)], [{ q: "kittens" }]);
       assert.ok(!JSON.stringify(op).includes(TOK), "the token is literal in the spec");
       const ref = op.slots.find((s) => s.ref)!;
-      assert.match(ref.ref!, /^session:(t|x-ctx)$/);
+      assert.match(ref.ref!, /^session:op\//);
       assert.equal(sessionValues[ref.ref!.slice(8)], TOK);
       const r = buildRequest(op, { q: "cats" }, { cookies: [], values: { [ref.ref!.slice(8)]: "Fresh0Token1Value2Xyz345" } });
       assert.ok(JSON.stringify(r).includes("Fresh0Token1Value2Xyz345"), "a refreshed value is sent");

@@ -114,7 +114,7 @@ describe("a credential under any name stays out of the spec", () => {
     test(label, () => {
       const { operation: op, sessionValues } = learn([xhr(req)], [{ q: "kittens" }]);
       assert.ok(!JSON.stringify(op).includes(TOKEN), "the token is literal in the spec");
-      assert.equal(sessionValues[name], TOKEN, "its value goes to the session store");
+      assert.equal(sessionValues[`op/${name}`], TOKEN, "its value goes to the session store");
       assert.ok(JSON.stringify(buildRequest(op, { q: "cats" }, { cookies: [], values: sessionValues })).includes(TOKEN), "a call sends it from the session store");
     });
   }
@@ -126,8 +126,8 @@ describe("a credential under any name stays out of the spec", () => {
     const { operation: op, sessionValues } = learn([ex], [{ q: "kittens" }], { storage });
     assert.ok(!JSON.stringify(op).includes(jwt));
     const refs = op.slots.filter((s) => s.ref).map((s) => [s.ref, s.at.join(" > ")]);
-    assert.deepEqual(refs, [["session:sb-proj-auth/access_token", "header:x-user"], ["session:sb-proj-auth/access_token", "body > json:/u"]]);
-    assert.equal(sessionValues["sb-proj-auth/access_token"], jwt);
+    assert.deepEqual(refs, [["session:op/sb-proj-auth/access_token", "header:x-user"], ["session:op/sb-proj-auth/access_token", "body > json:/u"]]);
+    assert.equal(sessionValues["op/sb-proj-auth/access_token"], jwt);
     const r = buildRequest(op, { q: "cats" }, { cookies: [], values: sessionValues });
     assert.equal(r.headers["x-user"], jwt);
     assert.deepEqual(JSON.parse(r.body!), { q: "cats", u: `v1:${jwt}` });
@@ -204,7 +204,7 @@ test("a leaf holding both an arg and a credential (next=/search?q=<arg>&auth=<co
   const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2lnbmF0dXJl";
   const s = learn([xhr({ url: `https://site.test/api/data?name=alice&next=${next("alice", jwt)}` })], [{ name: "alice" }], { storage: { at: jwt }, trigger: { url: "https://site.test/p?name={name}" } });
   assert.ok(!JSON.stringify(s.operation).includes(encodeURIComponent(jwt)));
-  assert.equal(s.sessionValues.at, jwt);
+  assert.equal(s.sessionValues["op/at"], jwt);
   assert.equal(buildRequest(s.operation, { name: "bob" }, { cookies: [], values: s.sessionValues }).url, `https://site.test/api/data?name=bob&next=${next("bob", jwt)}`);
 });
 
@@ -341,14 +341,14 @@ describe("a token the page keeps in localStorage", { skip: !chromeAvailable() &&
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const r = await addOperation({ site: "store", op: "get", trigger: { url: `${base}/p?name={name}` }, examples: [{ name: "alice" }, { name: "bobby" }], response: { extract: "data" } });
     assert.ok(!JSON.stringify(loadSite("store")!.site).includes(JWT), "the token is in the spec");
-    assert.deepEqual(r.operation.slots.filter((s) => s.ref).map((s) => s.ref), ["session:app-auth/jwt"]);
-    assert.equal(loadSession("store").values["app-auth/jwt"], JWT);
+    assert.deepEqual(r.operation.slots.filter((s) => s.ref).map((s) => s.ref), ["session:get/app-auth/jwt"]);
+    assert.equal(loadSession("store").values["get/app-auth/jwt"], JWT);
     const got = await call("store", "get", { name: "carol" }, { maxTier: 1, minIntervalMs: 0 });
     assert.equal(got.ok, true, JSON.stringify(got));
     assert.deepEqual(got.data, { name: "carol" });
     // a trigger run refreshes the value from the site's own request: the token, not the whole "v1:<token>" leaf
     saveSession("store", { ...loadSession("store"), values: {} });
     await runOpTrigger("store", loadSite("store")!.site.operations[0]!, { name: "dave" });
-    assert.equal(loadSession("store").values["app-auth/jwt"], JWT);
+    assert.equal(loadSession("store").values["get/app-auth/jwt"], JWT);
   });
 });

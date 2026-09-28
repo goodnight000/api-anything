@@ -97,11 +97,11 @@ test("X-like GraphQL GET: params, cookie/session refs, volatile anchor, match, h
     [
       ["cookie:ct0", "header:x-csrf-token"],
       ["cookie:gt", "header:x-guest-token"],
-      ["session:authorization", "header:authorization"],
-      ["session:x-client-transaction-id", "header:x-client-transaction-id"],
+      ["session:getUser/authorization", "header:authorization"],
+      ["session:getUser/x-client-transaction-id", "header:x-client-transaction-id"],
     ],
   );
-  assert.deepEqual(sessionValues, { authorization: BEARER, "x-client-transaction-id": "txnAAAAAAAAAAAAAAAAAAAAAAA" });
+  assert.deepEqual(sessionValues, { "getUser/authorization": BEARER, "getUser/x-client-transaction-id": "txnAAAAAAAAAAAAAAAAAAAAAAA" });
 
   // header policy: verbatim minus pseudo/cookie/accept-encoding; per-op headers like x-twitter-auth-type stay
   assert.deepEqual(Object.keys(op.request.headers).sort(), [
@@ -189,7 +189,7 @@ test("Google Flights: triple-encoded form params, value in several roles, counte
   assert.ok(learned.warnings.some((w) => /"destination" appears in 2 places/.test(w)));
   assert.ok(learned.warnings.some((w) => /query:_reqid varies between runs/.test(w)));
   assert.equal(op.minTier, 1);
-  assert.deepEqual(learned.sessionValues, { "x-goog-batchexecute-bgr": '[";u6W4pcHQ-one"]' });
+  assert.deepEqual(learned.sessionValues, { "search/x-goog-batchexecute-bgr": '[";u6W4pcHQ-one"]' });
   assert.equal(op.response.xssiPrefix, ")]}'");
 
   const req = buildRequest(op, { origin: "SEA", destination: "BOS" }, { cookies: [], values: learned.sessionValues });
@@ -361,16 +361,16 @@ test("per-session form tokens (Google at, Meta fb_dtsg) become session refs, and
   ];
   const base = { exchanges, examples: [{ city: "paris" }] as [Record<string, unknown>], cookies: [], name: "s", trigger: { url: "https://www.google.test/s?q={city}" }, readOnly: true };
   const { operation: op, sessionValues } = learnOperation(base);
-  assert.ok(op.slots.some((s) => s.ref === "session:at" && s.at[0] === "form:at"));
-  assert.ok(op.slots.some((s) => s.ref === "session:fb_dtsg"));
-  assert.equal(sessionValues.at, AT);
+  assert.ok(op.slots.some((s) => s.ref === "session:s/at" && s.at[0] === "form:at"));
+  assert.ok(op.slots.some((s) => s.ref === "session:s/fb_dtsg"));
+  assert.equal(sessionValues["s/at"], AT);
   assert.ok(!op.request.body!.includes(encodeURIComponent(AT)) && !op.request.body!.includes(encodeURIComponent(DTSG)), op.request.body);
   assert.equal(op.request.headers.authorization, "", "authorization is a session ref by default");
 
   const pub = learnOperation({ ...base, public: ["Authorization"] }).operation;
   assert.equal(pub.request.headers.authorization, BEARER);
   assert.deepEqual(pub.public, ["authorization"]);
-  assert.ok(!pub.slots.some((s) => s.ref === "session:authorization"));
+  assert.ok(!pub.slots.some((s) => s.ref === "session:s/authorization"));
 });
 
 test("an example value not in the chosen request is an error, not a param that changes nothing", () => {

@@ -448,7 +448,7 @@ test("BUG: Meta's x-fb-lsd header (same token as the lsd form field, which is re
     body: `lsd=${lsd}&fb_api_req_friendly_name=SearchQuery&variables=${encodeURIComponent('{"q":"nasa"}')}`,
   });
   const { operation: op } = learn([ex], [{ q: "nasa" }]);
-  assert.deepEqual(op.slots.find((s) => s.ref === "session:lsd")?.at, ["form:lsd"], "control: the form field is a ref");
+  assert.deepEqual(op.slots.find((s) => s.ref === "session:op/lsd")?.at, ["form:lsd"], "control: the form field is a ref");
   assert.ok(!JSON.stringify(op).includes(lsd), "x-fb-lsd header keeps the lsd token literally");
 });
 

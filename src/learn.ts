@@ -569,7 +569,7 @@ function liveValues(cookies: StoredCookie[], cookieHeader: string | undefined, s
     put(value, { ref: `session:${name}`, value });
     const visit = (v: unknown, k: string): void => {
       if (typeof v === "string") put(v, { ref: `session:${name}/${k}`, value: v });
-      else if (v && typeof v === "object") for (const [kk, c] of Object.entries(v)) visit(c, kk);
+      else if (v && typeof v === "object") for (const [kk, c] of Object.entries(v)) visit(c, k ? `${k}/${kk}` : kk);
     };
     if (/^\s*[[{]/.test(value)) visit(tryParse(value), "");
   }
@@ -745,12 +745,19 @@ export function learnOperation(input: LearnInput): Learned {
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
   const sessionValues: Record<string, string> = {};
+  const live = liveValues(input.cookies, ex.request.headers.cookie, input.storage);
   const addRef = (at: Step[], slot: Omit<Slot, "at">, value?: string) => {
+    if (value !== undefined && slot.ref?.startsWith("session:")) {
+      let name = slot.ref.slice(8);
+      if (sessionValues[name] !== undefined && sessionValues[name] !== value) name += `@${encodeURIComponent(key(at))}`;
+      slot = { ...slot, ref: `session:${name}` };
+      sessionValues[name] = value;
+      // Newly discovered credentials need the same compound-copy cleanup as cookies/storage.
+      if (!live.get(value)?.ref.startsWith("cookie:")) live.set(value, { ref: slot.ref!, value });
+    }
     slots.push({ ...slot, at });
     taken.add(key(at));
-    if (value !== undefined && slot.ref?.startsWith("session:")) sessionValues[slot.ref.slice(8)] = value;
   };
-  const live = liveValues(input.cookies, ex.request.headers.cookie, input.storage);
   for (const leaf of leaves) {
     const l = live.get(leaf.value);
     // string leaves only: a ref is filled with a string, which would retype a JSON number
@@ -796,7 +803,9 @@ export function learnOperation(input: LearnInput): Learned {
     if (header && (URL_HEADER.has(leaf.at[0]!) || BROWSER_HEADER.test(header))) continue;
     const escaped = JSON.stringify(leaf.value).slice(1, -1);
     if (!issued.some((b) => b.includes(leaf.value) || b.includes(escaped))) continue;
-    addRef(leaf.at, { ref: `session:${name}` }, leaf.value);
+    // A bootstrap token belongs to this operation and request position, not every field named t.
+    const ref = live.get(leaf.value)?.ref ?? `session:${name}@${encodeURIComponent(key(leaf.at))}`;
+    addRef(leaf.at, { ref }, leaf.value);
   }
   // A live value inside a longer leaf ("v1:<cookie>", a next= URL holding it percent-encoded, a
   // JSON-escaped copy) is a templated ref, re-encoded like the leaf had it.
@@ -823,13 +832,19 @@ export function learnOperation(input: LearnInput): Learned {
       continue;
     }
     if (taken.has(key(leaf.at))) continue;
+    let template = escapeTemplate(leaf.value);
+    let primary: { live: Live; escape: Escape | undefined } | undefined;
     for (const [v, l] of long) {
       const forms: [string, Escape | undefined][] = [[v, undefined], [encodeURIComponent(v), "url"], [JSON.stringify(v).slice(1, -1), "json"]];
-      const form = forms.find(([f]) => leaf.value.includes(f));
+      const form = forms.find(([f, esc]) => template.includes(escapeTemplate(f)) && (!primary || primary.escape === esc));
       if (!form) continue;
-      const template = escapeTemplate(leaf.value).split(escapeTemplate(form[0])).join(`{${l.ref}}`);
-      addRef(leaf.at, { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}), template, ...(form[1] ? { escape: form[1] } : {}) }, l.value);
-      break;
+      template = template.split(escapeTemplate(form[0])).join(`{${l.ref}}`);
+      if (l.ref.startsWith("session:") && l.value !== undefined) sessionValues[l.ref.slice(8)] = l.value;
+      primary ??= { live: l, escape: form[1] };
+    }
+    if (primary) {
+      const { live: l, escape } = primary;
+      addRef(leaf.at, { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}), template, ...(escape ? { escape } : {}) }, l.value);
     }
   }
   // The spec never holds a credential: blank every ref'd leaf.
@@ -874,6 +889,14 @@ export function learnOperation(input: LearnInput): Learned {
     example,
   }));
 
+  // Session values are stored per site. Two operations may use different tokens under the same
+  // field/header name, so newly learned references include the operation name. Old specs still work.
+  const scope = (ref: string) => ref.startsWith("session:") ? `session:${encodeURIComponent(input.name)}/${ref.slice(8)}` : ref;
+  for (const slot of slots) {
+    if (slot.ref) slot.ref = scope(slot.ref);
+    if (slot.template) for (const ref of templateRefs(slot.template)) slot.template = slot.template.split(`{${ref}}`).join(`{${scope(ref)}}`);
+  }
+
   const operation = OperationSchema.parse({
     name: input.name,
     request,
@@ -889,6 +912,6 @@ export function learnOperation(input: LearnInput): Learned {
     learnedLoggedIn: loggedIn(input.cookies, input.loginCookies),
     learnedAt: new Date().toISOString(),
   });
-  return { operation, exchange: ex, warnings, sessionValues };
+  return { operation, exchange: ex, warnings, sessionValues: Object.fromEntries(Object.entries(sessionValues).map(([k, v]) => [`${encodeURIComponent(input.name)}/${k}`, v])) };
 }
 

@@ -150,10 +150,10 @@ export async function send(op: Operation, args: Record<string, unknown>, session
   // session/cookie values the body or query carry: no other origin may receive them
   const carried = op.slots.flatMap((s) => {
     if (inHeader(s)) return [];
-    const refs = s.ref ? [s.ref] : s.template !== undefined ? templateRefs(s.template) : [];
+    const refs = s.template !== undefined ? [...new Set([...(s.ref ? [s.ref] : []), ...templateRefs(s.template)])] : s.ref ? [s.ref] : [];
     return refs.flatMap((r) => {
       const v = resolveRef(r, session, op.request.url);
-      return v && v.length >= 4 ? [s.ref ? transform(v, s.transform) : v] : [];
+      return v && v.length >= 4 ? [s.ref === r ? transform(v, s.transform) : v] : [];
     });
   });
   const leaks = (target: string, sentBody?: string) =>

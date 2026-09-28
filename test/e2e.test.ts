@@ -244,7 +244,7 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.tier, 3);
     assert.match(r.reason ?? "", /refreshed the session/);
-    assert.equal(loadSession(SITE).values.authorization, PUBLIC_BEARER);
+    assert.equal(loadSession(SITE).values["getUser3/authorization"], PUBLIC_BEARER);
     const again = await call(SITE, "getUser3", { name: "ivan" }, fast);
     assert.equal(again.tier, 1, JSON.stringify(again));
   });

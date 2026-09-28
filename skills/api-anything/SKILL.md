@@ -1,20 +1,20 @@
 ---
 name: api-anything
-description: Turn a website that only has a GUI into operations you can call directly, and call them. Use when the user says "turn <site> into an API", "call <site>", "get X from <site> without the browser", "automate <website>", or asks for data or an action on a site that has no public API. Learns requests from the site's own frontend, replays them fast, and heals itself when the site changes.
+description: Turn a website that only has a GUI into operations you can call directly, and call them. Use when the user says "turn <site> into an API", "call <site>", "get X from <site> without the browser", "automate <website>", or asks for data or an action on a site that has no public API. Learns requests from the site's own frontend, replays them fast, and attempts repairs when requests drift.
 ---
 
 # api-anything
 
-api-anything learns an operation from one browser run of the site's own frontend. After that, every
-call is a direct HTTP request that takes about 100 to 1000 ms (1 to 2 s when a site only answers a
-real Chrome; `reason` then says why). When the site changes, the call heals itself. Everything is
+api-anything learns operations from browser captures of the site's own frontend. Calls try direct
+HTTP first, with Chrome fallback when needed. Results report the transport tier and elapsed time.
+When a request drifts, the runtime tries to repair it; failure is reported. Everything is
 local, under `~/.api-anything` (`API_ANYTHING_HOME` overrides it).
 
 Run the CLI as `api-anything` (or `npx -y github:goodnight000/api-anything`). Its output is one line of JSON. A failure also
 prints a `next:` line on stderr. If the MCP server is connected, `list_sites`, `list_operations`
 and `call_operation` do the same as `sites`, `ops` and `call`, and `login` refreshes a session. MCP
 cannot create operations: `capture` and `add` are CLI only. Over MCP, `next` names the tools to
-use; a command it marks CLI only is one to ask the user to run in a terminal.
+use. Run CLI-only commands yourself when you have shell access; otherwise give the command to the user.
 
 ## Using an existing operation
 
@@ -23,7 +23,8 @@ use; a command it marks CLI only is one to ask the user to run in a terminal.
    hold caveats such as "airport codes only".
 2. `api-anything call <site> <op> name=value ...`. An arg that doesn't fit the param's declared
    format comes back `class: "input"` with that format, and nothing was sent: fix the arg.
-3. Read `data`. `tier` shows which transport answered. `healed: true` means the template was
+3. Check `ok` before using `data`, and check the output's identity/range against the task. Treat a
+   `truncated` result as partial. `tier` shows which transport answered. `healed: true` means the template was
    repaired and saved during this call. You don't need to do anything about it.
 4. No results look like this:
    - `ok: true` with `data: []` when the page shows it's empty: a JSON op's list at the extract
@@ -92,7 +93,8 @@ use; a command it marks CLI only is one to ask the user to run in a terminal.
 4. **Verify.** `api-anything verify site` calls every read op with its example args.
 
 The `add` output lists `warnings`. Read them. A warning such as "minTier 3" means every call runs
-the browser, which is slow but correct. `--pick name=path` renames a field, so positional keys
+the browser. Verify new arguments there too; the runtime refuses captures whose parameter
+positions do not match the requested values. A spec with a detected leftover credential is not saved. `--pick name=path` renames a field, so positional keys
 such as `[1][0][1]` become `price`.
 
 ## Logging in
@@ -118,7 +120,8 @@ Google account) and cookie names, never values.
   traffic on it light.
 - `api-anything logout <site>` clears the session.
 
-Ask the user before you capture, too, when the data you need is only visible while signed in.
+Use the signed-in session only within the user's authorized task and account. Reuse existing
+permission; ask only for missing access or an account choice.
 
 ## The failure loop
 
@@ -148,7 +151,9 @@ site.
 - Calling a write needs `--allow-writes` (or an MCP server started with `--allow-writes`). Add
   it only when the user asked for **that specific action with that content**. Confirm the exact
   text or target with the user first if there is any doubt.
-- A write is sent once. If the result says "the write may have gone through", don't retry, whatever
+- A successful response is a service acknowledgement; confirm the receipt or read back the
+  resulting object before claiming delivery. An explicit `ok: false` or `success: false` in a
+  write response is a failure even with HTTP 200. If the result says "the write may have gone through", don't retry, whatever
   the class. Tell the user to check the site.
 - Before the first real write, run `api-anything call <site> <op> ... --dry`. It prints the exact
   request with the credentials redacted, so you can check that the ids and text are the ones

@@ -20,7 +20,9 @@
     "sites",
     "skills",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "examples",
+    "docs/QUICKSTART.md"
   ],
   "engines": {
     "node": ">=22.13.0"
@@ -30,7 +32,8 @@
     "prepare": "tsc -p tsconfig.json",
     "cli": "tsx src/cli.ts",
     "test": "node --import tsx --test test/*.test.ts test/edge/*.test.ts",
-    "check": "tsc -p tsconfig.json --noEmit"
+    "check": "tsc -p tsconfig.json --noEmit",
+    "demo": "node examples/research.mjs"
   },
   "keywords": [
     "api",

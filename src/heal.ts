@@ -9,8 +9,8 @@ import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk 
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
 import { ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches, rankCandidates, type Args } from "./learn.js";
-import { cookieHeaderFor, home, loadSession, mergeCapture, pruneCaptures, readJson, safeName, siteOf, writePrivate } from "./session.js";
-import type { Match, Operation, ResponseSpec, Site, Trigger, Volatile } from "./spec.js";
+import { cookieHeaderFor, home, loadSession, mergeCapture, parseCookieHeader, pruneCaptures, readJson, safeName, siteOf, writePrivate } from "./session.js";
+import type { Match, Operation, ResponseSpec, Site, Slot, Trigger, Volatile } from "./spec.js";
 import { appendHeal, clearStale, loadSite, rememberTier, scanSecrets, updateSite } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
 
@@ -110,7 +110,7 @@ function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
   const out: Record<string, string> = {};
   for (const s of op.slots) {
     // a session ref's own leaf, or a session hole in a param's templated leaf
-    const refs = (s.ref ? [s.ref] : s.template !== undefined ? templateRefs(s.template) : []).filter((r) => r.startsWith("session:"));
+    const refs = (s.template !== undefined ? [...new Set([...(s.ref ? [s.ref] : []), ...templateRefs(s.template)])] : s.ref ? [s.ref] : []).filter((r) => r.startsWith("session:"));
     if (!refs.length) continue;
     let v: unknown;
     try {
@@ -154,13 +154,32 @@ export interface TriggerRun {
  * fires its own request first) and judged ok (a bot interstitial may precede the real page),
  * the latest on a tie.
  */
+function carriesArgs(op: Operation, e: Exchange, args: Args): boolean {
+  const cookies = Object.entries(parseCookieHeader(e.request.headers.cookie ?? "")).map(([name, value]) => ({
+    name, value, domain: new URL(e.request.url).hostname, path: "/", expires: -1, secure: false, httpOnly: false,
+  }));
+  const expected = buildRequest(op, args, { cookies, values: sessionValuesOf(op, e) });
+  return op.params.every((p) => {
+    if (args[p.name] === undefined && p.default === undefined) return !p.required;
+    const slots = op.slots.filter((s) =>
+      (s.param === p.name || s.template?.includes(`{${p.name}}`)) && !/^header:(referer|origin|cookie)$/i.test(s.at[0]!),
+    );
+    return slots.length > 0 && slots.every((s) => {
+      try {
+        return asText(getAt(e.request, s.at)) === asText(getAt(expected, s.at));
+      } catch {
+        return false;
+      }
+    });
+  });
+}
+
 function pickHit(op: Operation, hits: Exchange[], args: Args): Exchange | undefined {
-  const answered = hits.filter((e) => e.response || e.aborted);
-  if (!answered.length) return hits[0];
-  const want = Object.values(args).filter((v) => asText(v).length >= 3).length;
-  const carries = new Map(rankCandidates(answered, args, { all: true }).map((c) => [c.id, c.hits.length >= want]));
-  const score = (e: Exchange) => (carries.get(e.id) ? 2 : 0) + (e.aborted || judgeExchange(op, e)?.class === "ok" ? 1 : 0);
-  return answered.reduce((best, e) => (score(e) >= score(best) ? e : best));
+  // An answer to another query is never a fallback. Compare the declared parameter positions,
+  // including short values and structured args; substring ranking is only a discovery aid.
+  const answered = hits.filter((e) => (e.response || e.aborted) && carriesArgs(op, e, args));
+  const score = (e: Exchange) => e.aborted || judgeExchange(op, e)?.class === "ok" ? 1 : 0;
+  return answered.reduce<Exchange | undefined>((best, e) => !best || score(e) >= score(best) ? e : best, undefined);
 }
 
 /** The final page of a run, when it is a sign-in page the trigger was redirected to. */
@@ -477,7 +496,8 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   }
 
   const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
-  warnings.push(...scanSecrets(operation, session, allowed).secrets.map((s) => `credential left in the spec: ${s}`));
+  const secrets = scanSecrets(operation, session, allowed).secrets;
+  if (secrets.length) throw new Error(`refusing to save a spec containing a credential: ${secrets.join("; ")}`);
   // Re-read under the lock: another add or a heal may have saved this site since we started.
   let replaced = false;
   const path = updateSite(i.site, (current) => {
@@ -652,6 +672,9 @@ export type HealResult =
 const STOP: ReadonlySet<Class> = new Set(["rate", "blocked", "auth"]);
 
 function saveHealed(site: string, op: Operation, strategy: "rescan" | "recapture", diff: string, attempt: Attempt): HealResult {
+  const allowed = new Set((op.public ?? []).map((h) => `$.request.headers.${h}`));
+  const secrets = scanSecrets(op, loadSession(site), allowed).secrets;
+  if (secrets.length) return { outcome: "failed", reason: `refusing to save a healed spec containing a credential: ${secrets.join("; ")}` };
   updateSite(site, (current) => {
     if (!current) throw new Error(`site "${site}" disappeared during heal`);
     return putOperation(current, op);
@@ -724,11 +747,11 @@ export async function healOperation(
   if (!run.matched && run.loginWall) {
     return { outcome: "failed", transient: true, attempt: { tier: 3, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` }, reason: `the trigger landed on a sign-in page (${run.loginWall})` };
   }
-  if (!run.matched) return { outcome: "failed", attempt: last, reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` };
-  const seen = judgeExchange(op, run.matched);
+  if (!run.capture.exchanges.some((e) => matches(op.match, e.request))) return { outcome: "failed", attempt: last, reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` };
+  const seen = run.matched && judgeExchange(op, run.matched);
   if (seen && STOP.has(seen.class)) return { outcome: "failed", attempt: seen, transient: true, reason: `the site's own request says ${seen.class}: ${seen.reason}` };
   // The site's own answer is this call's answer only when the trigger ran with this call's args.
-  const fallback = op.readOnly && learnArgs === callArgs ? judgeExchange(op, run.matched) : undefined;
+  const fallback = op.readOnly && learnArgs === callArgs && run.matched ? judgeExchange(op, run.matched) : undefined;
   let fresh: Operation;
   let sessionValues: Record<string, string>;
   try {
@@ -777,6 +800,13 @@ export async function healOperation(
   };
   const lost = [...new Set(op.slots.flatMap((s) => (s.param ? [s.param] : [])))].filter((p) => !candidate.slots.some((s) => s.param === p));
   if (lost.length) return { outcome: "failed", attempt: last, fallback, reason: `re-learning found no place for ${lost.join(", ")}; not saved` };
+  // A moved parameter can heal; an inferred suffix/prefix is not proof of the caller's meaning.
+  // Credential names may change during a repair without changing parameter encoding.
+  const encoding = (s: Slot) => JSON.stringify([s.template?.replace(/\{(?:cookie|session):[^{}]+\}/g, "{credential}"), s.escape]);
+  const changedParam = candidate.slots.find((s) => s.param && !/^header:(referer|origin|cookie)$/i.test(s.at[0]!) &&
+    !op.slots.some((old) => old.param === s.param && encoding(old) === encoding(s)),
+  );
+  if (changedParam) return { outcome: "failed", attempt: last, fallback, reason: `re-learning changed the encoding of ${changedParam.param}; re-add the operation to confirm it` };
   if (template(candidate, learnArgs) === template(op, learnArgs)) {
     return { outcome: "identical", fallback, reason: "re-learning produced a byte-identical template" };
   }
