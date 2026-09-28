@@ -6,6 +6,10 @@ Your coding agent supplies the reasoning when creating an operation.
 
 ## Install and check
 
+The shortest path is to paste this into your coding agent:
+`Set up API Anything for me: https://github.com/goodnight000/api-anything/blob/main/INSTALL.md`.
+[INSTALL.md](../INSTALL.md) lists the steps the agent follows. By hand:
+
 ```sh
 git clone https://github.com/goodnight000/api-anything.git
 cd api-anything
@@ -32,7 +36,15 @@ Use `github:goodnight000/api-anything#<commit>` with `npx` to pin a revision.
 
 ## Connect an agent
 
-For Codex, after installing the CLI:
+For Claude Code, after installing the CLI:
+
+```sh
+claude mcp add --scope user api-anything -- api-anything mcp
+mkdir -p ~/.claude/skills/api-anything
+cp "$(npm root -g)/api-anything/skills/api-anything/SKILL.md" ~/.claude/skills/api-anything/
+```
+
+For Codex:
 
 ```sh
 codex mcp add api-anything -- api-anything mcp

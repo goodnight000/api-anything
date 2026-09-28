@@ -21,9 +21,22 @@ Across 5 runs of each task, the agent using API Anything answered 1.5 to 2× soo
 half as many tokens, and cost the same or less. All 20 answers were correct.
 [Method, raw numbers and limits](bench/README.md).
 
-## Quickstart
+## Install
 
-Needs Node 22.13+, npm and git. The package isn't on npm yet, so install it from GitHub:
+Paste this into Claude Code, Codex or another coding agent:
+
+```text
+Set up API Anything for me: https://github.com/goodnight000/api-anything/blob/main/INSTALL.md
+```
+
+The agent checks Node 22.13+, builds and installs the `api-anything` command, confirms that a
+call works, then connects the MCP server and the skill to itself. Restart the agent, then ask it
+something like "What does Goodreads rate Piranesi?"
+
+<details>
+<summary>Install by hand</summary>
+
+The package isn't on npm yet. Don't use `npm install -g github:...`, because it fails under npm 11.
 
 ```sh
 git clone https://github.com/goodnight000/api-anything.git && cd api-anything
@@ -35,28 +48,20 @@ api-anything call hacker-news search query=sqlite
 {"ok":true,"class":"ok","tier":1,"data":[{"title":"Hosting SQLite databases on GitHub Pages or any static file hoster","url":"https://phiresky.github.io/blog/2021/hosting-sqlite-databases-on-github-pages/", ...}, ...],"ms":111}
 ```
 
-`tier: 1` means the call went over plain HTTP with no browser. A failure returns `ok: false`
-with a `class`, a `reason` and a `next` step. Google Chrome is needed only to learn new operations
-and for browser fallback. Don't use `npm install -g github:...`, because it failed under npm 11.6.2.
-[Setup details](docs/QUICKSTART.md).
-
-## Give it to your agent
-
-The MCP server has four tools: `list_sites`, `list_operations`, `call_operation` and `login`.
-
-```sh
-codex mcp add api-anything -- api-anything mcp                 # Codex
-```
+`tier: 1` means plain HTTP with no browser. A failure returns `ok: false` with a `class`, a
+`reason` and a `next` step. Connect an agent with `codex mcp add api-anything -- api-anything mcp`,
+`claude mcp add --scope user api-anything -- api-anything mcp`, or this MCP entry:
 
 ```json
 { "mcpServers": { "api-anything": { "command": "api-anything", "args": ["mcp"] } } }
 ```
 
-In Claude Code: `/plugin marketplace add goodnight000/api-anything`, then
-`/plugin install api-anything@api-anything`.
+</details>
 
-Over MCP an agent **calls** operations. To **create** one, an agent needs a shell and the
-[skill](skills/api-anything/SKILL.md), or you run the CLI yourself.
+Over MCP an agent **calls** operations, using four tools: `list_sites`, `list_operations`,
+`call_operation` and `login`. To **create** operations, an agent needs a shell and the
+[skill](skills/api-anything/SKILL.md). Google Chrome is needed only for creating operations and
+for browser fallback. [Setup details](docs/QUICKSTART.md).
 
 ## Teach it a new site
 

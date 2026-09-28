@@ -218,6 +218,8 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
       const tools = await client.listTools();
       assert.deepEqual(tools.tools.map((t) => t.name).sort(), ["call_operation", "list_operations", "list_sites", "login"]);
       assert.equal(tools.tools.find((t) => t.name === "call_operation")?.annotations?.readOnlyHint, true);
+      // the agent is told which sites it can call before it picks web search
+      assert.match(client.getInstructions() ?? "", new RegExp(`\\b${SITE}\\b`));
 
       const text = (r: Awaited<ReturnType<typeof client.callTool>>) => JSON.parse((r.content as { text: string }[])[0]!.text);
       const ops = text(await client.callTool({ name: "list_operations", arguments: { site: SITE } }));

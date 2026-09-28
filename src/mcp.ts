@@ -58,7 +58,15 @@ const guarded =
   };
 
 export function createServer({ allowWrites = false }: { allowWrites?: boolean } = {}): McpServer {
-  const server = new McpServer({ name: "api-anything", version: VERSION });
+  // without naming the sites up front, an agent asked "what does Goodreads rate X?" reaches for web search
+  const server = new McpServer(
+    { name: "api-anything", version: VERSION },
+    {
+      instructions:
+        `Calls these websites' own data requests directly, usually over plain HTTP: ${listSites().join(", ")}. ` +
+        "When the user wants data from one of them, prefer list_operations then call_operation over web search or a browser.",
+    },
+  );
 
   server.registerTool(
     "list_sites",
