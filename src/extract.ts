@@ -1,5 +1,5 @@
 /** Turn a response body into the compact value an agent sees: parse, extract, pick, cap. */
-import { parse as parseHtml } from "node-html-parser";
+import { parse as parseHtml, type HTMLElement } from "node-html-parser";
 import { jsonValueEnd, parseJson } from "./codec.js";
 import type { ResponseSpec } from "./spec.js";
 
@@ -78,6 +78,23 @@ export function getPath(obj: unknown, path?: string): unknown {
   return walk(obj, 0);
 }
 
+/** --pick fields: commas separate them, except inside [], {} or () of a regex, or escaped as \, */
+export function splitPick(s: string): string[] {
+  const out: string[] = [];
+  let cur = "", depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (c === "\\" && s[i + 1] === ",") { cur += ","; i++; continue; }
+    if (c === "\\") { cur += c + (s[++i] ?? ""); continue; }
+    if ("[{(".includes(c)) depth++;
+    if ("]})".includes(c)) depth = Math.max(0, depth - 1);
+    if (c === "," && depth === 0) { out.push(cur.trim()); cur = ""; continue; }
+    cur += c;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
 /**
  * Keep only the given paths, per item for arrays. `name=path` renames the output key, and
  * `name=path~regex` keeps the part of a string that the regex's group 1 (or whole match) finds
@@ -108,17 +125,26 @@ export function pick(value: unknown, paths: string[]): unknown {
   return value.map(one).filter((x) => !(x && typeof x === "object" && !Object.keys(x).length));
 }
 
-/** `fields` values are "<css>" (text) or "<css>@attr"; an empty css means the item itself. */
-export function extractHtml(body: string, recipe: { items: string; fields: Record<string, string> }): Record<string, string | undefined>[] {
+/**
+ * `fields` values are "<css>" (text) or "<css>@attr"; an empty css means the item itself.
+ * An "all:" prefix returns every match as a list (a book's genres, a post's tags), [] when none.
+ */
+export function extractHtml(body: string, recipe: { items: string; fields: Record<string, string> }): Record<string, string | string[] | undefined>[] {
   return parseHtml(body)
     .querySelectorAll(recipe.items)
     .map((el) => {
-      const out: Record<string, string | undefined> = {};
-      for (const [name, sel] of Object.entries(recipe.fields)) {
+      const out: Record<string, string | string[] | undefined> = {};
+      for (const [name, field] of Object.entries(recipe.fields)) {
+        const all = field.startsWith("all:");
+        const sel = all ? field.slice(4) : field;
         const m = /^(.*?)@([\w:-]+)$/.exec(sel);
         const css = (m ? m[1]! : sel).trim();
-        const target = css ? el.querySelector(css) : el;
-        out[name] = !target ? undefined : m ? target.getAttribute(m[2]!) : target.text.replace(/\s+/g, " ").trim();
+        const value = (t: HTMLElement) => (m ? t.getAttribute(m[2]!) : t.text.replace(/\s+/g, " ").trim());
+        if (all) out[name] = (css ? el.querySelectorAll(css) : [el]).map(value).filter((v): v is string => !!v);
+        else {
+          const target = css ? el.querySelector(css) : el;
+          out[name] = target ? value(target) : undefined;
+        }
       }
       return out;
     });

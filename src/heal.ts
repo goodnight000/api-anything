@@ -360,9 +360,12 @@ function learnOrExplain(site: string, run: CaptureResult, input: Parameters<type
   try {
     return learnOperation(input);
   } catch (e) {
-    const doc = run.exchanges.filter((x) => x.resourceType === "document" && x.response).at(-1);
+    // Only the page's own documents: an ad's or widget's iframe (a reCAPTCHA frame) is not the page.
+    const docs = run.exchanges.filter((x) => x.resourceType === "document" && x.response);
+    const own = docs.length ? siteOf(new URL(docs[0]!.request.url).hostname) : undefined;
+    const doc = docs.filter((x) => siteOf(new URL(x.request.url).hostname) === own).at(-1);
     const wall = doc?.response && botWall({ status: doc.response.status, headers: doc.response.headers, body: doc.response.body ?? "" });
-    if (wall) throw new Error(`the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} and clear it, then add again`);
+    if (wall) throw new Error(`the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} and clear it, then add again (learning said: ${(e as Error).message})`);
     throw e;
   }
 }
@@ -392,6 +395,9 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   const i = { ...input, site: safeName(input.site) };
   const existing = loadSite(i.site)?.site;
   const [ex1, ex2] = i.examples;
+  // before any browser run: a too-short or duplicate example would only fail after it
+  if (ex1) checkExamples(ex1, "example");
+  if (ex2) checkExamples(ex2, "example 2");
   for (const c of [i.from?.capture, i.from2]) {
     if (i.write && c && !c.write) throw new Error(`capture ${c.id} ran without --write, so any write in it was already sent; capture again with --write`);
   }

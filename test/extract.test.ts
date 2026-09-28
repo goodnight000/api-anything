@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ResponseSchema } from "../src/spec.ts";
-import { capOutput, extract, extractEmbedded, extractHtml, getPath, inferShape, parseBody, pick } from "../src/extract.ts";
+import { capOutput, extract, extractEmbedded, extractHtml, getPath, inferShape, parseBody, pick, splitPick } from "../src/extract.ts";
 
 test("parseBody strips XSSI and keeps big integers exact", () => {
   assert.deepEqual(parseBody(')]}\'\n{"id":2085462611575857621,"n":3}'), { id: "2085462611575857621", n: 3 });
@@ -124,4 +124,17 @@ test("pick name=path~regex keeps group 1 (or the whole match) of a string; no ma
   ]);
   assert.deepEqual(pick({ a: { b: "v-12" } }, ["a.b~\\d+"]), { "a.b": "12" });
   assert.throws(() => ResponseSchema.parse({ pick: ["id=u~/in/(["] }), /regex after ~/);
+});
+
+test("--pick splits on commas, but not inside a regex's [], {} or (), nor an escaped \\,", () => {
+  assert.deepEqual(splitPick("bookId,title,author=author.name"), ["bookId", "title", "author=author.name"]);
+  assert.deepEqual(splitPick("count=rating~—\\s([0-9,]+),year=x~(\\d{4})"), ["count=rating~—\\s([0-9,]+)", "year=x~(\\d{4})"]);
+  assert.deepEqual(splitPick("a~x\\,y, b"), ["a~x,y", "b"]);
+});
+
+test("an html field with all: returns every match as a list, [] when there is none", () => {
+  const body = `<main><h1>Circe</h1><ul class="genres"><li><a>Fantasy</a></li><li><a>Mythology</a></li><li><a>Fiction</a></li></ul><a class="tag" href="/t/1">x</a><a class="tag" href="/t/2">y</a></main>`;
+  assert.deepEqual(extractHtml(body, { items: "main", fields: { title: "h1", genres: "all:ul.genres a", tags: "all:a.tag@href", none: "all:.missing" } }), [
+    { title: "Circe", genres: ["Fantasy", "Mythology", "Fiction"], tags: ["/t/1", "/t/2"], none: [] },
+  ]);
 });

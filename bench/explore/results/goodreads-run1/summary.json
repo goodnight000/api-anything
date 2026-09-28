@@ -1,0 +1,359 @@
+{
+  "name": "goodreads",
+  "model": "claude-opus-5-5",
+  "at": "2026-09-28T06:26:15.551Z",
+  "exit": 0,
+  "wallMs": 417982,
+  "costUsd": 1.1665654,
+  "turns": 48,
+  "usage": {
+    "inputTokens": 96,
+    "outputTokens": 22942,
+    "cacheReadInputTokens": 1534657,
+    "cacheCreationInputTokens": 49901,
+    "webSearchRequests": 0,
+    "costUSD": 1.1653634,
+    "contextWindow": 1000000,
+    "maxOutputTokens": 128000,
+    "thinkingTokens": 10223,
+    "canonicalModel": "claude-opus-5-5",
+    "provider": "firstParty",
+    "costBasis": "list"
+  },
+  "commands": 47,
+  "captures": 6,
+  "inspects": 19,
+  "adds": 17,
+  "calls": 4,
+  "commandLog": [
+    {
+      "t": 3219,
+      "ms": 1915,
+      "command": "which api-anything; api-anything sites 2>&1 | head -c 2000",
+      "resultChars": 1550,
+      "isError": false
+    },
+    {
+      "t": 7460,
+      "ms": 24574,
+      "command": "api-anything capture \"https://www.goodreads.com/search?q=dune\" --example q=dune --outline 2>&1 | head -c 8000",
+      "resultChars": 3568,
+      "isError": false
+    },
+    {
+      "t": 36758,
+      "ms": 1234,
+      "command": "api-anything inspect cmukv75bx 2 2>&1 | head -c 300; echo; api-anything inspect cmukv75bx 2 --html '{\"items\":\"[data-testid=\\\"book-list-item\\\"] > li\",\"fields\":{\"url\":\"a.BookCard__stretchedLink@href\",\"title\":\"[data-testid=\\\"title\\\"]\",\"author\":\"[data-testid=\\\"name\\\"]\",\"authorUrl\":\"a[href*=\\\"/author/show\\\"]@href\",\"rating\":\"[data-testid=\\\"rating\\\"]\",\"text\":\"\"}}' 2>&1 | head -c 3000",
+      "resultChars": 1652,
+      "isError": false
+    },
+    {
+      "t": 42387,
+      "ms": 38959,
+      "command": "api-anything capture \"https://www.goodreads.com/\" --example q=dune --outline --steps '[{\"action\":\"fill\",\"selector\":\"input[name=\\\"q\\\"]\",\"value\":\"dune\"},{\"action\":\"wait\",\"ms\":2500}]' 2>&1 | head -c 5000",
+      "resultChars": 93,
+      "isError": false
+    },
+    {
+      "t": 84433,
+      "ms": 1026,
+      "command": "api-anything inspect cmukv75bx 2 2>&1 | grep -o '<input[^>]*>' | head",
+      "resultChars": 31,
+      "isError": false
+    },
+    {
+      "t": 87871,
+      "ms": 1265,
+      "command": "api-anything inspect cmukv75bx 2 2>&1 | grep -o '<input[^>]*' | head; api-anything inspect cmukv75bx 2 2>&1 | grep -o 'auto_complete[^\"\\\\]*' | head -3",
+      "resultChars": 31,
+      "isError": false
+    },
+    {
+      "t": 92713,
+      "ms": 24,
+      "command": "api-anything inspect cmukv75bx 2 > /tmp/gr_search.json; python3 -c \"\nimport json,re;d=json.load(open('/tmp/gr_search.json'))['data'];print(len(d))\nfor m in re.findall(r'<input[^>]{0,200}',d)[:5]:print(m)\nprint(re.findall(r'.{100}Average rating of.{50}',d)[:3])\nprint(d.count('ratingsCount'), d.count('averageRating'), d.count('__NEXT_DATA__'), d.count('self.__next_f'))\ni=d.find('44492285');print(d[i",
+      "resultChars": 727,
+      "isError": true
+    },
+    {
+      "t": 95315,
+      "ms": 785,
+      "command": "api-anything inspect cmukv75bx 2 2>&1 | grep -o '.\\{200\\}44492285.\\{400\\}' | head -3",
+      "resultChars": 31,
+      "isError": false
+    },
+    {
+      "t": 99103,
+      "ms": 9,
+      "command": "api-anything inspect cmukv75bx 2 2>&1 | wc -c; api-anything inspect cmukv75bx 2 2>&1 | grep -o '.\\{0,150\\}44492285.\\{0,300\\}' | head -3",
+      "resultChars": 727,
+      "isError": true
+    },
+    {
+      "t": 104308,
+      "ms": 6645,
+      "command": "api-anything capture \"https://www.goodreads.com/book/auto_complete?format=json&q=dune\" --example q=dune --outline",
+      "resultChars": 1416,
+      "isError": false
+    },
+    {
+      "t": 113806,
+      "ms": 8609,
+      "command": "api-anything add goodreads searchBooks --trigger \"https://www.goodreads.com/book/auto_complete?format=json&q={q}\" --example q=dune --example2 q=tolkien --pick bookId,title,author=author.name,authorId=author.id,avgRating,ratingsCount",
+      "resultChars": 625,
+      "isError": false
+    },
+    {
+      "t": 126299,
+      "ms": 417,
+      "command": "api-anything add goodreads searchBooks --from cmukv920y --trigger \"https://www.goodreads.com/book/auto_complete?format=json&q={q}\" --example q=dune --example2 q=tolkien --extract '$' --pick bookId,title,author=author.name,authorId=author.id,avgRating,ratingsCount",
+      "resultChars": 696,
+      "isError": false
+    },
+    {
+      "t": 128682,
+      "ms": 365,
+      "command": "api-anything add --help 2>&1 | grep -i -A3 extract",
+      "resultChars": 830,
+      "isError": false
+    },
+    {
+      "t": 132359,
+      "ms": 344,
+      "command": "api-anything add goodreads searchBooks --from cmukv920y --from2 cmukv94l5 --trigger \"https://www.goodreads.com/book/auto_complete?format=json&q={q}\" --example q=dune --example2 q=tolkien --extract '[*]' --pick bookId,title,author=author.name,authorId=author.id,avgRating,ratingsCount",
+      "resultChars": 661,
+      "isError": false
+    },
+    {
+      "t": 135711,
+      "ms": 390,
+      "command": "api-anything add goodreads searchBooks --from cmukv920y --from2 cmukv94l5 --trigger \"https://www.goodreads.com/book/auto_complete?format=json&q={q}\" --example q=dune --example2 q=tolkien --extract '' --pick bookId,title,author=author.name,authorId=author.id,avgRating,ratingsCount",
+      "resultChars": 604,
+      "isError": false
+    },
+    {
+      "t": 139598,
+      "ms": 835,
+      "command": "api-anything call goodreads searchBooks q=hobbit",
+      "resultChars": 199,
+      "isError": false
+    },
+    {
+      "t": 144215,
+      "ms": 5474,
+      "command": "api-anything add goodreads searchBooks --from cmukv920y --from2 cmukv94l5 --trigger \"https://www.goodreads.com/book/auto_complete?format=json&q={q}\" --example q=dune --example2 q=tolkien --extract '[*]' --pick bookId,title,author=author.name,authorId=author.id,avgRating,ratingsCount >/dev/null 2>&1; api-anything call goodreads searchBooks q=hobbit",
+      "resultChars": 502,
+      "isError": true
+    },
+    {
+      "t": 154410,
+      "ms": 12,
+      "command": "grep -rn \"under half of the learned key paths\" /Users/charleszheng/Developer/api-anything-oss/src | head; grep -rn \"function keyPaths\\|function extractPath\\|function getPath\" /Users/charleszheng/Developer/api-anything-oss/src | head",
+      "resultChars": 727,
+      "isError": true
+    },
+    {
+      "t": 164009,
+      "ms": 779,
+      "command": "api-anything inspect cmukv920y 1 --path '[*]' 2>&1 | head -c 600; echo; api-anything inspect cmukv920y 1 --path '[1]' 2>&1 | head -c 300",
+      "resultChars": 901,
+      "isError": false
+    },
+    {
+      "t": 169474,
+      "ms": 369,
+      "command": "api-anything add goodreads searchBooks --from cmukv920y --from2 cmukv94l5 --trigger \"https://www.goodreads.com/book/auto_complete?format=json&q={q}\" --example q=dune --example2 q=tolkien --extract '[*]' 2>&1 | head -c 1500",
+      "resultChars": 661,
+      "isError": false
+    },
+    {
+      "t": 175747,
+      "ms": 503,
+      "command": "api-anything inspect cmukv75bx 2 --embedded '<script id=\"__NEXT_DATA__\" type=\"application/json\">(\\{)' 2>&1 | head -c 1500",
+      "resultChars": 130,
+      "isError": false
+    },
+    {
+      "t": 183261,
+      "ms": 5124,
+      "command": "api-anything capture \"https://www.goodreads.com/search?utf8=%E2%9C%93&query=dune&search_type=books\" --example query=dune --outline 2>&1 | head -c 2500",
+      "resultChars": 2488,
+      "isError": false
+    },
+    {
+      "t": 195676,
+      "ms": 13,
+      "command": "cat /Users/charleszheng/Developer/api-anything-oss/bench/explore/state/goodreads/home/sites/goodreads.json",
+      "resultChars": 727,
+      "isError": true
+    },
+    {
+      "t": 199277,
+      "ms": 9828,
+      "command": "api-anything capture \"https://www.goodreads.com/book/show/44767458\" --example bookId=44767458 --outline 2>&1 | head -c 6000",
+      "resultChars": 5978,
+      "isError": false
+    },
+    {
+      "t": 218093,
+      "ms": 717,
+      "command": "api-anything inspect cmukvazdf 1 --html '{\"items\":\"body\",\"fields\":{\"title\":\"[data-testid=\\\"bookTitle\\\"]\",\"author\":\"[data-testid=\\\"name\\\"]\",\"avgRating\":\"div.RatingStatistic__rating\",\"ratingsCount\":\"[data-testid=\\\"ratingsCount\\\"]\",\"pages\":\"[data-testid=\\\"pagesFormat\\\"]\",\"firstPublished\":\"[data-testid=\\\"publicationInfo\\\"]\",\"genres\":\"[data-testid=\\\"genresList\\\"] .Button__labelItem\",\"description\":\"[dat",
+      "resultChars": 3469,
+      "isError": false
+    },
+    {
+      "t": 222768,
+      "ms": 350,
+      "command": "api-anything help add 2>&1 | head -c 6000",
+      "resultChars": 670,
+      "isError": false
+    },
+    {
+      "t": 225003,
+      "ms": 772,
+      "command": "api-anything add --help 2>&1; api-anything inspect --help 2>&1",
+      "resultChars": 2100,
+      "isError": false
+    },
+    {
+      "t": 241865,
+      "ms": 747,
+      "command": "api-anything inspect cmukvazdf 1 --html '{\"items\":\"body\",\"fields\":{\"r1\":\".RatingStatistic__rating\",\"r2\":\"[aria-label^=\\\"Average rating\\\"]@aria-label\",\"g1\":\".BookPageMetadataSection__genreButton:nth-of-type(1)\",\"g2\":\".BookPageMetadataSection__genreButton:nth-of-type(2)\",\"g3\":\"span.BookPageMetadataSection__genreButton:nth-of-type(3) .Button__labelItem\",\"gl\":\"[data-testid=\\\"genresList\\\"] ul\"}}' 2>&1 ",
+      "resultChars": 1428,
+      "isError": false
+    },
+    {
+      "t": 248743,
+      "ms": 374,
+      "command": "api-anything inspect cmukvazdf 1 --html '{\"items\":\"article.ReviewCard\",\"fields\":{\"a\":\"[role=\\\"img\\\"]@aria-label\",\"b\":\".RatingStars@class\",\"c\":\".ReviewCard__row\",\"d\":\"section.ReviewCard__content\"}}' 2>&1 | head -c 1200",
+      "resultChars": 1200,
+      "isError": false
+    },
+    {
+      "t": 253702,
+      "ms": 350,
+      "command": "api-anything inspect cmukvazdf 1 --embedded '\"Review:kca://review[^\"]+\":(\\{)' 2>&1 | head -c 1500",
+      "resultChars": 1499,
+      "isError": false
+    },
+    {
+      "t": 259963,
+      "ms": 353,
+      "command": "api-anything inspect cmukvazdf 113 --outline --example bookId=44767458 2>&1 | head -c 3000",
+      "resultChars": 1680,
+      "isError": false
+    },
+    {
+      "t": 264543,
+      "ms": 12388,
+      "command": "api-anything add goodreads getBookReviews --trigger \"https://www.goodreads.com/book/show/{bookId}\" --example bookId=44767458 --example2 bookId=5907 --match operationName=getReviews --extract data.getReviews.edges --pick reviewer=node.creator.name,rating=node.rating,text=node.text 2>&1 | head -c 2500",
+      "resultChars": 265,
+      "isError": false
+    },
+    {
+      "t": 286914,
+      "ms": 546,
+      "command": "api-anything inspect cmukvazdf 1 --html '{\"items\":\"article.ReviewCard\",\"fields\":{\"a\":\".ReviewCard__row span@aria-label\",\"b\":\"span[aria-label]@aria-label\",\"c\":\".ShelfStatus span@class\",\"d\":\".ReviewCard__row span@class\"}}' 2>&1 | head -c 800",
+      "resultChars": 800,
+      "isError": false
+    },
+    {
+      "t": 292326,
+      "ms": 1054,
+      "command": "api-anything inspect cmukvazdf 1 --embedded '\"edges\":(\\[)' 2>&1 | head -c 800; echo; api-anything inspect cmukvazdf 1 --embedded '\"getReviews[^\"]*\":(\\{)' 2>&1 | head -c 800",
+      "resultChars": 1601,
+      "isError": false
+    },
+    {
+      "t": 297379,
+      "ms": 448,
+      "command": "api-anything inspect cmukvazdf 1 --embedded '\"apolloState\":(\\{)' --path '[*].rating' 2>&1 | head -c 800",
+      "resultChars": 135,
+      "isError": false
+    },
+    {
+      "t": 305103,
+      "ms": 374,
+      "command": "api-anything add goodreads getBookReviews --from cmukvazdf --pick-request 1 --trigger \"https://www.goodreads.com/book/show/{bookId}\" --example bookId=44767458 --embedded '\"apolloState\":(\\{)' --extract '[*]' --pick typename=__typename,rating,text 2>&1 | head -c 1500",
+      "resultChars": 688,
+      "isError": false
+    },
+    {
+      "t": 310222,
+      "ms": 405,
+      "command": "api-anything inspect cmukvazdf 1 --html '{\"items\":\"body\",\"fields\":{\"x\":\"[aria-label^=\\\"Rating \\\"]@aria-label\",\"y\":\".RatingStars__small@aria-label\",\"z\":\"[class*=\\\"RatingStars\\\"]@class\"}}' 2>&1 | head -c 600",
+      "resultChars": 195,
+      "isError": false
+    },
+    {
+      "t": 330435,
+      "ms": 500,
+      "command": "G='.BookPageMetadataSection__genreButton:nth-of-type'; api-anything add goodreads getBook --from cmukvazdf --pick-request 1 --trigger \"https://www.goodreads.com/book/show/{bookId}\" --example bookId=44767458 --html \"{\\\"items\\\":\\\"body\\\",\\\"fields\\\":{\\\"title\\\":\\\"[data-testid=\\\\\\\"bookTitle\\\\\\\"]\\\",\\\"author\\\":\\\"[data-testid=\\\\\\\"name\\\\\\\"]\\\",\\\"avgRating\\\":\\\"[aria-label^=\\\\\\\"Average rating\\\\\\\"]@aria-label\\\"",
+      "resultChars": 71,
+      "isError": false
+    },
+    {
+      "t": 336665,
+      "ms": 485,
+      "command": "G='.BookPageMetadataSection__genreButton:nth-of-type'; api-anything add goodreads getBook --from cmukvazdf --pick-request 1 --trigger \"https://www.goodreads.com/book/show/{bookId}\" --example bookId=44767458 --html \"{\\\"items\\\":\\\"body\\\",\\\"fields\\\":{\\\"title\\\":\\\"[data-testid=\\\\\\\"bookTitle\\\\\\\"]\\\",\\\"author\\\":\\\"[data-testid=\\\\\\\"name\\\\\\\"]\\\",\\\"avgRating\\\":\\\"[aria-label^=\\\\\\\"Average rating\\\\\\\"]@aria-label\\\"",
+      "resultChars": 1126,
+      "isError": false
+    },
+    {
+      "t": 345710,
+      "ms": 431,
+      "command": "G='.BookPageMetadataSection__genreButton:nth-of-type'; api-anything add goodreads getBook --from cmukvazdf --pick-request 1 --trigger \"https://www.goodreads.com/book/show/{bookId}\" --example bookId=44767458 --html \"{\\\"items\\\":\\\"body\\\",\\\"fields\\\":{\\\"title\\\":\\\"[data-testid=\\\\\\\"bookTitle\\\\\\\"]\\\",\\\"author\\\":\\\"[data-testid=\\\\\\\"name\\\\\\\"]\\\",\\\"avgRating\\\":\\\"[aria-label^=\\\\\\\"Average rating\\\\\\\"]@aria-label\\\"",
+      "resultChars": 1142,
+      "isError": false
+    },
+    {
+      "t": 351691,
+      "ms": 436,
+      "command": "api-anything add goodreads getBookReviews --from cmukvazdf --pick-request 1 --trigger \"https://www.goodreads.com/book/show/{bookId}\" --example bookId=44767458 --html '{\"items\":\"article.ReviewCard\",\"fields\":{\"reviewer\":\".ReviewerProfile__name\",\"status\":\".ShelfStatus\",\"date\":\".ReviewCard__row\",\"text\":\".ReviewText__content .Formatted\"}}' 2>&1 | head -c 800",
+      "resultChars": 800,
+      "isError": false
+    },
+    {
+      "t": 356135,
+      "ms": 6920,
+      "command": "api-anything capture \"https://www.goodreads.com/author/list/58\" --example authorId=58 --outline 2>&1 | head -c 3000",
+      "resultChars": 2992,
+      "isError": false
+    },
+    {
+      "t": 366546,
+      "ms": 451,
+      "command": "api-anything inspect cmukveabe 1 --html '{\"items\":\"table.tableList tr\",\"fields\":{\"url\":\"a.bookTitle@href\",\"title\":\"a.bookTitle span\",\"rating\":\"span.minirating\"}}' 2>&1 | head -c 1200",
+      "resultChars": 1184,
+      "isError": false
+    },
+    {
+      "t": 371503,
+      "ms": 9796,
+      "command": "api-anything add goodreads getAuthorBooks --trigger \"https://www.goodreads.com/author/list/{authorId}\" --example authorId=58 --example2 authorId=656983 --html '{\"items\":\"table.tableList tr\",\"fields\":{\"url\":\"a.bookTitle@href\",\"title\":\"a.bookTitle span\",\"rating\":\"span.minirating\"}}' --pick 'bookId=url~show/(\\d+),title,avgRating=rating~(\\d\\.\\d+),ratingsCount=rating~—\\s(\\S+)' 2>&1 | head -c 1500",
+      "resultChars": 201,
+      "isError": false
+    },
+    {
+      "t": 386022,
+      "ms": 457,
+      "command": "api-anything add goodreads getAuthorBooks --from cmukveabe --pick-request 1 --trigger \"https://www.goodreads.com/author/list/{authorId}\" --example authorId=58 --html '{\"items\":\"table.tableList tr\",\"fields\":{\"url\":\"a.bookTitle@href\",\"title\":\"a.bookTitle span\",\"rating\":\"span.minirating\"}}' --pick 'bookId=url~show/(\\d+),title,avgRating=rating~(\\d\\.\\d+),ratingsCount=rating~—\\s(\\S+)' 2>&1 | head -c 100",
+      "resultChars": 201,
+      "isError": false
+    },
+    {
+      "t": 392757,
+      "ms": 3561,
+      "command": "api-anything call goodreads getBook bookId=5907 2>&1 | head -c 1500; echo; api-anything call goodreads getBookReviews bookId=5907 2>&1 | head -c 1200",
+      "resultChars": 2446,
+      "isError": false
+    },
+    {
+      "t": 401337,
+      "ms": 1145,
+      "command": "api-anything add goodreads searchBooks --from cmukv920y --from2 cmukv94l5 --trigger \"https://www.goodreads.com/book/auto_complete?format=json&q={q}\" --example q=dune --example2 q=tolkien --extract '[0]' --pick bookId,title,author=author.name,authorId=author.id,avgRating,ratingsCount 2>&1 | head -c 600; echo; api-anything call goodreads searchBooks q=circe",
+      "resultChars": 775,
+      "isError": false
+    }
+  ]
+}

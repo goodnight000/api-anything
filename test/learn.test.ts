@@ -442,3 +442,23 @@ test("a short example found by chance inside a random header token is not a slot
   const at = operation.slots.filter((s) => s.param === "origin").map((s) => s.at[0]);
   assert.deepEqual(at.sort(), ["header:x-route", "query:origin"]);
 });
+
+test("a response that is itself a list of results is learned whole, not as its first item", () => {
+  const list = [{ bookId: "1", title: "Dune" }, { bookId: "2", title: "Dune Messiah" }];
+  const learned = learnOperation({
+    exchanges: [
+      {
+        id: 1,
+        resourceType: "xhr",
+        request: { method: "GET", url: "https://books.example/auto_complete?format=json&q=dune", headers: {} },
+        response: { status: 200, headers: {}, contentType: "application/json", body: JSON.stringify(list) },
+      },
+    ],
+    examples: [{ q: "dune" }],
+    cookies: [],
+    name: "search",
+    trigger: { url: "https://books.example/auto_complete?format=json&q={q}" },
+    readOnly: true,
+  });
+  assert.equal(learned.operation.response.extract, undefined);
+});

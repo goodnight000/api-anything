@@ -184,8 +184,11 @@ function shapeScope(op: Operation, data: unknown): { expected: Record<string, st
   if (!ex) return { expected: shape, value: data };
   const prefix = ex.replace(/\[(\d+|\*)\]/g, "[]").replace(/\["((?:[^"\\]|\\.)*)"\]/g, (_m, k: string) => `.${JSON.parse(`"${k}"`) as string}`).replace(/^\./, "");
   const expected: Record<string, string> = {};
+  // a trailing [*] returns the items themselves, as a list: compare them as "[]..." like any list
+  const items = ex.endsWith("[*]");
   for (const [k, t] of Object.entries(shape)) {
-    if (k.startsWith(`${prefix}.`)) expected[k.slice(prefix.length + 1)] = t;
+    if (items && (k === prefix || k.startsWith(`${prefix}.`) || k.startsWith(`${prefix}[]`))) expected[`[]${k.slice(prefix.length)}`] = t;
+    else if (k.startsWith(`${prefix}.`)) expected[k.slice(prefix.length + 1)] = t;
     else if (k.startsWith(`${prefix}[]`)) expected[k.slice(prefix.length)] = t;
   }
   return { expected, value: getPath(data, ex) };

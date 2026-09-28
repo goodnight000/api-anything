@@ -8,14 +8,27 @@ import { botWall } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
 import { addOperation, capturePage, loadCapture, PROFILE_HINT, profileDir } from "./heal.js";
 import { buildRequest } from "./http.js";
-import { capOutput, extract, innerJson } from "./extract.js";
+import { capOutput, extract, innerJson, splitPick } from "./extract.js";
 import { capturePages, pageUrls, rankCandidates } from "./learn.js";
+import { outline, type Outline } from "./outline.js";
+import type { Exchange } from "./types.js";
 import { serveStdio, VERSION } from "./mcp.js";
 import { loadSession, loggedIn, saveSession, sessionFile, withLock } from "./session.js";
 import { AmbiguousProfile } from "./import.js";
 import { cookieNames, importSession, logout, resolveLoginTarget } from "./login.js";
 import { MatchSchema, TriggerStepSchema, type Operation } from "./spec.js";
 import { exportSite, listSites, loadSite, siteNotes } from "./store.js";
+
+/** capture/inspect --outline: the scout's summary of one exchange's response. */
+function outlineOf(e: Exchange | undefined, values: string[]): { outline?: Outline } {
+  const r = e?.response;
+  const o = r?.body ? outline(r.contentType, r.body, values) : undefined;
+  return o && Object.keys(o).length ? { outline: o } : {};
+}
+
+/** A multi-line error (a zod report) on one line, so JSON output keeps all of it. */
+const oneLine = (m: string) => m.replace(/\s*\n\s*(✖\s*)?/g, " ").replace(/\s*→\s*/g, " at ").trim();
+
 
 const HELP: Record<string, string> = {
   login: `api-anything login <site|url> [--profile "Chrome/Profile 1"] [--window] [--cookies <file>]
@@ -33,16 +46,20 @@ const HELP: Record<string, string> = {
   --cookies   import a cookies.txt (Netscape) or JSON export (Cookie-Editor / Playwright), for CI`,
   logout: `api-anything logout <site>
   Clears the stored cookie jar and this site's cookies in api-anything's Chrome profile.`,
-  capture: `api-anything capture <url> [--steps <json>] [--soft-from <url>] [--example k=v]... [--write] [--limit n]
+  capture: `api-anything capture <url> [--steps <json>] [--soft-from <url>] [--example k=v]... [--write] [--limit n] [--outline]
   Loads the page in Chrome and lists the requests it made, noise filtered and ranked (requests carrying
   the --example values first). Saves everything as a capture id for: add --from <id> --pick-request <n>,
   and for: inspect <id> <n>. Captures hold cookie values; the newest 20 are kept, none past 24 h.
   --steps      JSON array of {action: click|fill|press|wait|goto, selector?, value?, ms?}
   --soft-from  load this page first, then navigate in-app to <url> (SPAs only fire their data XHRs that way)
-  --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser`,
-  inspect: `api-anything inspect <captureId> [<requestId>] [--path <p>] [--html <json>] [--embedded <regex>]
+  --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser
+  --outline    for the top 3 candidates, summarize the response instead of making you inspect it: where the
+               example values are, a suggested --extract and --pick fields with samples, JSON the page
+               embeds (a ready --embedded regex), and a repeated HTML list as a ready --html recipe`,
+  inspect: `api-anything inspect <captureId> [<requestId>] [--path <p>] [--html <json>] [--embedded <regex>] [--outline --example k=v]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
-  response: JSON at --path, or items from an --html / --embedded recipe (try selectors before add).`,
+  response: JSON at --path, or items from an --html / --embedded recipe (try selectors before add).
+  --outline summarizes the response (as capture --outline does) instead of printing it.`,
   add: `api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
   Runs the trigger twice in Chrome (with --example, then --example2 or --example again), picks the request
   carrying the example values, and saves the learned operation to ~/.api-anything/sites/<site>.json.
@@ -55,7 +72,8 @@ const HELP: Record<string, string> = {
   --from2 <id>    a second capture made with --example2 values, for the two-run diff
   --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
   --pick a,b.c,name=x.y  fields kept per item; name=path renames the key, name=path~regex keeps regex group 1
-  --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages
+  --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages;
+                  "all:<css>[@attr]" returns every match as a list (genres, tags)
   --embedded <regex>  JSON inside the page: group 1 marks where the JSON value starts; then --extract
   --public <header,...>  headers holding public constants (a web app's bearer): kept literal, allowed by export
   --write         the op changes state: it is learned from intercepted, aborted requests only
@@ -115,7 +133,7 @@ function json<T>(text: string | undefined, schema: z.ZodType<T>, flag: string): 
   try {
     return schema.parse(JSON.parse(text));
   } catch (e) {
-    throw new Fail(`--${flag}: ${(e as Error).message.split("\n")[0]}`, `api-anything --help shows the --${flag} format`);
+    throw new Fail(`--${flag}: ${oneLine((e as Error).message)}`, `api-anything --help shows the --${flag} format`);
   }
 }
 
@@ -187,6 +205,7 @@ async function run(argv: string[]): Promise<number> {
       window: { type: "boolean" },
       cookies: { type: "string" },
       profile: { type: "string" },
+      outline: { type: "boolean" },
     },
   });
   const [cmd, ...pos] = positionals;
@@ -263,7 +282,8 @@ async function run(argv: string[]): Promise<number> {
       const examples = kv(v.example);
       const c = await capturePage({ url, steps, softFrom: v["soft-from"], write: v.write, args: examples });
       const ranked = rankCandidates(c.exchanges, examples, { pages: pageUrls(c.exchanges, capturePages(c)) });
-      const candidates = ranked.slice(0, limit).map((x) => ({
+      const values = Object.values(examples).map(String);
+      const candidates = ranked.slice(0, limit).map((x, i) => ({
         id: x.id,
         kind: x.resourceType,
         method: x.method,
@@ -273,6 +293,7 @@ async function run(argv: string[]): Promise<number> {
         ...(x.operationName ? { operationName: x.operationName } : {}),
         ...(x.hits.length ? { carries: x.hits } : {}),
         size: x.size,
+        ...(v.outline && i < 3 ? outlineOf(c.exchanges.find((e) => e.id === x.id), values) : {}),
       }));
       const top = ranked[0];
       const html = top && /html/i.test(top.contentType ?? "");
@@ -316,6 +337,7 @@ async function run(argv: string[]): Promise<number> {
       }
       const e = c.exchanges.find((x) => x.id === Number(reqId));
       if (!e) throw new Fail(`no request ${reqId} in capture ${id}`, `api-anything inspect ${id}`);
+      if (v.outline) return out({ id: e.id, request: { method: e.request.method, url: e.request.url }, ...outlineOf(e, Object.values(kv(v.example)).map(String)) }), 0;
       const html = json(v.html, z.object({ items: z.string(), fields: z.record(z.string(), z.string()) }), "html");
       const body = e.response?.body ?? "";
       const response = { format: html ? "html" : v.embedded ? "embedded" : "json", ...(html ? { html } : {}), ...(v.embedded ? { embedded: { regex: v.embedded } } : {}) } as const;
@@ -358,7 +380,7 @@ async function run(argv: string[]): Promise<number> {
         description: v.description,
         response: {
           ...(v.extract ? { extract: v.extract } : {}),
-          ...(v.pick ? { pick: v.pick.split(",").map((s) => s.trim()) } : {}),
+          ...(v.pick ? { pick: splitPick(v.pick) } : {}),
           ...(html ? { html } : {}),
           ...(v.embedded ? { embedded: { regex: v.embedded } } : {}),
         },
@@ -524,7 +546,7 @@ try {
   await closeBrowser();
   const f = e instanceof Fail ? e : undefined;
   // Playwright errors carry the whole Chrome command line after the first line
-  out({ ok: false, error: (e as Error).message.split("\n")[0], ...(f?.extra ?? {}) });
+  out({ ok: false, error: oneLine((e as Error).message), ...(f?.extra ?? {}) });
   const next = f?.next ?? (e instanceof ProfileInUse ? PROFILE_HINT : `api-anything ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " "));
   process.stderr.write(`next: ${next}\n`);
   process.exitCode = 1;

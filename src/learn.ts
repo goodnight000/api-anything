@@ -603,7 +603,7 @@ function volatileAnchors(req: Request, leaves: Leaf[], taken: Set<string>, opNam
 }
 
 /** Path to the richest array carrying an example value, else the object holding it, else the biggest array. */
-function suggestExtract(root: unknown, values: string[]): string | undefined {
+export function suggestExtract(root: unknown, values: string[]): string | undefined {
   const carries = (v: unknown) => {
     const s = JSON.stringify(v).toLowerCase();
     return values.some((x) => s.includes(x));
@@ -619,6 +619,8 @@ function suggestExtract(root: unknown, values: string[]): string | undefined {
     const children: [string, unknown][] = Array.isArray(v)
       ? v.slice(0, 50).map((c, i) => [`${path}[${i}]`, c])
       : Object.entries(v).map(([k, c]) => [/^[\w$-]+$/.test(k) ? (path ? `${path}.${k}` : k) : `${path}[${JSON.stringify(k)}]`, c]);
+    // a top-level list of results is itself the answer: "" (the whole response) beats any item in it
+    if (Array.isArray(v) && !path && v.length > 1 && v.some((x) => x !== null && typeof x === "object") && carries(v)) return "";
     if (Array.isArray(v) && path) {
       if (!anyArray || v.length > anyArray.len) anyArray = { path, len: v.length };
       const rank = v.length + (v.some((x) => x !== null && typeof x === "object") ? 1e6 : 0);

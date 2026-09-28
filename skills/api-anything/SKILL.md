@@ -36,6 +36,56 @@ use. Run CLI-only commands yourself when you have shell access; otherwise give t
      results for these args ... the operation works". Treat that as "nothing found" for these
      args, not as a broken op.
 
+## Turning a site into an API: intent first
+
+Use this when the user wants a site "as an API", or several operations, rather than one call.
+
+1. **Pin down the intent.** Before capturing anything, you need to know:
+   - which questions the user will ask the site;
+   - which inputs change between calls, and which stay fixed;
+   - which fields they need back;
+   - whether the operations only read, whether they need the user's login, and how often they'll run.
+
+   If the request doesn't answer these, ask all your questions in one message, three at most. If it
+   does answer them, don't ask.
+2. **Propose operations, then wait for approval.** Propose one operation per kind of question, as
+   `name(inputs) -> fields`, with the page that shows that data. Also list what you won't cover, such
+   as pagination or writes. Example: `searchBooks(query) -> bookId, title, author, rating`,
+   `getBook(bookId) -> pages, genres, description`. The user's edits count as approval of the
+   edited list.
+3. **Outline first; inspect only when needed.** For each approved operation, run
+   `api-anything capture <page> --example k=v --outline`. Each of the top candidates then carries
+   an `outline`:
+   - `json.at` is where the example value sits. `json.extract` and `json.fields` (with sample values)
+     become `--extract` and `--pick`.
+   - `embedded[].regex` is a ready `--embedded` regex for JSON inside the page, with that JSON's
+     `extract` and `fields`. On a detail page, prefer schema.org JSON-LD (`application/ld+json`): it
+     stays stable when the site redesigns.
+   - `list` is a ready `--html` recipe (`items`, `fields`, `sample`) for a repeated list that holds
+     the example.
+   - `labels` lists selectors with sample text on a detail page, for `--html '{"items":"body",...}'`.
+     A key starting with `all:` is a field that returns every match as a list (genres, tags).
+   - `varyingKeys` warns that the path runs through an id that changes with the input: don't extract
+     through it, and use another source.
+
+   Use `inspect` only when the outline doesn't answer your question.
+4. **Find where the data really comes from.**
+   - If `list.count` is lower than the number of results the page shows, or the samples come from
+     only the first item, the rest of the list is filled in by script. Look for the JSON request
+     instead.
+   - A site's own search box often calls a JSON autocomplete endpoint. Capture with
+     `--steps '[{"action":"fill","selector":"<search input>","value":"<example>"},{"action":"wait","ms":2000}]'`
+     and look for the request that `carries` the value.
+   - Ids chain between operations. If `getBook` needs a `bookId`, take the example ids from
+     `searchBooks` output. Don't guess them.
+5. **Teach and verify each operation** with the loop below. Call each one with an input you didn't
+   use as an example, and check that the data matches what the page shows for that input.
+6. **Report.** Give a table of `op | inputs | returns | checked with`, plus what isn't covered (other
+   pages of results, fields the site doesn't expose, anything that needs login).
+
+Keep exploration cheap. Capture each page type once, read outlines rather than full responses, and
+don't capture pages the user didn't ask for.
+
 ## Creating an operation: capture, add, call, verify
 
 1. **Capture.** Load the page that shows the data and see which requests it makes:
@@ -43,7 +93,8 @@ use. Run CLI-only commands yourself when you have shell access; otherwise give t
    api-anything capture "https://site.com/some/page?q=kittens" --example q=kittens
    ```
    The candidates are ranked, and `carries` lists the example values each request contains. Pick
-   the request whose URL or operationName matches the data you want. `kind` is the resource type:
+   the request whose URL or operationName matches the data you want. Add `--outline` to get a
+   summary of each top candidate's response (see above) instead of inspecting them one by one. `kind` is the resource type:
    `document` is the page itself. If the output has `blocked`, the site served a bot challenge:
    follow `next` (the user logs in and clears it) instead of picking a request.
    - `api-anything inspect <captureId> <id> [--path a.b]` prints a candidate's response, with no

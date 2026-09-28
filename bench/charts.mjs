@@ -13,7 +13,22 @@ const stats = (xs) => ({ n: xs.length, median: median(xs), min: Math.min(...xs),
 // An answer is correct when each date's quoted price matches the snapshot taken right after that
 // trial. Ties make the airline ambiguous, so only the price is graded. A batch without per-trial
 // snapshots is not graded: fares moved within minutes.
+// Goodreads: each book's line must give the rendered page's rating (2 decimals) and its ratings count
+// within 3% ("1.48 million" counts). Page count depends on the edition, so it is not graded.
+function countsIn(line) {
+  const scale = { million: 1e6, m: 1e6, thousand: 1e3, k: 1e3 };
+  return [...line.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(million|thousand|m|k)?\b/gi)].map((m) => Number(m[1].replace(/,/g, "")) * (scale[m[2]?.toLowerCase()] ?? 1)).filter((n) => n >= 1000);
+}
+function bookOk(answer, book) {
+  const key = book.title.split(/[:(]/)[0].trim().toLowerCase();
+  const line = answer.split("\n").find((l) => l.toLowerCase().includes(key));
+  if (!line) return false;
+  const rating = Number(line.match(/\b([1-5]\.\d{2})\b/)?.[1]);
+  return Math.abs(rating - book.rating) < 0.005 && countsIn(line).some((n) => Math.abs(n - book.ratingsCount) / book.ratingsCount <= 0.03);
+}
+
 function correct(task, answer, truth) {
+  if (task.startsWith("goodreads")) return truth.every((b) => bookOk(answer ?? "", b));
   const priceOk = (date, price) => truth.some((g) => g.date === date && g.price === price);
   if (task === "flights-1") return priceOk("2026-10-20", Number(answer.match(/\$(\d+)/)?.[1]));
   return [20, 21, 22, 23, 24].every((d) => {

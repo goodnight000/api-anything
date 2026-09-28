@@ -1,12 +1,12 @@
 // Run one task through a Claude Code agent twice: with only a browser (Playwright MCP) and with
 // only API Anything (its MCP server). Same model, same prompt, fresh state per trial.
-// Usage: node bench/run-agents.mjs [--tasks flights-1,flights-5] [--trials 5] [--arms browser,api] [--out bench/results]
+// Usage: node bench/run-agents.mjs [--tasks flights-1,flights-5] [--trials 5] [--arms browser,api] [--out bench/results] [--seed <spec.json>]
 // Prints one JSON line per trial; raw event logs go to <out>/raw (not committed).
 // Needs the `claude` CLI signed in, Google Chrome, and `npm run build` in this checkout.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 
@@ -15,25 +15,35 @@ export const TASKS = {
     "Reply with one line: airline, departure time, price in USD.",
   "flights-5": "On Google Flights, find the cheapest nonstop one-way flight from SFO to JFK for each departure date " +
     "from 2026-10-20 through 2026-10-24. Reply with one line per date: date, airline, departure time, price in USD.",
+  "goodreads-1": "On Goodreads, what are the average rating, number of ratings and page count of Circe by Madeline Miller? " +
+    "Reply with one line: title, average rating, number of ratings, pages.",
+  "goodreads-5": "On Goodreads, find the average rating, number of ratings and page count of each of these books: " +
+    "Circe by Madeline Miller; The Name of the Wind by Patrick Rothfuss; Educated by Tara Westover; Pachinko by Min Jin Lee; " +
+    "The Martian by Andy Weir. Reply with one line per book: title, average rating, number of ratings, pages.",
 };
+export const BOOKS = { "goodreads-1": ["Circe Madeline Miller"], "goodreads-5": ["Circe Madeline Miller", "The Name of the Wind Patrick Rothfuss", "Educated Tara Westover", "Pachinko Min Jin Lee", "The Martian Andy Weir"] };
+// Goodreads serves an empty page to headless Chrome's default user agent; the browser agent gets a normal one.
+const CHROME_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 export const MODEL = "claude-opus-5-5";
 const PLAYWRIGHT_MCP = "@playwright/mcp@0.0.82";
 const repo = resolve(import.meta.dirname, "..");
 
-function mcpConfig(arm, dir, video) {
+function mcpConfig(task, arm, dir, video, seed) {
   if (arm === "api") {
+    // a learned spec the agent should have (bundled specs are always there)
+    if (seed) { mkdirSync(join(dir, "home/sites"), { recursive: true }); copyFileSync(seed, join(dir, "home/sites", basename(seed))); }
     return { "api-anything": { command: process.execPath, args: [join(repo, "dist/cli.js"), "mcp"], env: { API_ANYTHING_HOME: join(dir, "home") } } };
   }
-  const browser = { browserName: "chromium", launchOptions: { channel: "chrome", headless: true }, contextOptions: { viewport: { width: 1280, height: 800 } } };
+  const browser = { browserName: "chromium", launchOptions: { channel: "chrome", headless: true }, contextOptions: { viewport: { width: 1280, height: 800 }, ...(task.startsWith("goodreads") ? { userAgent: CHROME_UA } : {}) } };
   if (video) browser.contextOptions.recordVideo = { dir: video, size: { width: 1280, height: 800 } };
   writeFileSync(join(dir, "playwright.json"), JSON.stringify({ browser }));
   return { browser: { command: "npx", args: ["-y", PLAYWRIGHT_MCP, "--isolated", "--config", join(dir, "playwright.json")] } };
 }
 
 // Runs one trial. Every stream-json event is written to <log> with `t`, ms since spawn.
-export function runTrial(task, arm, { log, video, onEvent } = {}) {
+export function runTrial(task, arm, { log, video, onEvent, seed } = {}) {
   const dir = mkdtempSync(join(tmpdir(), `aa-bench-${arm}-`));
-  const servers = mcpConfig(arm, dir, video);
+  const servers = mcpConfig(task, arm, dir, video, seed);
   writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: servers }));
   const args = [
     "-p", TASKS[task], "--model", MODEL, "--output-format", "stream-json", "--verbose",
@@ -78,14 +88,17 @@ export function toolCalls(events) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { snapshot, DATES } = await import("./ground-truth.mjs");
-  const { values: v } = parseArgs({ options: { tasks: { type: "string", default: Object.keys(TASKS).join(",") }, trials: { type: "string", default: "5" }, arms: { type: "string", default: "browser,api" }, out: { type: "string", default: join(repo, "bench/results") } } });
+  const { withPage, renderedTopResult } = await import("./explore/truth.mjs");
+  const { values: v } = parseArgs({ options: { tasks: { type: "string", default: "flights-1,flights-5" }, trials: { type: "string", default: "5" }, arms: { type: "string", default: "browser,api" }, out: { type: "string", default: join(repo, "bench/results") }, seed: { type: "string" } } });
+  // what a person would see right after the trial: live fares, or each book's rendered page
+  const truthFor = (task) => (task.startsWith("goodreads") ? withPage(async (p) => { const out = []; for (const q of BOOKS[task]) out.push(await renderedTopResult(p, q)); return out; }) : snapshot(task === "flights-1" ? DATES.slice(0, 1) : DATES));
   const raw = join(v.out, "raw");
   mkdirSync(raw, { recursive: true });
   for (let i = 1; i <= Number(v.trials); i++) for (const task of v.tasks.split(",")) {
     for (const arm of v.arms.split(",")) {
       const log = join(raw, `${task}-${arm}-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
-      const r = await runTrial(task, arm, { log });
-      const truth = await snapshot(task === "flights-1" ? DATES.slice(0, 1) : DATES);
+      const r = await runTrial(task, arm, { log, seed: v.seed && resolve(v.seed) });
+      const truth = await truthFor(task);
       const u = r.result?.usage ?? {};
       console.log(JSON.stringify({ task, arm, trial: i, at: new Date().toISOString(), code: r.code, wallMs: r.wallMs, durationMs: r.result?.duration_ms, costUsd: r.result?.total_cost_usd, turns: r.result?.num_turns, inTokens: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0), outTokens: u.output_tokens, answer: r.result?.result, truth, log: relative(repo, log) }));
     }

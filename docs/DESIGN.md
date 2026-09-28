@@ -290,7 +290,7 @@ boundary, an item too big on its own is cut rather than dropped, strings are cut
 objects stay objects: members above a common size cap are shortened, then trailing members are
 dropped. It runs in about linear time on 10k-member objects. For HTML-only pages, `response.format:
 "html"` with a selector recipe `{ items: "<css>", fields: { name: "<css>[@attr]" } }` parsed
-in Node. For data embedded in the HTML document (for example Google's `AF_initDataCallback`), `format:
+in Node; a field written `all:<css>[@attr]` returns every match as a list (a book's genres). For data embedded in the HTML document (for example Google's `AF_initDataCallback`), `format:
 "embedded"` with a regex whose capture group is JSON, followed by `extract`. Seroval/JS-literal
 payloads are out of scope for v1.
 
@@ -369,6 +369,13 @@ independent alternative.
     captures, so `add --from <id>` re-learns (a fixed `--extract`) without Chrome. Captures hold
     full responses and the run's cookie values (one page can be tens of MB), so each new one prunes
     the directory to the newest 20, none older than 24 h.
+  - `capture --outline` / `inspect --outline` (the explorer's scout, `outline.ts`): for the top
+    candidates, a compact summary instead of the body — where the example values sit, a suggested
+    extract and pick fields with samples, JSON the page embeds (JSON-LD, `__NEXT_DATA__`,
+    `application/json` scripts, `window.X =` state) with a ready `--embedded` regex, a repeated
+    HTML list holding the example as a ready `--html` recipe, and labelled texts on a detail page.
+    Deterministic and site-agnostic; the agent reads it instead of inspecting bodies. Paths through
+    id-like keys (Apollo's `Book:kca://...`) are flagged, since they don't generalize.
   - `verify [site]` (health-checks every read op with its example, healing as needed)
   - `sites`, `ops <site>` (params with their format, and the site's notes: `<site>.md` beside its
     spec, the user's copy first), `heal <site> <op>`, `export <site>`, `mcp`

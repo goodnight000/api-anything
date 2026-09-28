@@ -148,3 +148,11 @@ test("a logged-out page that only links a sign-in page (Google's ServiceLogin bu
     assert.equal(cls(o, html(200, "<html><p>Please sign in to continue</p></html>")), "auth");
   }
 });
+
+test("an extract ending in [*] returns the items: the learned shape is compared per item", () => {
+  const items = op({ response: { format: "json", extract: "[*]", shape: { "[]": "object", "[].id": "string", "[].title": "string", "[].rating": "string", "[].count": "number" } } });
+  assert.equal(cls(items, json(200, [{ id: "1", title: "Dune", rating: "4.29", count: 10 }, { id: "2", title: "Emma", rating: "4.0", count: 3 }])), "ok");
+  assert.equal(cls(items, json(200, [{ other: 1 }, { other: 2 }])), "drift");
+  const nested = op({ response: { format: "json", extract: "results[*]", shape: { results: "array", "results[]": "object", "results[].a": "string", "results[].b": "number", "results[].c": "boolean" } } });
+  assert.equal(cls(nested, json(200, { results: [{ a: "x", b: 1, c: true }] })), "ok");
+});

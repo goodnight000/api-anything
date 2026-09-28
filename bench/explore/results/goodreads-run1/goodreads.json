@@ -1,0 +1,221 @@
+{
+  "name": "goodreads",
+  "baseUrl": "https://www.goodreads.com",
+  "operations": [
+    {
+      "name": "getBook",
+      "request": {
+        "method": "GET",
+        "url": "https://www.goodreads.com/book/show/%7BbookId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "bookId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.goodreads.com/book/show/{bookId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.goodreads.com",
+        "path": "/book/show/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "author",
+          "avgRating=avgRating~(\\d\\S*\\d)",
+          "ratingsCount=ratingsCount~^(\\S+)",
+          "pages=pages~^(\\d+)",
+          "firstPublished=firstPublished~ished\\s(.+)",
+          "genre1",
+          "genre2",
+          "genre3",
+          "genre4",
+          "genre5",
+          "genre6",
+          "genre7",
+          "description"
+        ],
+        "html": {
+          "items": "body",
+          "fields": {
+            "title": "[data-testid=\"bookTitle\"]",
+            "author": "[data-testid=\"name\"]",
+            "avgRating": "[aria-label^=\"Average rating\"]@aria-label",
+            "ratingsCount": "[data-testid=\"ratingsCount\"]",
+            "pages": "[data-testid=\"pagesFormat\"]",
+            "firstPublished": "[data-testid=\"publicationInfo\"]",
+            "genre1": ".BookPageMetadataSection__genreButton:nth-of-type(2)",
+            "genre2": ".BookPageMetadataSection__genreButton:nth-of-type(3)",
+            "genre3": ".BookPageMetadataSection__genreButton:nth-of-type(4)",
+            "genre4": ".BookPageMetadataSection__genreButton:nth-of-type(5)",
+            "genre5": ".BookPageMetadataSection__genreButton:nth-of-type(6)",
+            "genre6": ".BookPageMetadataSection__genreButton:nth-of-type(7)",
+            "genre7": ".BookPageMetadataSection__genreButton:nth-of-type(8)",
+            "description": "[data-testid=\"description\"] .Formatted"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "bookId",
+          "type": "string",
+          "required": true,
+          "example": "44767458"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-28T06:32:01.646Z"
+    },
+    {
+      "name": "getBookReviews",
+      "request": {
+        "method": "GET",
+        "url": "https://www.goodreads.com/book/show/%7BbookId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "bookId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.goodreads.com/book/show/{bookId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.goodreads.com",
+        "path": "/book/show/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "article.ReviewCard",
+          "fields": {
+            "reviewer": ".ReviewerProfile__name",
+            "status": ".ShelfStatus",
+            "date": ".ReviewCard__row",
+            "text": ".ReviewText__content .Formatted"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "bookId",
+          "type": "string",
+          "required": true,
+          "example": "44767458"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-28T06:32:07.629Z"
+    },
+    {
+      "name": "searchBooks",
+      "request": {
+        "method": "GET",
+        "url": "https://www.goodreads.com/book/auto_complete?format=json&q=%7Bq%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.goodreads.com/book/auto_complete?format=json&q={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.goodreads.com",
+        "path": "/book/auto_complete"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "[0]",
+        "pick": [
+          "bookId",
+          "title",
+          "author=author.name",
+          "authorId=author.id",
+          "avgRating",
+          "ratingsCount"
+        ]
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "dune"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-28T06:32:57.324Z"
+    }
+  ]
+}
