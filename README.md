@@ -9,8 +9,8 @@ over MCP, the CLI or TypeScript, and gets JSON back over plain HTTP.
 [![Two agents race on the same Google Flights task: one drives Chrome, one calls API Anything](docs/media/agent-race.gif)](docs/media/agent-race.mp4)
 
 <sub>Same agent (Claude Opus 5.5), same prompt, started together. Left: it drives headless Chrome
-through Playwright MCP. Right: it calls API Anything's Google Flights operation. Real time, no cuts,
-recorded 2026-09-28. [MP4](docs/media/agent-race.mp4) · [how it was recorded](bench/README.md#the-recorded-race)</sub>
+through Playwright MCP. Right: it calls API Anything's Google Flights operation. Shown at 3× speed with no cuts;
+the timers show real elapsed time. Recorded 2026-09-28. [MP4](docs/media/agent-race.mp4) · [how it was recorded](bench/README.md#the-recorded-race)</sub>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/agent-benchmark-dark.svg">

@@ -67,7 +67,7 @@ after the batch, and the Oct 22 fare changed from $309 to $315 during it. Raw su
 ## The recorded race
 
 [`docs/media/agent-race.mp4`](../docs/media/agent-race.mp4) shows both agents started at the
-same moment on `flights-5`. The browser footage is Playwright's own recording of that agent's
+same moment on `flights-5`, played at 3× speed. Its timers show real elapsed time. The browser footage is Playwright's own recording of that agent's
 page, and everything else is drawn from the two runs' event logs
 ([`video/timeline.json`](video/timeline.json)). An earlier attempt failed before the browser
 opened, because Playwright's ffmpeg wasn't installed. After that, three races were recorded,
