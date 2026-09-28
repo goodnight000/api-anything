@@ -148,7 +148,7 @@
     {
       "t": 154410,
       "ms": 12,
-      "command": "grep -rn \"under half of the learned key paths\" /Users/charleszheng/Developer/api-anything-oss/src | head; grep -rn \"function keyPaths\\|function extractPath\\|function getPath\" /Users/charleszheng/Developer/api-anything-oss/src | head",
+      "command": "grep -rn \"under half of the learned key paths\" <repo>/src | head; grep -rn \"function keyPaths\\|function extractPath\\|function getPath\" <repo>/src | head",
       "resultChars": 727,
       "isError": true
     },
@@ -183,7 +183,7 @@
     {
       "t": 195676,
       "ms": 13,
-      "command": "cat /Users/charleszheng/Developer/api-anything-oss/bench/explore/state/goodreads/home/sites/goodreads.json",
+      "command": "cat <state>/home/sites/goodreads.json",
       "resultChars": 727,
       "isError": true
     },

@@ -51,7 +51,9 @@ const code = await new Promise((done) => {
 });
 
 const result = events.find((e) => e.type === "result") ?? {};
-const commands = toolCalls(events).map((c) => ({ t: c.t, ms: c.done - c.t, command: String(c.input?.command ?? "").slice(0, 400), resultChars: c.resultChars, isError: c.isError }));
+// paths on this machine are replaced so the committed log doesn't carry them
+const local = (s) => s.replaceAll(state, "<state>").replaceAll(repo, "<repo>").replaceAll(process.env.HOME ?? "~", "~");
+const commands = toolCalls(events).map((c) => ({ t: c.t, ms: c.done - c.t, command: local(String(c.input?.command ?? "").slice(0, 400)), resultChars: c.resultChars, isError: c.isError }));
 const count = (re) => commands.filter((c) => re.test(c.command)).length;
 const summary = {
   name: v.name, model: MODEL, at: new Date(start).toISOString(), exit: code,
@@ -61,7 +63,7 @@ const summary = {
   commandLog: commands,
 };
 writeFileSync(join(out, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
-writeFileSync(join(out, "report.md"), `${result.result ?? "(no final message)"}\n`);
+writeFileSync(join(out, "report.md"), `${local(result.result ?? "(no final message)")}\n`);
 if (v.site) {
   // the shareable spec: export strips samples and refuses one holding a live credential
   const exp = spawn("api-anything", ["export", v.site, "--keep-examples", "--out", join(out, `${v.site}.json`)], { env, stdio: "inherit" });

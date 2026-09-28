@@ -21,7 +21,10 @@ export const TASKS = {
     "Circe by Madeline Miller; The Name of the Wind by Patrick Rothfuss; Educated by Tara Westover; Pachinko by Min Jin Lee; " +
     "The Martian by Andy Weir. Reply with one line per book: title, average rating, number of ratings, pages.",
 };
-export const BOOKS = { "goodreads-1": ["Circe Madeline Miller"], "goodreads-5": ["Circe Madeline Miller", "The Name of the Wind Patrick Rothfuss", "Educated Tara Westover", "Pachinko Min Jin Lee", "The Martian Andy Weir"] };
+// Goodreads book ids of the asked-for books, pinned from the rendered search page (title search, author checked):
+// a "title author" search ranks study guides first, so the grader reads these books' own pages.
+const IDS = { circe: "35959740", wind: "186074", educated: "35133922", pachinko: "34051011", martian: "18007564" };
+export const BOOKS = { "goodreads-1": [IDS.circe], "goodreads-5": [IDS.circe, IDS.wind, IDS.educated, IDS.pachinko, IDS.martian] };
 // Goodreads serves an empty page to headless Chrome's default user agent; the browser agent gets a normal one.
 const CHROME_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 export const MODEL = "claude-opus-5-5";
@@ -88,10 +91,10 @@ export function toolCalls(events) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { snapshot, DATES } = await import("./ground-truth.mjs");
-  const { withPage, renderedTopResult } = await import("./explore/truth.mjs");
+  const { withPage, renderedBook } = await import("./explore/truth.mjs");
   const { values: v } = parseArgs({ options: { tasks: { type: "string", default: "flights-1,flights-5" }, trials: { type: "string", default: "5" }, arms: { type: "string", default: "browser,api" }, out: { type: "string", default: join(repo, "bench/results") }, seed: { type: "string" } } });
   // what a person would see right after the trial: live fares, or each book's rendered page
-  const truthFor = (task) => (task.startsWith("goodreads") ? withPage(async (p) => { const out = []; for (const q of BOOKS[task]) out.push(await renderedTopResult(p, q)); return out; }) : snapshot(task === "flights-1" ? DATES.slice(0, 1) : DATES));
+  const truthFor = (task) => (task.startsWith("goodreads") ? withPage(async (p) => { const out = []; for (const id of BOOKS[task]) out.push(await renderedBook(p, id)); return out; }) : snapshot(task === "flights-1" ? DATES.slice(0, 1) : DATES));
   const raw = join(v.out, "raw");
   mkdirSync(raw, { recursive: true });
   for (let i = 1; i <= Number(v.trials); i++) for (const task of v.tasks.split(",")) {

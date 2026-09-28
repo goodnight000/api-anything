@@ -205,8 +205,12 @@ export async function runOpTrigger(site: string, op: Operation, args: Args, o: {
   // A write's tier-3 run is the UI sending it for real; learning or healing one intercepts it.
   const intercept = o.intercept ? writeGuard(op.match, { url: t.url, args }) : op.readOnly ? readGuard(op.match) : undefined;
   const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit });
-  const matched = pickHit(op, capture.exchanges.filter(isHit), args);
-  mergeCapture(site, capture.cookies, matched ? sessionValuesOf(op, matched) : {});
+  const hits = capture.exchanges.filter(isHit);
+  const matched = pickHit(op, hits, args);
+  // Session values (a site-wide API key, a guest token) don't depend on the args: refresh them from
+  // the op's own request even when the page asked for other args, whose answer is never returned.
+  const source = matched ?? hits.find((e) => e.response && e.response.status < 400);
+  mergeCapture(site, capture.cookies, source ? sessionValuesOf(op, source) : {});
   const wall = matched?.response ? undefined : loginWall(capture, t.url);
   return { capture, matched, ...(wall ? { loginWall: wall } : {}) };
 }

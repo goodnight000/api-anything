@@ -76,12 +76,53 @@ the input becomes a parameter, and the rest is stored as a template. The agent (
 request and the fields. API Anything builds the template without an LLM.
 [Recorded demos](docs/demos/README.md).
 
+## Map a site from an intent
+
+Tell an agent what you need from a site. The [skill](skills/api-anything/SKILL.md) makes it do
+this, in order:
+
+1. Ask about whatever the request leaves unclear.
+2. Propose operations and wait for your approval.
+3. Scout each page with `capture --outline`. This is a summary of what each request returns, so
+   the agent doesn't have to read full responses.
+4. Build each operation and check it with an input that wasn't an example.
+
+Goodreads has had no public API since 2020. One run took 6.3 minutes and $1.19. It produced
+search, book details, an author's books and reviews:
+
+```sh
+api-anything call goodreads searchBooks q=piranesi
+api-anything call goodreads getBook bookId=50202953
+```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/goodreads-benchmark-dark.svg">
+  <img alt="Goodreads, median of 5 runs. 1 book: browser agent 16.8 s and $0.156, API Anything 14.4 s and $0.048. 5 books: browser 182.5 s and $0.122, API Anything 30.5 s and $0.107." src="docs/media/goodreads-benchmark-light.svg">
+</picture>
+
+- **Tested on unseen books.** The test used 30 books that nobody used while building the
+  operations. For the 29 books the search found, every checked field matched the page Chrome
+  rendered: title, rating, ratings count and pages. All 146 calls went over plain HTTP.
+- **Agent comparison.** An agent using the operations answered 5 books in 30.5 s; the browser
+  agent took 182.5 s. For one book, it cost a third as much.
+- **No agent needed.** A plain script ([`examples/reading-list.mjs`](examples/reading-list.mjs))
+  builds the same five-book table in 16 s with no model.
+
+[How it was explored, tested and compared](bench/explore/README.md).
+
 ## What's included
 
-17 read operations across 8 sites: `google-flights` (search, top, price calendar), `hacker-news`,
-`x` and `instagram` profiles, `youtube`, `airbnb` and `amazon` search, and `linkedin` (profiles,
-companies and search, with your own login). They cover selected features, not whole sites.
-`api-anything ops <site>` lists parameters and caveats.
+22 read operations across 9 sites:
+
+- `google-flights`: search, top flights, price calendar
+- `hacker-news`
+- `x` and `instagram` profiles
+- search on `youtube`, `airbnb` and `amazon`
+- `linkedin`: profiles, companies and search, with your own login
+- `goodreads`: search, books, author lists and reviews, built by the explorer above
+
+They cover selected features, not whole sites. `api-anything ops <site>` lists parameters and
+caveats.
 
 ## How it works
 

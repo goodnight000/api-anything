@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 
 const repo = resolve(import.meta.dirname, "..");
 const res = join(repo, "bench/results", process.argv[2] ?? ""), media = join(repo, "docs/media");
-const draw = !process.argv[2]; // `node bench/charts.mjs v0.1.0` only summarizes an older batch
+const draw = !process.argv[2] || process.argv[2] === "goodreads"; // `node bench/charts.mjs v0.1.0` only summarizes an older batch
 const lines = (f) => (existsSync(f) ? readFileSync(f, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const stats = (xs) => ({ n: xs.length, median: median(xs), min: Math.min(...xs), max: Math.max(...xs) });
@@ -93,7 +93,12 @@ function svg(w, h, body, c, desc) {
 }
 
 mkdirSync(media, { recursive: true });
-const A = summary.agents, taskLabel = { "flights-1": "1 date", "flights-5": "5 dates" };
+const A = summary.agents, taskLabel = { "flights-1": "1 date", "flights-5": "5 dates", "goodreads-1": "1 book", "goodreads-5": "5 books" };
+// one chart per results folder: flights in bench/results, goodreads in bench/results/goodreads
+const CHART = {
+  "": { file: "agent-benchmark", task: "Task: cheapest nonstop SFO to JFK on Google Flights, for 1 date and for 5 dates.", check: "Every answer was checked against live fares." },
+  goodreads: { file: "goodreads-benchmark", task: "Task: rating, ratings count and pages of 1 book and of 5 books on Goodreads (operations an agent explored).", check: "Every answer was checked against the rendered book page." },
+}[process.argv[2] ?? ""];
 const tasks = Object.keys(taskLabel).filter((t) => A[`${t}/api`]?.seconds.n);
 for (const [mode, c] of draw ? Object.entries(THEMES) : []) {
   if (tasks.length) {
@@ -103,11 +108,11 @@ for (const [mode, c] of draw ? Object.entries(THEMES) : []) {
     const cost = barPanel(c, 488, 56, 440, { title: "Cost per task", rows: rows("costUsd"), fmt: (v) => `$${v.toFixed(3)}`, max: maxOf("costUsd") });
     const n = A[`${tasks[0]}/api`].seconds.n, h = Math.max(time.bottom, cost.bottom) + 46;
     const body = legend(c, 24, 30) + time.svg + cost.svg +
-      `<text x="24" y="${h - 32}" fill="${c.muted}" font-size="12">Bar = median of ${n} runs, line = range. Task: cheapest nonstop SFO to JFK on Google Flights, for 1 date and for 5 dates.</text>` +
-      `<text x="24" y="${h - 14}" fill="${c.muted}" font-size="12">Claude Opus 5.5 in Claude Code, same prompt. Cost as reported by Claude Code at API rates. Every answer was checked against live fares.</text>`;
-    writeFileSync(join(media, `agent-benchmark-${mode}.svg`), svg(952, h, body, c, "Agent time and cost per task, browser versus API Anything"));
+      `<text x="24" y="${h - 32}" fill="${c.muted}" font-size="12">Bar = median of ${n} runs, line = range. ${esc(CHART.task)}</text>` +
+      `<text x="24" y="${h - 14}" fill="${c.muted}" font-size="12">Claude Opus 5.5 in Claude Code, same prompt. Cost as reported by Claude Code at API rates. ${esc(CHART.check)}</text>`;
+    writeFileSync(join(media, `${CHART.file}-${mode}.svg`), svg(952, h, body, c, "Agent time and cost per task, browser versus API Anything"));
   }
-  if (summary.transport.api) {
+  if (summary.transport.api && !process.argv[2]) {
     const T = summary.transport;
     const p = barPanel(c, 24, 56, 904, { title: "Without an agent: time until a script has the flight list", rows: [{ label: "1 search", browser: T.browser.seconds, api: T.api.seconds }], fmt: (v) => `${v.toFixed(2)} s`, max: T.browser.seconds.max });
     const h = p.bottom + 46;

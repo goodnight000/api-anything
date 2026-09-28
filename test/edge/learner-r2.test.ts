@@ -352,3 +352,38 @@ describe("a token the page keeps in localStorage", { skip: !chromeAvailable() &&
     assert.equal(loadSession("store").values["get/app-auth/jwt"], JWT);
   });
 });
+
+describe("a site-wide key header, on a trigger page that always asks for its own record", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
+  let server: Server;
+  const KEY = "da2-k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc";
+  after(async () => {
+    await closeBrowser();
+    server?.closeAllConnections();
+    server?.close();
+  });
+  test("a fresh home with no stored key refreshes it from the page's own request, then answers the call's args directly", async () => {
+    server = createServer((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      if (u.pathname === "/book") {
+        res.writeHead(200, { "content-type": "text/html" });
+        return res.end(`<script>window.cfg={key:${JSON.stringify(KEY)}};fetch("/api/reviews?work=w-alpha-1",{headers:{"x-api-key":window.cfg.key}})</script>`);
+      }
+      if (u.pathname === "/api/reviews") {
+        const ok = req.headers["x-api-key"] === KEY;
+        res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
+        return res.end(JSON.stringify(ok ? { reviews: [{ work: u.searchParams.get("work"), text: "good" }] } : { errors: [{ message: "Valid authorization header not provided." }] }));
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const r = await addOperation({ site: "keyed", op: "reviews", trigger: { url: `${base}/book` }, examples: [{ work: "w-alpha-1" }], response: { extract: "reviews" } });
+    assert.ok(r.operation.slots.some((s) => s.ref?.startsWith("session:")), JSON.stringify(r.operation.slots));
+    assert.ok(!JSON.stringify(loadSite("keyed")!.site).includes(KEY));
+    saveSession("keyed", { ...loadSession("keyed"), values: {} }); // as on a machine that only has the exported spec
+    const got = await call("keyed", "reviews", { work: "w-beta-2" }, { minIntervalMs: 0 });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.deepEqual(got.data, [{ work: "w-beta-2", text: "good" }], "the answer is for the call's args, never the page's own");
+    assert.equal(got.tier, 1);
+  });
+});

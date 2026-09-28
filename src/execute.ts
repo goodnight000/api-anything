@@ -367,6 +367,8 @@ export async function call(siteName: string, opName: string, args: Record<string
       if (op.readOnly && ctx.maxTier >= 3 && chromeAvailable() && op.slots.some((s) => s.ref?.startsWith("session:"))) {
         const b = await attempt(ctx, op, 3);
         if (b.class === "ok") return done(success(b, { reason: `tier 1 said ${a.class} (${a.reason}); refreshed the session through the site's own request` }));
+        // The run answered other args (a trigger fixed to one page), but it refreshed the session values: retry once.
+        continue;
       }
     }
     if (a.class === "drift") return done(await onDrift(ctx, site, op, a));

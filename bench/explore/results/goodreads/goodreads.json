@@ -1,0 +1,329 @@
+{
+  "name": "goodreads",
+  "baseUrl": "https://www.goodreads.com",
+  "operations": [
+    {
+      "name": "searchBooks",
+      "request": {
+        "method": "GET",
+        "url": "https://www.goodreads.com/book/auto_complete?format=json&q=%7Bq%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.goodreads.com/book/auto_complete?format=json&q={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.goodreads.com",
+        "path": "/book/auto_complete"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "bookId",
+          "title",
+          "author=author.name",
+          "authorId=author.id",
+          "avgRating",
+          "ratingsCount"
+        ]
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "hyperion"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-28T06:41:32.256Z"
+    },
+    {
+      "name": "getBook",
+      "request": {
+        "method": "GET",
+        "url": "https://www.goodreads.com/book/show/%7BbookId%7D",
+        "headers": {
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "bookId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.goodreads.com/book/show/{bookId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.goodreads.com",
+        "path": "/book/show/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "title": "[data-testid=\"bookTitle\"]",
+            "author": "[data-testid=\"name\"]",
+            "authorUrl": ".ContributorLink@href",
+            "avgRating": ".RatingStatistics__rating",
+            "ratingsCount": "[data-testid=\"ratingsCount\"]",
+            "pages": "[data-testid=\"pagesFormat\"]",
+            "firstPublished": "[data-testid=\"publicationInfo\"]",
+            "genres": "all:[data-testid=\"genresList\"] a span.Button__labelItem",
+            "description": "[data-testid=\"description\"] span.Formatted"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "bookId",
+          "type": "string",
+          "required": true,
+          "example": "77566"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-28T06:42:12.101Z"
+    },
+    {
+      "name": "getReviews",
+      "request": {
+        "method": "POST",
+        "url": "https://kxbwmqov6jgg3daaamb744ycu4.appsync-api.us-east-1.amazonaws.com/graphql",
+        "headers": {
+          "accept": "application/graphql-response+json,application/json;q=0.9",
+          "accept-language": "en-US,en;q=0.9",
+          "content-type": "application/json",
+          "origin": "https://www.goodreads.com",
+          "priority": "u=1, i",
+          "referer": "https://www.goodreads.com/",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "cross-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
+          "x-api-key": ""
+        },
+        "body": "{\"operationName\":\"getReviews\",\"variables\":{\"filters\":{\"resourceType\":\"WORK\",\"resourceId\":\"{workId}\"},\"pagination\":{\"limit\":30}},\"extensions\":{\"clientLibrary\":{\"name\":\"@apollo/client\",\"version\":\"4.1.6\"}},\"query\":\"query getReviews($filters: BookReviewsFilterInput!, $pagination: PaginationInput) {\\n  getReviews(filters: $filters, pagination: $pagination) {\\n    ...BookReviewsFragment\\n    __typename\\n  }\\n}\\n\\nfragment BookReviewsFragment on BookReviewsConnection {\\n  totalCount\\n  edges {\\n    node {\\n      ...ReviewCardFragment\\n      __typename\\n    }\\n    __typename\\n  }\\n  pageInfo {\\n    prevPageToken\\n    nextPageToken\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment ReviewCardFragment on Review {\\n  __typename\\n  id\\n  creator {\\n    ...ReviewerProfileFragment\\n    __typename\\n  }\\n  recommendFor\\n  updatedAt\\n  createdAt\\n  spoilerStatus\\n  lastRevisionAt\\n  text\\n  rating\\n  preciseRating\\n  preReleaseBookSource\\n  shelving {\\n    creator {\\n      id\\n      __typename\\n    }\\n    book {\\n      id\\n      __typename\\n    }\\n    shelf {\\n      name\\n      displayName\\n      editable\\n      default\\n      actionType\\n      sortOrder\\n      webUrl\\n      __typename\\n    }\\n    taggings {\\n      tag {\\n        name\\n        webUrl\\n        __typename\\n      }\\n      __typename\\n    }\\n    webUrl\\n    __typename\\n  }\\n  likeCount\\n  viewerHasLiked\\n  commentCount\\n}\\n\\nfragment ReviewerProfileFragment on User {\\n  id: legacyId\\n  imageUrlSquare\\n  isAuthor\\n  ...SocialUserFragment\\n  textReviewsCount\\n  viewerRelationshipStatus {\\n    isBlockedByViewer\\n    __typename\\n  }\\n  name\\n  webUrl\\n  contributor {\\n    id\\n    works {\\n      totalCount\\n      __typename\\n    }\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment SocialUserFragment on User {\\n  viewerRelationshipStatus {\\n    isFollowing\\n    isFriend\\n    __typename\\n  }\\n  followersCount\\n  __typename\\n}\"}"
+      },
+      "slots": [
+        {
+          "param": "workId",
+          "at": [
+            "body",
+            "json:/variables/filters/resourceId"
+          ]
+        },
+        {
+          "ref": "session:getReviews/x-api-key",
+          "at": [
+            "header:x-api-key"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.goodreads.com/book/show/77566"
+      },
+      "match": {
+        "method": "POST",
+        "host": "kxbwmqov6jgg3daaamb744ycu4.appsync-api.us-east-1.amazonaws.com",
+        "path": "/graphql",
+        "operationName": "getReviews"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=UTF-8",
+        "extract": "data.getReviews.edges",
+        "pick": [
+          "reviewer=node.creator.name",
+          "rating=node.rating",
+          "text=node.text"
+        ]
+      },
+      "params": [
+        {
+          "name": "workId",
+          "type": "string",
+          "required": true,
+          "example": "kca://work/amzn1.gr.work.v1.xIT2_7WWJ119Me44O0dVMg"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-28T06:43:53.650Z"
+    },
+    {
+      "name": "getWorkId",
+      "request": {
+        "method": "GET",
+        "url": "https://www.goodreads.com/book/show/%7BbookId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "bookId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.goodreads.com/book/show/{bookId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.goodreads.com",
+        "path": "/book/show/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "workId=id",
+          "legacyWorkId=legacyId"
+        ],
+        "embedded": {
+          "regex": "\"Work:kca[^\"]*\":(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "bookId",
+          "type": "string",
+          "required": true,
+          "example": "77566"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-28T06:44:01.823Z"
+    },
+    {
+      "name": "authorBooks",
+      "request": {
+        "method": "GET",
+        "url": "https://www.goodreads.com/author/list/%7BauthorId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"153\", \"Not_A Brand\";v=\"8\", \"Chromium\";v=\"153\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "authorId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.goodreads.com/author/list/{authorId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.goodreads.com",
+        "path": "/author/list/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "bookId=url~/show/(\\d+)",
+          "title",
+          "avgRating=minirating~([\\d.]+) avg",
+          "ratingsCount=minirating~([\\d,]+) rating"
+        ],
+        "html": {
+          "items": "table.tableList tr",
+          "fields": {
+            "url": "a.bookTitle@href",
+            "title": "a.bookTitle span",
+            "minirating": "span.minirating"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "authorId",
+          "type": "string",
+          "required": true,
+          "example": "2687"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-09-28T06:44:43.588Z"
+    }
+  ]
+}

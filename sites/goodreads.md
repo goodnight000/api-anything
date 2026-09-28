@@ -1,0 +1,38 @@
+# goodreads
+
+Logged out, no account needed. Goodreads closed its public API in 2020. An agent with the
+api-anything skill built these operations on 2026-09-28 from a stated intent, in about 6 minutes
+([bench/explore](../bench/explore/README.md)). Across 30 books it had never seen, every call
+answered over plain HTTP. In each of the 29 books where the chain reached the book, the details
+matched the page Chrome rendered.
+
+| op | args | returns |
+|---|---|---|
+| `searchBooks` | `q` (title or author words) | the search box's top 5: `bookId`, `title`, `author`, `authorId`, `avgRating`, `ratingsCount` |
+| `getBook` | `bookId` | `title`, `author`, `authorUrl`, `avgRating`, `ratingsCount`, `pages`, `firstPublished`, `genres` (list), `description` |
+| `authorBooks` | `authorId` | up to 30 books: `bookId`, `title`, `avgRating`, `ratingsCount` |
+| `getWorkId` | `bookId` | `workId` (`kca://work/...`), `legacyWorkId` |
+| `getReviews` | `workId` | top reviews: `reviewer`, `rating` (1-5), `text` |
+
+Chains:
+- Details: `searchBooks q=circe` returns `bookId`, then call `getBook bookId=...`.
+- Author: take `authorId` from `searchBooks`, then call `authorBooks authorId=...`.
+- Reviews: call `getWorkId bookId=...`, then `getReviews workId=...`. Reviews are keyed by the
+  work, not the book.
+
+## Caveats
+
+- **Search by title, then choose.** For a "title author" query, Goodreads's own search ranks
+  summaries and study guides first. The real book may not be in the top 5. Search by the title,
+  then pick the result by the right author with the most ratings.
+- Numbers keep the page's format. `avgRating` is a string (`"4.22"`). In `getBook`,
+  `ratingsCount` is `"1,481,183 ratings"` and `pages` is `"393 pages, Hardcover"`. `authorBooks`
+  gives `"1,481,180"`. `searchBooks` gives a number.
+- `getReviews` returns review text as the site's HTML. Long reviews fill the output cap after a
+  few reviews, and the result is marked `truncated`.
+- `getReviews` sends a site-wide API key that the page itself uses. The key isn't in the spec. On a
+  new install, the first call opens the page in Chrome once (about 6 s) to pick up the key. Later
+  calls are plain HTTP. Its trigger is fixed to one book's page, so if the
+  request itself changes, repair can't re-learn it for other works. The call fails rather than
+  return another book's reviews.
+- Page 1 only: 5 search results, 30 of an author's books, the first reviews.

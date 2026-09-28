@@ -1,0 +1,1 @@
+{"search":["searchBooks","q","bookId","title","authorId","ratingsCount","author"],"book":["getBook","bookId","title","avgRating","ratingsCount","pages"],"author":["authorBooks","authorId","title"],"reviews":["getReviews","workId","text",["getWorkId","bookId","workId"]]}
