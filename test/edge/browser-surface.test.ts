@@ -571,7 +571,8 @@ describe("MCP server edge cases (in-memory)", () => {
   test("BUG huge results: items bigger than the output cap are cut, not dropped to an empty list", async () => {
     const r = JSON.parse(text(await client.callTool({ name: "call_operation", arguments: { site: "edge", op: "huge", args: { name: "bob" } } })));
     assert.equal(r.ok, true);
-    assert.ok(Array.isArray(r.data) && r.data.length > 0, `data=${JSON.stringify(r.data)} truncated=${r.truncated}`);
+    const items = Array.isArray(r.data) ? r.data : r.data?.rows;
+    assert.ok(Array.isArray(items) && items.length > 0, `data=${JSON.stringify(r.data)} truncated=${r.truncated}`);
   });
 });
 

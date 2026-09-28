@@ -12,7 +12,8 @@ local, under `~/.api-anything` (`API_ANYTHING_HOME` overrides it).
 
 Run the CLI as `api-anything` (or `npx -y github:goodnight000/api-anything`). Its output is one line of JSON. A failure also
 prints a `next:` line on stderr. If the MCP server is connected, `list_sites`, `list_operations`
-and `call_operation` do the same as `sites`, `ops` and `call`, and `login` refreshes a session. MCP
+and `call_operation` do the same as `sites`, `ops` and `call`, and `login` refreshes a session.
+`call_operation` sends a list of records as `data: {columns, rows}`, one row per item. MCP
 cannot create operations: `capture` and `add` are CLI only. Over MCP, `next` names the tools to
 use. Run CLI-only commands yourself when you have shell access; otherwise give the command to the user.
 

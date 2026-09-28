@@ -3,3 +3,6 @@ dist/
 .DS_Store
 *.har
 *.tgz
+bench/results/raw/
+bench/video/raw*/
+bench/video/frames/

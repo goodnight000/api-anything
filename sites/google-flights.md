@@ -1,10 +1,7 @@
 # google-flights
 
-Verified 2026-09-27, logged out, US IP, with `api-anything verify google-flights` passing from a clean
-`API_ANYTHING_HOME` (no cookies, no session values). No account is needed. Checked live:
-`search`/`top` for SFO→NYC (JFK, EWR and LGA results), BOS→London, SFO→Tokyo, Chicago→MIA and
-PIT→HNL; `priceCalendar` for SFO→JFK, BOS→MIA and LAX→ORD (92 days in one call). The calendar's
-cheapest BOS→MIA day ($80) matched the cheapest flight `top` returned for that date.
+Verified 2026-09-27, logged out, US IP, from a clean `API_ANYTHING_HOME`: `verify` passes, and live
+calls covered airport, metro and city searches and 92-day calendars. No account is needed.
 
 | op | args | returns | tier |
 |---|---|---|---|
@@ -37,27 +34,23 @@ the list is not exhaustive, and an unlisted metro code still comes back empty.
 
 ## Result fields
 
-`search` and `top`: the page embeds its results as `AF_initDataCallback({key: 'ds:1', ..., data:[...]})`,
-which the spec reads with `format: "embedded"`. `[2][0]` is the top list and `[3][0]` the other list,
-the same positional JSPB as the `GetShoppingResults` XHR. `pick` names the fields:
+`search` and `top` read the results the page embeds (`AF_initDataCallback` `ds:1`: `[2][0]` is the top
+list, `[3][0]` the other list). The JSPB paths are in `google-flights.json`. Each item:
 
-| key | path | meaning | example |
-|---|---|---|---|
-| `airline` | `[0][1]` | airline names (several when the itinerary mixes carriers) | `["Delta"]` |
-| `price` | `[1][0][1]` | price, USD, for the whole one-way itinerary | `209` |
-| `from` / `to` | `[0][3]` / `[0][6]` | departure / arrival airport | `"SFO"` / `"JFK"` |
-| `departureDate` / `arrivalDate` | `[0][4]` / `[0][7]` | date `[y,m,d]` | `[2027,4,15]` |
-| `departureTime` / `arrivalTime` | `[0][5]` / `[0][8]` | local time `[h,m]`. A missing entry is 0: `[9]` = 09:00, `[null,56]` = 00:56 | `[13,50]` |
-| `durationMinutes` | `[0][9]` | total duration, minutes | `333` |
-| `stops` | `[0][13]` | `null` for nonstop, else one `[layover minutes, airport, airport, null, airport name, city, ...]` per stop, so the stop count is its length | `[[58,"IAH",...]]` |
+| key | meaning | example |
+|---|---|---|
+| `airline` | airline names (several when the itinerary mixes carriers) | `["Delta"]` |
+| `price` | USD for the whole one-way itinerary | `209` |
+| `from` / `to` | departure / arrival airport | `"SFO"` / `"JFK"` |
+| `departureTime` / `arrivalTime` | local time `[h,m]`; a missing entry is 0: `[9]` = 09:00, `[null,56]` = 00:56 | `[13,50]` |
+| `arrivalDate` | `[y,m,d]`; the departure date is the one you asked for | `[2027,4,16]` |
+| `durationMinutes` | total duration | `333` |
+| `via` | stop airports in order; **absent for a nonstop flight** | `["IAH"]` |
 
-The unpicked item also holds `[0][0]` (carrier code), `[0][2]` (legs; `[0][2][i][22]` is the flight
-number `["DL","606",null,"Delta"]` and `[0][2][i][17]` the aircraft), and `[1][1]` (a booking token).
-Add them to `pick` in your copy of the spec if you need them. `[1]` of the embedded data holds the
-places Google resolved (`[["/m/02_286",4],"New York",...]`).
-
-`priceCalendar`: the batchexecute payload is at `[0][0][2]`, and `[1]` of it is one
-`[date, null, [[null, price], token], 1]` per day. `price` is missing on a day with no fare.
+The page also has the carrier code, flight numbers, aircraft, layover minutes and a booking token
+per item. Add them to `pick` in your copy of the spec if you need them. `priceCalendar` reads
+`[0][0][2]` of the batchexecute payload, one `[date, null, [[null, price], token], 1]` per day;
+`price` is missing on a day with no fare.
 
 ## Known limits
 

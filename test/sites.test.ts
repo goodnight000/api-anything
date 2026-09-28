@@ -34,10 +34,10 @@ const accepts = (p: { pattern?: string }, v: string) => new RegExp(p.pattern!).t
 
 // ---------------------------------------------------------------- google-flights
 
-// one real "other flights" item (SFO->EWR via ATL), legs and booking token trimmed
-const flight = (price: number, to: string) => [
-  ["F9", ["Frontier"], [], "SFO", [2026, 10, 21], [22, 14], to, [2026, 10, 22], [10, 33], 559, 1, null, 0,
-    [[129, "ATL", "ATL", null, "Hartsfield-Jackson Atlanta International Airport", "Atlanta"]]],
+// one real "other flights" item (SFO->EWR via ATL), legs and booking token trimmed; a nonstop has null stops
+const viaAtl = [[129, "ATL", "ATL", null, "Hartsfield-Jackson Atlanta International Airport", "Atlanta"]];
+const flight = (price: number, to: string, stops: unknown = viaAtl) => [
+  ["F9", ["Frontier"], [], "SFO", [2026, 10, 21], [22, 14], to, [2026, 10, 22], [10, 33], 559, 1, null, 0, stops],
   [[null, price], "tok"],
 ];
 const flightsPage = (top: unknown[], other: unknown[]) =>
@@ -50,14 +50,14 @@ const flightsPage = (top: unknown[], other: unknown[]) =>
   ])}, sideChannel: {}});</script></html>`;
 
 test("google-flights search/top read the results the page embeds, so a metro code like NYC returns flights", () => {
-  const body = flightsPage([flight(219, "EWR")], [flight(149, "EWR"), flight(204, "LGA")]);
+  const body = flightsPage([flight(219, "EWR")], [flight(149, "EWR"), flight(204, "LGA", null)]);
   const other = ok(op("google-flights", "search"), body, "text/html; charset=utf-8");
   assert.deepEqual(other.map((f) => [f.price, f.to]), [[149, "EWR"], [204, "LGA"]]);
   assert.deepEqual(other[0], {
-    airline: ["Frontier"], price: 149, from: "SFO", to: "EWR", departureDate: [2026, 10, 21], departureTime: [22, 14],
-    arrivalDate: [2026, 10, 22], arrivalTime: [10, 33], durationMinutes: 559,
-    stops: [[129, "ATL", "ATL", null, "Hartsfield-Jackson Atlanta International Airport", "Atlanta"]],
+    airline: ["Frontier"], price: 149, from: "SFO", to: "EWR", departureTime: [22, 14],
+    arrivalDate: [2026, 10, 22], arrivalTime: [10, 33], durationMinutes: 559, via: ["ATL"],
   });
+  assert.equal("via" in other[1], false, "a nonstop flight has no via");
   assert.deepEqual(ok(op("google-flights", "top"), body, "text/html; charset=utf-8").map((f) => f.price), [219]);
 });
 

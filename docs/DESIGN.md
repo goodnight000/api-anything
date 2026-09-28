@@ -382,6 +382,8 @@ independent alternative.
   it is started with `--allow-writes`. `list_operations` carries the site's notes and each param's
   `hint`/`pattern`. A `next` served over MCP names the tools (`list_operations {"site":"x"}`, the
   `login` tool) instead of CLI commands, and marks a CLI-only one (heal, add) as the user's to run.
+  `call_operation` sends `data` that is a list of two or more records as `{columns, rows}` (a
+  missing field is null): the keys, repeated in every item, were half of a flight search's tokens.
 - **Skill** `skills/api-anything/SKILL.md`: the create loop (capture → add → call → verify), the
   strict failure loop (follow `next` at most once, then stop and report), and the safety rules.
 - **Claude Code plugin** manifest (skill + MCP), plus copy-paste install lines for Codex and other agents.

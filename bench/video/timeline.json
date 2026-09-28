@@ -1,0 +1,1613 @@
+{
+  "recordedAt": "2026-09-28T05:40:39.947Z",
+  "model": "claude-opus-5-5",
+  "task": "flights-5",
+  "prompt": "On Google Flights, find the cheapest nonstop one-way flight from SFO to JFK for each departure date from 2026-10-20 through 2026-10-24. Reply with one line per date: date, airline, departure time, price in USD.",
+  "footage": [
+    "page@1b411d405d3c310553462bd9e37f8ea8.webm"
+  ],
+  "browser": {
+    "calls": [
+      {
+        "t": 7368,
+        "done": 16854,
+        "tool": "browser_navigate",
+        "input": "{\"url\":\"https://www.google.com/travel/flights?q=Flights%20from%20SFO%20to%20JFK%20on%202026-10-20%20one%20way%20nonstop&curr=USD&hl=en\"}",
+        "resultChars": 555,
+        "isError": false
+      },
+      {
+        "t": 18980,
+        "done": 19532,
+        "tool": "browser_evaluate",
+        "input": "{\"function\":\"() => document.body.innerText.slice(0, 5000)\"}",
+        "resultChars": 3252,
+        "isError": false
+      },
+      {
+        "t": 23109,
+        "done": 44440,
+        "tool": "browser_run_code_unsafe",
+        "input": "{\"code\":\"async (page) => {\\n  const out = {};\\n  for (const d of ['2026-10-21','2026-10-22','2026-10-23','2026-10-24']) {\\n    await page.goto(`https://www.google.com/travel/flights?q=Flights%20from%20SFO%20to%20JFK%20on%20${d}%20one%20way%20nonstop&curr=USD&hl=en`);\\n    await page.waitForTimeout(4",
+        "resultChars": 11430,
+        "isError": false
+      }
+    ],
+    "usage": [
+      {
+        "t": 7353,
+        "tokens": 9674
+      },
+      {
+        "t": 18980,
+        "tokens": 19899
+      },
+      {
+        "t": 21873,
+        "tokens": 32244
+      },
+      {
+        "t": 50116,
+        "tokens": 52490
+      }
+    ],
+    "end": {
+      "t": 51062,
+      "durationMs": 45828,
+      "costUsd": 0.1348276,
+      "turns": 4,
+      "answer": "I searched Google Flights for nonstop, one-way economy flights (1 adult) from SFO to JFK on each date. On 10/20, 10/23 and 10/24, several flights share the lowest price. For those dates I listed the one Google ranks first and put the others in brackets.\n\n- 2026-10-20, JetBlue, 6:00 AM, $209 (also $209: Delta 7:00 AM, 4:15 PM and 10:15 PM; American 11:35 AM and 3:28 PM; Alaska 1:43 PM; JetBlue 2:18 PM, 8:44 PM and 11:59 PM)\n- 2026-10-21, Alaska, 1:43 PM, $219\n- 2026-10-22, Alaska, 1:43 PM, $315\n- 2026-10-23, American, 3:28 PM, $209 (also $209: Delta 4:15 PM, 10:15 PM and 11:49 PM)\n- 2026-10-24, JetBlue, 6:00 AM, $209 (also $209: Delta 7:00 AM; Alaska 7:38 AM, 1:43 PM and 10:23 PM; American 3:28 PM and 9:56 PM; JetBlue 2:18 PM and 8:29 PM)\n\nThese prices were current on 2026-09-27 and include taxes and fees but not bag fees. They're likely to change.",
+      "exit": 0
+    }
+  },
+  "api": {
+    "calls": [
+      {
+        "t": 3845,
+        "done": 3909,
+        "tool": "list_operations",
+        "input": "{\"site\":\"google-flights\"}",
+        "resultChars": 9528,
+        "isError": false
+      },
+      {
+        "t": 5900,
+        "done": 6894,
+        "tool": "call_operation",
+        "input": "{\"site\":\"google-flights\",\"op\":\"search\",\"args\":{\"origin\":\"SFO\",\"destination\":\"JFK\",\"date\":\"2026-10-20\"}}",
+        "resultChars": 1308,
+        "isError": false,
+        "preview": {
+          "columns": [
+            "airline",
+            "price",
+            "from",
+            "to",
+            "departureTime",
+            "arrivalDate",
+            "arrivalTime",
+            "durationMinutes",
+            "via"
+          ],
+          "rows": [
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                21,
+                37
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                11
+              ],
+              623,
+              [
+                "BOS"
+              ]
+            ],
+            [
+              [
+                "Alaska"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                13,
+                43
+              ],
+              [
+                2026,
+                10,
+                20
+              ],
+              [
+                22,
+                29
+              ],
+              346,
+              null
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                14,
+                18
+              ],
+              [
+                2026,
+                10,
+                20
+              ],
+              [
+                22,
+                59
+              ],
+              341,
+              null
+            ],
+            [
+              [
+                "American"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                15,
+                28
+              ],
+              [
+                2026,
+                10,
+                20
+              ],
+              [
+                23,
+                59
+              ],
+              331,
+              null
+            ],
+            [
+              [
+                "Delta"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                16,
+                15
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                null,
+                35
+              ],
+              320,
+              null
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                20,
+                44
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                5,
+                20
+              ],
+              336,
+              null
+            ],
+            [
+              [
+                "Delta"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                22,
+                15
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                6,
+                41
+              ],
+              326,
+              null
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                23,
+                59
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                8,
+                35
+              ],
+              336,
+              null
+            ]
+          ],
+          "total": 17
+        }
+      },
+      {
+        "t": 6435,
+        "done": 7981,
+        "tool": "call_operation",
+        "input": "{\"site\":\"google-flights\",\"op\":\"top\",\"args\":{\"origin\":\"SFO\",\"destination\":\"JFK\",\"date\":\"2026-10-20\"}}",
+        "resultChars": 342,
+        "isError": false,
+        "preview": {
+          "columns": [
+            "airline",
+            "price",
+            "from",
+            "to",
+            "departureTime",
+            "arrivalDate",
+            "arrivalTime",
+            "durationMinutes"
+          ],
+          "rows": [
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                6
+              ],
+              [
+                2026,
+                10,
+                20
+              ],
+              [
+                14,
+                32
+              ],
+              332
+            ],
+            [
+              [
+                "Delta"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                7
+              ],
+              [
+                2026,
+                10,
+                20
+              ],
+              [
+                15,
+                30
+              ],
+              330
+            ],
+            [
+              [
+                "American"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                11,
+                35
+              ],
+              [
+                2026,
+                10,
+                20
+              ],
+              [
+                20
+              ],
+              325
+            ]
+          ],
+          "total": 3
+        }
+      },
+      {
+        "t": 7231,
+        "done": 8972,
+        "tool": "call_operation",
+        "input": "{\"site\":\"google-flights\",\"op\":\"search\",\"args\":{\"origin\":\"SFO\",\"destination\":\"JFK\",\"date\":\"2026-10-21\"}}",
+        "resultChars": 1438,
+        "isError": false,
+        "preview": {
+          "columns": [
+            "airline",
+            "price",
+            "from",
+            "to",
+            "departureTime",
+            "arrivalDate",
+            "arrivalTime",
+            "durationMinutes",
+            "via"
+          ],
+          "rows": [
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                7,
+                59
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                19,
+                59
+              ],
+              540,
+              [
+                "BOS"
+              ]
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                10,
+                20
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                21,
+                29
+              ],
+              489,
+              [
+                "BOS"
+              ]
+            ],
+            [
+              [
+                "American"
+              ],
+              219,
+              "SFO",
+              "JFK",
+              [
+                9,
+                12
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                20
+              ],
+              468,
+              [
+                "ORD"
+              ]
+            ],
+            [
+              [
+                "Alaska"
+              ],
+              219,
+              "SFO",
+              "JFK",
+              [
+                11
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                22,
+                29
+              ],
+              509,
+              [
+                "SEA"
+              ]
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              244,
+              "SFO",
+              "JFK",
+              [
+                12
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                20,
+                40
+              ],
+              340,
+              null
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              244,
+              "SFO",
+              "JFK",
+              [
+                14,
+                18
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                22,
+                59
+              ],
+              341,
+              null
+            ],
+            [
+              [
+                "Alaska"
+              ],
+              259,
+              "SFO",
+              "JFK",
+              [
+                7,
+                38
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                16,
+                20
+              ],
+              342,
+              null
+            ],
+            [
+              [
+                "Delta"
+              ],
+              259,
+              "SFO",
+              "JFK",
+              [
+                13,
+                50
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                22,
+                19
+              ],
+              329,
+              null
+            ]
+          ],
+          "total": 19
+        }
+      },
+      {
+        "t": 8037,
+        "done": 9950,
+        "tool": "call_operation",
+        "input": "{\"site\":\"google-flights\",\"op\":\"top\",\"args\":{\"origin\":\"SFO\",\"destination\":\"JFK\",\"date\":\"2026-10-21\"}}",
+        "resultChars": 413,
+        "isError": false,
+        "preview": {
+          "columns": [
+            "airline",
+            "price",
+            "from",
+            "to",
+            "departureTime",
+            "arrivalDate",
+            "arrivalTime",
+            "durationMinutes"
+          ],
+          "rows": [
+            [
+              [
+                "Alaska"
+              ],
+              219,
+              "SFO",
+              "JFK",
+              [
+                13,
+                43
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                22,
+                29
+              ],
+              346
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              244,
+              "SFO",
+              "JFK",
+              [
+                6
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                14,
+                32
+              ],
+              332
+            ],
+            [
+              [
+                "American"
+              ],
+              244,
+              "SFO",
+              "JFK",
+              [
+                15,
+                28
+              ],
+              [
+                2026,
+                10,
+                21
+              ],
+              [
+                23,
+                59
+              ],
+              331
+            ],
+            [
+              [
+                "Delta"
+              ],
+              259,
+              "SFO",
+              "JFK",
+              [
+                16,
+                15
+              ],
+              [
+                2026,
+                10,
+                22
+              ],
+              [
+                null,
+                35
+              ],
+              320
+            ]
+          ],
+          "total": 4
+        }
+      },
+      {
+        "t": 8855,
+        "done": 11021,
+        "tool": "call_operation",
+        "input": "{\"site\":\"google-flights\",\"op\":\"search\",\"args\":{\"origin\":\"SFO\",\"destination\":\"JFK\",\"date\":\"2026-10-22\"}}",
+        "resultChars": 1568,
+        "isError": false,
+        "preview": {
+          "columns": [
+            "airline",
+            "price",
+            "from",
+            "to",
+            "departureTime",
+            "arrivalDate",
+            "arrivalTime",
+            "durationMinutes",
+            "via"
+          ],
+          "rows": [
+            [
+              [
+                "American"
+              ],
+              219,
+              "SFO",
+              "JFK",
+              [
+                10,
+                51
+              ],
+              [
+                2026,
+                10,
+                22
+              ],
+              [
+                22,
+                29
+              ],
+              518,
+              [
+                "CLT"
+              ]
+            ],
+            [
+              [
+                "Alaska"
+              ],
+              269,
+              "SFO",
+              "JFK",
+              [
+                18,
+                59
+              ],
+              [
+                2026,
+                10,
+                23
+              ],
+              [
+                5,
+                59
+              ],
+              480,
+              [
+                "PDX"
+              ]
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              345,
+              "SFO",
+              "JFK",
+              [
+                14,
+                18
+              ],
+              [
+                2026,
+                10,
+                22
+              ],
+              [
+                22,
+                59
+              ],
+              341,
+              null
+            ],
+            [
+              [
+                "Alaska"
+              ],
+              374,
+              "SFO",
+              "JFK",
+              [
+                6,
+                18
+              ],
+              [
+                2026,
+                10,
+                22
+              ],
+              [
+                15
+              ],
+              342,
+              null
+            ],
+            [
+              [
+                "Alaska"
+              ],
+              374,
+              "SFO",
+              "JFK",
+              [
+                22,
+                23
+              ],
+              [
+                2026,
+                10,
+                23
+              ],
+              [
+                7,
+                4
+              ],
+              341,
+              null
+            ],
+            [
+              [
+                "Delta"
+              ],
+              379,
+              "SFO",
+              "JFK",
+              [
+                11,
+                45
+              ],
+              [
+                2026,
+                10,
+                22
+              ],
+              [
+                20,
+                22
+              ],
+              337,
+              null
+            ],
+            [
+              [
+                "Delta"
+              ],
+              379,
+              "SFO",
+              "JFK",
+              [
+                16,
+                15
+              ],
+              [
+                2026,
+                10,
+                23
+              ],
+              [
+                null,
+                35
+              ],
+              320,
+              null
+            ],
+            [
+              [
+                "Delta"
+              ],
+              379,
+              "SFO",
+              "JFK",
+              [
+                23,
+                49
+              ],
+              [
+                2026,
+                10,
+                23
+              ],
+              [
+                8,
+                15
+              ],
+              326,
+              null
+            ]
+          ],
+          "total": 21
+        }
+      },
+      {
+        "t": 9730,
+        "done": 12077,
+        "tool": "call_operation",
+        "input": "{\"site\":\"google-flights\",\"op\":\"top\",\"args\":{\"origin\":\"SFO\",\"destination\":\"JFK\",\"date\":\"2026-10-22\"}}",
+        "resultChars": 346,
+        "isError": false,
+        "preview": {
+          "columns": [
+            "airline",
+            "price",
+            "from",
+            "to",
+            "departureTime",
+            "arrivalDate",
+            "arrivalTime",
+            "durationMinutes"
+          ],
+          "rows": [
+            [
+              [
+                "Alaska"
+              ],
+              315,
+              "SFO",
+              "JFK",
+              [
+                13,
+                43
+              ],
+              [
+                2026,
+                10,
+                22
+              ],
+              [
+                22,
+                29
+              ],
+              346
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              319,
+              "SFO",
+              "JFK",
+              [
+                23,
+                59
+              ],
+              [
+                2026,
+                10,
+                23
+              ],
+              [
+                8,
+                35
+              ],
+              336
+            ],
+            [
+              [
+                "Delta"
+              ],
+              379,
+              "SFO",
+              "JFK",
+              [
+                7
+              ],
+              [
+                2026,
+                10,
+                22
+              ],
+              [
+                15,
+                30
+              ],
+              330
+            ]
+          ],
+          "total": 3
+        }
+      },
+      {
+        "t": 10442,
+        "done": 12849,
+        "tool": "call_operation",
+        "input": "{\"site\":\"google-flights\",\"op\":\"search\",\"args\":{\"origin\":\"SFO\",\"destination\":\"JFK\",\"date\":\"2026-10-23\"}}",
+        "resultChars": 1558,
+        "isError": false,
+        "preview": {
+          "columns": [
+            "airline",
+            "price",
+            "from",
+            "to",
+            "departureTime",
+            "arrivalDate",
+            "arrivalTime",
+            "durationMinutes",
+            "via"
+          ],
+          "rows": [
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                21,
+                37
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                11
+              ],
+              623,
+              [
+                "BOS"
+              ]
+            ],
+            [
+              [
+                "Delta"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                22,
+                15
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                6,
+                41
+              ],
+              326,
+              null
+            ],
+            [
+              [
+                "Delta"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                23,
+                49
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                8,
+                15
+              ],
+              326,
+              null
+            ],
+            [
+              [
+                "American"
+              ],
+              219,
+              "SFO",
+              "JFK",
+              [
+                19,
+                11
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                5,
+                43
+              ],
+              452,
+              [
+                "PHX"
+              ]
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              244,
+              "SFO",
+              "JFK",
+              [
+                14,
+                18
+              ],
+              [
+                2026,
+                10,
+                23
+              ],
+              [
+                22,
+                59
+              ],
+              341,
+              null
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              244,
+              "SFO",
+              "JFK",
+              [
+                23,
+                59
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                8,
+                35
+              ],
+              336,
+              null
+            ],
+            [
+              [
+                "American"
+              ],
+              259,
+              "SFO",
+              "JFK",
+              [
+                12,
+                59
+              ],
+              [
+                2026,
+                10,
+                23
+              ],
+              [
+                21,
+                30
+              ],
+              331,
+              null
+            ],
+            [
+              [
+                "Alaska"
+              ],
+              259,
+              "SFO",
+              "JFK",
+              [
+                13,
+                43
+              ],
+              [
+                2026,
+                10,
+                23
+              ],
+              [
+                22,
+                29
+              ],
+              346,
+              null
+            ]
+          ],
+          "total": 21
+        }
+      },
+      {
+        "t": 11302,
+        "done": 13607,
+        "tool": "call_operation",
+        "input": "{\"site\":\"google-flights\",\"op\":\"top\",\"args\":{\"origin\":\"SFO\",\"destination\":\"JFK\",\"date\":\"2026-10-23\"}}",
+        "resultChars": 354,
+        "isError": false,
+        "preview": {
+          "columns": [
+            "airline",
+            "price",
+            "from",
+            "to",
+            "departureTime",
+            "arrivalDate",
+            "arrivalTime",
+            "durationMinutes"
+          ],
+          "rows": [
+            [
+              [
+                "American"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                15,
+                28
+              ],
+              [
+                2026,
+                10,
+                23
+              ],
+              [
+                23,
+                59
+              ],
+              331
+            ],
+            [
+              [
+                "Delta"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                16,
+                15
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                null,
+                35
+              ],
+              320
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              244,
+              "SFO",
+              "JFK",
+              [
+                20,
+                44
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                5,
+                20
+              ],
+              336
+            ]
+          ],
+          "total": 3
+        }
+      },
+      {
+        "t": 12086,
+        "done": 14791,
+        "tool": "call_operation",
+        "input": "{\"site\":\"google-flights\",\"op\":\"search\",\"args\":{\"origin\":\"SFO\",\"destination\":\"JFK\",\"date\":\"2026-10-24\"}}",
+        "resultChars": 1240,
+        "isError": false,
+        "preview": {
+          "columns": [
+            "airline",
+            "price",
+            "from",
+            "to",
+            "departureTime",
+            "arrivalDate",
+            "arrivalTime",
+            "durationMinutes",
+            "via"
+          ],
+          "rows": [
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                7,
+                30
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                19,
+                55
+              ],
+              565,
+              [
+                "BOS"
+              ]
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                22,
+                10
+              ],
+              [
+                2026,
+                10,
+                25
+              ],
+              [
+                11,
+                2
+              ],
+              592,
+              [
+                "BOS"
+              ]
+            ],
+            [
+              [
+                "Alaska"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                13,
+                43
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                22,
+                29
+              ],
+              346,
+              null
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                14,
+                18
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                22,
+                59
+              ],
+              341,
+              null
+            ],
+            [
+              [
+                "American"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                15,
+                28
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                23,
+                59
+              ],
+              331,
+              null
+            ],
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                20,
+                29
+              ],
+              [
+                2026,
+                10,
+                25
+              ],
+              [
+                5,
+                4
+              ],
+              335,
+              null
+            ],
+            [
+              [
+                "American"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                21,
+                56
+              ],
+              [
+                2026,
+                10,
+                25
+              ],
+              [
+                6,
+                30
+              ],
+              334,
+              null
+            ],
+            [
+              [
+                "Alaska"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                22,
+                23
+              ],
+              [
+                2026,
+                10,
+                25
+              ],
+              [
+                7,
+                4
+              ],
+              341,
+              null
+            ]
+          ],
+          "total": 16
+        }
+      },
+      {
+        "t": 12793,
+        "done": 15833,
+        "tool": "call_operation",
+        "input": "{\"site\":\"google-flights\",\"op\":\"top\",\"args\":{\"origin\":\"SFO\",\"destination\":\"JFK\",\"date\":\"2026-10-24\"}}",
+        "resultChars": 342,
+        "isError": false,
+        "preview": {
+          "columns": [
+            "airline",
+            "price",
+            "from",
+            "to",
+            "departureTime",
+            "arrivalDate",
+            "arrivalTime",
+            "durationMinutes"
+          ],
+          "rows": [
+            [
+              [
+                "JetBlue"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                6
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                14,
+                32
+              ],
+              332
+            ],
+            [
+              [
+                "Delta"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                7
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                15,
+                30
+              ],
+              330
+            ],
+            [
+              [
+                "Alaska"
+              ],
+              209,
+              "SFO",
+              "JFK",
+              [
+                7,
+                38
+              ],
+              [
+                2026,
+                10,
+                24
+              ],
+              [
+                16,
+                20
+              ],
+              342
+            ]
+          ],
+          "total": 3
+        }
+      }
+    ],
+    "usage": [
+      {
+        "t": 3845,
+        "tokens": 3818
+      },
+      {
+        "t": 4925,
+        "tokens": 11779
+      },
+      {
+        "t": 22512,
+        "tokens": 26570
+      }
+    ],
+    "end": {
+      "t": 23024,
+      "durationMs": 20336,
+      "costUsd": 0.150108,
+      "turns": 12,
+      "answer": "I searched both of Google's result lists (\"top\" and \"other\") for each date and kept only nonstop flights:\n\n- **2026-10-20** — JetBlue, 6:00 AM, $209\n- **2026-10-21** — Alaska, 1:43 PM, $219\n- **2026-10-22** — Alaska, 1:43 PM, $315\n- **2026-10-23** — American, 3:28 PM, $209\n- **2026-10-24** — JetBlue, 6:00 AM, $209\n\nOn Oct 20, 23 and 24, several nonstops share the lowest price. Where that happens, I listed the one that leaves earliest. The other flights at the same price:\n\n- **Oct 20, $209:** Delta 7:00 AM, American 11:35 AM, Alaska 1:43 PM, JetBlue 2:18 PM, American 3:28 PM, Delta 4:15 PM, JetBlue 8:44 PM, Delta 10:15 PM, JetBlue 11:59 PM\n- **Oct 23, $209:** Delta 4:15 PM, Delta 10:15 PM, Delta 11:49 PM\n- **Oct 24, $209:** Delta 7:00 AM, Alaska 7:38 AM, Alaska 1:43 PM, JetBlue 2:18 PM, American 3:28 PM, JetBlue 8:29 PM, American 9:56 PM, Alaska 10:23 PM\n\nThese are one-way economy fares for one adult, as of today (2026-09-27).",
+      "exit": 0
+    }
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "agents": {
+    "flights-1/browser": {
+      "correct": 5,
+      "seconds": {
+        "n": 5,
+        "median": 12.931,
+        "min": 12.191,
+        "max": 14.281
+      },
+      "costUsd": {
+        "n": 5,
+        "median": 0.16625080000000003,
+        "min": 0.10180919999999999,
+        "max": 0.2392796
+      },
+      "tokens": {
+        "n": 5,
+        "median": 46696,
+        "min": 38578,
+        "max": 81012
+      }
+    },
+    "flights-1/api": {
+      "correct": 5,
+      "seconds": {
+        "n": 5,
+        "median": 8.414,
+        "min": 8.093,
+        "max": 11.318
+      },
+      "costUsd": {
+        "n": 5,
+        "median": 0.0739732,
+        "min": 0.07329499999999999,
+        "max": 0.07663319999999998
+      },
+      "tokens": {
+        "n": 5,
+        "median": 21337,
+        "min": 21310,
+        "max": 21471
+      }
+    },
+    "flights-5/browser": {
+      "correct": 5,
+      "seconds": {
+        "n": 5,
+        "median": 41.607,
+        "min": 38.654,
+        "max": 52.935
+      },
+      "costUsd": {
+        "n": 5,
+        "median": 0.15376800000000002,
+        "min": 0.1111924,
+        "max": 0.254447
+      },
+      "tokens": {
+        "n": 5,
+        "median": 55616,
+        "min": 50586,
+        "max": 81538
+      }
+    },
+    "flights-5/api": {
+      "correct": 5,
+      "seconds": {
+        "n": 5,
+        "median": 21.118,
+        "min": 20.476,
+        "max": 24.282
+      },
+      "costUsd": {
+        "n": 5,
+        "median": 0.151639,
+        "min": 0.15067599999999998,
+        "max": 0.1535018
+      },
+      "tokens": {
+        "n": 5,
+        "median": 28602,
+        "min": 28554,
+        "max": 28699
+      }
+    }
+  },
+  "transport": {
+    "browser": {
+      "seconds": {
+        "n": 10,
+        "median": 1.4224999999999999,
+        "min": 1.012,
+        "max": 2.156
+      },
+      "requests": {
+        "n": 10,
+        "median": 37,
+        "min": 22,
+        "max": 40
+      }
+    },
+    "api": {
+      "seconds": {
+        "n": 10,
+        "median": 1.1695,
+        "min": 1.082,
+        "max": 1.387
+      }
+    }
+  }
+}

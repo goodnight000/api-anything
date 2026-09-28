@@ -31,6 +31,18 @@ export function mcpNext(next: string): string {
   return /\bapi-anything (heal|add|capture|verify|export)\b/.test(out) ? `${out} (api-anything commands are CLI only: ask the user to run them in a terminal)` : out;
 }
 
+/**
+ * A list of records repeats every key in every item, which an agent pays for in tokens. Over MCP
+ * such a list is sent once-per-key as `{columns, rows}`; a missing field is null. Anything else,
+ * including a list with one item, is sent as is.
+ */
+export function asTable(data: unknown): unknown {
+  const isRecord = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
+  if (!Array.isArray(data) || data.length < 2 || !data.every(isRecord)) return data;
+  const columns = [...new Set(data.flatMap((x) => Object.keys(x)))];
+  return { columns, rows: data.map((x) => columns.map((c) => (c in x ? x[c] : null))) };
+}
+
 const reply = (v: unknown, isError = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(v) }], isError });
 
 /** Every failure comes back as {error, next} JSON, like call_operation's, never as a bare exception text. */
@@ -106,7 +118,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     "call_operation",
     {
       description:
-        "Call a site operation. Returns {ok, class, data, tier, healed?, ms, reason?, next?}; `reason` also explains a slow success. On failure follow `next` at most once, then stop and report." +
+        "Call a site operation. Returns {ok, class, data, tier, healed?, ms, reason?, next?}; a list of records comes back as data {columns, rows} (one row per item, null for a missing field). `reason` also explains a slow success. On failure follow `next` at most once, then stop and report." +
         (allowWrites ? " Write operations change the user's account: only call them when the user asked for that exact action." : " Writes are disabled on this server."),
       inputSchema: {
         site: z.string(),
@@ -117,7 +129,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     },
     guarded(async ({ site, op, args }: { site: string; op: string; args?: Record<string, unknown> }) => {
       const r = await call(site, op, args ?? {}, { allowWrites });
-      return reply(r.next ? { ...r, next: mcpNext(r.next) } : r, !r.ok);
+      return reply({ ...r, ...(r.data !== undefined ? { data: asTable(r.data) } : {}), ...(r.next ? { next: mcpNext(r.next) } : {}) }, !r.ok);
     }),
   );
 

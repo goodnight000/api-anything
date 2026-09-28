@@ -1,0 +1,133 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- One frame of the race video. render.mjs loads this, sets window.TIMELINE, then calls render(t) per frame. -->
+<style>
+  @import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=block");
+  :root {
+    --page: #121211; --panel: #1b1b1a; --inset: #242423; --line: #2e2e2c;
+    --text: #e0e0dc; --text-2: #a8a79f; --muted: #7d7c76;
+    --browser: #d95926; --api: #3987e5;
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1280px; height: 720px; background: var(--page); color: var(--text); font: 400 14px/1.4 Geist, sans-serif; overflow: hidden; }
+  .mono { font-family: "Geist Mono", ui-monospace, monospace; }
+  header { padding: var(--s5) var(--s6) var(--s4); display: flex; gap: var(--s4); align-items: baseline; }
+  header .label { color: var(--muted); font-size: 13px; }
+  header .prompt { font-size: 16px; color: var(--text); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s5); padding: 0 var(--s6); }
+  .col { background: var(--panel); border-radius: 12px; padding: var(--s4); height: 604px; display: flex; flex-direction: column; gap: var(--s3); position: relative; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; }
+  .name { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: var(--s2); }
+  .name i { width: 10px; height: 10px; border-radius: 5px; display: inline-block; }
+  .sub { color: var(--text-2); font-size: 13px; margin-top: 2px; }
+  .clock { text-align: right; }
+  .clock .t { font-size: 32px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+  .clock .tok { color: var(--text-2); font-size: 13px; font-variant-numeric: tabular-nums; margin-top: var(--s1); }
+  .stage { height: 351px; border-radius: 8px; background: var(--inset); overflow: hidden; position: relative; }
+  .stage video { width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; }
+  .stage .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; }
+  .stage .cap { padding: var(--s3) var(--s4) var(--s2); color: var(--text-2); font-size: 13px; }
+  .stage .cap b { color: var(--text); font-weight: 500; }
+  .stage .data { overflow: hidden; }
+  .stage table { border-collapse: collapse; margin: 0 var(--s4); font-size: 11.5px; width: calc(100% - 2 * var(--s4)); }
+  .stage th { text-align: left; color: var(--muted); font-weight: 400; padding: 4px 6px 4px 0; border-bottom: 1px solid var(--line); }
+  .stage td { color: var(--text-2); padding: 4px 6px 4px 0; border-bottom: 1px solid var(--line); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .stage .answer { position: absolute; inset: 0; background: var(--inset); padding: var(--s4); display: none; }
+  .answer .stat { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .answer .ans { color: var(--text-2); font-size: 13px; line-height: 1.5; margin-top: var(--s3); white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 13; }
+  ol { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+  li { display: grid; grid-template-columns: 52px 1fr auto; gap: var(--s2); padding: 5px var(--s2); border-radius: 6px; font-variant-numeric: tabular-nums; }
+  li .at { color: var(--muted); }
+  li .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  li .what .mono { color: var(--text-2); font-size: 12px; }
+  li .res { color: var(--muted); }
+  li.running { background: var(--inset); }
+  footer { position: absolute; left: var(--s6); right: var(--s6); bottom: 10px; color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; }
+</style>
+<header><span class="label">Same prompt, started together</span><span class="prompt" id="prompt"></span></header>
+<main>
+  <section class="col" id="browser">
+    <div class="head"><div><div class="name"><i style="background:var(--browser)"></i>Agent + browser</div><div class="sub">Playwright MCP driving headless Chrome</div></div>
+      <div class="clock"><div class="t">0.0 s</div><div class="tok"></div></div></div>
+    <div class="stage"><video muted preload="auto"></video><div class="empty">No page open yet</div><div class="answer"><div class="stat"></div><div class="ans"></div></div></div>
+    <ol></ol>
+  </section>
+  <section class="col" id="api">
+    <div class="head"><div><div class="name"><i style="background:var(--api)"></i>Agent + API Anything</div><div class="sub">api-anything MCP, no browser</div></div>
+      <div class="clock"><div class="t">0.0 s</div><div class="tok"></div></div></div>
+    <div class="stage"><div class="data"></div><div class="empty">No browser. Results arrive as JSON.</div><div class="answer"><div class="stat"></div><div class="ans"></div></div></div>
+    <ol></ol>
+  </section>
+</main>
+<footer><span id="credit"></span></footer>
+<script>
+  const fmtS = (ms) => (ms / 1000).toFixed(1) + " s";
+  const fmtK = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n));
+  const fmtChars = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + "k chars" : n + " chars");
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+
+  function describe(c) {
+    const i = (() => { try { return JSON.parse(c.input); } catch { return {}; } })();
+    switch (c.tool) {
+      case "browser_navigate": return ["Open page", decodeURIComponent(i.url ?? "").replace(/^https:\/\/www\./, "")];
+      case "browser_snapshot": return ["Read page structure", ""];
+      case "browser_evaluate": return ["Run JavaScript in page", ""];
+      case "browser_run_code_unsafe": return ["Run a Playwright script", ""];
+      case "browser_find": return ["Search page text", i.regex ?? i.text ?? ""];
+      case "browser_click": return ["Click", i.element ?? ""];
+      case "browser_type": return ["Type", i.text ?? ""];
+      case "browser_wait_for": return ["Wait", i.text ?? i.time ?? ""];
+      case "list_sites": return ["list_sites", ""];
+      case "list_operations": return ["list_operations", i.site ?? ""];
+      case "call_operation": return [`${i.site}.${i.op}`, Object.values(i.args ?? {}).join(" ")];
+      default: return [c.tool.replace(/^browser_/, ""), ""];
+    }
+  }
+
+  window.render = async (t) => {
+    const T = window.TIMELINE;
+    document.getElementById("prompt").textContent = T.prompt;
+    document.getElementById("credit").textContent = T.credit;
+    for (const arm of ["browser", "api"]) {
+      const A = T[arm], col = document.getElementById(arm), end = A.end.t, finished = t >= end;
+      const now = Math.min(t, end);
+      col.querySelector(".clock .t").textContent = fmtS(now);
+      const u = A.usage.filter((x) => x.t <= t).at(-1);
+      col.querySelector(".clock .tok").textContent = (u ? fmtK(u.tokens) : "0") + " tokens to the model";
+      const calls = A.calls.filter((c) => c.t <= t);
+      col.querySelector("ol").innerHTML = calls.slice(-4).map((c) => {
+        const [what, arg] = describe(c), running = !c.done || c.done > t;
+        const res = running ? fmtS(t - c.t) : `${fmtS(c.done - c.t)} · ${fmtChars(c.resultChars)}`;
+        return `<li class="${running ? "running" : ""}"><span class="at">${fmtS(c.t)}</span><span class="what">${esc(what)} <span class="mono">${esc(arg)}</span></span><span class="res">${res}</span></li>`;
+      }).join("");
+      const done = col.querySelector(".answer");
+      done.style.display = finished ? "block" : "none";
+      if (finished) {
+        done.querySelector(".stat").textContent = `Done in ${fmtS(end)} · $${A.end.costUsd.toFixed(3)} · ${A.calls.length} tool calls`;
+        done.querySelector(".ans").textContent = A.end.answer.replace(/\*\*/g, "");
+      }
+      if (arm === "browser") {
+        const v = col.querySelector("video"), vt = (t - T.footageOffsetMs) / 1000;
+        if (!v.src) v.src = T.footageSrc;
+        const show = vt >= 0;
+        col.querySelector(".stage .empty").style.display = show ? "none" : "grid";
+        v.style.display = show ? "block" : "none";
+        if (show) {
+          const target = Math.min(vt, v.duration || vt);
+          if (Math.abs(v.currentTime - target) > 0.01) await new Promise((r) => { v.addEventListener("seeked", r, { once: true }); v.currentTime = target; });
+        }
+      } else {
+        const last = calls.filter((c) => c.tool === "call_operation" && c.preview && c.done <= t).at(-1);
+        col.querySelector(".stage .empty").style.display = last ? "none" : "grid";
+        const cell = (v) => (v === null ? "" : typeof v === "string" ? v : JSON.stringify(v).replace(/"/g, ""));
+        const p = last?.preview;
+        col.querySelector(".stage .data").innerHTML = p
+          ? `<div class="cap"><b>${esc(describe(last).join(" "))}</b> returned ${p.total} rows as JSON. First ${p.rows.length}:</div>` +
+            `<table class="mono"><tr>${p.columns.map((c) => `<th>${esc(c)}</th>`).join("")}</tr>` +
+            p.rows.map((r) => `<tr>${r.map((v) => `<td>${esc(cell(v))}</td>`).join("")}</tr>`).join("") + "</table>"
+          : "";
+      }
+    }
+  };
+</script>

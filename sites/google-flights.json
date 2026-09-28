@@ -61,12 +61,11 @@
           "price=[1][0][1]",
           "from=[0][3]",
           "to=[0][6]",
-          "departureDate=[0][4]",
           "departureTime=[0][5]",
           "arrivalDate=[0][7]",
           "arrivalTime=[0][8]",
           "durationMinutes=[0][9]",
-          "stops=[0][13]"
+          "via=[0][13][*][1]"
         ],
         "embedded": {
           "regex": "key: 'ds:1', hash: '\\d+', data:(\\[)"
@@ -163,12 +162,11 @@
           "price=[1][0][1]",
           "from=[0][3]",
           "to=[0][6]",
-          "departureDate=[0][4]",
           "departureTime=[0][5]",
           "arrivalDate=[0][7]",
           "arrivalTime=[0][8]",
           "durationMinutes=[0][9]",
-          "stops=[0][13]"
+          "via=[0][13][*][1]"
         ],
         "embedded": {
           "regex": "key: 'ds:1', hash: '\\d+', data:(\\[)"
