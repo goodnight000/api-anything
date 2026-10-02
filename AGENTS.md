@@ -14,9 +14,12 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/classify.ts` | response -> ok/drift/auth/rate/blocked/input/error; `judge` also extracts |
 | `src/extract.ts` | parse, extract, pick, cap |
 | `src/http.ts` | tier 1: fill the template, send with Node fetch |
+| `src/replay.ts`, `src/core.ts` | `api-anything/core`: one judged send through the embedder's transport; pure modules only |
 | `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login |
+| `src/rescan.ts` | the browserless heal's token scan, with the caller's fetch |
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |
 | `src/execute.ts` | `call()`: the tier ladder, classifier actions, heal guards, write rules |
+| `src/cookies.ts`, `src/secrets.ts` | cookie matching and the credential scan, with no file access |
 | `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, export scan |
 | `src/cli.ts`, `src/mcp.ts`, `src/index.ts` | entry points |
 
@@ -29,6 +32,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
   retry only on 400/401/403/404. Require `allowWrites` at every entry point.
 - No site-specific code in `src/`. Add the pattern to `test/fixture/server.ts` instead.
 - Healing is reactive: always send the stored template first.
+- `src/core.ts` and everything it imports stay pure: no `node:fs`, browser, session file or store. `test/core.test.ts` checks the import graph.
 - Tests use `node:test` and never touch the network beyond localhost.
 
 ## Commands

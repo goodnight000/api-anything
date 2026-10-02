@@ -396,6 +396,24 @@ independent alternative.
 - **Claude Code plugin** manifest (skill + MCP), plus copy-paste install lines for Codex and other agents.
 - Library: `import { call, open } from "api-anything"`.
 
+## Embedding (`api-anything/core`)
+
+A host that keeps sessions itself (a per-user browser, a credential vault) cannot use `call()`:
+it reads `~/.api-anything`, launches its own Chrome and heals in the foreground. The `core` entry
+is the same learning and request logic with those parts left to the host:
+
+- `replay(op, args, session, { transport, signal })` fills the template and calls `transport`
+  once. No pacing, timeout, redirect, retry, tier climb or heal: the transport owns redirects and
+  where credentials may go, and the caller owns time. It refuses writes. The result carries the
+  class, `data` (extracted and picked, never capped) and `decoded` (the response's whole value,
+  before `extract` and `pick`), so the host can check completeness before anything is dropped.
+- `rescanOperation(op, args, fetchText)` is the browserless heal with the host's fetch. It
+  returns a candidate; validating and saving it are the host's.
+- `learnOperation`, `scanSecrets`, `classify`, `judge`, `buildRequest` and the spec schema.
+
+Nothing reachable from `src/core.ts` imports the file system, the browser layer, the session
+store or the spec store. `call()` and the CLI are unchanged and use the same modules.
+
 ## Non-goals (v1)
 
 TLS impersonation transports, CAPTCHA solving, signature reimplementation, seroval parsing,

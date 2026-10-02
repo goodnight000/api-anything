@@ -1,6 +1,6 @@
 /** Tier 1: fill the stored template and send it with Node fetch. */
 import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
-import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
+import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./cookies.js";
 import type { StoredCookie } from "./types.js";
 import type { Operation, Param, Request } from "./spec.js";
 

@@ -4,7 +4,7 @@
  */
 import { asText, escapeTemplate, escapeValue, fillSlotTemplate, fillTemplate, getAt, setAt, templateRefs, walk, type Escape, type Leaf, type Step } from "./codec.js";
 import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
-import { loggedIn, parseCookieHeader } from "./session.js";
+import { loggedIn, parseCookieHeader } from "./cookies.js";
 import { OperationSchema, type Match, type Operation, type Param, type Request, type ResponseSpec, type Slot, type Trigger, type Volatile } from "./spec.js";
 import type { CaptureResult, Exchange, StoredCookie } from "./types.js";
 

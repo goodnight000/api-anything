@@ -8,11 +8,14 @@ import { botWall, judge, type Class } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
-import { ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches, rankCandidates, type Args } from "./learn.js";
+import { ASSET_EXT, capturePages, checkExamples, learnOperation, matches, rankCandidates, type Args } from "./learn.js";
 import { cookieHeaderFor, home, loadSession, mergeCapture, parseCookieHeader, pruneCaptures, readJson, safeName, siteOf, writePrivate } from "./session.js";
-import type { Match, Operation, ResponseSpec, Site, Slot, Trigger, Volatile } from "./spec.js";
+import { fillTrigger, rescanOperation } from "./rescan.js";
+import type { Match, Operation, ResponseSpec, Site, Slot, Trigger } from "./spec.js";
 import { appendHeal, clearStale, loadSite, rememberTier, scanSecrets, updateSite } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
+
+export { fillTrigger };
 
 export const profileDir = () => join(home(), "profile");
 
@@ -34,21 +37,6 @@ export interface Attempt {
 
 export const PROFILE_HINT =
   "another api-anything process (an MCP server?) holds the browser profile; it lets go after a few seconds idle: wait, or stop it, then retry once";
-
-/** Fill `{param}` in a trigger. URL parts are percent-encoded; step values are typed as given. */
-export function fillTrigger(t: Trigger, args: Args): Trigger {
-  const enc = Object.fromEntries(Object.entries(args).map(([k, v]) => [k, encodeURIComponent(asText(v))]));
-  const step = (s: TriggerStep): TriggerStep => ({
-    ...s,
-    ...(s.selector !== undefined ? { selector: fillTemplate(s.selector, args) } : {}),
-    ...(s.value !== undefined ? { value: fillTemplate(s.value, s.action === "goto" ? enc : args) } : {}),
-  });
-  return {
-    url: fillTemplate(t.url, enc),
-    ...(t.softFrom ? { softFrom: fillTemplate(t.softFrom, enc) } : {}),
-    ...(t.steps ? { steps: t.steps.map(step) } : {}),
-  };
-}
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 // Once the steps run, only these may still load: they can't carry a write the way an image ping,
@@ -521,73 +509,6 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
 
 /* ---------------------------------------------------------------- rescan */
 
-const CHARSET: Record<Volatile["shape"]["charset"], [string, string]> = {
-  // [token chars, chars that must not touch the token]
-  digits: ["0-9", "0-9A-Za-z_"],
-  hex: ["0-9a-fA-F", "0-9A-Za-z_"],
-  base64url: ["A-Za-z0-9_-", "A-Za-z0-9_-"],
-  base64: ["A-Za-z0-9+/=", "A-Za-z0-9+/="],
-};
-const NEAR = 300;
-
-/**
- * Whether text between a token and its anchor (read left to right) keeps them in one group: no
- * bracket closes the group the scan started in, and no `;` ends a statement at that level. Meta's
- * `}),null);__d(` and X's `}},13:e=>{` end the previous module; a `"use strict";` nested inside the
- * anchor's own module does not.
- * ponytail: brackets inside string literals count too; a bundle string holding `}` could mislead it.
- */
-function sameGroup(between: string): boolean {
-  let depth = 0;
-  for (const c of between) {
-    if (c === "(" || c === "[" || c === "{") depth++;
-    else if (c === ")" || c === "]" || c === "}") {
-      if (--depth < 0) return false;
-    } else if (c === ";" && depth === 0) return false;
-  }
-  return true;
-}
-
-/**
- * The token of the recorded shape next to the anchor. The anchor must stand as its own name
- * ("Followers" is not inside "FollowersYouKnow"), and an occurrence in code beats one in prose
- * (a log message "B failed", whitespace next to it). A token in the anchor's own group beats a
- * nearer one across a module boundary; a tie between two tokens is no answer.
- * `strict` (writes, whose validation is a real send): only a token that is the one candidate.
- */
-function nearestToken(texts: string[], v: Volatile, strict = false): string | undefined {
-  const [chars, bound] = CHARSET[v.shape.charset];
-  const re = new RegExp(`(?<![${bound}])[${chars}]{${v.shape.length}}(?![${bound}])`, "g");
-  const anchor = new RegExp(`(?<![A-Za-z0-9$])${escapeRe(v.anchor)}(?![A-Za-z0-9$])`, "g");
-  const found: { token: string; d: number; same: boolean; prose: boolean }[] = [];
-  for (const text of texts) {
-    for (const a of text.matchAll(anchor)) {
-      const i = a.index;
-      const from = Math.max(0, i - NEAR);
-      const anchorEnd = i + v.anchor.length;
-      const prose = /\s/.test(text[i - 1] ?? "") || /\s/.test(text[anchorEnd] ?? "");
-      for (const m of text.slice(from, anchorEnd + NEAR).matchAll(re)) {
-        const token = m[0];
-        if (v.shape.charset !== "digits" && !hashLike(token)) continue;
-        const start = from + m.index;
-        const end = start + token.length;
-        if (end > i && start < anchorEnd) continue; // overlaps the anchor itself
-        const between = end <= i ? text.slice(end, i) : text.slice(anchorEnd, start);
-        found.push({ token, d: between.length, same: sameGroup(between), prose });
-      }
-    }
-  }
-  const code = found.some((f) => !f.prose) ? found.filter((f) => !f.prose) : found;
-  const pool = code.some((f) => f.same) ? code.filter((f) => f.same) : strict ? [] : code;
-  if (strict) {
-    const distinct = new Set(pool.map((f) => f.token));
-    return distinct.size === 1 ? [...distinct][0] : undefined;
-  }
-  const best = Math.min(...pool.map((f) => f.d));
-  const tied = new Set(pool.filter((f) => f.d === best).map((f) => f.token));
-  return tied.size === 1 ? [...tied][0] : undefined;
-}
-
 async function fetchText(url: string, headers: Record<string, string>, fetchImpl: typeof fetch): Promise<{ text: string; url: string }> {
   try {
     const r = await fetchImpl(url, { headers, redirect: "follow", signal: AbortSignal.timeout(15_000) });
@@ -597,45 +518,13 @@ async function fetchText(url: string, headers: Record<string, string>, fetchImpl
   }
 }
 
-/**
- * Browserless heal: fetch the trigger document and the scripts it references, and swap in the
- * token of each volatile's shape nearest its anchor. Undefined when nothing new was found.
- */
-export async function rescan(site: string, op: Operation, args: Args, fetchImpl: typeof fetch = fetch): Promise<{ operation: Operation; diff: string } | undefined> {
-  if (!op.volatile.length) return undefined;
+/** Rescan with this machine's session: the site's cookies ride on the document and script fetches. */
+export function rescan(site: string, op: Operation, args: Args, fetchImpl: typeof fetch = fetch): Promise<{ operation: Operation; diff: string } | undefined> {
   const session = loadSession(site);
-  const url = fillTrigger(op.trigger, args).url;
-  const headers = (u: string) => {
-    const h: Record<string, string> = {};
-    const ua = op.request.headers["user-agent"];
-    const cookie = cookieHeaderFor(session.cookies, u);
-    if (ua) h["user-agent"] = ua;
-    if (cookie) h.cookie = cookie;
-    return h;
-  };
-  const { text: doc, url: docUrl } = await fetchText(url, headers(url), fetchImpl);
-  if (!doc) return undefined;
-  // relative to the document's final URL: a redirect (a locale prefix) moves where "../static" points
-  const refs = [
-    ...doc.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi),
-    ...doc.matchAll(/<link\b[^>]*\bhref=["']([^"']+\.m?js(?:\?[^"']*)?)["']/gi),
-  ].map((m) => new URL(m[1]!, docUrl).href);
-  // ponytail: only scripts the document references directly; ids in lazily loaded chunks need recapture.
-  const scripts = await Promise.all([...new Set(refs)].slice(0, 40).map(async (s) => (await fetchText(s, headers(s), fetchImpl)).text));
-  const texts = [doc, ...scripts];
-
-  const types = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]));
-  let request = op.request;
-  const changes: string[] = [];
-  for (const v of op.volatile) {
-    const old = asText(getAt(op.request, v.at));
-    const token = nearestToken(texts, v, !op.readOnly);
-    if (!token || token === old) continue;
-    const numeric = types.get(JSON.stringify(v.at)) === "number";
-    request = setAt(request, v.at, numeric ? BigInt(token) : token);
-    changes.push(`${v.at.join(" > ")}: ${old} -> ${token}`);
-  }
-  return changes.length ? { operation: { ...op, request }, diff: changes.join("; ") } : undefined;
+  return rescanOperation(op, args, (url, headers) => {
+    const cookie = cookieHeaderFor(session.cookies, url);
+    return fetchText(url, cookie ? { ...headers, cookie } : headers, fetchImpl);
+  });
 }
 
 /* -------------------------------------------------------------- recapture */

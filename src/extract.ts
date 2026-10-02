@@ -166,12 +166,16 @@ export function extractEmbedded(body: string, regex: string): unknown {
   }
 }
 
+/** Body -> the whole value its format holds, before `extract` and `pick` narrow it. */
+export function decode(res: ResponseSpec, body: string): unknown {
+  if (res.format === "html") return res.html ? extractHtml(body, res.html) : body;
+  if (res.format === "embedded") return res.embedded ? extractEmbedded(body, res.embedded.regex) : undefined;
+  return parseBody(body, res.xssiPrefix);
+}
+
 /** Body -> extracted value per the op's response spec. Undefined when the extract path is missing. */
 export function extract(res: ResponseSpec, body: string): unknown {
-  let data: unknown;
-  if (res.format === "html") data = res.html ? extractHtml(body, res.html) : body;
-  else if (res.format === "embedded") data = res.embedded ? extractEmbedded(body, res.embedded.regex) : undefined;
-  else data = parseBody(body, res.xssiPrefix);
+  let data = decode(res, body);
   if (res.extract && data !== undefined) data = getPath(data, res.extract);
   if (res.pick?.length && data !== undefined) data = pick(data, res.pick);
   return data;
