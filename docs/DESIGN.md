@@ -410,6 +410,8 @@ is the same learning and request logic with those parts left to the host:
 - `rescanOperation(op, args, fetchText)` is the browserless heal with the host's fetch. It
   returns a candidate; validating and saving it are the host's.
 - `learnOperation`, `scanSecrets`, `classify`, `judge`, `buildRequest` and the spec schema.
+- `getPath` and `operationNameOf`, so a host's own checks over `decoded` and over a built
+  request read paths and operation names the way the spec's `extract` and `match` do.
 
 Nothing reachable from `src/core.ts` imports the file system, the browser layer, the session
 store or the spec store. `call()` and the CLI are unchanged and use the same modules.

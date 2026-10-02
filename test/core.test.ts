@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { OperationSchema, replay, rescanOperation, type Operation, type ReplayTransport, type Request } from "../src/core.ts";
+import { OperationSchema, getPath, operationNameOf, replay, rescanOperation, type Operation, type ReplayTransport, type Request } from "../src/core.ts";
 
 /** Every module `entry` reaches through relative imports, and every package or builtin they name. */
 function importGraph(entry: string): { files: Set<string>; external: Set<string> } {
@@ -113,4 +113,10 @@ test("rescanOperation swaps a rotated id using only the caller's fetch", async (
     ["https://site.test/?q=puppies", { "user-agent": "UA" }],
     ["https://site.test/static/app.js", { "user-agent": "UA" }],
   ]);
+});
+
+test("the host reads paths and operation names the way a spec's extract and match do", () => {
+  assert.deepEqual(getPath({ sections: [{ items: [1] }, { items: [2, 3] }] }, "sections[*].items"), [1, 2, 3]);
+  assert.equal(getPath({ a: 1 }, "b.c"), undefined);
+  assert.equal(operationNameOf({ method: "POST", url: "https://site.test/graphql", headers: {}, body: JSON.stringify({ operationName: "Search" }) }), "Search");
 });

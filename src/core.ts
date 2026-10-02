@@ -5,7 +5,8 @@
  */
 export { replay, type ReplayResult, type ReplayTransport } from "./replay.js";
 export { rescanOperation, type FetchText } from "./rescan.js";
-export { learnOperation, type LearnInput, type Learned } from "./learn.js";
+export { learnOperation, operationNameOf, type LearnInput, type Learned } from "./learn.js";
+export { getPath } from "./extract.js";
 export { scanSecrets } from "./secrets.js";
 export { classify, judge, type Class, type Classified, type Judged, type Observed } from "./classify.js";
 export { buildRequest } from "./http.js";
