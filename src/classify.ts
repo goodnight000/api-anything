@@ -91,10 +91,11 @@ const snippet = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 160);
 /** The vendor challenging here. `rides`: the marker also sits on ordinary pages, so a sign-in form explains it. */
 function challenge(body: string, status: number): { vendor: string; rides: boolean } | undefined {
   const head = body.slice(0, 200_000);
-  for (const [vendor, page, sdk] of CHALLENGES) {
-    if (page?.test(head)) return { vendor, rides: false };
-    if (CHALLENGE_STATUS.has(status) && sdk?.test(head)) return { vendor, rides: true };
-  }
+  const first = CHALLENGES.find(
+    ([, page, sdk]) => !!page?.test(head) || (CHALLENGE_STATUS.has(status) && !!sdk?.test(head)),
+  );
+  // one interstitial marker anywhere on the page settles it, whichever vendor is named first
+  if (first) return { vendor: first[0], rides: !CHALLENGES.some(([, page]) => page?.test(head)) };
   return CAPTCHA_WIDGET.test(head) ? { vendor: "reCAPTCHA", rides: true } : undefined;
 }
 
@@ -109,9 +110,10 @@ export function botWall(r: Observed, wantsJson = false, hasData?: () => boolean)
   const ct = (r.headers["content-type"] ?? "").toLowerCase();
   const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
   if (r.headers["cf-mitigated"] === "challenge") return "Cloudflare challenge (cf-mitigated)";
-  // Kasada's headers ride on its sites' ordinary answers too; only its challenge status is a wall.
-  if (CHALLENGE_STATUS.has(r.status) && Object.keys(r.headers).some((k) => k.toLowerCase().startsWith("x-kpsdk")))
-    return `Kasada challenge (HTTP ${r.status})`;
+  // Kasada's headers ride on its sites' ordinary answers too: only its challenge status is a wall, and
+  // not on a sign-in form (an interstitial's markers on that page are still caught below).
+  const kasada = Object.keys(r.headers).some((k) => k.toLowerCase().startsWith("x-kpsdk"));
+  if (kasada && CHALLENGE_STATUS.has(r.status) && !signInForm(body)) return `Kasada challenge (HTTP ${r.status})`;
   if (r.status >= 400 || (isHtml && (wantsJson || body.length < 64_000))) {
     const c = challenge(body, r.status);
     // A widget on a sign-in form asks for a login, which no transport tier gets past. An interstitial's

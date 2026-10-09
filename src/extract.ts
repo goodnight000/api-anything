@@ -20,7 +20,8 @@ export function parseBody(body: string, xssiPrefix?: string): unknown {
   const prefix = xssiPrefix ?? xssiOf(text) ?? "";
   if (prefix && text.startsWith(prefix)) text = text.slice(prefix.length);
   text = text.trim();
-  const chunks = /^\d+[ \t]*\r?\n/.test(text) ? parseChunks(text) : undefined;
+  // Number lines are chunk lengths only behind an XSSI prefix (Google's rt=c); bare, they are NDJSON records.
+  const chunks = prefix && /^\d+[ \t]*\r?\n/.test(text) ? parseChunks(text) : undefined;
   if (chunks) return chunks;
   const parts = prefix ? text.split(prefix) : [text];
   if (parts.length > 1) return parts.map((p) => parseJson(p.trim()));
@@ -56,12 +57,13 @@ function parseLines(text: string): unknown[] | undefined {
   return out.length ? out : undefined;
 }
 
-/** Length-prefixed chunks, each a JSON value. Undefined unless that framing covers the whole text (numbers on lines of their own are NDJSON). */
+/** Length-prefixed chunks, each a JSON value; a last length with nothing after it ends them. Undefined unless that framing covers the whole text. */
 function parseChunks(text: string): unknown[] | undefined {
   const out: unknown[] = [];
   const head = /\s*\d+[ \t]*\r?\n\s*/y;
   let i = 0;
   while (i < text.length) {
+    if (/^\s*\d+\s*$/.test(text.slice(i))) break;
     head.lastIndex = i;
     const m = head.exec(text);
     if (!m) return undefined;

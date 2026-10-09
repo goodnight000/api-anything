@@ -128,6 +128,21 @@ test("a sign-in form that embeds a CAPTCHA widget is auth; a CAPTCHA page with n
   const write = op({ readOnly: false, response: { format: "json" } });
   // an interstitial's own markers win over any form on the page (a hidden or unrelated login form)
   const walled = `<!doctype html><html><head><title>One more step</title></head><body><script src="https://geo.captcha-delivery.com/captcha/"></script><form name="js_challenge"><input name="username"><input type="password" name="password"></form></body></html>`;
+  // a script that rides on ordinary pages, named first, must not hide another vendor's interstitial
+  const both = walled.replace(
+    "<body>",
+    '<body><script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>',
+  );
+  assert.equal(cls(op(), html(403, both)), "blocked");
+  // Kasada's headers ride on its sites' ordinary answers: a 403 sign-in form with them asks for a login
+  assert.equal(
+    cls(op(), { status: 403, headers: { "content-type": "text/html", "x-kpsdk-ct": "t" }, body: signIn }),
+    "auth",
+  );
+  assert.equal(
+    cls(op(), { status: 403, headers: { "content-type": "text/html", "x-kpsdk-ct": "t" }, body: walled }),
+    "blocked",
+  );
   for (const o of [op(), listed, write]) {
     for (const status of [200, 403]) {
       assert.equal(cls(o, html(status, signIn)), "auth", `${o.response.format} ${status}`);

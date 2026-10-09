@@ -22,6 +22,9 @@ test("parseBody strips XSSI and keeps big integers exact", () => {
 test("parseBody reads Google rt=c length-prefixed chunks", () => {
   const body = ')]}\'\n\n27\n[["wrb.fr",null,"[1,2]"]]\n12\n[["di",42]]\n';
   assert.deepEqual(parseBody(body), [[["wrb.fr", null, "[1,2]"]], [["di", 42]]]);
+  // a final empty chunk ends the framing: its length is not data, on one line or after a multi-line value
+  assert.deepEqual(parseBody(')]}\'\n7\n{"a":1}\n0\n'), [{ a: 1 }]);
+  assert.deepEqual(parseBody(')]}\'\n12\n{\n "a": 1\n}\n0\n'), [{ a: 1 }]);
 });
 
 test("getPath: dots, brackets, index-only paths, dashed keys, quoted keys", () => {
@@ -161,6 +164,9 @@ test("parseBody: newline-delimited JSON and a finite event stream give an array 
   assert.deepEqual(parseBody('data: {"only":1}\n\n'), [{ only: 1 }], "one event is still a list");
   // lines that start with a number are not a length prefix: every record is kept
   assert.deepEqual(parseBody("1\n2\n3"), [1, 2, 3]);
+  assert.deepEqual(parseBody("1\n2"), [1, 2]);
+  assert.deepEqual(parseBody("1\n2\n3\n4"), [1, 2, 3, 4]);
+  assert.deepEqual(parseBody('0\n{"id":1}'), [0, { id: 1 }]);
   assert.deepEqual(parseBody('0\n{"id":1}\n{"id":2}'), [0, { id: 1 }, { id: 2 }]);
   assert.deepEqual(extract(ResponseSchema.parse({ extract: "[*].text" }), stream), ["He", "llo"]);
   assert.deepEqual(extract(ResponseSchema.parse({ pick: ["id"] }), '{"id":1,"x":0}\n{"id":2,"x":0}'), [
