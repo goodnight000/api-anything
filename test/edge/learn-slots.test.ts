@@ -109,6 +109,38 @@ test("a name the caller marked public is a constant in every pass", () => {
   assert.deepEqual([r.headers["x-app"], r.headers["x-ctx"]], [SID, `v1:${SID}`]);
 });
 
+/* ------------------------------------------------ 2: a hole has no transform */
+
+test("a cookie sitting unquoted or URL-decoded next to an arg in one leaf is refused, not left literal", () => {
+  const bare = "ajax:4815162342108151623";
+  const encoded = "eyJpdiI6IkFCQ0RFRkdISUpLTE1OT1AiLCJ2YWx1ZSI6Ing9In0%3D";
+  const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
+  const cookies = [cookie("JSESSIONID", `"${bare}"`), cookie("XSRF-TOKEN", encoded), cookie("sid", SID)];
+  const run = (ctx: string, example: Record<string, unknown> = { q: "nasa" }) =>
+    learn([xhr({ url: "https://api.site.test/v1/search?q=nasa", headers: { "x-ctx": ctx } })], [example], { cookies });
+
+  assert.throws(
+    () => run(`user=nasa;auth=${bare}`),
+    /header:x-ctx holds cookie:JSESSIONID without its quotes.*credential/,
+  );
+  assert.throws(
+    () => run(`user=nasa;xsrf=${decodeURIComponent(encoded)}`),
+    /header:x-ctx holds cookie:XSRF-TOKEN URL-decoded.*credential/,
+  );
+  // the same in a leaf no param is in: only one of its credentials can be transformed when filled
+  assert.throws(
+    () => run(`${bare}:${decodeURIComponent(encoded)}`),
+    /header:x-ctx holds cookie:XSRF-TOKEN URL-decoded/,
+  );
+
+  // control: a copy as stored is a hole, and an unquoted copy alone in its leaf is a ref with a transform
+  for (const ctx of [`user=nasa;auth="${bare}";s=${SID}`, `v1:${bare}`]) {
+    const { operation: op } = run(ctx);
+    assert.ok(!JSON.stringify(op).includes(bare) && !JSON.stringify(op).includes(SID), JSON.stringify(op.slots));
+    assert.equal(buildRequest(op, { q: "nasa" }, { cookies, values: {} }).headers["x-ctx"], ctx);
+  }
+});
+
 /* --------------------------------------------------- 3: one name, one value */
 
 test("a stored value found inside a longer leaf never takes over another credential's name", () => {

@@ -142,7 +142,9 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    them (Meta's `x-fb-lsd`) shares its ref. A cookie or stored value (≥ 16 chars) inside a longer
    leaf (`v1:<cookie>`, percent-encoded in a `next=` URL, JSON-escaped) is a templated ref that
    re-encodes it the same way; in a leaf that also holds an arg (`next=/search?q={q}&auth=<cookie>`)
-   it is a `{cookie:x}` hole in the param's template, filled at call time. When that slot has no
+   it is a `{cookie:x}` hole in the param's template, filled at call time. A hole is filled with the value as
+   stored; only a ref slot's own value takes a `transform`. So a cookie that could only be a hole and sits
+   there unquoted or URL-decoded has no safe form, and learning refuses the request rather than keep its text. When that slot has no
    escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. A capture refreshes a
    templated `session:` value from its place in the leaf. Slots never overlap: a ref for a whole container
    (a JSON body the app saved in storage, a JSON-valued header) yields to the params and refs inside it,

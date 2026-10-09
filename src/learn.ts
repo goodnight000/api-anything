@@ -873,18 +873,30 @@ function issuedRefs(refs: Refs, leaves: Leaf[], issued: string[]): void {
 }
 
 /**
+ * A hole is filled with the value as stored: only a ref slot's own value can be unquoted or
+ * URL-decoded first. A cookie held in that form where it could only be a hole has no safe
+ * representation, so the request is refused rather than learned with the cookie left in it.
+ */
+function refuseHole(l: Live, at: Step[]): never {
+  throw new Error(
+    `${at.join(" > ")} holds ${l.ref} ${l.transform === "strip-quotes" ? "without its quotes" : "URL-decoded"} beside other text filled at call time, ` +
+      "where a credential can only be refilled as stored: it would stay in the spec. Not learned",
+  );
+}
+
+/**
  * Pass 5, in a param's templated leaf: each live value it holds becomes a `{cookie:x}`/`{session:x}`
  * hole in the param's own template. Returns the request with those values taken out of the leaf,
  * since a param's leaf is not blanked like a ref's.
  */
 function holeRefs(refs: Refs, own: Slot, long: [string, Live][], request: Request): Request {
   for (const [v, l] of long) {
-    if (l.transform) continue;
     // With no escape of its own, the leaf may still hold the value encoded (x-ctx: user={q};auth=<%-encoded>):
     // the slot then takes that escape, so the hole is refilled the same way.
     const tries: (Escape | undefined)[] = own.escape ? [own.escape] : [undefined, "url", "json"];
     const i = tries.findIndex((e) => own.template!.includes(escapeTemplate(escapeValue(v, e))));
     if (i < 0) continue;
+    if (l.transform) refuseHole(l, own.at);
     const esc = tries[i];
     const form = escapeValue(v, esc);
     if (esc && !own.escape) own.escape = esc;
@@ -906,6 +918,9 @@ function templatedRef(refs: Refs, leaf: Leaf, long: [string, Live][]): void {
     ];
     const form = forms.find(([f, esc]) => template.includes(escapeTemplate(f)) && (!primary || primary.escape === esc));
     if (!form) continue;
+    // ponytail: the first value found is the slot's own, so a later one that needs a transform is
+    // refused even where it could have come first. Pick the transformed one first if a site needs it.
+    if (primary && l.transform) refuseHole(l, leaf.at);
     const ref = holeRef(refs, l, leaf.at);
     template = template.split(escapeTemplate(form[0])).join(`{${ref}}`);
     primary ??= { ref, live: l, escape: form[1] };
