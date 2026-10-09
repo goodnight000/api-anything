@@ -227,6 +227,25 @@ describe("runTrigger on awkward pages", { skip: noChrome }, () => {
     assert.ok(r.exchanges.some((e) => e.request.url.includes("/file.csv")));
   });
 
+  test("a page whose renderer hangs: the run still ends, and the browser is free for the next one", async () => {
+    const t0 = Date.now();
+    const ended = await Promise.race([
+      runTrigger({
+        url: `${fx.url}/stuck-page?name=stuck`,
+        profileDir: prof,
+        timeoutMs: 3000,
+        intercept: (e, acting) => acting && e.request.method !== "GET",
+      }).then(
+        (r) => !!data(r, "stuck"),
+        () => true,
+      ),
+      sleep(45_000).then(() => "hung"),
+    ]);
+    assert.equal(ended, true, `after ${Date.now() - t0} ms with timeoutMs 3000`);
+    const next = await runTrigger({ url: `${fx.url}/data-page?name=after`, profileDir: prof });
+    assert.ok(data(next, "after")?.response?.body);
+  });
+
   test("tier 2 works when the API origin's root redirects to another origin", async () => {
     const fx2 = await startEdgeFixture({ rootRedirect: true });
     try {

@@ -196,7 +196,11 @@ Closing a page is not atomic either: its unload handlers send, Playwright calls 
 a page once `close()` was called, and Chrome sends a request paused in a session on to the network
 when that session detaches. So when a guarded run ends, each of its pages is first taken to
 `about:blank` with its session and the guards still live, and everything it sends from then on
-fails; what is closed afterwards has nothing left to send. Service workers are
+fails; what is closed afterwards has nothing left to send. Each step of that has a bound (5 s: a
+hung renderer answers nothing, and neither `evaluate()` nor `close()` has a timeout of its own), and
+the guards are lifted only when every page of the run is known to be closed. If one is not, the
+browser is still released, the route stays until that page is gone (it acts on the run's pages
+only), and the socket guard, which drops every run's sends, is dropped after 30 s. Service workers are
 blocked in the profile, since their fetches bypass routing. The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
 run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the

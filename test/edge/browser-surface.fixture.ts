@@ -153,6 +153,9 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
       case "/late-tab-page":
         // opens a tab whose document is slow: the tab has no page yet when the run that opened it ends
         return html(res, `<script>window.open("/held-vote")</script>${dataFetch(name)}`);
+      case "/stuck-page":
+        // the renderer hangs for good shortly after load: nothing run in the page ever answers again
+        return html(res, `${dataFetch(name)}<script>setTimeout(()=>{for(;;){}},300)</script>`);
       case "/chain-page":
         // opens a tab that opens the slow tab and closes itself: the slow tab's opener is gone when its page comes
         return html(res, `<script>window.open("/chain-tab")</script>${dataFetch(name)}`);

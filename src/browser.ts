@@ -284,6 +284,9 @@ async function guardSockets(ctx: BrowserContext, guard: SocketGuard): Promise<()
 
 // How long a page gets to be emptied, and then to close, before the run ends without waiting for it.
 const SEAL_MS = 5000;
+/** A call into a page, given up on after a while: a hung renderer answers nothing, and evaluate() and close() have no timeout. */
+const within = <T>(p: Promise<T>, otherwise: T): Promise<T> =>
+  Promise.race([p.catch(() => otherwise), sleep(SEAL_MS).then(() => otherwise)]);
 
 /**
  * One page's requests as Chrome pauses them, below Playwright's routes, on a DevTools session of
@@ -705,6 +708,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   };
 
   /**
+   * The end of a run, as one sequence; true when every page of the run is known to be closed.
    * A guarded run's pages are emptied before they are closed, with their sessions and the guards
    * still live. A page that is being closed still sends (its pagehide handlers fire a beacon, a
    * client re-sends what the guard just failed), and by then nothing stops it: Playwright calls no
@@ -713,32 +717,44 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
    * the seal first: its document unloads here, what it sends last fails, and the page that is
    * closed afterwards has nothing left to send. A tab of the run that has no page (Playwright has
    * not reported it, or its opener was closed by the time it did) is closed through the browser.
-   * Pages keep being adopted meanwhile, and this goes round until there is nothing new.
+   * Pages keep being adopted meanwhile, and this goes round until there is nothing new. Every
+   * step is bounded: a page that will not be emptied or closed does not hold the run.
    */
-  const seal = async () => {
-    sealed = true;
-    const soon = (p: Promise<unknown>) => Promise.race([p.catch(() => {}), sleep(SEAL_MS)]);
-    const emptied = new Set<Page>();
-    for (const end = Date.now() + 3 * SEAL_MS; Date.now() < end; ) {
-      await Promise.all([...adopting, ...taps.values()]);
-      const fresh = [...own].filter((p) => !emptied.has(p) && !p.isClosed());
-      for (const p of fresh) {
-        emptied.add(p);
-        const tapped = await taps.get(p);
-        await soon(p.goto("about:blank", { timeout: SEAL_MS }));
-        // A round trip through the new document, then (in `answered`) through the browser:
-        // whatever the old one sent as it unloaded has been paused and failed before either returns.
-        await soon(p.evaluate(() => 0));
-        if (tapped) await soon(tapped.answered());
+  const closePages = async (): Promise<boolean> => {
+    if (guard) {
+      sealed = true;
+      const emptied = new Set<Page>();
+      for (const end = Date.now() + 3 * SEAL_MS; Date.now() < end; ) {
+        await Promise.all([...adopting, ...taps.values()]);
+        const fresh = [...own].filter((p) => !emptied.has(p) && !p.isClosed());
+        for (const p of fresh) {
+          emptied.add(p);
+          const tapped = await taps.get(p);
+          // A round trip through the new document, then (in `answered`) through the browser:
+          // whatever the old one sent as it unloaded has been paused and failed before either returns.
+          if (
+            await within(
+              p.goto("about:blank", { timeout: SEAL_MS }).then(() => true),
+              false,
+            )
+          )
+            await within(
+              p.evaluate(() => 0),
+              0,
+            );
+          if (tapped) await within(tapped.answered(), undefined);
+        }
+        while (deciding > 0 && Date.now() < end) await sleep(20);
+        const lost = strays();
+        const open = [...own].filter((p) => !p.isClosed()).map((p) => taps.get(p));
+        const through = (await Promise.all(open)).find((t) => !!t);
+        for (const id of lost) await within(through?.close(id) ?? Promise.resolve(), undefined);
+        if (!fresh.length && !lost.length) break;
+        if (lost.length) await sleep(20); // until the browser reports them gone
       }
-      while (deciding > 0 && Date.now() < end) await sleep(20);
-      const lost = strays();
-      const open = [...own].filter((p) => !p.isClosed()).map((p) => taps.get(p));
-      const through = (await Promise.all(open)).find((t) => !!t);
-      for (const id of lost) await soon(through?.close(id) ?? Promise.resolve());
-      if (!fresh.length && !lost.length) return;
-      if (lost.length) await sleep(20); // until the browser reports them gone
     }
+    await Promise.all([...own].map((p) => within(p.close(), undefined)));
+    return [...own].every((p) => p.isClosed()) && !strays().length;
   };
 
   try {
@@ -755,7 +771,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       const before = exchanges.length;
       // A link the app rendered goes through its router; otherwise the history API plus popstate,
       // which client routers (React Router, TanStack, Next) listen to. An injected <a> would not be routed.
-      await page.evaluate((u) => {
+      const routing = page.evaluate((u) => {
         const link = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find(
           (a) => a.href === u && (!a.target || a.target === "_self"),
         );
@@ -767,6 +783,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
           /* cross-origin: fall through to a plain load */
         }
       }, o.url);
+      await within(routing, undefined);
       await idle(5000);
       // ponytail: "fired anything" is the routed signal; a page whose analytics fire on pushState fools it.
       const routed = exchanges.slice(before).some((e) => ["xhr", "fetch", "document"].includes(e.resourceType));
@@ -792,15 +809,16 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     })();
     await Promise.race([settled, grace]);
     // Tokens an SPA keeps in web storage (not the jar); learning turns a request repeating one into a session: ref.
-    const storage = await page
-      .evaluate(() =>
+    const storage = await within(
+      page.evaluate(() =>
         Object.fromEntries(
           [localStorage, sessionStorage]
             .flatMap((s) => Object.keys(s).map((k) => [k, s.getItem(k) ?? ""]))
             .filter(([, v]) => v.length <= 16_384),
         ),
-      )
-      .catch(() => ({}));
+      ),
+      {},
+    );
     return {
       exchanges,
       cookies: siteCookies(await ctx.cookies(), o.url),
@@ -814,14 +832,23 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     ctx.off("requestfinished", onDone);
     ctx.off("requestfailed", onDone);
     ctx.off("response", onResponse);
+    const lift = async () => {
+      ctx.off("page", onPage);
+      if (guard) await ctx.unroute("**/*", guard).catch(() => {});
+      dropSocketSends?.();
+    };
     // New tabs are still adopted while the run ends: one opened now is the run's to close as well.
-    if (guard) await seal();
-    // Close the pages before lifting the guards: an open page still sends (a client's retry; Chrome
-    // reloads an aborted navigation's error page after a second), and unrouting releases what is paused.
-    for (const p of own) await p.close().catch(() => {});
-    ctx.off("page", onPage);
-    if (guard) await ctx.unroute("**/*", guard).catch(() => {});
-    dropSocketSends?.();
+    // The pages are closed before the guards are lifted: an open page still sends (a client's
+    // retry; Chrome reloads an aborted navigation's error page after a second), and unrouting
+    // releases what is paused.
+    if (await closePages()) await lift();
+    else {
+      // Not known to be closed (a hung renderer, a close that failed): the guards stay. The route
+      // acts on this run's pages only, so it can wait until they are gone; the socket guard drops
+      // every run's sends, so it goes after a while either way. The browser is released regardless.
+      for (const p of own) p.once("close", () => void ([...own].every((q) => q.isClosed()) && lift()));
+      setTimeout(() => dropSocketSends?.(), 6 * SEAL_MS).unref();
+    }
     release();
   }
 }
