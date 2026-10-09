@@ -188,11 +188,15 @@ would load, and write, after the guards were lifted) is closed through that sess
 not any page of the run is still open. The guards are lifted only after the run's pages are closed:
 an open page still sends (a client's retry; Chrome reloads an aborted navigation's error page after
 about a second), and removing a route releases the requests paused in it. A route is not asked about
-every request: Playwright continues by itself any paused request that has no network id, which is
-what a document sends as it unloads (a pagehide beacon, a keepalive fetch, an image ping) and a
-deferred `fetchLater()`. So each guarded page also has a DevTools session of the run's own, where the
-same guard decides those. Not covered: a frame on another site. It is a DevTools target of its own,
-and that target is gone before the frame's document unloads, so what the frame sends as it unloads
+every request. Playwright continues by itself every hop of a redirect (a stylesheet the guard
+allowed, answered with a redirect to the write, would be sent on to it) and any paused request that
+has no network id, which is what a document sends as it unloads (a pagehide beacon, a keepalive
+fetch, an image ping) and a deferred `fetchLater()`. So each guarded page also has a DevTools
+session of the run's own, where the same guard decides those; a hop is judged at its own address
+with the resource type of the request that was redirected, so a read's unsafe request that is
+redirected away from the op's `match` is aborted. Not covered: a frame on another site. It is a
+DevTools target of its own: its redirect hops would need a session on the frame, and that target is
+gone before the frame's document unloads, so what the frame sends as it unloads
 is seen by no session, one attached to the frame included (tried); what it sends while the page is
 up is routed like any request. Only interception on the browser target would see it, for every run.
 Closing a page is not atomic either: its unload handlers send, Playwright calls no route handler for

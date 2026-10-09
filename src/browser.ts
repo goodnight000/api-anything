@@ -345,13 +345,16 @@ function tabsOf(ctx: BrowserContext): Promise<Tabs> {
 
 /**
  * One page's requests as Chrome pauses them, below Playwright's routes, on a DevTools session of
- * our own. A route is not asked about every request: Playwright continues by itself any paused
- * request that has no network id, which is what a document sends as it unloads (a pagehide beacon,
- * a keepalive fetch, an image ping) and a deferred fetchLater(). `drop` is asked about each
- * request, and told whether a route will see it too.
- * ponytail: a frame on another site is a target of its own, and that target is gone before the
- * frame's document unloads: what such a frame sends as it unloads is seen by no session, its own
- * included (tried). Only interception on the browser target would see it, for every run at once.
+ * our own. A route is not asked about every request. Playwright continues by itself, calling no
+ * handler: every hop of a redirect (so an asset the guard allowed can be sent on to a write), and
+ * any paused request that has no network id, which is what a document sends as it unloads (a
+ * pagehide beacon, a keepalive fetch, an image ping) and a deferred fetchLater(). `drop` is asked
+ * about each request, and told whether a route will see it too; a hop keeps the resource type of
+ * the request that was redirected.
+ * ponytail: a frame on another site is a target of its own. Its redirect hops would need a tap on
+ * the frame; what it sends as it unloads is seen by no session, its own included (tried: the
+ * target is gone before the document unloads), only by interception on the browser target, for
+ * every run at once.
  */
 interface Tap {
   /** the page's DevTools target */
@@ -375,7 +378,7 @@ async function tap(ctx: BrowserContext, page: Page, drop: (e: Exchange, routed: 
     };
     const { requestId } = e;
     const answer = (
-      drop(ex, !!e.networkId)
+      drop(ex, !!e.networkId && !e.redirectedRequestId)
         ? cdp.send("Fetch.failRequest", { requestId, errorReason: "Aborted" })
         : cdp.send("Fetch.continueRequest", { requestId })
     ).catch(() => {}); // the request or its page is gone

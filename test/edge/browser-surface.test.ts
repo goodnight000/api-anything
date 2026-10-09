@@ -466,6 +466,28 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     });
   }
 
+  test("capture --write: a stylesheet the guard allows that is redirected to the write is stopped at the redirect", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    const r = await capturePage({
+      url: `${fx.url}/vote-page`,
+      steps: [{ action: "click", selector: "#hop" }],
+      write: true,
+    });
+    assert.ok(
+      fx.calls.slice(seen).includes("/safe.css"),
+      "the stylesheet itself was allowed, so the redirect happened",
+    );
+    assert.deepEqual(votes().slice(before), [], "the redirect carried the request to the write");
+    const hops = r.exchanges.filter((e) => e.request.url.endsWith("/api/vote?how=hop"));
+    assert.deepEqual(
+      hops.map((e) => [e.aborted, e.resourceType]),
+      [[true, "stylesheet"]],
+      "recorded once, as aborted",
+    );
+  });
+
   test("capture --write: a write that is a new tab's first navigation is recorded as aborted, so it can be learned", async () => {
     process.env.API_ANYTHING_HOME = home;
     const r = await capturePage({
