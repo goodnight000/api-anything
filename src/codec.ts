@@ -22,8 +22,8 @@ export interface Leaf {
   type: "string" | "number" | "boolean" | "null";
   /** the string was itself JSON and its leaves follow in the walk */
   container?: boolean;
-  /** on a container: a key an object in its JSON repeats. Step paths reach that key's first occurrence only. */
-  repeated?: Step[];
+  /** on a container: the keys objects in its JSON repeat. Step paths reach such a key's first occurrence only. */
+  repeated?: Step[][];
 }
 
 /* ------------------------------------------------------------- JSON spans */
@@ -390,7 +390,7 @@ function walkJsonString(s: string, at: Step[], out: Leaf[], holder: Leaf): boole
       return eachChild(s, i, (key, child) => {
         const p = `${ptr}/${escapeToken(key)}`;
         // noted where the object is walked: a repeated key may hold no leaf at all ({} twice)
-        if (c === "{" && seen.has(key)) holder.repeated ??= [...at, `json:${p}`];
+        if (c === "{" && seen.has(key)) holder.repeated = [...(holder.repeated ?? []), [...at, `json:${p}`]];
         seen.add(key);
         visit(child, p);
       });

@@ -52,8 +52,10 @@ Step kinds: `path:<i>` (URL path segment), `query:<key>`, `header:<name>`, `form
 `json:<RFC6901 pointer>` (the current string is parsed as JSON), `b64` (the current string is
 base64 of JSON), `body` (the whole body). A repeated key's later occurrences are `query[1]:<key>`,
 `form[1]:<key>`, and so on. A JSON object has no such form: a pointer reaches a key's first occurrence
-only, so learning refuses a request whose JSON repeats a key (`{"token":A,"token":B}`) rather than
-leave the later value where it can be neither blanked nor filled. Header names are lower-cased when a spec is parsed.
+only. The walk reads every occurrence, so learning knows what any of them would be, and refuses the request
+where a repeated key is, or holds, a param, a session reference or a volatile anchor in any occurrence
+(`{"token":A,"token":B}`): the later value could be neither blanked nor filled. A repeated key that is none of
+those is a constant and is sent as captured, byte for byte (`{"limit":1,"limit":2}`). Header names are lower-cased when a spec is parsed.
 Filling decodes only the layers a slot touches, sets the value, and re-encodes only those layers.
 Untouched bytes stay identical, so RestLi parens, key order and the exact encoding survive.
 No `{x}` string interpolation over raw captured text. In a slot `template`, `{{` and `}}` are
@@ -223,10 +225,11 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.
    The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header or field name a human marks public
-   (`add --public authorization` for a web app's shared bearer) is the caller's word about
-   the name, and the op lists it in `public`. The rules that go by a name skip its leaf: a per-session or
-   credential-like name, entropy under one, a value an earlier answer issued, the text beside a param. It exempts
-   nothing else. A public leaf that equals or embeds a cookie or a stored value becomes its ref as anywhere else,
+   (`add --public authorization` for a web app's shared bearer) is listed by the op in `public`
+   and keeps literal what these rules would take by that name: a header by its name (`authorization`, `x-csrf-token`),
+   a credential-like name over a random-looking value (`api_key`), a value an earlier answer issued, the text beside
+   a param. It exempts nothing else. A per-session field (`token`, `csrf`, `at`: the list above) is a ref under a
+   public name too. A public leaf that equals or embeds a cookie or a stored value becomes its ref as anywhere else,
    whatever the stored value looks like: a name or entropy rule that does not fire is no proof a stored value is
    safe to keep. One that holds a cookie or a stored credential in a form no rule can make a ref (too short, base64)
    fails the final check. The save-time scan (`heal.ts`) and export still waive a public header whole, and no other public name.

@@ -569,16 +569,20 @@ function pickRequest(input: LearnInput, args: Args, warnings: string[]): { excha
 }
 
 /**
- * A JSON object that repeats a key has a leaf no step path reaches, so a credential there could be
- * neither blanked nor filled. JSON.stringify never writes one, so a frontend's own request has none.
+ * A JSON object that repeats a key has occurrences no step path reaches: a slot there fills or
+ * blanks the first one only. The walk reads every occurrence, so `placed` (the slots, the volatile
+ * anchors) holds what any of them would be. A repeated key that is none of those, and holds none,
+ * is a constant and stays as captured.
  */
-function refuseRepeatedKeys(leaves: Leaf[]): void {
-  const at = leaves.find((l) => l.repeated)?.repeated;
-  if (!at) return;
-  throw new Error(
-    `the request has a JSON object that repeats a key (${at.join(" > ")}): only the key's first occurrence can be read or filled, ` +
-      "so a value in a later one would stay in the spec as captured. Not learned; pick a request without the repeated key",
-  );
+function refuseRepeatedKeys(leaves: Leaf[], placed: { at: Step[] }[]): void {
+  for (const at of leaves.flatMap((l) => l.repeated ?? [])) {
+    if (!placed.some((p) => key(p.at) === key(at) || covers(at, p.at))) continue;
+    throw new Error(
+      `the request has a JSON object that repeats a key (${at.join(" > ")}) where a param or a session value goes: ` +
+        "only the key's first occurrence can be filled, so a value in a later one would stay in the spec as captured. " +
+        "Not learned; pick a request without the repeated key",
+    );
+  }
 }
 
 /** Pointers inside a JSON text whose value equals want (an array or object example). */
@@ -912,11 +916,14 @@ type SecretNamed = (name: string, value: string) => boolean;
  * `secretNamed` tells the two apart for a credential-named random value: asked about a shipped one,
  * it says no and notes the name in `shipped`, for the op's public list.
  */
-function secretTest(exchanges: Exchange[]): { secretNamed: SecretNamed; shipped: Set<string> } {
+function secretTest(
+  exchanges: Exchange[],
+  publicNames: Set<string>,
+): { secretNamed: SecretNamed; shipped: Set<string> } {
   const scripts = exchanges.flatMap((e) => (staticBundle(e) && e.response?.body ? [e.response.body] : []));
   const shipped = new Set<string>();
   const secretNamed = (name: string, value: string) => {
-    if (!credentialName(name) || !highEntropy(value)) return false;
+    if (publicNames.has(name.toLowerCase()) || !credentialName(name) || !highEntropy(value)) return false;
     if (!scripts.some((b) => b.includes(value))) return true;
     shipped.add(name.toLowerCase());
     return false;
@@ -1151,14 +1158,15 @@ function sessionRefs(
     live,
     sessionValues: {},
   };
-  // The caller's word that a name is public is about the name: the rules that go by one (passes 2
-  // to 4, the text beside a param) skip its leaf. Passes 1 and 5 see every leaf: no name, and no
-  // guess at what a stored value is, keeps a cookie or a stored value from being a ref.
+  // A name the caller marked public keeps what it kept before these passes were reworked, no more:
+  // a header by its name, a credential-like name over a random-looking value, a value an earlier
+  // answer issued, the text beside a param. A per-session field name (token, csrf) is a ref all the
+  // same, and so is any cookie or stored value (passes 1 and 5 see every leaf).
   const publicNames = new Set((input.public ?? []).map((h) => h.toLowerCase()));
   const open = leaves.filter((l) => !publicNames.has(leafName(l.at).toLowerCase()));
   liveRefs(refs, leaves, publicNames);
-  const { secretNamed, shipped } = secretTest(input.exchanges);
-  fieldRefs(refs, open, secretNamed);
+  const { secretNamed, shipped } = secretTest(input.exchanges, publicNames);
+  fieldRefs(refs, leaves, secretNamed);
   headerRefs(refs, open, secretNamed);
   const issued = input.exchanges.flatMap((e) =>
     e.id < ex.id && e.response?.body && !staticBundle(e) ? [e.response.body] : [],
@@ -1172,6 +1180,7 @@ function sessionRefs(
     Object.entries(refs.sessionValues).filter(([, v]) => refs.live.get(v)?.secret !== false),
   );
   sentWhole(refs, held);
+  refuseRepeatedKeys(leaves, refs.slots);
   // A ref'd leaf's value lives in the session, not the spec: blank it.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
   refuseLeftover(request, refs.slots, { cookies, values, stored });
@@ -1245,8 +1254,7 @@ function refuseLeftover(request: Request, slots: Slot[], known: Known): void {
   if (secrets.length)
     throw new Error(
       `refusing to learn a request that would keep a credential in the spec: ${secrets.join("; ")}. ` +
-        "A cookie or a stored value is one under any name. If a session value there was found by its field or header " +
-        `name and is the same for every visitor, mark that name with --public <name>; otherwise ${ANOTHER_REQUEST}`,
+        `No name marked public waives one. Not learned: ${ANOTHER_REQUEST}`,
     );
 }
 
@@ -1552,7 +1560,6 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   const { exchange, pages } = pickRequest(input, args1, warnings);
   const captured = templateOf(exchange);
   const leaves = walk(captured);
-  refuseRepeatedKeys(leaves);
 
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
@@ -1564,6 +1571,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
 
   // 5. volatile anchors
   const volatile = volatileAnchors(request, leaves, slots);
+  refuseRepeatedKeys(leaves, volatile);
 
   // match: stable identity, with param and hash-like path segments wildcarded
   const match = input.match ?? buildMatch(request, slots);

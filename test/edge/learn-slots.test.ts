@@ -16,6 +16,7 @@ import { addOperation, type CaptureFile } from "../../src/heal.js";
 import { buildRequest } from "../../src/http.js";
 import { learnOperation, matches } from "../../src/learn.js";
 import { scanSecrets } from "../../src/secrets.js";
+import { exportSite } from "../../src/store.js";
 import type { Exchange, StoredCookie } from "../../src/types.js";
 
 const A = "Zx81kLmN0pQrStUv2wXyZ3aBcD";
@@ -70,26 +71,41 @@ const cookie = (name: string, value: string): StoredCookie => ({
 
 /* ------------------------------------------------------- repeated keys */
 
-test("a JSON object that repeats a key is refused: its later occurrence could not be blanked", () => {
+test("a repeated JSON key is refused where a slot would go, in any occurrence, and is a constant otherwise", () => {
+  const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
+  const refused: [string, string, Parameters<typeof learn>[2]?][] = [
+    // a credential by its name, in both occurrences and in the later one only
+    ["token", `{"q":"nasa","token":"${A}","token":"${B}"}`],
+    ["token", `{"q":"nasa","token":"x","token":"${B}"}`],
+    // the later occurrence is an object: its leaves are not at the first one's path either
+    ["auth", `{"q":"nasa","auth":1,"auth":{"token":"${B}"}}`],
+    // a cookie and a stored value, whichever occurrence holds it
+    ["n", `{"q":"nasa","n":"${SID}","n":"x"}`, { cookies: [cookie("sid", SID)] }],
+    ["n", `{"q":"nasa","n":"x","n":"${SID}"}`, { cookies: [cookie("sid", SID)] }],
+    ["n", `{"q":"nasa","n":1,"n":"solarized-dark"}`, { storage: { theme: "solarized-dark" } }],
+    // the param itself, and a second copy of it
+    ["q", '{"q":"nasa","q":"other"}'],
+    ["k", '{"q":"nasa","k":"x","k":"nasa"}'],
+    // a persisted-query id: a rescan would rewrite the first occurrence only
+    ["doc_id", '{"q":"nasa","doc_id":"1234567890123","doc_id":"1234567890124"}'],
+  ];
+  for (const [name, body, extra] of refused)
+    assert.throws(
+      () => learn([post(body)], [{ q: "nasa" }], extra),
+      new RegExp(`repeats a key \\(body > json:/${name}\\) where a param or a session value goes`),
+      body,
+    );
+  // in JSON inside a string too
   assert.throws(
-    () => learn([post(`{"q":"nasa","token":"${A}","token":"${B}"}`)], [{ q: "nasa" }]),
-    /repeats a key \(body > json:\/token\)/,
+    () => learn([post(JSON.stringify({ q: "nasa", vars: `{"token":"x","token":"${B}"}` }))], [{ q: "nasa" }]),
+    /repeats a key \(body > json:\/vars > json:\/token\)/,
   );
-  // the later occurrence is an object: its leaves are not at the first one's path either
-  assert.throws(
-    () => learn([post(`{"q":"nasa","auth":1,"auth":{"token":"${B}"}}`)], [{ q: "nasa" }]),
-    /repeats a key \(body > json:\/auth\)/,
-  );
-  // the repeat is seen in the object itself, so one that holds no leaf at all counts too
-  assert.throws(
-    () => learn([post('{"q":"nasa","meta":{},"meta":{}}')], [{ q: "nasa" }]),
-    /repeats a key \(body > json:\/meta\)/,
-  );
-  // and so does one in JSON inside a string
-  assert.throws(
-    () => learn([post(JSON.stringify({ q: "nasa", vars: '{"a":[],"a":[]}' }))], [{ q: "nasa" }]),
-    /repeats a key \(body > json:\/vars > json:\/a\)/,
-  );
+  // a repeated key that is no slot and holds none is sent as captured, byte for byte
+  for (const body of ['{"q":"nasa","limit":1,"limit":2}', '{"q":"nasa","meta":{},"meta":{"a":[1]},"x":"y","x":"y"}']) {
+    const { operation: op } = learn([post(body)], [{ q: "nasa" }], { public: ["limit"] });
+    assert.deepEqual(op.slots, [{ param: "q", at: ["body", "json:/q"] }]);
+    assert.equal(buildRequest(op, { q: "mars" }, { cookies: [], values: {} }).body, body.replace("nasa", "mars"));
+  }
   // control: a repeated query key has a position of its own
   const { operation: op } = learn(
     [xhr({ url: `https://api.site.test/v1/search?q=nasa&t=${A}&t=${B}` })],
@@ -103,7 +119,7 @@ test("a JSON object that repeats a key is refused: its later occurrence could no
 
 /* ------------------------------------------------------------- public */
 
-test("a name marked public is exempt from the rules that go by a name, never from a live credential", () => {
+test("a name marked public keeps no per-session field, no cookie and no stored value literal", () => {
   const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
   const NEXT = "Zx9Qw8vLm7Kj6HgF5dS4aP3oI2uY1tRe";
   const ex = xhr({
@@ -122,22 +138,59 @@ test("a name marked public is exempt from the rules that go by a name, never fro
     names,
   );
   const { operation: op, sessionValues } = learn([ex], [{ q: "kittens" }], { ...input, public: names });
-  // What only a name decided stays as captured. A cookie and a stored value, a setting too, are
-  // references whatever the leaf is called: the caller's word is about the name.
+  // Every one of them is a reference under a public name too, as it was before this file's fixes:
+  // the mark keeps a header by its name and a credential-like name literal, nothing else.
   assert.deepEqual(op.slots, [
     { param: "q", at: ["query:q"] },
     { ref: "session:op/cached", at: ["query:sv"] },
     { ref: "session:op/theme", at: ["query:theme"] },
     { ref: "cookie:sid", at: ["header:x-app"] },
+    { ref: "session:op/token", at: ["query:token"] },
     { ref: "cookie:sid", at: ["header:x-ctx"], template: "v1:{cookie:sid}" },
   ]);
-  assert.deepEqual(sessionValues, { "op/cached": B, "op/theme": "solarized-dark" });
+  assert.deepEqual(sessionValues, { "op/cached": B, "op/theme": "solarized-dark", "op/token": A });
   assert.deepEqual(op.public, names);
-  for (const live of [SID, B]) assert.ok(!JSON.stringify(op).includes(live), `${live} is in the spec`);
+  for (const live of [SID, A, B]) assert.ok(!JSON.stringify(op).includes(live), `${live} is in the spec`);
   // ...so a replay follows the jar after the cookie rotates
   const r = buildRequest(op, { q: "cats" }, { cookies: [cookie("sid", NEXT)], values: sessionValues });
   assert.equal(r.url, `https://api.site.test/v1/search?q=cats&token=${A}&sv=${B}&theme=solarized-dark`);
   assert.deepEqual([r.headers["x-app"], r.headers["x-ctx"]], [NEXT, `v1:${NEXT}`]);
+});
+
+test("a per-session field marked public is saved and exported as a reference, with no cookie or storage behind it", async () => {
+  const short = "aB3dEf9hK2";
+  const requests: [string, Parameters<typeof xhr>[0]][] = [
+    ["query:token", { url: `${local}?q=kittens&token=${short}` }],
+    [
+      "form:token",
+      {
+        method: "POST",
+        url: local,
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `q=kittens&token=${short}`,
+      },
+    ],
+    [
+      "body > json:/token",
+      {
+        method: "POST",
+        url: local,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ q: "kittens", token: short }),
+      },
+    ],
+    // a short stored value inside the field: too short to cut out, so the whole field is the reference
+    ["query:token", { url: `${local}?q=kittens&token=prefix:${short}:suffix` }],
+  ];
+  for (const [at, request] of requests) {
+    const storage = request.url.includes("prefix") ? { cache: short } : undefined;
+    const site = `public-token-${nextId}`;
+    const { operation: op } = await add(site, xhr(request), [], storage, ["token"]);
+    assert.deepEqual(op.slots.at(-1), { ref: "session:op/token", at: at.split(" > ") }, at);
+    const exported = exportSite(site);
+    for (const spec of [op, exported.spec])
+      assert.ok(!JSON.stringify(spec).includes(short), `${at}: the token is in the saved or exported spec`);
+  }
 });
 
 /* ------------------------------------------------ a hole has no transform */
@@ -528,18 +581,19 @@ test("learning refuses a request it could not clear of a live value, in any enco
     () => learn([post(JSON.stringify({ q: "kittens", csrf: "Ab3dEf9h", ctx: "v1:Ab3dEf9h" }))], [{ q: "kittens" }]),
     /keep a credential in the spec: body > json:\/ctx holds the live session value csrf\./,
   );
-  // ...but one found only by its name is no credential once the caller marks that name public
-  const named = learn(
-    [post(JSON.stringify({ q: "kittens", csrf: "Ab3dEf9h", ctx: "v1:Ab3dEf9h" }))],
-    [{ q: "kittens" }],
-    { public: ["csrf"] },
+  // ...and marking the per-session name public changes nothing: it is a reference all the same
+  assert.throws(
+    () =>
+      learn([post(JSON.stringify({ q: "kittens", csrf: "Ab3dEf9h", ctx: "v1:Ab3dEf9h" }))], [{ q: "kittens" }], {
+        public: ["csrf", "ctx"],
+      }),
+    /body > json:\/ctx holds the live session value csrf\. No name marked public waives one/,
   );
-  assert.deepEqual(named.operation.slots, [{ param: "q", at: ["body", "json:/q"] }]);
   // a cookie is one under any name: the header that holds it is refused though marked public
   const held = xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-ctx": "v1:secret123" } });
   assert.throws(
     () => learn([held], [{ q: "kittens" }], { cookies: [cookie("sess", "secret123")], public: ["x-ctx"] }),
-    /keep a credential in the spec: header:x-ctx holds the live cookie sess\. A cookie or a stored value is one under any name/,
+    /keep a credential in the spec: header:x-ctx holds the live cookie sess\. No name marked public waives one/,
   );
 });
 
