@@ -225,23 +225,34 @@ test("send: a cross-origin redirect drops cookie-derived and session headers; sa
 });
 
 test("a redirect to another origin is refused when its Location repeats a header's value, however it is encoded", () => {
-  const get = op({ request: { method: "get", url: "https://x.com/me", headers: { authorization: "" } } });
-  const from = { url: "https://x.com/me", method: "GET", headers: { authorization: "Bearer PUBLIC" } };
-  const v = "Bearer PUBLIC";
+  const get = op({
+    readOnly: true,
+    request: { method: "get", url: "https://x.com/me", headers: { authorization: "" } },
+  });
+  // a space and a literal plus, a quote and a backslash: what form and JSON encoding each treat their own way
+  const v = 'SECRET/a b+"c\\d-1234';
+  const held: Session = { cookies: [], values: { authorization: v } };
+  const from = { url: "https://x.com/me", method: "GET", headers: { authorization: v } };
+  const enc = encodeURIComponent;
+  const form = new URLSearchParams({ t: v }).toString().slice(2);
   const copies = [
-    v,
-    encodeURIComponent(v),
-    encodeURIComponent(encodeURIComponent(v)),
-    v.replace(" ", "+"),
+    enc(v),
+    enc(enc(v)),
+    form,
+    enc(JSON.stringify(v)),
+    enc(JSON.stringify(v).replaceAll("/", "\\/")),
+    // a return address inside a return address: three decodes deep, and a form-encoded one inside a percent-encoded one
+    enc(`/a?next=${enc(`/b?t=${enc(v)}`)}`),
+    enc(`/a?next=${enc(`/b?t=${form}`)}`),
     Buffer.from(v).toString("base64"),
     Buffer.from(v).toString("base64url"),
   ];
   for (const copy of copies)
     assert.throws(
-      () => nextHop(get, session, from, 302, `https://evil.example/landing?t=${copy}`),
+      () => nextHop(get, held, from, 302, `https://evil.example/landing?t=${copy}`),
       /not following the HTTP 302 redirect to https:\/\/evil\.example: /,
       copy,
     );
-  assert.equal(nextHop(get, session, from, 302, `/landing?t=${v}`).url, "https://x.com/landing?t=Bearer%20PUBLIC");
-  assert.deepEqual(nextHop(get, session, from, 302, "https://evil.example/landing").headers, {});
+  assert.equal(nextHop(get, held, from, 302, `/landing?t=${enc(v)}`).url, `https://x.com/landing?t=${enc(v)}`);
+  assert.deepEqual(nextHop(get, held, from, 302, "https://evil.example/landing").headers, {});
 });

@@ -271,9 +271,12 @@ export function nextHop(
         return v && v.length >= 4 ? [s.ref === r ? transform(v, s.transform) : v] : [];
       }),
     );
-    // ponytail: found as it is, form- or percent-encoded up to twice, or in base64; a copy the site
-    // encodes some other way (encrypted, split, base64 at an offset) passes. Refuse every
-    // cross-origin hop of an op with ref slots if that is ever met.
+    // ponytail: a search, not a proof. The address is percent- and form-decoded (a `+` is a space
+    // only before its level is decoded, or a literal %2B would become one) until nothing changes,
+    // every reading kept, so nested return addresses open; the value is looked for as it is, as a
+    // JSON string's contents, and in base64. What still passes: a copy that is encrypted, hashed,
+    // split, hex or \u-escaped, base64 at an offset or of an escaped form. Refuse every
+    // cross-origin hop of an op with ref slots if one is ever met.
     const unpct = (u: string) =>
       u.replace(/(%[0-9a-f]{2})+/gi, (m) => {
         try {
@@ -282,13 +285,23 @@ export function nextHop(
           return m;
         }
       });
-    const plain = [next.href, unpct(next.href), unpct(unpct(next.href))].flatMap((u) => [u, u.replaceAll("+", " ")]);
-    const forms = (v: string) => [
-      v,
-      Buffer.from(v).toString("base64").replace(/=+$/, ""),
-      Buffer.from(v).toString("base64url"),
-    ];
-    if (inBody || carried.some((v) => forms(v).some((f) => plain.some((u) => u.includes(f)))))
+    const readings = new Set([next.href]);
+    // a Set is walked through what is added to it: each reading is decoded in turn, to a bound
+    for (const u of readings) {
+      if (readings.size > 64) break;
+      readings.add(unpct(u)).add(unpct(u.replaceAll("+", " ")));
+    }
+    const forms = (v: string) => {
+      const json = JSON.stringify(v).slice(1, -1);
+      return [
+        v,
+        json,
+        json.replaceAll("/", "\\/"),
+        Buffer.from(v).toString("base64").replace(/=+$/, ""),
+        Buffer.from(v).toString("base64url"),
+      ];
+    };
+    if (inBody || carried.some((v) => forms(v).some((f) => [...readings].some((u) => u.includes(f)))))
       throw refused("the request would carry this session's values to another origin");
   }
   return { url: next.href, method, headers, body };
