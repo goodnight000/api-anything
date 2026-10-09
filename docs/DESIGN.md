@@ -214,7 +214,9 @@ a closing page's traffic is stopped without a record. Every wait in that sequenc
 since a hung renderer answers nothing and neither `evaluate()` nor `close()` has a timeout of its
 own: 5 s each for a page to be emptied, for its session to answer, for the browser's list of tabs
 (also when a new tab's owner is decided: no answer counts as a possible owner) and for a page or a
-stray tab to close, and 15 s for the rounds together. The guards are lifted only when every page of the run and every stray tab
+stray tab to close. No new round starts after 15 s, but a round under way runs its waits out, each
+to its own 5 s, so with a page that answers nothing the end of a run can take longer (two such
+pages took about 21 s). The guards are lifted only when every page of the run and every stray tab
 is known to be closed. If one is not, the browser is still released, and both guards stay until the
 last of them is gone: the route, which acts on the run's pages only, and the socket guard, although
 it drops every run's sends. A page that is still open can still write, and time passing is no sign
