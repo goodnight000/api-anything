@@ -184,10 +184,11 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    keeps in storage under any key) is one ref: blank in the spec and sent whole from the session at call time, so no
    key, no short leaf and no encoding of its text reaches the spec. The refs found inside it are dropped. A param
    inside it could not be filled on replay, so the learn is refused: the error names the container and the param.
-   The way on is to mark the container public (`--public x-csrf-token`, `--public body`) when the rest of it is the
-   same for every visitor: it then stays as captured, on the caller's word, with the param inside it filled.
-   Otherwise learn another request. A container that is a cookie outside a header has only that second way, since
-   the save-time scan refuses a cookie's text there whatever is marked public. Only a header is a session value by its name alone: a
+   Where the container is one by its header's name, or as a stored value that is no credential, the way on is to mark
+   it public (`--public x-csrf-token`, `--public body`) when the rest of it is the same for every visitor: it then
+   stays as captured, with the param inside it filled and any live credential inside it still a ref. Otherwise learn
+   another request. A container that is a cookie or a stored credential as a whole has only that second way: it is a
+   ref under a public name too, and the error does not offer the mark. Only a header is a session value by its name alone: a
    container under a credential-like field name is judged leaf by leaf. A stored value counts as a credential under a credential's name or when it is random-looking, in any
    entry that holds it and whatever the entries' order; a stored JSON text by its key, and each string in it on its
    own. A stored setting sent under a credential's name in the request (`token=<it>`) counts too. Newly learned session references are scoped by operation, with distinct request positions
@@ -200,8 +201,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    the stored values that are credentials, whether or not anything made them refs. A stored setting
    (a theme, a locale) is not looked for, also when a leaf that equals it made it a ref: a ref keeps a value fresh,
    it does not make it secret. A copy no rule could turn into a ref (too short to template, base64, percent-encoded
-   twice) fails the learn, closed, and the error names the leaf that holds it. What is exempt is a position, never a
-   value: a name marked public, and for stored values the caller's own example. A field's name exempts nothing. Add and heal
+   twice) fails the learn, closed, and the error names the leaf that holds it. No name exempts a leaf, one marked
+   public included; exempt is only the caller's own example, for stored values. Add and heal
    run the scan again before saving, against the site's whole session (every stored session value, settings too), and refuse to save any spec that still contains one.
    What the scan finds is a copy of a value it is given, 6 characters or longer, as it is or unquoted or URL-decoded:
    in the text; in what the text decodes to, through up to three layers of percent-encoding, JSON escapes and base64
@@ -222,10 +223,16 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.
    The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header or field name a human marks public
-   (`add --public authorization` for a web app's shared bearer) is a constant under every rule above: its leaf stays
-   literal whatever it equals or holds (a cookie, a stored value, a per-session name), and the op lists it in `public`.
-   Learning waives the position of any public name. The save-time scan (`heal.ts`) and export waive a public header
-   only: a public query or body field that holds a live cookie or session value learns, and `add` then refuses to save it.
+   (`add --public authorization` for a web app's shared bearer; `body` names a whole body) is the caller's word about
+   the name, and the op lists it in `public`. The rules that go by a name skip its leaf: a per-session or
+   credential-like name, entropy under one, a value an earlier answer issued, the text beside a param. A live
+   credential is one under any name: a public leaf that equals or embeds a cookie or a stored credential becomes its
+   ref as anywhere else, and one that holds it in a form no rule can make a ref (too short, base64) fails the final
+   check. A stored value that is no credential (a setting, a text the page saved) stays as captured under a public
+   name. The save-time scan (`heal.ts`) and export still waive a public header whole, and no other public name.
+   Learning runs first on every add and recapture, so a public header reaches them holding no cookie and no stored
+   credential the scan can find; a public query or body field that holds a session value another operation of the site stored
+   learns, and `add` then refuses to save it.
 5. **Volatile anchors.** A hash-like literal (queryId path segment, doc_id, persisted hash) gets a
    `volatile` entry recording its shape (charset + length) and a stable **anchor** string next to it
    (the GraphQL operationName or the neighboring path segment). This is what the cheap heal uses.
