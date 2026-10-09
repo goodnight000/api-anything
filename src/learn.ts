@@ -798,14 +798,11 @@ type SecretNamed = (name: string, value: string) => boolean;
  * `secretNamed` tells the two apart for a credential-named random value: asked about a shipped one,
  * it says no and notes the name in `shipped`, for the op's public list.
  */
-function secretTest(
-  exchanges: Exchange[],
-  publicNames: Set<string>,
-): { secretNamed: SecretNamed; shipped: Set<string> } {
+function secretTest(exchanges: Exchange[]): { secretNamed: SecretNamed; shipped: Set<string> } {
   const scripts = exchanges.flatMap((e) => (staticBundle(e) && e.response?.body ? [e.response.body] : []));
   const shipped = new Set<string>();
   const secretNamed = (name: string, value: string) => {
-    if (publicNames.has(name.toLowerCase()) || !credentialName(name) || !highEntropy(value)) return false;
+    if (!credentialName(name) || !highEntropy(value)) return false;
     if (!scripts.some((b) => b.includes(value))) return true;
     shipped.add(name.toLowerCase());
     return false;
@@ -825,16 +822,11 @@ function fieldRefs(refs: Refs, leaves: Leaf[], secretNamed: SecretNamed): void {
 }
 
 /** Pass 3: auth and anti-bot headers, credential-named ones, and a header repeating a value the earlier passes found. */
-function headerRefs(
-  refs: Refs,
-  headers: Record<string, string>,
-  publicNames: Set<string>,
-  secretNamed: SecretNamed,
-): void {
+function headerRefs(refs: Refs, leaves: Leaf[], secretNamed: SecretNamed): void {
   const fieldOf = new Map(Object.entries(refs.sessionValues).map(([k, v]) => [v, k]));
-  for (const [name, value] of Object.entries(headers)) {
-    const at = [`header:${name}`];
-    if (publicNames.has(name) || refs.taken.has(key(at))) continue;
+  for (const { at, value } of leaves) {
+    const name = at.length === 1 ? headerName(at) : undefined;
+    if (name === undefined || refs.taken.has(key(at))) continue;
     // Meta's x-fb-lsd repeats the lsd field: one credential, one ref.
     const same = value.length >= 8 ? fieldOf.get(value) : undefined;
     if (!same && !SESSION_HEADER.test(name) && (BROWSER_HEADER.test(name) || !secretNamed(name, value))) continue;
@@ -849,12 +841,12 @@ function headerRefs(
  * refreshed by every trigger run. Static bundles are public (above); hash-like path segments and
  * persisted-query ids are volatile anchors, healed by rescan.
  */
-function issuedRefs(refs: Refs, leaves: Leaf[], issued: string[], publicNames: Set<string>): void {
+function issuedRefs(refs: Refs, leaves: Leaf[], issued: string[]): void {
   for (const leaf of leaves) {
     if (leaf.container || leaf.type !== "string" || refs.taken.has(key(leaf.at)) || !highEntropy(leaf.value)) continue;
     const header = headerName(leaf.at);
     const name = leafName(leaf.at);
-    if (leaf.at[0]!.startsWith("path:") || VOLATILE_KEY.test(name) || publicNames.has(name.toLowerCase())) continue;
+    if (leaf.at[0]!.startsWith("path:") || VOLATILE_KEY.test(name)) continue;
     if (header && (URL_HEADER.has(leaf.at[0]!) || BROWSER_HEADER.test(header))) continue;
     const escaped = JSON.stringify(leaf.value).slice(1, -1);
     if (!issued.some((b) => b.includes(leaf.value) || b.includes(escaped))) continue;
@@ -953,16 +945,18 @@ function sessionRefs(
     live: liveValues(input.cookies, ex.request.headers.cookie, input.storage),
     sessionValues: {},
   };
-  liveRefs(refs, leaves);
+  // A name the caller marked public is a constant: no pass sees its leaf.
   const publicNames = new Set((input.public ?? []).map((h) => h.toLowerCase()));
-  const { secretNamed, shipped } = secretTest(input.exchanges, publicNames);
-  fieldRefs(refs, leaves, secretNamed);
-  headerRefs(refs, captured.headers, publicNames, secretNamed);
+  const open = leaves.filter((l) => !publicNames.has(leafName(l.at).toLowerCase()));
+  liveRefs(refs, open);
+  const { secretNamed, shipped } = secretTest(input.exchanges);
+  fieldRefs(refs, open, secretNamed);
+  headerRefs(refs, open, secretNamed);
   const issued = input.exchanges.flatMap((e) =>
     e.id < ex.id && e.response?.body && !staticBundle(e) ? [e.response.body] : [],
   );
-  issuedRefs(refs, leaves, issued, publicNames);
-  let request = embeddedRefs(refs, leaves, captured);
+  issuedRefs(refs, open, issued);
+  let request = embeddedRefs(refs, open, captured);
   // The spec never holds a credential: blank every ref'd leaf.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
   return {

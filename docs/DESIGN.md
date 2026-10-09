@@ -148,9 +148,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    The spec never holds a credential. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.
-   The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header a human marks public
-   (`add --public authorization` for a web app's shared bearer) stays literal; the op lists it in `public`,
-   and export allows it.
+   The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header or field name a human marks public
+   (`add --public authorization` for a web app's shared bearer) is a constant under every rule above: its leaf stays
+   literal whatever it equals or holds (a cookie, a stored value, a per-session name), and the op lists it in `public`.
+   Save and export waive a public header only: a public query or body field that holds a live cookie or session value is still refused.
 5. **Volatile anchors.** A hash-like literal (queryId path segment, doc_id, persisted hash) gets a
    `volatile` entry recording its shape (charset + length) and a stable **anchor** string next to it
    (the GraphQL operationName or the neighboring path segment). This is what the cheap heal uses.

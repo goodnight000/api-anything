@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildRequest } from "../../src/http.js";
 import { learnOperation } from "../../src/learn.js";
-import type { Exchange } from "../../src/types.js";
+import type { Exchange, StoredCookie } from "../../src/types.js";
 
 const A = "Zx81kLmN0pQrStUv2wXyZ3aBcD";
 const B = "Ys92jKnM1qRsTuVw3xYzA4bCdE";
@@ -48,6 +48,16 @@ const learn = (exchanges: Exchange[], examples: Examples, extra: Partial<Paramet
     ...extra,
   });
 
+const cookie = (name: string, value: string): StoredCookie => ({
+  name,
+  value,
+  domain: "site.test",
+  path: "/",
+  expires: -1,
+  httpOnly: true,
+  secure: false,
+});
+
 /* ------------------------------------------------------- 1: repeated keys */
 
 test("a JSON object that repeats a key is refused: its later occurrence could not be blanked", () => {
@@ -69,4 +79,32 @@ test("a JSON object that repeats a key is refused: its later occurrence could no
     new URL(buildRequest(op, { q: "mars" }, { cookies: [], values: {} }).url).search,
     `?q=mars&t=${A}&t=${B}`,
   );
+});
+
+/* ------------------------------------------------------------- 5: public */
+
+test("a name the caller marked public is a constant in every pass", () => {
+  const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
+  const ex = xhr({
+    // token: a per-session field by name; sv: equal to a stored value
+    url: `https://api.site.test/v1/search?q=kittens&token=${A}&sv=${B}`,
+    // x-app: equal to a cookie; x-ctx: a cookie inside a longer leaf
+    headers: { "x-app": SID, "x-ctx": `v1:${SID}`, cookie: `sid=${SID}` },
+  });
+  const input = { cookies: [cookie("sid", SID)], storage: { cached: B } };
+  const names = ["sv", "token", "x-app", "x-ctx"];
+  // control: each of the four is a reference when nobody says otherwise
+  assert.deepEqual(
+    learn([ex], [{ q: "kittens" }], input)
+      .operation.slots.flatMap((s) => (s.ref ? [s.at[0]!.split(":")[1]] : []))
+      .sort(),
+    names,
+  );
+  const { operation: op, sessionValues } = learn([ex], [{ q: "kittens" }], { ...input, public: names });
+  assert.deepEqual(op.slots, [{ param: "q", at: ["query:q"] }]);
+  assert.deepEqual(sessionValues, {});
+  assert.deepEqual(op.public, names);
+  const r = buildRequest(op, { q: "cats" }, { cookies: [], values: {} });
+  assert.equal(r.url, `https://api.site.test/v1/search?q=cats&token=${A}&sv=${B}`);
+  assert.deepEqual([r.headers["x-app"], r.headers["x-ctx"]], [SID, `v1:${SID}`]);
 });
