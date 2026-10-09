@@ -202,9 +202,10 @@ when that session detaches. So when a guarded run ends, each of its pages is fir
 fails; what is closed afterwards has nothing left to send. Emptying a page and closing it each
 have a bound (5 s: a hung renderer answers nothing, and neither `evaluate()` nor `close()` has a
 timeout of its own), and the guards are lifted only when every page of the run and every stray tab
-is known to be closed. If one is not, the browser is still released, the route stays until the
-last of them is gone (it acts on the run's pages
-only), and the socket guard, which drops every run's sends, is dropped after 30 s. Service workers are
+is known to be closed. If one is not, the browser is still released, and both guards stay until the
+last of them is gone: the route, which acts on the run's pages only, and the socket guard, although
+it drops every run's sends. A page that is still open can still write, and time passing is no sign
+that it cannot. Service workers are
 blocked in the profile, since their fetches bypass routing. The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
 run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the

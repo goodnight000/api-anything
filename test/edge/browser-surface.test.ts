@@ -697,6 +697,53 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     assert.equal(fx.wsMessages(), before, "the message was sent while learning it");
   });
 
+  test("a page that will neither empty nor close keeps the socket guard until it is really gone, however long that takes", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = fx.wsMessages();
+    const run = capturePage({ url: `${fx.url}/chat`, steps: [{ action: "wait", ms: 1500 }], write: true });
+    // after the run has started: it holds the browser. The interval is another user of it, so the
+    // browser, and the page the run could not close, are still there once the run is over.
+    const ctx = await openBrowser({ profileDir: profileDir() });
+    const keep = setInterval(() => void openBrowser({ profileDir: profileDir() }), 1000);
+    let close = async () => {};
+    try {
+      // Fault injection: the run's page answers neither the navigation that empties it nor close().
+      let page = ctx.pages().find((p) => p.url() === `${fx.url}/chat`);
+      for (const end = Date.now() + 20_000; !page && Date.now() < end; await sleep(50))
+        page = ctx.pages().find((p) => p.url() === `${fx.url}/chat`);
+      assert.ok(page, "the run's page");
+      const goto = page.goto.bind(page);
+      close = page.close.bind(page);
+      const never = new Promise<never>(() => {});
+      Object.assign(page, {
+        goto: (url: string, o?: Parameters<typeof goto>[1]) => (url === "about:blank" ? never : goto(url, o)),
+        close: () => never,
+      });
+      await run;
+      assert.equal(page.isClosed(), false, "the page is still open, with its socket");
+      // the socket guard used to be dropped 30 s after such a run: time passing does not make a page unable to write
+      await sleep(31_000);
+      await page.click("#send");
+      await sleep(300);
+      assert.equal(fx.wsMessages(), before, "a page the run never managed to close sent over its socket");
+      // once the page is really gone the guard goes too: it drops every run's sends, so it must not stay
+      await close();
+      const other = await ctx.newPage();
+      await other.goto(`${fx.url}/chat`);
+      let sent = false;
+      for (const end = Date.now() + 5000; !sent && Date.now() < end; await sleep(200)) {
+        await other.click("#send");
+        sent = fx.wsMessages() > before;
+      }
+      await other.close();
+      assert.ok(sent, "the socket guard outlived the run's last page");
+    } finally {
+      clearInterval(keep);
+      await run.catch(() => {});
+      await close().catch(() => {});
+    }
+  });
+
   test("a tier-2 request that never answers times out instead of hanging the call", async () => {
     process.env.API_ANYTHING_HOME = home;
     const t0 = Date.now();

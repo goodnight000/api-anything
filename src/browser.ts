@@ -895,9 +895,9 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     if (await closePages()) await lift();
     else {
       // Not known to be closed (a hung renderer, a close that failed): the guards stay until the
-      // run's pages and its stray tabs are all gone, whichever goes last. The route acts on this
-      // run's pages only, so it can wait; the socket guard drops every run's sends, so it goes
-      // after a while either way. The browser is released regardless.
+      // run's pages and its stray tabs are all gone, whichever goes last. That includes the socket
+      // guard, though it drops every run's sends: a page that is still open can still write, and
+      // time passing is no sign that it cannot. The browser is released regardless.
       const retire = () => {
         if (!gone()) return;
         tabs?.watchers.delete(retire);
@@ -905,7 +905,6 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       };
       tabs?.watchers.add(retire);
       for (const p of own) p.once("close", retire);
-      setTimeout(() => dropSocketSends?.(), 6 * SEAL_MS).unref();
     }
     release();
   }
