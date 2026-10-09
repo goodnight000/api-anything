@@ -2,7 +2,6 @@
 /** api-anything CLI. Compact JSON on stdout; every failure also prints one `next:` line on stderr. */
 import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { parse as parseHtml } from "node-html-parser";
 import { z } from "zod";
 import { chromeAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
 import { botWall, emptyResults, judge, type Observed } from "./classify.js";
@@ -322,19 +321,13 @@ function positive(text: string | undefined, flag: string): number | undefined {
   return Number(text);
 }
 
-/** A page's text outside its forms: a page that is only a sign-in form has none. */
-function textOutsideForms(html: string): string {
-  const root = parseHtml(html);
-  for (const el of root.querySelectorAll("form, head, script, style, noscript, template")) el.remove();
-  // the body's: the parser keeps `<!doctype html>` as text at the root
-  return (root.querySelector("body") ?? root).text.trim();
-}
-
 /**
  * What the page a capture ended on says about learning from it. `stop`: nothing to learn here, it
- * is a sign-in page or an HTTP error. `also`: it shows a sign-in form beside content or data, as a
- * public page may, so that is said next to the recommendation and not instead of it. `status`: its
- * HTTP error, when a request it loaded is recommended all the same.
+ * is a sign-in page or an HTTP error. `also`: it shows a sign-in form, as a public page may too, so
+ * that is said next to the recommendation and not instead of it. `status`: its HTTP error, when a
+ * request it loaded is recommended all the same.
+ * "Sign-in page" takes direct evidence, never the look of the page: the navigation landed on a login
+ * path, or example values were given, no answer in the capture holds one, and the page shows the form.
  */
 function pageSays(
   c: CaptureFile,
@@ -342,13 +335,7 @@ function pageSays(
   ranked: Candidate[],
   values: string[],
 ): { stop?: string; also?: string; status?: number } {
-  const pages = capturePages(c).map((u) => u.split("#")[0]);
-  // the main frame's last document: a widget's iframe is a document too
-  const page = c.exchanges
-    .filter((e) => e.resourceType === "document" && e.response && pages.includes(e.request.url))
-    .at(-1);
-  if (!page?.response) return {};
-  const { status, headers, body = "" } = page.response;
+  const wall = "the page is a sign-in page: ask the user to run api-anything login <site>, then capture again";
   // what the classifier makes of a page nothing was learned from yet: a read whose recipe finds nothing
   const unlearned = OperationSchema.parse({
     name: "page",
@@ -359,25 +346,25 @@ function pageSays(
   });
   const signIn = (seen: Observed) => judge(unlearned, { ...seen, url: c.finalUrl }).class === "auth";
   // Shown neither markup nor status, the classifier can only go by where the navigation landed: a login path.
-  const landed = signIn({ status: 200, headers: {}, body: "" });
+  if (signIn({ status: 200, headers: {}, body: "" })) return { stop: wall };
+  const pages = capturePages(c).map((u) => u.split("#")[0]);
+  // the main frame's last document: a widget's iframe is a document too
+  const page = c.exchanges
+    .filter((e) => e.resourceType === "document" && e.response && pages.includes(e.request.url))
+    .at(-1);
+  if (!page?.response) return {};
+  const { status, headers, body = "" } = page.response;
   const form = signIn({ status, headers, body });
-  const shown = values.some((x) => x.length >= 3 && body.toLowerCase().includes(x.toLowerCase()));
-  // The page is the form and nothing else: no other candidate, no example value, no text outside its forms.
-  const bare = form && ranked.every((x) => x.id === page.id) && !shown && !textOutsideForms(body);
+  const asked = values.filter((x) => x.length >= 3).map((x) => x.toLowerCase());
+  const answers = () => c.exchanges.map((e) => (e.response?.body ?? "").toLowerCase());
+  if (form && asked.length && !answers().some((a) => asked.some((x) => a.includes(x)))) return { stop: wall };
+  const also =
+    "the page also shows a sign-in form: if the data you want is missing, ask the user to run api-anything login <site> first";
   // An error is a dead end when the erroring page is itself what would be recommended, not when a
   // data request it loaded is (a static host's 404 fallback serving the app).
-  const failed = status >= 400 && (ranked[0]?.id ?? page.id) === page.id;
-  if (landed || bare || (form && failed))
-    return { stop: "the page is a sign-in page: ask the user to run api-anything login <site>, then capture again" };
-  if (failed) return { stop: `the page answered HTTP ${status}: check the URL, then capture again` };
-  return {
-    ...(form
-      ? {
-          also: "the page also shows a sign-in form: if the data you want is missing, ask the user to run api-anything login <site> first",
-        }
-      : {}),
-    ...(status >= 400 ? { status } : {}),
-  };
+  if (status >= 400 && (ranked[0]?.id ?? page.id) === page.id)
+    return { stop: `the page answered HTTP ${status}: check the URL, then capture again${form ? `; ${also}` : ""}` };
+  return { ...(form ? { also } : {}), ...(status >= 400 ? { status } : {}) };
 }
 
 async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {

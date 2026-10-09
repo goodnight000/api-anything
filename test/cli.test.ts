@@ -519,33 +519,25 @@ describe("capture's next hint", { skip: noChrome }, () => {
   const learn = /\badd <site> <op> --from c/;
   const alsoForm = /sign-in form.*api-anything login/;
 
-  test("a sign-in page or an HTTP error is not offered as something to learn from", async () => {
-    const walls = { "/private": "served in place: nothing on it but the form", "/account": "landed on a login path" };
-    for (const [path, why] of Object.entries(walls)) {
-      const { next } = await capture(path);
-      assert.match(next, signInPage, why);
-      assert.doesNotMatch(next, learn, why);
+  test("'sign-in page' takes direct evidence: a login path, or example values that no answer holds", async () => {
+    const walls = [
+      ["/account"], // the navigation landed on /signin
+      ["/private", "--example", "name=alice"], // a sign-in form, and alice is in no response of the capture
+    ];
+    for (const [path, ...flags] of walls) {
+      const { next } = await capture(path!, ...flags);
+      assert.match(next, signInPage, path);
+      assert.doesNotMatch(next, learn, path);
     }
-    const gone = (await capture("/no/such/page")).next;
-    assert.match(gone, /404.*URL/);
-    assert.doesNotMatch(gone, learn);
   });
 
-  test("an erroring document does not hide the data request it loaded", async () => {
-    // a static host's 404 fallback serving the app, which fetches the user's JSON
-    const out = await capture("/app/alice", "--example", "name=alice");
-    assert.equal(out.candidates[0].kind, "fetch");
-    assert.match(out.next, learn);
-    assert.doesNotMatch(out.next, /check the URL/);
-    assert.equal(out.pageStatus, 404, "the document's status is reported on its own");
-  });
-
-  test("a sign-in form on a page with content or data is said beside the recommendation, not instead", async () => {
+  test("a sign-in form with nothing to say the data is missing is said beside the recommendation", async () => {
     const pages = [
-      ["/forum"], // the member list under a login box, no example given
-      ["/community", "--example", "name=zelda"], // a redirect to it, with an example that is not on it
-      ["/card/alice", "--example", "name=alice"], // the example only in the page's state JSON
-      ["/forum/alice", "--example", "name=alice"], // the data in a JSON request
+      ["/private"], // a login page served in place, but no example to miss
+      ["/card/alice"], // public data in the page's state JSON, under a login box
+      ["/catalog"], // a public listing that sits inside the search form
+      ["/community"], // a redirect, to a public page with a login box
+      ["/forum/alice", "--example", "name=alice"], // the example is in a JSON request's answer, not in the page
     ];
     for (const [path, ...flags] of pages) {
       const { next } = await capture(path!, ...flags);
@@ -553,5 +545,17 @@ describe("capture's next hint", { skip: noChrome }, () => {
       assert.match(next, learn, path);
       assert.match(next, alsoForm, path);
     }
+  });
+
+  test("an HTTP error is a dead end only when the erroring page is itself the best candidate", async () => {
+    const gone = (await capture("/no/such/page")).next;
+    assert.match(gone, /404.*URL/);
+    assert.doesNotMatch(gone, learn);
+    // a static host's 404 fallback serving the app, which fetches the user's JSON
+    const out = await capture("/app/alice", "--example", "name=alice");
+    assert.equal(out.candidates[0].kind, "fetch");
+    assert.match(out.next, learn);
+    assert.doesNotMatch(out.next, /check the URL/);
+    assert.equal(out.pageStatus, 404, "the document's status is reported on its own");
   });
 });
