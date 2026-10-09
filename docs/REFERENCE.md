@@ -48,6 +48,10 @@ re-run `add --from <one of the captures>`: no browser needed. For a server-rende
 `inspect` accepts the same recipe flags (`--extract`, `--pick`, `--html`, `--embedded`), so you can
 try a recipe first: it exits non-zero when a path or selector finds nothing.
 
+`add` can also learn from a saved capture instead of running the trigger: `add <site> <op> --from
+<capture> --pick-request <id> --example k=v`. A capture holds one run, so the second example needs a
+second capture of the page, made with its values: `--from2 <capture2> --example2 k=v2`.
+
 ## Replay, fallback and repair
 
 Besides its request template, each operation stores two things:

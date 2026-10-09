@@ -82,7 +82,8 @@ const HELP: Record<string, string> = {
   --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON)
   --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser);
                   every add saves its own runs as captures, so a wrong --extract is fixed this way
-  --from2 <id>    a second capture made with --example2 values, for the two-run diff
+  --from2 <id>    a second capture, made with the --example2 values, for the two-run diff; with --from,
+                  --example2 needs it: capture the page again with those values
   --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
   --pick a,b.c,name=x.y  fields kept per item; name=path renames the key, name=path~regex keeps regex group 1
   --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages;
@@ -506,6 +507,11 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   if (!v.from) needChrome();
   if (v.from2 && !ex2)
     throw new Fail("--from2 needs --example2 (the values that capture was made with)", "api-anything add --help");
+  if (v.from && v.example2 && !v.from2)
+    throw new Fail(
+      "--example2 with --from needs --from2: a capture holds one run",
+      `capture the page again with the second example's values (api-anything capture <that page's url> --example ${v.example2.join(" --example ")}), then run this add again with --from2 <the new capture's id>`,
+    );
   const r = await addOperation({
     site,
     op: name,

@@ -120,7 +120,9 @@ don't capture pages the user didn't ask for.
      request rather than dropping the param.
    - An op with no args (a feed, a list) needs `--match path=/api/feed` to say which request.
    - If `add` warns that the match is ambiguous, or picks the wrong request, run `capture` again
-     and use `add --from <captureId> --pick-request <id>`.
+     and use `add --from <captureId> --pick-request <id>`. A capture holds one run, so a second
+     example needs its own: capture the page with those values, then add `--from2 <captureId2>
+     --example2 k=v`.
    - A copy of the page's own URL in a request (analytics `page.url`, `?src=`) is not evidence
      that the request reads the arg, so `add` won't learn from it on its own. If the data request
      really takes the page path (a route resolver posting `{"path":"/facebook/react"}`), pick it

@@ -182,7 +182,46 @@ describe("inspect", () => {
   });
 });
 
-describe("capture's next hint", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
+const noChrome = !chromeAvailable() && "Google Chrome not installed";
+
+describe("add from a saved capture", { skip: noChrome }, () => {
+  // Captures of /u/alice and /u/bob, each with the id of the request for the user's data.
+  const saved: Record<string, { capture: string; request: string }> = {};
+  before(async () => {
+    for (const name of ["alice", "bob"]) {
+      const out = JSON.parse((await cli("capture", `${fx.url}/u/${name}`, "--example", `name=${name}`)).stdout);
+      saved[name] = { capture: out.capture, request: String(out.candidates[0].id) };
+    }
+  });
+  const add = async (op: string, from: string, ...flags: string[]) => {
+    const { capture, request } = saved[from]!;
+    const r = await cli("add", "fixture", op, "--from", capture, "--pick-request", request, ...flags);
+    return { ...r, out: JSON.parse(r.stdout) };
+  };
+
+  test("--example2 with --from and no --from2 is refused, and the way it says to go works", async () => {
+    const r = await add("twice", "alice", "--example", "name=alice", "--example2", "name=bob");
+    assert.equal(r.code, 1, r.stdout);
+    assert.deepEqual(r.out, { ok: false, error: "--example2 with --from needs --from2: a capture holds one run" });
+    assert.match(r.stderr, /^next: capture the page again .*api-anything capture .* --example name=bob.* --from2 /m);
+    assert.equal((await cli("ops", "fixture")).code, 1, "nothing was saved");
+
+    const both = await add(
+      "twice",
+      "alice",
+      "--example",
+      "name=alice",
+      "--from2",
+      saved.bob!.capture,
+      "--example2",
+      "name=bob",
+    );
+    assert.equal(both.code, 0, both.stdout);
+    assert.deepEqual(both.out.warnings, [], "the two captures were diffed: no 'learned from one example'");
+  });
+});
+
+describe("capture's next hint", { skip: noChrome }, () => {
   const next = async (path: string, ...flags: string[]) =>
     JSON.parse((await cli("capture", `${fx.url}${path}`, ...flags)).stdout).next as string;
 
