@@ -184,6 +184,11 @@ export async function startFixture(): Promise<Fixture> {
         return void res
           .writeHead(200, { "content-type": "text/html" })
           .end('<!doctype html><title>me</title><script>fetch("/api/me")</script>');
+      // a wall that answers a non-browser client the way a framework answers a stale CSRF token
+      case "/api/picky":
+        return /Chrome\//.test(req.headers["user-agent"] ?? "")
+          ? json(res, { items: [{ picky: "ok" }] })
+          : json(res, { message: "CSRF token mismatch." }, 419);
       // double-submit CSRF: the header must repeat the ct cookie
       case "/api/csrf": {
         const ct = /(?:^|; )ct=([^;]+)/.exec(cookie)?.[1];

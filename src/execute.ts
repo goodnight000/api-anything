@@ -15,7 +15,7 @@ import {
   profileDir,
   runOpTrigger,
 } from "./heal.js";
-import { buildRequest, type Sent, send, withDefaults } from "./http.js";
+import { buildRequest, holdsRef, type Sent, send, withDefaults } from "./http.js";
 import { reimportIfBrowser } from "./login.js";
 import { loadSession, loggedIn, mergeCapture, type Session, saveSession, sessionFile, withLock } from "./session.js";
 import type { Operation, Site } from "./spec.js";
@@ -397,8 +397,10 @@ export async function call(
       next: `delete ${sessionFile(siteName)}, then ask the user to run api-anything login ${siteName} if the site needs an account`,
     });
   }
+  let bare: boolean;
   try {
-    buildRequest(op, args, session);
+    // No cookie and no session value goes out with this request: nothing a login could renew.
+    bare = !buildRequest(op, args, session).headers.cookie && !op.slots.some(holdsRef) && !op.learnedLoggedIn;
   } catch (e) {
     return done({ ok: false, class: "input", reason: (e as Error).message, next: nextFor("input", siteName, op) });
   }
@@ -462,6 +464,15 @@ export async function call(
     }
     if (a.class === "blocked" && tier < (write ? 2 : 3)) {
       notes.push(`tier ${tier} was blocked (${a.reason})`);
+      tier++;
+      continue;
+    }
+    // An auth answer to a request that carried no credential is not a session that ran out: the
+    // transport was turned away (a wall that answers 419 or 401 to a client it does not like), or the
+    // page computes a token the template lacks. A browser tier settles it, and a real login wall still
+    // answers auth there. Only when that tier can run, so the answer stays auth where it cannot.
+    if (a.class === "auth" && bare && tier < Math.min(write ? 2 : 3, ctx.maxTier) && chromeAvailable()) {
+      notes.push(`tier ${tier} said auth to a request that carried no credential (${a.reason})`);
       tier++;
       continue;
     }

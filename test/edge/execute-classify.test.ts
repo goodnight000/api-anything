@@ -640,6 +640,26 @@ describe("allowWrites at every entry point", () => {
   });
 });
 
+test("auth with no credential sent stays auth when no browser tier may run, or when one was sent", async () => {
+  site(
+    "pickyoff",
+    rd("items", "/api/picky"),
+    rd("withref", "/api/picky", {
+      request: { method: "GET", url: `${fx.base}/api/picky`, headers: { "x-token": "" } },
+      slots: [{ ref: "session:x-token", at: ["header:x-token"] }],
+    }),
+  );
+  // capped at tier 1: the answer is the site's, with the login hint, not "needs tier 2"
+  const capped = await call("pickyoff", "items", {}, t1);
+  assert.equal(capped.class, "auth", JSON.stringify(capped));
+  assert.equal(capped.tier, 1);
+  // an op that sends a session value: its auth answer is the session's, and takes the recovery path
+  fx.hits.length = 0;
+  const withref = await call("pickyoff", "withref", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 3000 });
+  assert.equal(withref.class, "auth", JSON.stringify(withref));
+  assert.equal(withref.tier, 1);
+});
+
 /* ----------------------------------------------------------------- Chrome-only */
 
 describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
@@ -847,6 +867,21 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     assert.equal(r.tier, 3);
     assert.match(r.reason ?? "", /^tier 2 said auth .*refreshed the session/);
     assert.equal((await call("t2token", "items", {}, o)).tier, 2, "the refreshed value serves tier 2");
+  });
+
+  test("auth answered to a request that carried no credential is tried at the next tier, and remembered", async () => {
+    site("picky", rd("items", "/api/picky"));
+    const o = { minIntervalMs: 0, timeoutMs: 5000 };
+    fx.hits.length = 0;
+    const r = await call("picky", "items", {}, o);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 2);
+    assert.deepEqual(r.data, [{ picky: "ok" }]);
+    assert.match(r.reason ?? "", /tier 1 said auth to a request that carried no credential/);
+    // the next call starts where this one got through
+    fx.hits.length = 0;
+    assert.equal((await call("picky", "items", {}, o)).tier, 2);
+    assert.equal(fx.hits.filter((h) => h.url === "/api/picky").length, 1, "tier 1 was not tried again");
   });
 
   test("tier 2 honours timeoutMs", async () => {
