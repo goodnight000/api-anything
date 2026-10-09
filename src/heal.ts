@@ -494,7 +494,14 @@ function previewOf(data: unknown): AddResult["preview"] {
 export async function addOperation(input: AddInput): Promise<AddResult> {
   const i = { ...input, site: safeName(input.site) };
   const existing = loadSite(i.site)?.site;
-  const [ex1, ex2] = i.examples;
+  // Re-adding an op from a capture to repair its recipe: with no example it would lose its params,
+  // so the example values stored with it stand in.
+  const stored = existing?.operations.find((o) => o.name === i.op)?.params.filter((p) => p.example !== undefined) ?? [];
+  const reused =
+    i.from && !Object.keys(i.examples[0]).length && stored.length
+      ? `no example was given, so ${i.op}'s stored one (${stored.map((p) => `${p.name}=${asText(p.example)}`).join(", ")}) stands in`
+      : undefined;
+  const [ex1, ex2] = reused ? [Object.fromEntries(stored.map((p) => [p.name, p.example])), i.examples[1]] : i.examples;
   // before any browser run: a too-short or duplicate example would only fail after it
   if (ex1) checkExamples(ex1, "example");
   if (ex2) checkExamples(ex2, "example 2");
@@ -559,25 +566,32 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   }
   const r = i.response ?? {};
   const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
-  const learned = learnOrExplain(i.site, run1, {
-    exchanges: run1.exchanges,
-    pages: capturePages(run1),
-    exchanges2: run2?.exchanges,
-    examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
-    cookies: (run2 ?? run1).cookies,
-    storage: { ...run2?.storage, ...run1.storage },
-    match: i.match,
-    id: i.from?.id,
-    name: i.op,
-    trigger,
-    readOnly: !i.write,
-    loginCookies: existing?.loginCookies,
-    public: i.public,
-    // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
-    ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
-  });
+  let learned: ReturnType<typeof learnOperation>;
+  try {
+    learned = learnOrExplain(i.site, run1, {
+      exchanges: run1.exchanges,
+      pages: capturePages(run1),
+      exchanges2: run2?.exchanges,
+      examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
+      cookies: (run2 ?? run1).cookies,
+      storage: { ...run2?.storage, ...run1.storage },
+      match: i.match,
+      id: i.from?.id,
+      name: i.op,
+      trigger,
+      readOnly: !i.write,
+      loginCookies: existing?.loginCookies,
+      public: i.public,
+      // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
+      ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
+    });
+  } catch (e) {
+    // the capture may have been made with other values than the stored ones
+    throw reused ? new Error(`${(e as Error).message}; ${reused}: pass --example with this capture's values`) : e;
+  }
   const recipe = r.html ?? r.embedded;
   const warnings = learned.warnings.filter((w) => !(recipe && w.startsWith("response is HTML")));
+  if (reused) warnings.push(reused);
   if (unplaced.length)
     warnings.push(
       `the trigger has no {${unplaced.join("}, {")}}: tier-3 runs and heals would load the example's page; put the param in --trigger`,

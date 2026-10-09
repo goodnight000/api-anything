@@ -43,7 +43,8 @@ shape (ids and sizes vary). `--pick`
 accepts `name=path` to rename a field, `name=path~regex` to keep the part of a string the
 regex's group 1 finds (`publicId=navigationUrl~/in/([^/?]+)`), and `[*]` in a path collects from every array item
 (`sections[*].items` joins each section's items); items with none of the picked fields are dropped. If the preview is wrong, fix `--extract`/`--pick` and
-re-run `add --from <one of the captures>`: no browser needed. For a server-rendered page, use
+re-run `add --from <the first of the captures>`: no browser needed, and the operation keeps its
+example values unless you pass `--example`. For a server-rendered page, use
 `--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page.
 `inspect` accepts the same recipe flags (`--extract`, `--pick`, `--html`, `--embedded`), so you can
 try a recipe first: it exits non-zero when a path or selector finds nothing.

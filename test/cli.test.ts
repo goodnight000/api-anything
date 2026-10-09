@@ -193,31 +193,52 @@ describe("add from a saved capture", { skip: noChrome }, () => {
       saved[name] = { capture: out.capture, request: String(out.candidates[0].id) };
     }
   });
-  const add = async (op: string, from: string, ...flags: string[]) => {
+  /** add fixture <op> from the capture of that user's page; `flags` are split on spaces. */
+  const add = async (op: string, from: string, flags: string) => {
     const { capture, request } = saved[from]!;
-    const r = await cli("add", "fixture", op, "--from", capture, "--pick-request", request, ...flags);
+    const r = await cli("add", "fixture", op, "--from", capture, "--pick-request", request, ...flags.split(" "));
     return { ...r, out: JSON.parse(r.stdout) };
   };
 
   test("--example2 with --from and no --from2 is refused, and the way it says to go works", async () => {
-    const r = await add("twice", "alice", "--example", "name=alice", "--example2", "name=bob");
+    const r = await add("twice", "alice", "--example name=alice --example2 name=bob");
     assert.equal(r.code, 1, r.stdout);
     assert.deepEqual(r.out, { ok: false, error: "--example2 with --from needs --from2: a capture holds one run" });
     assert.match(r.stderr, /^next: capture the page again .*api-anything capture .* --example name=bob.* --from2 /m);
     assert.equal((await cli("ops", "fixture")).code, 1, "nothing was saved");
 
-    const both = await add(
-      "twice",
-      "alice",
-      "--example",
-      "name=alice",
-      "--from2",
-      saved.bob!.capture,
-      "--example2",
-      "name=bob",
-    );
+    const both = await add("twice", "alice", `--example name=alice --from2 ${saved.bob!.capture} --example2 name=bob`);
     assert.equal(both.code, 0, both.stdout);
     assert.deepEqual(both.out.warnings, [], "the two captures were diffed: no 'learned from one example'");
+  });
+
+  test("repairing a recipe from a capture keeps the op's params: its stored examples stand in", async () => {
+    const wrong = await add("getUser", "alice", "--example name=alice --extract data.wrong");
+    assert.deepEqual(wrong.out.params, ["name:string"]);
+    assert.match(wrong.out.warnings.join("\n"), /Fix --extract.* and re-run add --from/);
+
+    // that advice, followed to the letter: no --example this time
+    const fixed = await add("getUser", "alice", "--extract data.user --pick name");
+    assert.equal(fixed.code, 0, fixed.stdout);
+    assert.deepEqual(fixed.out.params, ["name:string"]);
+    assert.match(
+      fixed.out.warnings.join("\n"),
+      /no example was given, so getUser's stored one \(name=alice\) stands in/,
+    );
+    const carol = JSON.parse((await cli("call", "fixture", "getUser", "name=carol")).stdout);
+    assert.deepEqual(carol.data, { name: "carol" }, JSON.stringify(carol));
+
+    // an --example still wins, and is the stored one from then on
+    const bob = await add("getUser", "bob", "--example name=bob --extract data.user --pick name");
+    assert.deepEqual(bob.out.preview, { first: { name: "bob" } });
+    assert.doesNotMatch(bob.out.warnings.join("\n"), /stored/);
+    // a capture made with other values than the stored ones: the failure says which were tried
+    const other = await add("getUser", "alice", "--extract data.user");
+    assert.equal(other.code, 1, other.stdout);
+    assert.match(
+      other.out.error,
+      /no example was given, so getUser's stored one \(name=bob\) stands in: pass --example/,
+    );
   });
 });
 

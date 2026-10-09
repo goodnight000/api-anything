@@ -81,7 +81,8 @@ const HELP: Record<string, string> = {
   --soft-from     neutral page to load first, then navigate in-page to the trigger
   --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON)
   --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser);
-                  every add saves its own runs as captures, so a wrong --extract is fixed this way
+                  every add saves its own runs as captures, so a wrong --extract is fixed this way:
+                  re-added with no --example, an op keeps its stored example values (and so its params)
   --from2 <id>    a second capture, made with the --example2 values, for the two-run diff; with --from,
                   --example2 needs it: capture the page again with those values
   --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
