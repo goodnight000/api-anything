@@ -204,6 +204,15 @@ export async function startFixture(): Promise<Fixture> {
                 '<!doctype html><title>Log in</title><form action="/login"><input name="user"><input type="password" name="pw"></form>',
               )
           : void res.writeHead(307, { location: "/api/save?login=1" }).end();
+      // a button whose handler fires twice (a double-bound listener), next to a request that belongs with the write
+      case "/double-page":
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end(
+            '<!doctype html><title>double</title><button id="go">go</button><script>document.getElementById("go").onclick=()=>{' +
+              'fetch("/api/companion",{method:"POST",body:"c=1"});' +
+              'for(let i=0;i<2;i++)fetch("/api/double",{method:"POST",body:"x=1"})}</script>',
+          );
       case "/save-page":
         return void res
           .writeHead(200, { "content-type": "text/html" })

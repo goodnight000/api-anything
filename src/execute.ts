@@ -128,10 +128,14 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       // For a write this is the UI sending it: the one attempt.
       const run = await runOpTrigger(ctx.site, op, ctx.args);
       const judged = run.matched && judgeExchange(op, run.matched);
-      if (judged) return judged;
-      if (run.loginWall)
-        return { tier, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` };
-      return { tier, class: "drift", reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` };
+      const a: Attempt =
+        judged ||
+        (run.loginWall
+          ? { tier, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` }
+          : { tier, class: "drift", reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` });
+      if (!run.repeats) return a;
+      const stopped = run.repeats === 1 ? "the repeat was" : `${run.repeats} repeats were`;
+      return { ...a, note: `the page sent this write ${run.repeats + 1} times: ${stopped} stopped in the browser` };
     }
     const session = loadSession(ctx.site);
     let r: Sent | PageFetchResult;
@@ -454,14 +458,16 @@ export async function call(
       });
     }
     const a = await attempt(ctx, op, tier);
+    if (a.note) notes.push(a.note);
     if (a.class === "ok") {
       // Only an escalation is remembered; a tier the spec itself asks for is not, so editing minTier takes effect.
       const keep = tier > op.minTier ? tier : undefined;
       if (remembered !== keep) rememberTier(siteName, op.name, keep);
       return done(noted(a));
     }
+    const reason = a.note ? `${a.reason}; ${a.note}` : a.reason;
     const fail = (): CallResult =>
-      done({ ok: false, class: a.class, tier, reason: a.reason, next: nextFor(a.class, siteName, op, a) });
+      done({ ok: false, class: a.class, tier, reason, next: nextFor(a.class, siteName, op, a) });
     if (write && !notRun(a)) return fail();
     // A bare 403 is a wall or a refusal of this one entity (a private profile): if the example args
     // answer through the same tier, the args are the problem, and a browser run would not help.

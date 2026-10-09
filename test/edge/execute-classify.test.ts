@@ -1000,9 +1000,34 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
       assert.equal(r.ok, false);
       assert.match(r.next ?? "", /check the site/);
       assert.doesNotMatch(r.next ?? "", /retry once/);
+      // the server's own 307 is the one send going on, not a second one: it is not stopped
+      assert.ok(
+        fx.hits.some((h) => h.method === "POST" && h.url === "/api/save?login=1"),
+        "the redirect of the write was aborted",
+      );
     } finally {
       delete process.env.API_ANYTHING_BROWSER_ROOTS;
     }
+  });
+
+  test("a tier-3 write whose page sends it twice is performed once, and the result says a repeat was stopped", async () => {
+    site("t3twice", {
+      ...rd("save", "/api/double", {
+        minTier: 3,
+        trigger: { url: `${fx.base}/double-page`, steps: [{ action: "click", selector: "#go" }] },
+        match: { method: "POST", path: "/api/double" },
+      }),
+      readOnly: false,
+      request: { method: "POST", url: `${fx.base}/api/double`, headers: {}, body: "x=1" },
+      response: { format: "json" },
+    });
+    const r = await call("t3twice", "save", {}, { allowWrites: true, minIntervalMs: 0, timeoutMs: 5000 });
+    const posts = (path: string) => fx.hits.filter((h) => h.method === "POST" && h.url === path).length;
+    assert.equal(posts("/api/double"), 1, `the write reached the server ${posts("/api/double")} times`);
+    assert.equal(posts("/api/companion"), 1, "what else the trigger sends is left alone");
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 3);
+    assert.match(r.reason ?? "", /sent this write 2 times.* stopped/);
   });
 
   test("auth at tier 2 from a stale cookie behind a header ref: the jar is refreshed from the profile, one retry", async () => {

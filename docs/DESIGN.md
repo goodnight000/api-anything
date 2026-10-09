@@ -327,7 +327,13 @@ A write executes exactly
 once per call. Retry only on a definite non-execution (400/401/403/404 answered to the request
 itself: after a redirect, as in Post/Redirect/Get, it ran; at tier 3 the page sent it, and the
 answer judged may be a redirect's follow-up, so a tier-3 write is never retried); timeouts, 5xx and network errors are
-ambiguous and are never retried. Writes need `allowWrites` at every entry point (CLI flag, MCP
+ambiguous and are never retried. At tier 3 the page can also send it twice by itself (a handler
+bound twice, a client that sends again), so the run has a budget: the op's own request, by its
+`match`, leaves once, every further request matching it is aborted, and the result's `reason` says
+a repeat was stopped. The server's redirect of the one that left is still that one. What else the
+trigger sends passes (a real write often needs companion requests, and what a trigger does besides
+is its author's choice) until the run ends, when, as in every guarded run, its pages send nothing
+more. An op with no `match` has no request to count. Writes need `allowWrites` at every entry point (CLI flag, MCP
 server flag, library option).
 
 ## Failure classifier (`classify.ts`)

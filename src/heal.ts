@@ -43,6 +43,8 @@ export interface Attempt {
   redirected?: boolean;
   /** a specific `next` for the agent (a local problem, not the site's) */
   hint?: string;
+  /** what the caller should know whatever the outcome (a repeat of the write was stopped) */
+  note?: string;
 }
 
 export const PROFILE_HINT =
@@ -129,6 +131,24 @@ const readGuard = (m: Match) => {
     !(via && own(via));
 };
 
+/**
+ * A write's tier-3 run is the page sending it for real, so its own request may leave once: a
+ * handler bound twice, or a client that sends again, would perform the write again, and every
+ * further request matching the op is aborted. The server's redirect of the one that left is still
+ * that one (`via`: what a hop was redirected from). What else the trigger sends is the op author's
+ * choice and passes. An op with no `match` has no request to count.
+ */
+const sendOnce = (m: Match) => {
+  let sent = false;
+  return (e: Exchange, _acting: boolean, via?: Exchange): boolean => {
+    if (e.resourceType === "websocket" || !Object.keys(m).length || !matches(m, e.request)) return false;
+    if (via && matches(m, via.request)) return false;
+    const repeat = sent;
+    sent = true;
+    return repeat;
+  };
+};
+
 /** Values of the op's session: refs as the browser just sent them. */
 function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
   const out: Record<string, string> = {};
@@ -191,6 +211,8 @@ export interface TriggerRun {
   matched?: Exchange;
   /** the trigger landed on a sign-in page instead of the content */
   loginWall?: string;
+  /** a write's own request was sent again by the page this many times, and stopped each time */
+  repeats?: number;
 }
 
 /**
@@ -262,21 +284,24 @@ export async function runOpTrigger(
 ): Promise<TriggerRun> {
   const t = fillTrigger(op.trigger, args);
   const isHit = (e: Exchange) => matches(op.match, e.request);
-  // A write's tier-3 run is the UI sending it for real; learning or healing one intercepts it.
+  // A write's tier-3 run is the UI sending it for real, once; learning or healing one intercepts it.
   const intercept = o.intercept
     ? writeGuard(op.match, { url: t.url, args })
     : op.readOnly
       ? readGuard(op.match)
-      : undefined;
+      : sendOnce(op.match);
   const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit });
   const hits = capture.exchanges.filter(isHit);
-  const matched = pickHit(op, hits, args);
+  // a real write's answer is a request that left: a repeat that was stopped answers nothing
+  const sent = o.intercept || op.readOnly ? hits : hits.filter((e) => !e.aborted);
+  const matched = pickHit(op, sent, args);
   // Session values (a site-wide API key, a guest token) don't depend on the args: refresh them from
   // the op's own request even when the page asked for other args, whose answer is never returned.
   const source = matched ?? hits.find((e) => e.response && e.response.status < 400);
   mergeCapture(site, capture.cookies, source ? sessionValuesOf(op, source) : {});
   const wall = matched?.response ? undefined : loginWall(capture, t.url);
-  return { capture, matched, ...(wall ? { loginWall: wall } : {}) };
+  const repeats = hits.length - sent.length;
+  return { capture, matched, ...(wall ? { loginWall: wall } : {}), ...(repeats ? { repeats } : {}) };
 }
 
 /** A tier-3 result: the site's own request, answered. */
