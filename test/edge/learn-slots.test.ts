@@ -572,6 +572,28 @@ test("run 2's request is chosen on run 1's evidence: a request that does not ans
   );
 });
 
+test("a run 2 request with no answer, or an error for one, is no data answer and disproves nothing", () => {
+  const run1 = [xhr({ url: "https://site.test/api/kittens?q=kittens" }, answer("kittens"))];
+  const stale = xhr({ url: "https://site.test/api/kittens?q=puppies" });
+  const fresh = xhr({ url: "https://site.test/api/puppies?q=puppies" }, answer("puppies"));
+  const unanswered: Exchange = { ...stale, response: undefined };
+  const failed: Exchange = {
+    ...stale,
+    response: { ...stale.response!, status: 404, body: '{"error":"no such list"}' },
+  };
+  for (const old of [unanswered, failed]) {
+    const { operation: op } = learn(run1, [{ q: "kittens" }, { q: "puppies" }], { exchanges2: [old, fresh] });
+    assert.deepEqual(op.slots, [
+      { param: "q", at: ["path:1"] },
+      { param: "q", at: ["query:q"] },
+    ]);
+    assert.equal(buildRequest(op, { q: "tigers" }, noSession).url, "https://site.test/api/tigers?q=tigers");
+    // alone, it may show a nonce but takes no slot away
+    const alone = learn(run1, [{ q: "kittens" }, { q: "puppies" }], { exchanges2: [old] });
+    assert.equal(alone.operation.slots.length, 2);
+  }
+});
+
 test("a read the caller pinned whose own answer is a flag is its own counterpart in run 2", () => {
   // "is this liked?" answers {"liked":true}: no data by the ranking's lights, and the op all the same
   const liked = (id: number) => [xhr({ url: `https://site.test/api/liked?id=${id}&v=42` }, { liked: true })];

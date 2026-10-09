@@ -227,6 +227,12 @@ function dataless(e: Exchange, args: Args): boolean {
   return isAck(e) && !exampleValues(args).some(([, v]) => v.length >= 3 && answer.includes(v));
 }
 
+/** A data answer: a captured 2xx that is not data-less. A request nobody answered, or an error, is not one. */
+function hasData(e: Exchange, args: Args): boolean {
+  const status = e.response?.status ?? 0;
+  return status >= 200 && status < 300 && !dataless(e, args);
+}
+
 /** The text an example is searched by; an array example by its first element. */
 function exampleText(v: unknown): string {
   if (Array.isArray(v)) return asText(v.find((x) => asText(x).length >= 3) ?? v[0]).toLowerCase();
@@ -1477,8 +1483,8 @@ function twoRunDiff(
   // only looked like a param made the match a wildcard, which a sibling endpoint (/api/suggest
   // beside /api/search) fits too.
   const reads = input.accepts?.(first) ? input.accepts : () => true;
-  const data = input.readOnly && !dataless(first, args1);
-  const answers = ranked.filter((c) => reads(byId(c)) && !(data && dataless(byId(c), args2)));
+  const data = input.readOnly && hasData(first, args1);
+  const answers = ranked.filter((c) => reads(byId(c)) && (!data || hasData(byId(c), args2)));
   const path = new URL(request.url).pathname;
   const top = answers.find((c) => c.hits.length && new URL(c.url).pathname === path) ?? answers[0] ?? ranked[0];
   // A short example is placed only where run 2 proves it, so a run 2 that proves nothing fails it.
