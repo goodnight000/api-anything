@@ -15,7 +15,7 @@ import {
   profileDir,
   runOpTrigger,
 } from "./heal.js";
-import { buildRequest, holdsRef, nextHop, RedirectRefused, type Sent, send, withDefaults } from "./http.js";
+import { BadHeader, buildRequest, holdsRef, nextHop, RedirectRefused, type Sent, send, withDefaults } from "./http.js";
 import { reimportIfBrowser } from "./login.js";
 import { loadSession, loggedIn, mergeCapture, type Session, saveSession, sessionFile, withLock } from "./session.js";
 import type { Operation, Site } from "./spec.js";
@@ -436,7 +436,11 @@ export async function call(
   try {
     buildRequest(op, args, session);
   } catch (e) {
-    return done({ ok: false, class: "input", reason: (e as Error).message, next: nextFor("input", siteName, op) });
+    const next =
+      e instanceof BadHeader
+        ? `nothing was sent. Check the args; if the value is the session's, ask the user to run: api-anything login ${siteName}`
+        : nextFor("input", siteName, op);
+    return done({ ok: false, class: "input", reason: (e as Error).message, next });
   }
 
   // No login on record for this site: the session has no source (a login records one, logout clears it),

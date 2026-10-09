@@ -864,6 +864,22 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
       assert.deepEqual(r.data, [{ language: "fr", type: "application/json" }], JSON.stringify(r));
     });
 
+    test(`tier ${tier}: a session value no header can carry fails naming the header, never the value`, async () => {
+      site(`brk${tier}`, {
+        ...rd("me", "/api/brk", { minTier: tier }),
+        request: { method: "GET", url: `${fx.base}/api/brk`, headers: { "x-token": "" } },
+        slots: [{ ref: "session:tok", at: ["header:x-token"] }],
+      });
+      saveSession(`brk${tier}`, { cookies: [], values: { tok: "SECRET-source-token-1234\r\nextra" } });
+      fx.hits.length = 0;
+      const r = await call(`brk${tier}`, "me", {}, o);
+      assert.equal(r.ok, false);
+      assert.doesNotMatch(JSON.stringify(r), /SECRET|extra/);
+      assert.match(r.reason ?? "", /the x-token header/);
+      assert.match(r.next ?? "", /api-anything login brk\d/);
+      assert.equal(fx.hits.filter((h) => h.url === "/api/brk").length, 0);
+    });
+
     test(`tier ${tier}: a write is not sent a second time by a redirect, and the result says where it stopped`, async () => {
       const write = (name: string, method: string, path: string) => ({
         ...rd(name, path, { minTier: tier }),

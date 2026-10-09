@@ -166,7 +166,16 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
     if (/[^\x00-\x7f]/.test(h)) req.headers[k] = h.replace(/[^\x00-\x7f]+/g, encodeURIComponent);
   const cookie = cookieHeaderFor(session.cookies, req.url);
   if (cookie) req.headers.cookie = cookie;
+  // fetch would refuse it quoting the value, which may be a session's: name the header only
+  for (const [k, h] of Object.entries(req.headers)) if (/[\r\n\0]/.test(h)) throw new BadHeader(k);
   return req;
+}
+
+/** A filled header whose value holds a line break or a NUL: no request can carry it, so none was sent. */
+export class BadHeader extends Error {
+  constructor(name: string) {
+    super(`the ${name} header was filled with a value that holds a line break, which no request can carry`);
+  }
 }
 
 const lastSend = new Map<string, number>();

@@ -248,7 +248,9 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    user-agent) minus `:pseudo`, host, content-length, connection, cookie, conditional headers
    (`if-none-match` and co., which would turn every replay into a 304), and content-encoding (a
    gzip-compressed request body is captured and stored decoded). Never promote headers to
-   site-global: a globally promoted x-twitter-auth-type broke every X guest read.
+   site-global: a globally promoted x-twitter-auth-type broke every X guest read. At call time a
+   filled header whose value holds a line break or a NUL is not sent: the call fails naming the
+   header, never the value (fetch's own error would quote a session's token into the result).
 7. Record `learnedLoggedIn` (whether the session had auth cookies). If an op learned signed in comes
    back without its data and the jar has no login cookie, the call is `auth`, not drift.
 8. **Response.** Store the content type, the XSSI prefix to strip (`)]}'`), a suggested `extract` path (the
