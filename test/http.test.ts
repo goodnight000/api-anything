@@ -256,3 +256,15 @@ test("a redirect to another origin is refused when its Location repeats a header
   assert.equal(nextHop(get, held, from, 302, `/landing?t=${enc(v)}`).url, `https://x.com/landing?t=${enc(v)}`);
   assert.deepEqual(nextHop(get, held, from, 302, "https://evil.example/landing").headers, {});
 });
+
+test("a short session value is a copy only standing on its own in a redirect's address, not inside a longer word", () => {
+  const get = op({
+    readOnly: true,
+    request: { method: "get", url: "https://x.com/me", headers: { authorization: "" } },
+  });
+  const held: Session = { cookies: [], values: { authorization: "test" } };
+  const from = { url: "https://x.com/me", method: "GET", headers: { authorization: "test" } };
+  assert.equal(nextHop(get, held, from, 302, "https://news.example/?t=contest").url, "https://news.example/?t=contest");
+  for (const copy of ["test", "a-test", "test%20b", "%22test%22"])
+    assert.throws(() => nextHop(get, held, from, 302, `https://news.example/?t=${copy}`), /session's values/, copy);
+});
