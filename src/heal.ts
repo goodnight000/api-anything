@@ -381,8 +381,8 @@ export interface AddResult {
   preview?: { count?: number; first: unknown };
   /** an op of that name existed and was overwritten */
   replaced: boolean;
-  /** only the op's response recipe was replaced: its request, params and trigger are as they were */
-  repaired?: boolean;
+  /** the op was kept and one thing replaced: its response recipe, or (given alone) its description */
+  repaired?: "recipe" | "description";
 }
 
 /** Put `{name}` back where an example value sits in a literal step (a typed value, a selector). */
@@ -543,14 +543,14 @@ const recipeWarnings = (warnings: string[], r: Recipe) =>
 function saveOperation(
   site: string,
   operation: Operation,
-  exchange: Exchange,
+  exchange: Exchange | undefined,
   warnings: string[],
   session: Session,
   again: string | undefined,
 ): Omit<AddResult, "captures"> {
   let preview: AddResult["preview"];
-  const res = exchange.response;
-  if (res) {
+  const res = exchange?.response;
+  if (exchange && res) {
     const j = judge(operation, {
       status: res.status,
       headers: res.headers,
@@ -595,6 +595,15 @@ function saveOperation(
 function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["from"]>, i: AddInput): AddResult {
   const { capture, id } = from;
   const r = i.response ?? {};
+  // Scanned against what a full add would have merged into the session first: the capture's cookies
+  // (and, below, the values this request sent for the op's session refs). Live for the scan, saved by nothing here.
+  const now = loadSession(site);
+  const live: Session = { ...now, cookies: [...now.cookies, ...capture.cookies] };
+  // A description with no recipe flag is metadata: nothing is learned again, and the recipe stays.
+  if (i.description && !Object.values(r).some((x) => x !== undefined)) {
+    const saved = saveOperation(site, { ...old, description: i.description }, undefined, [], live, undefined);
+    return { ...saved, captures: [], repaired: "description" };
+  }
   const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
   const own = Object.keys(old.match).length > 0;
   const pool = capture.exchanges.filter((e) => (id !== undefined ? e.id === id : own && matches(old.match, e.request)));
@@ -617,16 +626,9 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
       `request ${exchange.id} is not one ${old.name}'s match finds, and the request was not learned from it: only the recipe was, from its answer. To learn the request too, pass --example`,
     );
   const operation: Operation = { ...old, ...(i.description ? { description: i.description } : {}), response };
-  // Scanned against what a full add would have merged into the session first: the capture's cookies
-  // and the values this request sent for the op's session refs. Live for the scan, saved by nothing here.
-  const now = loadSession(site);
-  const live: Session = {
-    ...now,
-    cookies: [...now.cookies, ...capture.cookies],
-    values: { ...now.values, ...sessionValuesOf(old, exchange) },
-  };
+  live.values = { ...now.values, ...sessionValuesOf(old, exchange) };
   const saved = saveOperation(site, operation, exchange, warnings, live, capture.id);
-  return { ...saved, captures: [], repaired: true };
+  return { ...saved, captures: [], repaired: "recipe" };
 }
 
 /**

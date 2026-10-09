@@ -100,7 +100,7 @@ const HELP: Record<string, string> = {
   --write         the op changes state: it is learned from intercepted, aborted requests only. A request a
                   --write capture aborted, or an existing write learned again, needs --write: neither is
                   ever saved as a read
-  --description <text>
+  --description <text>  with --from and nothing else, for an existing op: only the description changes
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.`,
   call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--max-tier 1|2|3] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, ms, next?}. --dry prints the request with credentials redacted.`,
@@ -552,6 +552,12 @@ function captureAgain(
   ].join(" ");
 }
 
+/** What a repair says it changed: the op was kept, and one thing in it replaced. */
+const REPAIRED = {
+  recipe: "only what it returns changed: the request, params and trigger are as they were",
+  description: "only the description changed: what it returns, the request, params and trigger are as they were",
+};
+
 async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   const [site, name] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything add --help");
@@ -609,11 +615,7 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     ok: true,
     site,
     op: op.name,
-    ...(r.repaired
-      ? { repaired: "only what it returns changed: the request, params and trigger are as they were" }
-      : r.replaced
-        ? { replaced: true }
-        : {}),
+    ...(r.repaired ? { repaired: REPAIRED[r.repaired] } : r.replaced ? { replaced: true } : {}),
     request: `${op.request.method} ${op.request.url.split("?")[0]}`,
     params: op.params.map((p) => `${p.name}:${p.type}`),
     readOnly: op.readOnly,

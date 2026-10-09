@@ -407,6 +407,18 @@ describe("add from a saved capture", () => {
     assert.deepEqual(await carol("viewed"), { name: "carol", followers: 500 }, "name still fills the user asked for");
   });
 
+  test("--description alone changes the description: the recipe is left as it is", async () => {
+    await add("described", "alice", "--example name=alice --extract data.user --pick name");
+    const r = await cli("add", "fixture", "described", "--from", "calice", "--description", "A user's name");
+    const out = JSON.parse(r.stdout);
+    assert.equal(r.code, 0, r.stdout);
+    assert.match(out.repaired, /description/);
+    assert.doesNotMatch(out.repaired, /returns changed/);
+    assert.deepEqual(await carol("described"), { name: "carol" }, "extract and pick are still there");
+    const ops = JSON.parse((await cli("ops", "fixture")).stdout).operations;
+    assert.equal(ops.find((o: { name: string }) => o.name === "described").description, "A user's name");
+  });
+
   test("a repair keeps a param that has no stored example", async () => {
     await add("bare", "alice", "--example name=alice --extract data.wrong");
     // a shared spec is exported without its example values
