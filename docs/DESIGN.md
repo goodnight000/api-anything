@@ -151,7 +151,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    since blanking the whole would take their positions away. Newly learned session references are scoped by operation, with distinct request positions
    for different tokens that share a name: one name never means two values, wherever the second was
    found (a storage entry called `token` inside `v1:<value>`, next to a `token` field holding another). All discovered credentials participate in compound-copy
-   removal. Add and heal refuse to save any spec that still contains a detected live credential.
+   removal. Learning ends with one check behind all of these rules: the save-time secret scan, run over the stored
+   request and the slot templates against the cookies and the session values just found. A copy no rule could turn
+   into a ref (too short to template, base64, percent-encoded twice) fails the learn, closed. Add and heal run the
+   same scan again before saving, against the site's whole session, and refuse to save any spec that still contains a detected live credential.
    The spec never holds a credential. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.

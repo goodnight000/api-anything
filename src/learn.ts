@@ -17,7 +17,7 @@ import {
   walk,
 } from "./codec.js";
 import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
-import { loggedIn, parseCookieHeader } from "./session.js";
+import { loggedIn, parseCookieHeader, type Session } from "./session.js";
 import {
   type Match,
   type Operation,
@@ -29,6 +29,7 @@ import {
   type Trigger,
   type Volatile,
 } from "./spec.js";
+import { scanSecrets } from "./store.js";
 import type { CaptureResult, Exchange, StoredCookie } from "./types.js";
 
 export type Args = Record<string, unknown>;
@@ -710,22 +711,27 @@ interface Live {
   value?: string;
 }
 
+/** The cookies the request itself sent, in the jar's shape: live even where the capture's jar lacks them. */
+const sentCookies = (e: Exchange): StoredCookie[] =>
+  Object.entries(parseCookieHeader(e.request.headers.cookie ?? "")).map(([name, value]) => ({
+    name,
+    value,
+    domain: new URL(e.request.url).hostname,
+    path: "/",
+    expires: -1,
+    httpOnly: false,
+    secure: false,
+  }));
+
 /**
  * Live session values (8+ chars) a request may repeat: cookies (raw, unquoted, URL-decoded) and the
  * page's localStorage/sessionStorage, including string leaves of a JSON entry (auth SDKs keep
  * tokens that way). A cookie is a `cookie:` ref; a storage value a `session:` ref.
  */
-function liveValues(
-  cookies: StoredCookie[],
-  cookieHeader: string | undefined,
-  storage: Record<string, string> = {},
-): Map<string, Live> {
+function liveValues(cookies: StoredCookie[], storage: Record<string, string> = {}): Map<string, Live> {
   const out = new Map<string, Live>();
   const put = (v: string, live: Live) => v.length >= 8 && !out.has(v) && out.set(v, live);
-  for (const [name, value] of [
-    ...cookies.map((c) => [c.name, c.value] as const),
-    ...Object.entries(parseCookieHeader(cookieHeader ?? "")),
-  ]) {
+  for (const { name, value } of cookies) {
     let decoded = value;
     try {
       decoded = decodeURIComponent(value);
@@ -982,11 +988,12 @@ function sessionRefs(
   leaves: Leaf[],
   params: Slot[],
 ): { request: Request; slots: Slot[]; sessionValues: Record<string, string>; publicNames: string[] } {
+  const cookies = [...input.cookies, ...sentCookies(ex)];
   const refs: Refs = {
     // copies: pass 5 writes ref holes into a param's template
     slots: params.map((s) => ({ ...s })),
     taken: new Set(params.map((s) => key(s.at))),
-    live: liveValues(input.cookies, ex.request.headers.cookie, input.storage),
+    live: liveValues(cookies, input.storage),
     sessionValues: {},
   };
   // A name the caller marked public is a constant: no pass sees its leaf.
@@ -1004,12 +1011,21 @@ function sessionRefs(
   innerWins(refs);
   // The spec never holds a credential: blank every ref'd leaf.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
-  return {
-    request,
-    slots: refs.slots,
-    sessionValues: refs.sessionValues,
-    publicNames: [...new Set([...publicNames, ...shipped])],
-  };
+  const listed = [...new Set([...publicNames, ...shipped])];
+  refuseLeftover(request, refs.slots, { cookies, values: refs.sessionValues }, listed);
+  return { request, slots: refs.slots, sessionValues: refs.sessionValues, publicNames: listed };
+}
+
+/**
+ * The check behind every pass: no cookie, and no value a pass made a session: ref, is left in the
+ * stored request or in a slot template, in any encoding the save-time scan reads. A copy the
+ * passes could not turn into a ref (too short to template, base64, encoded twice) fails closed here.
+ */
+function refuseLeftover(request: Request, slots: Slot[], live: Session, publicNames: string[]): void {
+  const allowed = new Set(publicNames.map((h) => `$.request.headers.${h}`));
+  const { secrets } = scanSecrets({ request, slots }, live, allowed);
+  if (secrets.length)
+    throw new Error(`refusing to learn a request that would keep a credential in the spec: ${secrets.join("; ")}`);
 }
 
 /**

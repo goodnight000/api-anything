@@ -236,3 +236,37 @@ test("a persisted-query hash the app caches in storage stays a volatile anchor a
     assert.ok(op.request.url.includes(hash), "the hash stays in the template for the cheap heal to swap");
   }
 });
+
+/* ------------------------------------------- the check behind every pass */
+
+test("learning refuses a request it could not clear of a live value, in any encoding the save scan reads", () => {
+  const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
+  const cases: [string, StoredCookie, Record<string, unknown>][] = [
+    ["a cookie too short to template, inside a longer leaf", cookie("sess", "secret123"), { ctx: "v1:secret123" }],
+    ["a cookie in base64", cookie("sid", SID), { state: Buffer.from(`sid=${SID}`).toString("base64") }],
+    [
+      "a cookie percent-encoded twice",
+      cookie("sid", `${SID}/=`),
+      { next: encodeURIComponent(`/cb?s=${encodeURIComponent(`${SID}/=`)}`) },
+    ],
+  ];
+  for (const [label, c, fields] of cases) {
+    assert.throws(
+      () => learn([post(JSON.stringify({ q: "kittens", ...fields }))], [{ q: "kittens" }], { cookies: [c] }),
+      new RegExp(`keep a credential in the spec: \\$\\.request\\.body holds the live cookie ${c.name}`),
+      label,
+    );
+  }
+  // a session value the learner found by name counts too, where no pass reaches its second copy
+  assert.throws(
+    () => learn([post(JSON.stringify({ q: "kittens", csrf: "Ab3dEf9h", ctx: "v1:Ab3dEf9h" }))], [{ q: "kittens" }]),
+    /keep a credential in the spec: \$\.request\.body holds the live session value csrf/,
+  );
+  // control: a header the caller marked public may hold one
+  const { operation: op } = learn(
+    [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-ctx": "v1:secret123" } })],
+    [{ q: "kittens" }],
+    { cookies: [cookie("sess", "secret123")], public: ["x-ctx"] },
+  );
+  assert.equal(op.request.headers["x-ctx"], "v1:secret123");
+});
