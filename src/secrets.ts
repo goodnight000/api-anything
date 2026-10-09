@@ -152,24 +152,6 @@ function decodings(v: string): Set<string> {
   return out;
 }
 
-/**
- * Whether `text` is one of `values` and nothing more, in a form the scan reads: as it is,
- * percent-encoded, JSON-escaped or base64, the value raw, unquoted or URL-decoded. There is no
- * length floor: it is for text that may hold no known value at all (an object key in a credential
- * container), and it asks for the whole text, since a one-character value is inside most words.
- */
-export function isLiveValue(text: string, values: Iterable<string>): boolean {
-  const forms = decodings(text);
-  const unpadded = new Set([...forms].map((f) => f.replace(/=+$/, "")));
-  for (const value of values)
-    for (const v of new Set([value, value.replace(/^"|"$/g, ""), pctDecode(value, false)])) {
-      const b64 = Buffer.from(v, "utf8").toString("base64").replace(/=+$/, "");
-      if (v && (forms.has(v) || unpadded.has(b64) || unpadded.has(b64.replace(/\+/g, "-").replace(/\//g, "_"))))
-        return true;
-    }
-  return false;
-}
-
 const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
 const IPV6 = /^[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}$/i;
 /** A literal IP address (a client's remoteHost the page reported): the user's, not the site's. */

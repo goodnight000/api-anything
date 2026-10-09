@@ -178,20 +178,17 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    (`/<docId>/kittens`, `rev=kittens@<hash>`); the caller can mark the name public when the text is the same for every
    visitor. A capture refreshes a
    templated `session:` value from its place in the leaf. A `session:` value the page later sends empty is not
-   refreshed: the stored one is kept. Slots never overlap: a ref for a whole container
-   (a JSON body the app saved in storage, a JSON-valued header) yields to the params and refs inside it,
-   since blanking the whole would take their positions away. A container that is a credential (by its header's name, a
-   cookie, a stored value that is one) stays one in every part: each of its other string leaves becomes a `session:`
-   ref of its own, named by its position. An empty string is one too: the page may fill it on a later load, and only a
-   ref there is refreshed. A leaf that cannot be a ref (a number, a flag, a null, a leaf that is only partly a slot)
-   refuses the learn; a leaf under a name marked public stays as captured. An object key in the container that is
-   itself a credential refuses it too: a key cannot be a ref, and its text would stay in the container, in a slot's
-   pointer and in a ref's name. A key is one when it is random-looking and not a name like `includePromotedContent`,
-   or when it is any cookie or stored value, whole, as it is or percent-encoded or in base64. No length floor applies
-   here, since without the yield no text of the container would be in the spec at all; so a one-character cookie
-   that equals an ordinary key refuses as well, and marking the container public (`--public x-csrf-token`) is the way
-   past it when the whole of it is the same for every visitor. A request the app saved under an ordinary storage key is no credential: its other leaves stay as
-   captured. A stored value counts as a credential under a credential's name or when it is random-looking, in any
+   refreshed: the stored one is kept. Slots never overlap, and a container that is a
+   session value is never serialized in part. A container is a string that holds JSON, as it is or in base64. One that
+   is a session value as a whole (a header named like a credential, a value equal to a cookie, a value the page also
+   keeps in storage under any key) is one ref: blank in the spec and sent whole from the session at call time, so no
+   key, no short leaf and no encoding of its text reaches the spec. The refs found inside it are dropped. A param
+   inside it could not be filled on replay, so the learn is refused: the error names the container and the param.
+   The way on is to mark the container public (`--public x-csrf-token`, `--public body`) when the rest of it is the
+   same for every visitor: it then stays as captured, on the caller's word, with the param inside it filled.
+   Otherwise learn another request. A container that is a cookie outside a header has only that second way, since
+   the save-time scan refuses a cookie's text there whatever is marked public. Only a header is a session value by its name alone: a
+   container under a credential-like field name is judged leaf by leaf. A stored value counts as a credential under a credential's name or when it is random-looking, in any
    entry that holds it and whatever the entries' order; a stored JSON text by its key, and each string in it on its
    own. A stored setting sent under a credential's name in the request (`token=<it>`) counts too. Newly learned session references are scoped by operation, with distinct request positions
    for different tokens that share a name: one name never means two values, wherever the second was
@@ -199,8 +196,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    removal. Learning ends with one check behind all of these rules: the save-time secret scan, run over the stored
    request and the slot templates. It looks for credentials, not for everything live: every cookie (the jar's and
    the request's own Cookie header); the `session:` values that are credentials (found by name or as issued, stored as
-   one, or sent under a credential's name); the stored values that are credentials, whether or not anything made them
-   refs; and the value of a credential container whose ref yielded, anywhere but in that container. A stored setting
+   one, or sent under a credential's name), those of refs dropped from inside a container sent whole included; and
+   the stored values that are credentials, whether or not anything made them refs. A stored setting
    (a theme, a locale) is not looked for, also when a leaf that equals it made it a ref: a ref keeps a value fresh,
    it does not make it secret. A copy no rule could turn into a ref (too short to template, base64, percent-encoded
    twice) fails the learn, closed, and the error names the leaf that holds it. What is exempt is a position, never a

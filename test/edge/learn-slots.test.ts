@@ -3,7 +3,7 @@
  * spec or were stored under the wrong name, and params the second example proves or disproves.
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -199,197 +199,138 @@ test("a stored value found inside a longer leaf never takes over another credent
 
 /* ------------------------------------------------------- no overlapping */
 
-test("a ref for a whole container yields to the params and refs inside it", () => {
-  const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
-  const session = { cookies: [cookie("sid", SID)], values: {} };
-  const jar = { cookies: session.cookies };
-  const send = (op: ReturnType<typeof learn>["operation"]) => buildRequest(op, { q: "puppies" }, session);
+// A container that is a session value (a JSON header named like a credential, a JSON value a cookie
+// or the page's storage holds) is sent whole from the session. Nothing of it is in the spec: not a
+// key, not a short leaf, in no encoding.
+const OPAQUE = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
+const local = "http://127.0.0.1/api/search";
+const csrf = (value: unknown, url = `${local}?q=kittens`) =>
+  xhr({ url, headers: { "x-csrf-token": JSON.stringify(value) } });
+const posted = (body: string, url = local) =>
+  xhr({ method: "POST", url, headers: { "content-type": "application/json" }, body });
+const capture = (ex: Exchange, cookies: StoredCookie[], storage?: Record<string, string>): CaptureFile => ({
+  id: `overlap-${ex.id}`,
+  at: new Date().toISOString(),
+  url: "http://127.0.0.1/?q=kittens",
+  finalUrl: "http://127.0.0.1/?q=kittens",
+  exchanges: [ex],
+  cookies,
+  ...(storage ? { storage } : {}),
+});
+const add = (site: string, ex: Exchange, cookies: StoredCookie[], storage?: Record<string, string>, pub?: string[]) =>
+  addOperation({
+    site,
+    op: "op",
+    trigger: { url: "http://127.0.0.1/?q={q}" },
+    examples: [{ q: "kittens" }],
+    from: { capture: capture(ex, cookies, storage) },
+    ...(pub ? { public: pub } : {}),
+  });
+const savedBody = JSON.stringify({ q: "kittens", stamp: "aB3dE" });
+const bodyCookie = [cookie("last", encodeURIComponent(savedBody))];
 
-  // the app saved its last request in localStorage, and a field inside it is the session cookie
-  const body = JSON.stringify({ q: "kittens", token: SID, page: 1 });
-  const saved = learn([post(body)], [{ q: "kittens" }], { ...jar, storage: { lastRequest: body } });
-  assert.deepEqual(saved.operation.slots, [
-    { param: "q", at: ["body", "json:/q"] },
-    { ref: "cookie:sid", at: ["body", "json:/token"] },
-  ]);
-  assert.deepEqual(saved.sessionValues, {});
-  assert.deepEqual(JSON.parse(send(saved.operation).body!), { q: "puppies", token: SID, page: 1 });
-
-  // only a param inside: the body is still filled, not blanked whole
-  const plain = JSON.stringify({ q: "kittens", page: 1 });
-  const onlyParam = learn([post(plain)], [{ q: "kittens" }], { storage: { lastRequest: plain } });
-  assert.deepEqual(onlyParam.operation.slots, [{ param: "q", at: ["body", "json:/q"] }]);
-  assert.equal(send(onlyParam.operation).body, '{"q":"puppies","page":1}');
-
-  // control: nothing inside has a slot, so the whole container is one ref
-  const state = '{"tab":"all","n":3}';
-  const whole = learn(
-    [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-state": state } })],
-    [{ q: "kittens" }],
-    { storage: { state } },
-  );
-  assert.deepEqual(
-    whole.operation.slots.filter((s) => s.ref),
-    [{ ref: "session:op/state", at: ["header:x-state"] }],
-  );
-  assert.deepEqual(whole.sessionValues, { "op/state": state });
+test("a param inside a container that is a session value refuses the learn, and nothing is saved", async () => {
+  const short = [cookie("sess", "aB3dE")];
+  const whole = { q: "kittens", [OPAQUE]: "v1" };
+  // keys that would keep the cookie's text in the spec if any part of the container were serialized:
+  // the cookie as it is, percent-encoded, in base64, with text after it, in base64 twice
+  const keys = ["aB3dE", "%61%42%33%64%45", "YUIzZEU=", "aB3dEx", "aB3dE:1", "aB3dEabcd", "%61%42%33%64%45x"];
+  const cases: [string, Exchange, StoredCookie[], Record<string, string>?][] = [
+    ...[...keys, "YUIzZEV4", "WVVJelpFVT0="].map((k): [string, Exchange, StoredCookie[]] => [
+      `the key ${k}`,
+      csrf({ q: "kittens", [k]: "v1" }),
+      short,
+    ]),
+    ["an opaque key", csrf(whole), []],
+    ["an opaque key, the header held whole by a cookie", csrf(whole), [cookie("csrf", JSON.stringify(whole))]],
+    ["a short cookie beside the param", csrf({ q: "kittens", stamp: "aB3dE" }), short],
+    ["a body the app also keeps whole in storage", posted(savedBody), short, { savedRequest: savedBody }],
+  ];
+  const before = readdirSync(HOME, { recursive: true }).sort();
+  for (const [what, ex, cookies, storage] of cases) {
+    const at = ex.request.body ? "body" : "header:x-csrf-token";
+    const refusal = new RegExp(
+      `^Error: ${at} is a session value \\(.*\\), sent whole .* the param q inside it \\(${at} > json:/q\\) could not be filled` +
+        `.* --public ${at.replace("header:", "")}; otherwise learn another request`,
+    );
+    assert.throws(() => learn([ex], [{ q: "kittens" }], { cookies, storage }), refusal, what);
+    await assert.rejects(add("overlap", ex, cookies, storage), refusal, what);
+  }
+  // a body that is a cookie is offered no --public: see the next test
+  const only =
+    /^Error: body is a session value \(cookie:last\).* could not be filled\. Not learned: learn another request/;
+  assert.throws(() => learn([posted(savedBody)], [{ q: "kittens" }], { cookies: bodyCookie }), only);
+  await assert.rejects(add("overlap", posted(savedBody), bodyCookie), only);
+  assert.deepEqual(readdirSync(HOME, { recursive: true }).sort(), before, "a refused add writes nothing");
 });
 
-test("a credential container that yields to a slot inside it keeps nothing else of itself in the spec", () => {
-  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
-  const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
-  const cookies = [cookie("sid", SID)];
-  // x-csrf-token is a credential by its name, and its value is JSON
-  const run = (value: unknown) =>
-    learn(
-      [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-csrf-token": JSON.stringify(value) } })],
-      [{ q: "kittens" }],
-      { cookies },
-    );
-  const slotsOf = (op: ReturnType<typeof learn>["operation"]) =>
-    op.slots.map((s) => [s.param ?? s.ref!.replace(/@.*/, ""), s.at.join(" > ")]);
-
-  // a param inside: the opaque token beside it is still the credential
-  const header = { q: "kittens", opaque: T, v: "v1" };
-  const { operation: op, sessionValues } = run(header);
-  assert.ok(!JSON.stringify(op).includes(T), "the token stayed in the spec");
-  assert.deepEqual(slotsOf(op), [
-    ["q", "query:q"],
-    ["q", "header:x-csrf-token > json:/q"],
-    ["session:op/x-csrf-token", "header:x-csrf-token > json:/opaque"],
-    ["session:op/x-csrf-token", "header:x-csrf-token > json:/v"],
+test("marked public, such a container is the caller's to vouch for: it learns, saves and replays", async () => {
+  const short = [cookie("sess", "aB3dE")];
+  const header = await add("public-header", csrf({ q: "kittens", aB3dE: "v1" }), short, undefined, ["x-csrf-token"]);
+  assert.deepEqual(header.operation.slots, [
+    { param: "q", at: ["query:q"] },
+    { param: "q", at: ["header:x-csrf-token", "json:/q"] },
   ]);
-  assert.deepEqual(Object.values(sessionValues).sort(), [T, "v1"].sort());
-  const sent = buildRequest(op, { q: "puppies" }, { cookies, values: sessionValues });
-  assert.deepEqual(JSON.parse(sent.headers["x-csrf-token"]!), { ...header, q: "puppies" });
-
-  // a cookie inside: the same for what sits beside it
-  const list = run([SID, "v1"]).operation;
-  assert.deepEqual(slotsOf(list), [
-    ["q", "query:q"],
-    ["cookie:sid", "header:x-csrf-token > json:/0"],
-    ["session:op/x-csrf-token", "header:x-csrf-token > json:/1"],
-  ]);
-
-  // what cannot be a reference refuses the learn: a number, and a leaf that is only partly a slot
-  assert.throws(
-    () => run({ q: "kittens", opaque: T, n: 17 }),
-    /header:x-csrf-token > json:\/n is a number inside the credential header:x-csrf-token/,
-  );
-  assert.throws(
-    () => run({ sig: "kittens.v2" }),
-    /header:x-csrf-token > json:\/sig is only partly a slot inside the credential header:x-csrf-token/,
-  );
-  // ...whose text, when it is a credential by the header's name on its own, is refused as such
-  assert.throws(
-    () => run({ sig: `kittens.${T}` }),
-    /header:x-csrf-token > json:\/sig holds a param inside text that is a credential \(by the leaf's name, x-csrf-token\)/,
-  );
-});
-
-test("an empty string beside a slot in a credential container is a reference too", () => {
-  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
-  const U = "Zx9Qw8vLm7Kj6HgF5dS4aP3oI2uY1tRe";
-  const run = (value: unknown) =>
-    learn(
-      [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-csrf-token": JSON.stringify(value) } })],
-      [{ q: "kittens" }],
-    );
-  // the page may fill it on a later load: only a reference there lets a refresh record what it sends
-  const { operation: op, sessionValues } = run({ q: "kittens", opaque: "", other: T });
-  const refs = op.slots.filter((s) => s.ref);
-  assert.deepEqual(
-    refs.map((s) => s.at.join(" > ")),
-    ["header:x-csrf-token > json:/opaque", "header:x-csrf-token > json:/other"],
-  );
-  assert.deepEqual(Object.values(sessionValues), ["", T]);
-  const later = { ...sessionValues, [refs[0]!.ref!.slice(8)]: U };
-  assert.deepEqual(
-    JSON.parse(buildRequest(op, { q: "puppies" }, { cookies: [], values: later }).headers["x-csrf-token"]!),
-    { q: "puppies", opaque: U, other: T },
-  );
-
-  // nothing else in it: every leaf is accounted for, so the container's own unchanged text is no leftover
-  const small = run({ q: "kittens", opaque: "" });
-  assert.deepEqual(
-    small.operation.slots.map((s) => s.at.join(" > ")),
-    ["query:q", "header:x-csrf-token > json:/q", "header:x-csrf-token > json:/opaque"],
-  );
   assert.equal(
-    buildRequest(small.operation, { q: "puppies" }, { cookies: [], values: small.sessionValues }).headers[
-      "x-csrf-token"
-    ],
-    '{"q":"puppies","opaque":""}',
-  );
-});
-
-test("a credential that is a key of a yielding container refuses the learn: a key cannot be a reference", () => {
-  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
-  const run = (value: unknown, extra: Parameters<typeof learn>[2] = {}) =>
-    learn(
-      [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-csrf-token": JSON.stringify(value) } })],
-      [{ q: "kittens" }],
-      extra,
-    );
-  const refusal = /header:x-csrf-token has an object key that is itself a credential .* Not learned/;
-  // the opaque string is the key: its text would stay in the header, in a slot's pointer and in a ref's name
-  assert.throws(() => run({ q: "kittens", [T]: "v1" }), refusal);
-  // the same when the header is a credential because a cookie holds its whole text
-  const header = { q: "kittens", [T]: "v1" };
-  assert.throws(() => run(header, { cookies: [cookie("csrf", JSON.stringify(header))] }), refusal);
-  // a key that holds no leaf, a key deeper down, and a key that is a known live value
-  assert.throws(() => run({ q: "kittens", [T]: {} }), refusal);
-  assert.throws(() => run({ q: "kittens", inner: { [T]: "v1" } }), refusal);
-  assert.throws(() => run({ q: "kittens", secret123: "v1" }, { cookies: [cookie("sess", "secret123")] }), refusal);
-  // the error does not repeat the credential
-  assert.throws(
-    () => run({ q: "kittens", [T]: "v1" }),
-    (e: Error) => !e.message.includes(T),
-  );
-
-  // control: an ordinary key, however long, is a name
-  const { operation: op } = run({ q: "kittens", includePromotedContentInResults: "v1" });
-  assert.deepEqual(
-    op.slots.map((s) => s.at.join(" > ")),
-    ["query:q", "header:x-csrf-token > json:/q", "header:x-csrf-token > json:/includePromotedContentInResults"],
-  );
-});
-
-test("a key of a yielding credential container is held against every cookie and stored value, however short", () => {
-  const run = (value: unknown, extra: Parameters<typeof learn>[2] = {}) =>
-    learn(
-      [xhr({ url: "http://127.0.0.1/api/search?q=kittens", headers: { "x-csrf-token": JSON.stringify(value) } })],
-      [{ q: "kittens" }],
-      extra,
-    );
-  // the refusal says the way out: the caller's word that the whole header is public
-  const refusal = /header:x-csrf-token has an object key that is itself a credential .* --public x-csrf-token/;
-  // Five characters are under every other threshold. Without the yield the whole header is blanked,
-  // so no text of it may come back as a key: as it is, percent-encoded or in base64.
-  const sess = { cookies: [cookie("sess", "aB3dE")] };
-  for (const k of ["aB3dE", "%61%42%33%64%45", "YUIzZEU=", "YUIzZEU"])
-    assert.throws(() => run({ q: "kittens", [k]: "v1" }, sess), refusal, k);
-  assert.throws(() => run({ q: "kittens", inner: { aB3dE: {} } }, sess), refusal, "nested, holding no leaf");
-  assert.throws(() => run({ q: "kittens", aB3dE: "v1" }, { cookies: [cookie("sess", '"aB3dE"')] }), refusal);
-  // a stored value, whatever it is stored as, and a single character
-  assert.throws(() => run({ q: "kittens", dark: "v1" }, { storage: { theme: "dark" } }), refusal);
-  const prefs = { prefs: JSON.stringify({ user: { id: "u7" } }) };
-  assert.throws(() => run({ q: "kittens", u7: "v1" }, { storage: prefs }), refusal);
-  assert.throws(() => run({ q: "kittens", "1": "v1" }, { cookies: [cookie("v", "1")] }), refusal);
-
-  // control: an array's index is no key, and a key that only contains a short value is another name
-  const list = run(["kittens", "v1"], { cookies: [cookie("v", "1")] }).operation;
-  assert.deepEqual(
-    list.slots.map((s) => s.at.join(" > ")),
-    ["query:q", "header:x-csrf-token > json:/0", "header:x-csrf-token > json:/1"],
-  );
-  assert.equal(run({ q: "kittens", v1: "x" }, { cookies: [cookie("v", "1")] }).operation.slots.length, 3);
-  // the way out works: the header marked public stays as captured and still takes the arg
-  const marked = run({ q: "kittens", aB3dE: "v1" }, { ...sess, public: ["x-csrf-token"] }).operation;
-  assert.equal(
-    buildRequest(marked, { q: "puppies" }, noSession).headers["x-csrf-token"],
+    buildRequest(header.operation, { q: "puppies" }, noSession).headers["x-csrf-token"],
     '{"q":"puppies","aB3dE":"v1"}',
   );
+  // a body the app keeps in storage is an ordinary body: `body` names it
+  const body = await add("public-body", posted(savedBody), short, { savedRequest: savedBody }, ["body"]);
+  assert.deepEqual(body.operation.slots, [{ param: "q", at: ["body", "json:/q"] }]);
+  assert.equal(buildRequest(body.operation, { q: "puppies" }, noSession).body, '{"q":"puppies","stamp":"aB3dE"}');
+  // outside a header the save-time scan takes no one's word for a cookie's text: no way on there
+  await assert.rejects(
+    add("public-cookie", posted(savedBody), bodyCookie, undefined, ["body"]),
+    /refusing to save .* live cookie last/,
+  );
+});
+
+test("a container that is a session value with only refs inside is one ref, and none of its text is in the spec", () => {
+  const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
+  const cookies = [cookie("sid", SID), cookie("sess", "aB3dE")];
+  const absent = (op: ReturnType<typeof learn>["operation"], texts: string[]) => {
+    for (const text of texts) assert.ok(!JSON.stringify(op).includes(text), `${text} is in the spec`);
+  };
+
+  // a header named like a credential: a cookie, an opaque key and a short cookie inside it
+  const value = { sid: SID, [OPAQUE]: "leafValue42", innerKey9: { stamp: "aB3dE" } };
+  const header = learn([csrf(value)], [{ q: "kittens" }], { cookies });
+  assert.deepEqual(header.operation.slots, [
+    { param: "q", at: ["query:q"] },
+    { ref: "session:op/x-csrf-token", at: ["header:x-csrf-token"] },
+  ]);
+  assert.equal(header.operation.request.headers["x-csrf-token"], "");
+  assert.deepEqual(header.sessionValues, { "op/x-csrf-token": JSON.stringify(value) });
+  absent(header.operation, [SID, OPAQUE, "leafValue42", "innerKey9", "stamp", "aB3dE"]);
+  const session = { cookies, values: header.sessionValues };
+  assert.equal(
+    buildRequest(header.operation, { q: "puppies" }, session).headers["x-csrf-token"],
+    JSON.stringify(value),
+  );
+
+  // a body the page's storage holds whole: a live field, a per-session field and a query id under an opaque key
+  const body = JSON.stringify({ sid: SID, csrf: "Ab3dEf9h", [OPAQUE]: { doc_id: "123456789012" } });
+  const stored = learn([posted(body, `${local}?q=kittens`)], [{ q: "kittens" }], {
+    cookies,
+    storage: { savedRequest: body },
+  });
+  assert.deepEqual(stored.operation.slots, [
+    { param: "q", at: ["query:q"] },
+    { ref: "session:op/savedRequest", at: ["body"] },
+  ]);
+  assert.equal(stored.operation.request.body, "");
+  assert.deepEqual(stored.operation.volatile, []);
+  assert.deepEqual(stored.sessionValues, { "op/savedRequest": body });
+  absent(stored.operation, [SID, OPAQUE, "Ab3dEf9h", "doc_id", "123456789012"]);
+  assert.equal(buildRequest(stored.operation, { q: "puppies" }, { cookies, values: stored.sessionValues }).body, body);
+});
+
+test("a body that is no session value takes a param as it always did", () => {
+  // the same body as the saved one, with no copy in storage: an ordinary request body
+  const { operation: op } = learn([posted(savedBody)], [{ q: "kittens" }], { cookies: [cookie("sess", "aB3dE")] });
+  assert.deepEqual(op.slots, [{ param: "q", at: ["body", "json:/q"] }]);
+  assert.equal(buildRequest(op, { q: "puppies" }, noSession).body, '{"q":"puppies","stamp":"aB3dE"}');
 });
 
 test("a path segment that is a reference is a wildcard in the match, as a param's is", () => {
@@ -646,9 +587,9 @@ test("the check knows a stored credential that no pass made a reference, and no 
     /body > json:\/state holds the live session value .*pq:Search/,
   );
 
-  // a credential container whose ref yielded to a param inside it is still looked for whole
-  const csrf = JSON.stringify({ q: "kittens", n: "ab" });
-  const copied = post(JSON.stringify({ q: "kittens", state: b64(csrf) }), { "x-csrf-token": csrf });
+  // a container that is a session value is looked for whole, wherever else a copy of it sits
+  const whole = JSON.stringify({ n: "ab", m: "cd" });
+  const copied = post(JSON.stringify({ q: "kittens", state: b64(whole) }), { "x-csrf-token": whole });
   assert.throws(
     () => learn([copied], [{ q: "kittens" }]),
     /body > json:\/state holds the live session value x-csrf-token\./,
