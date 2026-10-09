@@ -19,9 +19,10 @@ import { call } from "../../src/execute.js";
 import { addOperation, type CaptureFile, putOperation, rescan, runOpTrigger, templatizeUrl } from "../../src/heal.js";
 import { buildRequest } from "../../src/http.js";
 import { learnOperation } from "../../src/learn.js";
+import { scanSecrets } from "../../src/secrets.js";
 import { loadSession, saveSession } from "../../src/session.js";
 import { type Operation, parseSite } from "../../src/spec.js";
-import { exportSite, loadSite, saveSite, scanSecrets, updateSite } from "../../src/store.js";
+import { exportSite, loadSite, saveSite, updateSite } from "../../src/store.js";
 import type { Exchange, StoredCookie } from "../../src/types.js";
 
 after(() => rmSync(HOME, { recursive: true, force: true }));

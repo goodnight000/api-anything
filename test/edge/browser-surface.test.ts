@@ -17,7 +17,8 @@ import { chromeAvailable, closeBrowser, openBrowser, pageFetch, runTrigger, tabs
 import { call } from "../../src/execute.js";
 import { addOperation, capturePage, loadCapture, profileDir } from "../../src/heal.js";
 import { createServer } from "../../src/mcp.js";
-import { clearStale, exportSite, loadSite, markStale, scanSecrets, staleMark } from "../../src/store.js";
+import { scanSecrets } from "../../src/secrets.js";
+import { clearStale, exportSite, loadSite, markStale, staleMark } from "../../src/store.js";
 import { startFixture } from "../fixture/server.js";
 import { type EdgeFixture, startEdgeFixture, TOKEN } from "./browser-surface.fixture.js";
 

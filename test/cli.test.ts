@@ -1,0 +1,960 @@
+/**
+ * The CLI as an agent meets it, against the offline fixture site: which flags and names a command
+ * takes, and what it says when the page, the recipe or the examples are not ones it can work with.
+ */
+import assert from "node:assert/strict";
+import { execFile, execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, before, describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { chromeAvailable } from "../src/browser.js";
+import { addOperation } from "../src/heal.js";
+import type { TriggerStep } from "../src/types.js";
+import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
+
+const HOME = mkdtempSync(join(tmpdir(), "api-anything-cli-"));
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const CLI = join(ROOT, "src", "cli.ts");
+
+function cli(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  // async on purpose: the fixture server lives in this process and must keep answering
+  return new Promise((resolve) =>
+    execFile(
+      process.execPath,
+      ["--import", "tsx", CLI, ...args],
+      { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } },
+      (err, stdout, stderr) => resolve({ code: err ? Number(err.code ?? 1) : 0, stdout, stderr }),
+    ),
+  );
+}
+
+let fx: Fixture;
+before(async () => (fx = await startFixture()));
+after(async () => {
+  await fx.close();
+  rmSync(HOME, { recursive: true, force: true });
+});
+
+/* A capture file as `capture` saves one, made without a browser: what is done with a saved capture needs none. */
+
+const CSRF = "seeded-csrf-token-0123456789";
+const JAR = [{ name: "ct0", value: CSRF, domain: "127.0.0.1", path: "/", expires: -1, httpOnly: false, secure: false }];
+
+function seed(id: string, capture: { url: string; exchanges: unknown[]; [k: string]: unknown }): void {
+  mkdirSync(join(HOME, "captures"), { recursive: true });
+  const file = { id, at: new Date().toISOString(), finalUrl: capture.url, cookies: JAR, ...capture };
+  writeFileSync(join(HOME, "captures", `${id}.json`), JSON.stringify(file));
+}
+
+/** One request as the fixture's pages send it, and the fixture's answer to it. `form`: a POST's body. */
+async function answered(id: number, resourceType: string, path: string, o: { cookie?: string; form?: string } = {}) {
+  const headers: Record<string, string> =
+    resourceType === "document"
+      ? {}
+      : {
+          "x-csrf-token": CSRF,
+          authorization: PUBLIC_BEARER,
+          cookie: [`ct0=${CSRF}`, ...(o.cookie ? [o.cookie] : [])].join("; "),
+          referer: `${fx.url}/`,
+          ...(o.form ? { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" } : {}),
+        };
+  const method = o.form ? "POST" : "GET";
+  const res = await fetch(`${fx.url}${path}`, { method, headers, body: o.form });
+  return {
+    id,
+    resourceType,
+    request: { method, url: `${fx.url}${path}`, headers, ...(o.form ? { body: o.form } : {}) },
+    response: {
+      status: res.status,
+      headers: {},
+      contentType: res.headers.get("content-type") ?? "",
+      body: await res.text(),
+    },
+  };
+}
+
+/** The argv a shell hands the `api-anything ...` command a hint spells out. */
+function shellArgv(hint: string): string[] {
+  const command = /api-anything (\S.*); then /.exec(hint)?.[1];
+  assert.ok(command, `no command in: ${hint}`);
+  const print = "console.log(JSON.stringify(process.argv.slice(1)))";
+  return JSON.parse(execFileSync("sh", ["-c", `"$0" -e '${print}' -- ${command}`, process.execPath]).toString());
+}
+
+describe("flags and command names", () => {
+  before(() => {
+    // a read that needs no session: GET /api/spa/user?name=<name>
+    mkdirSync(join(HOME, "sites"), { recursive: true });
+    writeFileSync(
+      join(HOME, "sites", "plain.json"),
+      JSON.stringify({
+        name: "plain",
+        baseUrl: fx.url,
+        operations: [
+          {
+            name: "getUser",
+            readOnly: true,
+            trigger: { url: `${fx.url}/spa/{name}` },
+            match: { method: "GET", path: "/api/spa/user" },
+            request: { method: "GET", url: `${fx.url}/api/spa/user?name=alice`, headers: {} },
+            slots: [{ param: "name", at: ["query:name"] }],
+            params: [{ name: "name", example: "alice" }],
+          },
+        ],
+      }),
+    );
+  });
+
+  test("a flag the command does not take is refused, naming the command and its --help", async () => {
+    const r = await cli("call", "plain", "getUser", "name=carol", "--pick", "name", "--limit", "1");
+    assert.equal(r.code, 1, r.stdout);
+    assert.match(JSON.parse(r.stdout).error, /^call .*--pick.*--limit/);
+    assert.match(r.stderr, /^next: api-anything call --help/m);
+
+    // --steps belongs to capture and add: elsewhere it is not even parsed
+    const steps = await cli("call", "plain", "getUser", "name=carol", "--steps", "not json");
+    assert.match(JSON.parse(steps.stdout).error, /^call .*--steps/);
+
+    const own = await cli("call", "plain", "getUser", "name=carol", "--max-tier", "1");
+    assert.deepEqual(JSON.parse(own.stdout).data, { name: "carol" }, own.stdout);
+    assert.equal((await cli("call", "--limit", "1", "--help")).code, 0, "--help still answers");
+  });
+
+  test("a name every object inherits is an unknown command like any other", async () => {
+    const usage = (await cli("--help")).stdout;
+    for (const name of ["toString", "constructor"]) {
+      const r = await cli(name);
+      assert.equal(r.code, 1, name);
+      assert.equal(r.stdout, usage, name);
+      assert.match(r.stderr, new RegExp(`^next: unknown command "${name}"`), name);
+      assert.equal((await cli(name, "--help")).stdout, usage, `${name} --help`);
+    }
+  });
+
+  const step = (action: string) => JSON.stringify([{ action, selector: "#file", value: "file.pdf" }]);
+
+  test("a step --steps cannot run is one short line: the action, and the actions there are", async () => {
+    const upload = await cli("capture", `${fx.url}/list`, "--steps", step("upload"));
+    assert.equal(upload.code, 1);
+    const said = JSON.parse(upload.stdout).error;
+    assert.match(said, /^--steps: .*"upload"/);
+    assert.match(said, /upload.*not supported/);
+    for (const action of ["click", "fill", "press", "wait", "goto"]) assert.match(said, new RegExp(`\\b${action}\\b`));
+    assert.doesNotMatch(said, /"code"|\n/, "one line, not the validator's report");
+
+    const hover = JSON.parse(
+      (await cli("add", "plain", "x", "--trigger", `${fx.url}/list`, "--steps", step("hover"))).stdout,
+    ).error;
+    assert.match(hover, /"hover".*\bclick\b/);
+    assert.doesNotMatch(hover, /upload/);
+
+    // any other malformed step: what is wrong and where, on one line, not the validator's JSON report
+    const typed = await cli("capture", `${fx.url}/list`, "--steps", '[{"action":"click","selector":5}]');
+    assert.match(JSON.parse(typed.stdout).error, /^--steps: [^{[\n]* \[0\]\.selector$/);
+  });
+
+  test("a command's help names the output fields an agent has to act on", async () => {
+    const named = { capture: ["blocked", "pageStatus"], add: ["replaced"], inspect: ["note"] };
+    for (const [command, fields] of Object.entries(named)) {
+      const help = (await cli(command, "--help")).stdout;
+      for (const field of fields) assert.match(help, new RegExp(`\\b${field}\\b`), `${command} --help: ${field}`);
+    }
+  });
+
+  test("a malformed JSON flag points at the help of the command it was given to", async () => {
+    seed("cflags", { url: `${fx.url}/list`, exchanges: [await answered(1, "document", "/list")] });
+    const bad = {
+      capture: [`${fx.url}/list`, "--steps", '[{"action":"click","selector":5}]'],
+      add: ["plain", "x", "--trigger", `${fx.url}/list`, "--steps", step("hover")],
+      call: ["plain", "getUser", "--json", '{"name":'],
+      inspect: ["cflags", "1", "--html", '{"items":1}'],
+    };
+    for (const [command, args] of Object.entries(bad)) {
+      const r = await cli(command, ...args);
+      assert.equal(r.code, 1, command);
+      assert.match(r.stderr, new RegExp(`^next: api-anything ${command} --help`), command);
+    }
+    assert.match(
+      (await cli("add", "plain", "x", "--from", "c", "--match", "{")).stderr,
+      /^next: api-anything add --help/,
+    );
+  });
+});
+
+describe("inspect", () => {
+  // 1: the list page; 2: a user's JSON; 3: a user with no posts; 4: the list searched for nobody.
+  before(async () => {
+    const user = (id: number, name: string, posts: string[]) => ({
+      id,
+      resourceType: "fetch",
+      request: { method: "GET", url: `${fx.url}/`, headers: {} },
+      response: {
+        status: 200,
+        headers: {},
+        contentType: "application/json",
+        body: JSON.stringify({ data: { user: { name, followers: 500, posts: posts.map((text) => ({ text })) } } }),
+      },
+    });
+    seed("csaved", {
+      url: `${fx.url}/list`,
+      exchanges: [
+        await answered(1, "document", "/list"),
+        user(2, "alice", ["hello from alice"]),
+        user(3, "dora", []),
+        await answered(4, "document", "/list?q=nobody"),
+      ],
+    });
+  });
+  const inspect = async (request: number, ...flags: string[]) => {
+    const r = await cli("inspect", "csaved", String(request), ...flags);
+    return { ...r, out: JSON.parse(r.stdout) };
+  };
+
+  test("it takes add's recipe flags: --extract (or --path) and --pick, after --html too", async () => {
+    assert.deepEqual((await inspect(2, "--extract", "data.user", "--pick", "name")).out.data, { name: "alice" });
+    assert.equal((await inspect(2, "--path", "data.user.posts[0].text")).out.data, "hello from alice");
+    const recipe = '{"items":"li.user","fields":{"name":"a.name","followers":"span.followers"}}';
+    assert.deepEqual((await inspect(1, "--html", recipe, "--pick", "name")).out.data, [
+      { name: "alice" },
+      { name: "bob" },
+      { name: "carol" },
+    ]);
+  });
+
+  test("a path or selector that finds nothing fails and says so; an empty list at a path is a result", async () => {
+    const next = /^next: api-anything inspect csaved \d/m;
+    const path = await inspect(2, "--path", "data.wrong");
+    assert.equal(path.code, 1);
+    assert.equal(path.out.ok, false);
+    assert.match(path.out.error, /data\.wrong/);
+    assert.match(path.stderr, next);
+
+    const selector = await inspect(1, "--html", '{"items":"li.nope","fields":{"name":"a"}}');
+    assert.equal(selector.code, 1);
+    assert.match(selector.out.error, /--html.*li\.nope/);
+    assert.match(selector.stderr, next);
+
+    const regex = await inspect(1, "--embedded", "window\\.state = (\\{)");
+    assert.equal(regex.code, 1);
+    assert.match(regex.out.error, /--embedded/);
+
+    // the page is not JSON: a path into it finds nothing, rather than printing the page
+    assert.equal((await inspect(1, "--extract", "data.user")).code, 1);
+
+    const empty = await inspect(3, "--extract", "data.user.posts");
+    assert.equal(empty.code, 0, empty.stdout);
+    assert.deepEqual(empty.out.data, []);
+  });
+
+  test("an --html recipe on a page with no results answers [] when the items' container is there, empty", async () => {
+    const zero = await inspect(4, "--html", '{"items":"ul.users li.user","fields":{"name":"a.name"}}');
+    assert.equal(zero.code, 0, zero.stdout);
+    assert.deepEqual(zero.out.data, []);
+    assert.match(zero.out.note, /ul\.users.*empty/);
+    // the same page, a selector with no container to find: nothing tells no results from a wrong selector
+    assert.equal((await inspect(4, "--html", '{"items":"li.user","fields":{"name":"a.name"}}')).code, 1);
+  });
+});
+
+describe("add from a saved capture", () => {
+  /** The steps that post a text on /compose. */
+  const steps = (text: string): TriggerStep[] => [
+    { action: "fill", selector: "#text", value: text },
+    { action: "click", selector: "#post" },
+  ];
+  const post = () => `/api/graphql/${fx.state.createQueryId}/CreatePost`;
+  const posts = () => fx.calls.filter((c) => c.path === post()).length;
+
+  before(async () => {
+    // calice, cbob: /u/<name>. Request 1 is the page, 2 the user's JSON.
+    for (const name of ["alice", "bob"]) {
+      const variables = encodeURIComponent(JSON.stringify({ name, withExtras: true }));
+      seed(`c${name}`, {
+        url: `${fx.url}/u/${name}`,
+        exchanges: [
+          await answered(1, "document", `/u/${name}`),
+          await answered(2, "fetch", `/api/graphql/${fx.state.userQueryId}/UserByName?variables=${variables}`),
+        ],
+      });
+    }
+    // cpost: /compose captured with --write. Request 2 is the POST the guard aborted, so it has no
+    // answer; 3 is a search the page also POSTed, which went through and was answered.
+    const search = JSON.stringify([[["search", JSON.stringify(["kittens", 10]), null, "generic"]]]);
+    seed("cpost", {
+      url: `${fx.url}/compose`,
+      write: true,
+      steps: steps("hello alice"),
+      exchanges: [
+        await answered(1, "document", "/compose"),
+        {
+          id: 2,
+          resourceType: "fetch",
+          request: {
+            method: "POST",
+            url: `${fx.url}${post()}`,
+            headers: { "x-csrf-token": CSRF, authorization: PUBLIC_BEARER, "content-type": "application/json" },
+            body: JSON.stringify({ variables: { text: "hello alice" }, queryId: fx.state.createQueryId }),
+          },
+          aborted: true,
+        },
+        await answered(3, "xhr", "/api/rpc?rpcids=search", { form: `f.req=${encodeURIComponent(search)}` }),
+      ],
+    });
+  });
+  /** add fixture <op> from the capture of that user's page; `flags` are split on spaces. */
+  const add = async (op: string, from: string, flags: string) => {
+    const r = await cli("add", "fixture", op, "--from", `c${from}`, "--pick-request", "2", ...flags.split(" "));
+    return { ...r, out: JSON.parse(r.stdout) };
+  };
+
+  test("--example2 with --from and no --from2 is refused, and the way it says to go works", async () => {
+    const r = await add("twice", "alice", "--example name=alice --example2 name=bob");
+    assert.equal(r.code, 1, r.stdout);
+    assert.match(r.out.error, /--example2 .*--from2/);
+    assert.deepEqual(shellArgv(r.stderr), ["capture", `${fx.url}/u/bob`, "--example", "name=bob"]);
+    assert.match(r.stderr, /--from2/);
+    assert.equal((await cli("ops", "fixture")).code, 1, "nothing was saved");
+
+    const both = await add("twice", "alice", "--example name=alice --from2 cbob --example2 name=bob");
+    assert.equal(both.code, 0, both.stdout);
+    assert.doesNotMatch(both.out.warnings.join("\n"), /one example/, "the two captures were diffed");
+  });
+
+  test("the capture that refusal asks for repeats how the first was made: --write, steps, quoting", async () => {
+    const refused = async (capture: string, ...flags: string[]) => {
+      const r = await cli("add", "demo", "send", "--from", capture, ...flags);
+      assert.equal(r.code, 1, r.stdout);
+      return r.stderr;
+    };
+    // a write captured with --write: type the text, click Post
+    seed("cwrite", { url: `${fx.url}/compose`, write: true, steps: steps("hello alice"), exchanges: [] });
+    assert.deepEqual(
+      shellArgv(await refused("cwrite", "--write", "--example", "text=hello alice", "--example2", "text=hello bob")),
+      [
+        "capture",
+        `${fx.url}/compose`,
+        "--steps",
+        JSON.stringify(steps("hello bob")),
+        "--write",
+        "--example",
+        "text=hello bob",
+      ],
+    );
+
+    // the value in the URL, a soft navigation, and a quote for the shell to trip on
+    seed("csoft", { url: `${fx.url}/spa/alice?tab=posts`, softFrom: `${fx.url}/spa/home`, exchanges: [] });
+    assert.deepEqual(shellArgv(await refused("csoft", "--example", "name=alice", "--example2", "name=bob o'neil")), [
+      "capture",
+      `${fx.url}/spa/bob%20o'neil?tab=posts`,
+      "--soft-from",
+      `${fx.url}/spa/home`,
+      "--example",
+      "name=bob o'neil",
+    ]);
+
+    // the first example is nowhere in the capture's url or steps: no command, rather than a wrong one
+    seed("cfeed", { url: `${fx.url}/feed`, write: true, exchanges: [] });
+    const words = await refused("cfeed", "--example", "name=alice", "--example2", "name=bob");
+    assert.doesNotMatch(words, /api-anything capture/);
+    assert.match(words, /--write/);
+    assert.match(words, /--from2/);
+  });
+
+  const carol = async (op: string) => JSON.parse((await cli("call", "fixture", op, "name=carol")).stdout).data;
+
+  test("a recipe is fixed by adding the op again from its capture: the stored examples stand in for --example", async () => {
+    const wrong = await add("getUser", "alice", "--example name=alice --extract data.wrong");
+    assert.deepEqual(wrong.out.params, ["name:string"]);
+    assert.match(wrong.out.warnings.join("\n"), /add --from calice/);
+
+    // that advice, followed: no example and no --pick-request, and the stored example finds the request
+    const r = await cli("add", "fixture", "getUser", "--from", "calice", "--extract", "data.user", "--pick", "name");
+    const fixed = JSON.parse(r.stdout);
+    assert.equal(r.code, 0, r.stdout);
+    assert.equal(fixed.replaced, true);
+    assert.deepEqual(fixed.params, ["name:string"], "the param is not dropped");
+    assert.deepEqual(fixed.preview, { first: { name: "alice" } });
+    assert.deepEqual(await carol("getUser"), { name: "carol" });
+
+    // the new recipe is judged on the captured answer, as add judges one
+    const still = await add("getUser", "alice", "--extract data.nope");
+    assert.equal(still.out.preview, undefined);
+    assert.match(still.out.warnings.join("\n"), /data\.nope.*add --from calice/);
+
+    // a flag that shapes the request needs no example either
+    const pinned = await add(
+      "getUser",
+      "alice",
+      "--match path=/api/graphql/*/UserByName --extract data.user --pick name",
+    );
+    assert.equal(pinned.code, 0, pinned.stdout);
+    assert.deepEqual(pinned.out.params, ["name:string"]);
+    assert.deepEqual(await carol("getUser"), { name: "carol" });
+
+    // another request of the capture carries the example somewhere else (the page's own URL): the op is
+    // not quietly re-bound to it
+    const page = await cli("add", "fixture", "getUser", "--from", "calice", "--pick-request", "1");
+    assert.equal(page.code, 1, page.stdout);
+    assert.match(JSON.parse(page.stdout).error, /other places.*stored ones were used \(name=alice\).*--example/);
+    assert.deepEqual(await carol("getUser"), { name: "carol" }, "the op is as it was");
+  });
+
+  test("a capture made with other values is not learned with the stored ones: a value that sits elsewhere binds nothing", async () => {
+    await add("viewed", "alice", "--example name=alice --extract data.user --pick name");
+    // bob's page, where the stored example (alice) is the viewer in the same request
+    const variables = encodeURIComponent(JSON.stringify({ name: "bob", withExtras: true }));
+    seed("cviewer", {
+      url: `${fx.url}/u/bob`,
+      exchanges: [
+        await answered(1, "document", "/u/bob"),
+        await answered(
+          2,
+          "fetch",
+          `/api/graphql/${fx.state.userQueryId}/UserByName?variables=${variables}&viewer=alice`,
+        ),
+      ],
+    });
+    const refused = await add("viewed", "viewer", "--extract data.user --pick name,followers");
+    assert.equal(refused.code, 1, refused.stdout);
+    assert.match(refused.out.error, /other places.*stored ones were used \(name=alice\).*--example/);
+    assert.deepEqual(await carol("viewed"), { name: "carol" }, "the op is as it was");
+    // with the values the capture was made with, it is learned from it
+    const learned = await add("viewed", "viewer", "--example name=bob --extract data.user --pick name,followers");
+    assert.deepEqual(learned.out.preview, { first: { name: "bob", followers: 300 } });
+    assert.deepEqual(await carol("viewed"), { name: "carol", followers: 500 }, "name fills the user asked for");
+  });
+
+  test("--description alone changes the description: with no recipe flag the stored recipe stands", async () => {
+    await add("described", "alice", "--example name=alice --extract data.user --pick name");
+    const r = await cli("add", "fixture", "described", "--from", "calice", "--description", "A user's name");
+    const out = JSON.parse(r.stdout);
+    assert.equal(r.code, 0, r.stdout);
+    assert.equal(out.replaced, true);
+    assert.deepEqual(await carol("described"), { name: "carol" }, "extract and pick are still there");
+    const ops = JSON.parse((await cli("ops", "fixture")).stdout).operations;
+    assert.equal(ops.find((o: { name: string }) => o.name === "described").description, "A user's name");
+
+    // an empty one clears it, and still leaves the recipe alone
+    const cleared = await cli("add", "fixture", "described", "--from", "calice", "--description", "");
+    assert.equal(cleared.code, 0, cleared.stdout);
+    assert.deepEqual(await carol("described"), { name: "carol" }, "extract and pick are still there");
+    const after = JSON.parse((await cli("ops", "fixture")).stdout).operations;
+    assert.equal(after.find((o: { name: string }) => o.name === "described").description, undefined);
+  });
+
+  test("an op with no stored example is not learned again without one: its params are not dropped", async () => {
+    await add("bare", "alice", "--example name=alice --extract data.wrong");
+    // a shared spec is exported without its example values
+    const file = join(HOME, "sites", "fixture.json");
+    const spec = JSON.parse(readFileSync(file, "utf8"));
+    for (const op of spec.operations) for (const p of op.params) delete p.example;
+    writeFileSync(file, JSON.stringify(spec));
+
+    const refused = await add("bare", "alice", "--extract data.user --pick name");
+    assert.equal(refused.code, 1, refused.stdout);
+    assert.match(refused.out.error, /no stored example for name.*--example.*calice/);
+    const fixed = await add("bare", "alice", "--example name=alice --extract data.user --pick name");
+    assert.deepEqual(fixed.out.params, ["name:string"]);
+    assert.deepEqual(await carol("bare"), { name: "carol" });
+  });
+
+  test("an op added again is scanned for credentials as any add is: the capture's cookies and tokens count", async () => {
+    // /api/mine keys its answer by the session cookie's value, "guest" without one
+    const SESSION = "cookie-value-new-session";
+    const mine = async (id: string, session?: string) =>
+      seed(id, {
+        url: `${fx.url}/mine?name=alice`,
+        cookies: session ? [...JAR, { ...JAR[0], name: "session", value: session }] : JAR,
+        exchanges: [
+          await answered(1, "fetch", "/api/mine?name=alice", session ? { cookie: `session=${session}` } : {}),
+        ],
+      });
+    const add = async (op: string, ...flags: string[]) => {
+      const r = await cli("add", "fixture", op, ...flags);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    await mine("cguest");
+    const learned = await add("mine", "--from", "cguest", "--pick-request", "1", "--example", "name=alice");
+    assert.match(learned.out.extract, /^guest/, learned.stdout);
+
+    // the same request captured signed in: an extract through the cookie's value is refused, typed or suggested
+    await mine("csigned", SESSION);
+    const typed = await add("mine", "--from", "csigned", "--extract", `${SESSION}[0]`);
+    assert.equal(typed.code, 1, typed.stdout);
+    assert.match(typed.out.error, /credential/);
+    const suggested = await add("mine2", "--from", "csigned", "--pick-request", "1", "--example", "name=alice");
+    assert.equal(suggested.code, 1, suggested.stdout);
+    assert.match(suggested.out.error, /credential/);
+    assert.doesNotMatch(readFileSync(join(HOME, "sites", "fixture.json"), "utf8"), new RegExp(SESSION));
+
+    // a credential the captured request carries in a header the op has no slot for counts too
+    const TOKEN = "NewPrivateSession9876543210";
+    const guest = await answered(1, "fetch", "/api/mine?name=alice");
+    seed("cheader", {
+      url: `${fx.url}/mine?name=alice`,
+      exchanges: [
+        { ...guest, request: { ...guest.request, headers: { ...guest.request.headers, "x-auth-token": TOKEN } } },
+      ],
+    });
+    const header = await add("mine", "--from", "cheader", "--extract", TOKEN);
+    assert.equal(header.code, 1, header.stdout);
+    assert.match(header.out.error, /credential/);
+    // so does a description that names it, though nothing else changes
+    const named = await add("mine", "--from", "cheader", "--description", `the session ${TOKEN}`);
+    assert.equal(named.code, 1, named.stdout);
+    assert.match(named.out.error, /credential/);
+    // and a random-looking value under an ordinary header name that the page also keeps in storage
+    const OPAQUE = "Zq7RandomOpaque0192837465abc";
+    seed("copaque", {
+      url: `${fx.url}/mine?name=alice`,
+      storage: { opaque: OPAQUE },
+      exchanges: [
+        { ...guest, request: { ...guest.request, headers: { ...guest.request.headers, "x-opaque": OPAQUE } } },
+      ],
+    });
+    const opaque = await add("mine", "--from", "copaque", "--extract", OPAQUE);
+    assert.equal(opaque.code, 1, opaque.stdout);
+    assert.match(opaque.out.error, /credential/);
+    // and a short token the page keeps inside a JSON entry of its storage
+    const SHORT = "abcd1234";
+    seed("cnested", {
+      url: `${fx.url}/mine?name=alice`,
+      storage: { auth: JSON.stringify({ access_token: SHORT }) },
+      exchanges: [
+        { ...guest, request: { ...guest.request, headers: { ...guest.request.headers, "x-opaque": SHORT } } },
+      ],
+    });
+    for (const flags of [
+      ["--extract", SHORT],
+      ["--description", `session ${SHORT}`],
+    ]) {
+      const nested = await add("mine", "--from", "cnested", ...flags);
+      assert.equal(nested.code, 1, nested.stdout);
+      assert.match(nested.out.error, /credential/);
+    }
+    for (const secret of [TOKEN, OPAQUE, SHORT])
+      assert.doesNotMatch(readFileSync(join(HOME, "sites", "fixture.json"), "utf8"), new RegExp(secret));
+  });
+
+  test("a recipe may name a random-looking value that is not a credential: a build id the response is keyed by", async () => {
+    const BUILD = "R7q8Ab9Cd0Ef1Gh2Ij3Kl4Mn";
+    const guest = await answered(1, "fetch", "/api/mine?name=alice");
+    seed("cbuild", {
+      url: `${fx.url}/mine?name=alice`,
+      exchanges: [
+        {
+          ...guest,
+          request: { ...guest.request, headers: { ...guest.request.headers, "x-build": BUILD } },
+          response: { ...guest.response, body: JSON.stringify({ [BUILD]: [{ name: "alice" }] }) },
+        },
+      ],
+    });
+    const add = async (...flags: string[]) => {
+      const r = await cli("add", "fixture", "built", "--from", "cbuild", ...flags);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    assert.equal((await add("--pick-request", "1", "--example", "name=alice")).code, 0);
+    const repaired = await add("--extract", BUILD);
+    assert.equal(repaired.code, 0, repaired.stdout);
+    assert.equal(repaired.out.replaced, true);
+  });
+
+  test("an op added again is not refused for its own example, however much it looks like a key", async () => {
+    // a public object id passed as the param: random-looking, and under a name that reads like a credential's
+    const KEY = "PublicObjectAbc12345";
+    seed("cobject", {
+      url: `${fx.url}/mine?name=${KEY}`,
+      exchanges: [await answered(1, "fetch", `/api/mine?name=${KEY}`)],
+    });
+    const add = async (...flags: string[]) => {
+      const r = await cli("add", "fixture", "object", "--from", "cobject", ...flags);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    const learned = await add("--pick-request", "1", "--example", `name=${KEY}`);
+    assert.equal(learned.code, 0, learned.stdout);
+    const repaired = await add("--extract", "guest", "--pick", "name");
+    assert.equal(repaired.code, 0, repaired.stdout);
+    assert.equal(repaired.out.replaced, true);
+  });
+
+  describe("an op added again from a capture is checked as any add is", () => {
+    /** A request no page of the fixture sends, and an answer for it: only what add does with the capture is under test. */
+    const lookup = (path: string, body?: string) => ({
+      id: 1,
+      resourceType: "fetch",
+      request: {
+        method: body ? "POST" : "GET",
+        url: `${fx.url}${path}`,
+        headers: body ? { "content-type": "application/json" } : {},
+        ...(body ? { body } : {}),
+      },
+      response: { status: 200, headers: {}, contentType: "application/json", body: '{"data":[{"name":"alice"}]}' },
+    });
+    const add = async (op: string, from: string, ...flags: string[]) => {
+      const r = await cli("add", "fixture", op, "--from", from, "--pick-request", "1", ...flags);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    const saved = () => readFileSync(join(HOME, "sites", "fixture.json"), "utf8");
+
+    test("every credential in the request counts, two that would take one ref's name included", async () => {
+      const [OLD, QUERY, BODY] = ["OldPrivateTokenAbc12345", "QueryPrivateTokenBcd23456", "BodyPrivateTokenCde34567"];
+      seed("ctoken", {
+        url: `${fx.url}/page`,
+        exchanges: [lookup("/api/lookup?name=alice", JSON.stringify({ token: OLD }))],
+      });
+      assert.equal((await add("lookup", "ctoken", "--example", "name=alice", "--extract", "data")).code, 0);
+      // the same op's request, now with a second token in the query: the body's is the ref the op already has
+      const path = `/api/lookup?name=alice&token=${QUERY}`;
+      seed("ctokens", { url: `${fx.url}/page`, exchanges: [lookup(path, JSON.stringify({ token: BODY }))] });
+      for (const token of [QUERY, BODY]) {
+        const named = await add("lookup", "ctokens", "--description", `session ${token}`);
+        assert.equal(named.code, 1, named.stdout);
+        assert.match(named.out.error, /credential/);
+      }
+      for (const token of [OLD, QUERY, BODY]) assert.doesNotMatch(saved(), new RegExp(token));
+    });
+
+    test("a request the learner cannot place the examples in is refused, and what it holds is not saved", async () => {
+      const SHORT = "abcd1234";
+      seed("cnamed", { url: `${fx.url}/page`, exchanges: [lookup("/api/named?name=alice")] });
+      assert.equal((await add("named", "cnamed", "--example", "name=alice", "--extract", "data")).code, 0);
+      // an empty query key is a position no slot can name, and its value is a token the page stores
+      seed("cnokey", {
+        url: `${fx.url}/page`,
+        storage: { auth: JSON.stringify({ access_token: SHORT }) },
+        exchanges: [lookup(`/api/named?=${SHORT}`)],
+      });
+      const named = await add("named", "cnokey", "--description", `session ${SHORT}`);
+      assert.equal(named.code, 1, named.stdout);
+      assert.doesNotMatch(saved(), new RegExp(SHORT));
+    });
+
+    test("what the op holds public was said of the value it was learned with, not of another sent in its place", async () => {
+      const [SHIPPED, PRIVATE] = ["PublicStaticApiKeyAbc12345", "PrivateRuntimeApiKeyZyx98765"];
+      const keyed = (key: string) => {
+        const e = lookup("/api/shipped?name=alice");
+        return { ...e, id: 2, request: { ...e.request, headers: { "x-api-key": key } } };
+      };
+      // the site's own script ships the first key to every visitor, so the learner leaves it in the request
+      const script = {
+        id: 1,
+        resourceType: "script",
+        request: { method: "GET", url: `${fx.url}/app.js`, headers: {} },
+        response: {
+          status: 200,
+          headers: { "cache-control": "public" },
+          contentType: "application/javascript",
+          body: `const key="${SHIPPED}";`,
+        },
+      };
+      seed("cshipped", { url: `${fx.url}/page`, cookies: [], exchanges: [script, keyed(SHIPPED)] });
+      const first = await cli(
+        ...["add", "fixture", "shipped", "--from", "cshipped", "--pick-request", "2"],
+        ...["--example", "name=alice", "--extract", "data"],
+      );
+      assert.equal(first.code, 0, first.stdout);
+      const op = () => JSON.parse(saved()).operations.find((o: { name: string }) => o.name === "shipped");
+      assert.deepEqual(op().public, ["x-api-key"]);
+      // a later capture sends another key there, and no script ships it
+      seed("cprivate", { url: `${fx.url}/page`, cookies: [], exchanges: [keyed(PRIVATE)] });
+      for (const flags of [
+        ["--description", PRIVATE],
+        ["--extract", "data", "--pick", PRIVATE],
+      ]) {
+        const r = await cli("add", "fixture", "shipped", "--from", "cprivate", "--pick-request", "2", ...flags);
+        assert.equal(r.code, 1, r.stdout);
+        assert.match(JSON.parse(r.stdout).error, /credential/);
+      }
+      assert.doesNotMatch(saved(), new RegExp(PRIVATE));
+    });
+
+    test("a value the session store still holds is a credential, though the op's ref has moved on to another", async () => {
+      const [FIRST, ROTATED] = ["OriginalStoredSecretAbc12345", "RotatedStoredSecretZyx98765"];
+      const opaque = (value: string) => {
+        const e = lookup("/api/rotated?name=alice");
+        return { ...e, request: { ...e.request, headers: { "x-opaque": value } } };
+      };
+      seed("cfirst", {
+        url: `${fx.url}/page`,
+        cookies: [],
+        storage: { oldStorage: FIRST },
+        exchanges: [opaque(FIRST)],
+      });
+      assert.equal((await add("rotated", "cfirst", "--example", "name=alice", "--extract", "data")).code, 0);
+      // the page now keeps another value under another key, and sends that one
+      seed("csecond", {
+        url: `${fx.url}/page`,
+        cookies: [],
+        storage: { newStorage: ROTATED },
+        exchanges: [opaque(ROTATED)],
+      });
+      for (const secret of [FIRST, ROTATED])
+        for (const flags of [
+          ["--description", secret],
+          ["--extract", "data", "--pick", secret],
+        ]) {
+          const r = await add("rotated", "csecond", ...flags);
+          assert.equal(r.code, 1, r.stdout);
+          assert.match(r.out.error, /credential/);
+        }
+      for (const secret of [FIRST, ROTATED]) assert.doesNotMatch(saved(), new RegExp(secret));
+    });
+
+    test("adding an op again keeps the session its capture shows: the next call sends the new login", async () => {
+      const jar = (session: string) => [...JAR, { ...JAR[0], name: "session", value: session, httpOnly: true }];
+      const signedIn = async (session: string) => ({
+        url: `${fx.url}/private`,
+        cookies: jar(session),
+        exchanges: [await answered(1, "fetch", "/private", { cookie: `session=${session}` })],
+      });
+      const first = fx.mintSession();
+      seed("clogin", await signedIn(first));
+      assert.equal((await add("private", "clogin", "--extract", "data")).code, 0);
+      const call = async () => JSON.parse((await cli("call", "fixture", "private", "--max-tier", "1")).stdout);
+      assert.equal((await call()).ok, true);
+      // the site signs the stored session out, the user signs in again, and the next capture is made with the new one
+      const storedLogin = (): string =>
+        JSON.parse(readFileSync(join(HOME, "sessions", "fixture.json"), "utf8")).cookies.find(
+          (c: { name: string }) => c.name === "session",
+        ).value;
+      for (const flags of [
+        ["--description", "the signed-in page"],
+        ["--extract", "data", "--pick", "secret"],
+      ]) {
+        fx.revoke(storedLogin());
+        assert.equal((await call()).class, "auth", "the stored login is signed out");
+        seed("crelogin", await signedIn(fx.mintSession()));
+        assert.equal((await add("private", "crelogin", ...flags)).code, 0);
+        const after = await call();
+        assert.equal(after.ok, true, JSON.stringify(after));
+      }
+    });
+
+    test("adding an op again from its own request refreshes the session value its ref reads", async () => {
+      const [FIRST, NEXT] = ["FirstOpaqueValueAbc12345", "NextOpaqueValueBcd23456"];
+      const opaque = (value: string) => {
+        const e = lookup("/api/reffed?name=alice");
+        return { ...e, request: { ...e.request, headers: { "x-opaque": value } } };
+      };
+      const stored = () =>
+        Object.values(JSON.parse(readFileSync(join(HOME, "sessions", "fixture.json"), "utf8")).values);
+      seed("cref", { url: `${fx.url}/page`, cookies: [], storage: { opaque: FIRST }, exchanges: [opaque(FIRST)] });
+      assert.equal((await add("reffed", "cref", "--example", "name=alice", "--extract", "data")).code, 0);
+      assert.ok(stored().includes(FIRST));
+      // the same request, sending the value the page holds now
+      seed("cref2", { url: `${fx.url}/page`, cookies: [], storage: { opaque: NEXT }, exchanges: [opaque(NEXT)] });
+      assert.equal((await add("reffed", "cref2", "--extract", "data", "--pick", "name")).code, 0);
+      assert.ok(stored().includes(NEXT) && !stored().includes(FIRST), "the ref now holds what the request sent");
+      for (const value of [FIRST, NEXT]) assert.doesNotMatch(saved(), new RegExp(value));
+    });
+
+    test("a description is not saved from a capture that holds no request of the op: nothing says what is secret in it", async () => {
+      const TOKEN = "OtherEndpointTokenAbc12345";
+      seed("cbase", { url: `${fx.url}/page`, exchanges: [lookup("/api/base?name=alice")] });
+      assert.equal((await add("base", "cbase", "--example", "name=alice", "--extract", "data")).code, 0);
+      seed("celse", { url: `${fx.url}/page`, exchanges: [lookup(`/api/other?token=${TOKEN}`)] });
+      const r = await cli("add", "fixture", "base", "--from", "celse", "--description", TOKEN);
+      assert.equal(r.code, 1, r.stdout);
+      assert.match(
+        JSON.parse(r.stdout).error,
+        /no captured request carries the example values.*stored ones were used \(name=alice\)/,
+      );
+      assert.doesNotMatch(saved(), new RegExp(TOKEN));
+    });
+
+    test("a param under a credential's name stays a param: the stored example says so", async () => {
+      const KEY = "PublicObjectAbc12345";
+      seed("ckeyed", { url: `${fx.url}/page`, exchanges: [lookup(`/api/keyed?api_key=${KEY}`)] });
+      const learned = await add("keyed", "ckeyed", "--example", `key=${KEY}`, "--extract", "data");
+      assert.equal(learned.code, 0, learned.stdout);
+      // learned with no example that value would be called a credential; the stored example says it is the param
+      const repaired = await add("keyed", "ckeyed", "--extract", "data", "--pick", "name");
+      assert.equal(repaired.code, 0, repaired.stdout);
+      assert.equal(repaired.out.replaced, true);
+      assert.deepEqual(
+        JSON.parse(saved())
+          .operations.find((o: { name: string }) => o.name === "keyed")
+          .params.map((p: { name: string }) => p.name),
+        ["key"],
+      );
+    });
+  });
+
+  test("a request a --write capture aborted is learned as a write or not at all, whatever its name", async () => {
+    const add = async (op: string, request: string, example: string) => {
+      const r = await cli("add", "demo", op, "--from", "cpost", "--pick-request", request, "--example", example);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    // no op of that name yet, so nothing but the capture says it is a write
+    const fresh = await add("post", "2", "text=hello alice");
+    assert.equal(fresh.code, 1, fresh.stdout);
+    assert.match(fresh.out.error, /intercepted.*--write/);
+    assert.equal((await cli("ops", "demo")).code, 1, "nothing was saved");
+
+    // the method alone says nothing: a POST the same capture let through, and answered, is a read
+    const search = await add("search", "3", "q=kittens");
+    assert.equal(search.code, 0, search.stdout);
+    assert.equal(search.out.readOnly, true);
+    assert.equal(posts(), 0, "no POST reached the site");
+
+    // as the second capture of a pair, the request the diff reads from it decides, not how it was captured:
+    // the answered search is a read there too
+    const pair = await cli(
+      ...["add", "demo", "search2", "--from", "cpost", "--pick-request", "3", "--example", "q=kittens"],
+      ...["--from2", "cpost", "--example2", "q=kittens"],
+    );
+    assert.equal(pair.code, 0, pair.stdout);
+    assert.equal(JSON.parse(pair.stdout).readOnly, true);
+    // but a request it intercepted is a write there, whatever the first capture shows
+    const first = JSON.parse(readFileSync(join(HOME, "captures", "cpost.json"), "utf8"));
+    const sent = first.exchanges.map((e: { id: number; aborted?: boolean }) =>
+      e.id === 2
+        ? {
+            ...e,
+            aborted: undefined,
+            response: { status: 200, headers: {}, contentType: "application/json", body: '{"data":{"ok":true}}' },
+          }
+        : e,
+    );
+    seed("csent", { url: first.url, steps: first.steps, exchanges: sent });
+    const held = await cli(
+      ...["add", "demo", "post2", "--from", "csent", "--pick-request", "2", "--example", "text=hello alice"],
+      ...["--from2", "cpost", "--example2", "text=hello alice"],
+    );
+    assert.equal(held.code, 1, held.stdout);
+    assert.match(JSON.parse(held.stdout).error, /cpost .*intercepted request 2 as a write.*--write/);
+    // and one it intercepted that the diff does not read decides nothing: the answered search is read,
+    // a search with other args that was held back is beside the point
+    const form = (q: string) =>
+      `f.req=${encodeURIComponent(JSON.stringify([[["search", JSON.stringify([q, 10]), null, "generic"]]]))}`;
+    const { response: _held, ...other } = await answered(2, "xhr", "/api/rpc?rpcids=search", {
+      form: form("unrelated"),
+    });
+    seed("cpups", {
+      url: `${fx.url}/compose`,
+      write: true,
+      exchanges: [
+        await answered(1, "xhr", "/api/rpc?rpcids=search", { form: form("puppies") }),
+        { ...other, aborted: true },
+      ],
+    });
+    const beside = await cli(
+      ...["add", "demo", "search3", "--from", "cpost", "--pick-request", "3", "--example", "q=kittens"],
+      ...["--from2", "cpups", "--example2", "q=puppies"],
+    );
+    assert.equal(beside.code, 0, beside.stdout);
+    assert.equal(JSON.parse(beside.stdout).readOnly, true);
+    assert.equal(posts(), 0, "no POST reached the site");
+  });
+
+  test("a write stays a write: learning it again, to fix its recipe too, is refused without --write", async () => {
+    const send = async (...flags: string[]) => {
+      const r = await cli("add", "demo", "send", "--from", "cpost", ...flags);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    const learned = await send("--write", "--example", "text=hello alice");
+    assert.equal(learned.out.readOnly, false, learned.stdout);
+
+    // fixing its recipe is learning it again: without --write that is refused, with it the op stays a write
+    const bare = await send("--extract", "data.create_post");
+    assert.equal(bare.code, 1, bare.stdout);
+    assert.match(bare.out.error, /is a write.*--write/);
+    const fixed = await send("--write", "--extract", "data.create_post");
+    assert.equal(fixed.code, 0, fixed.stdout);
+    assert.equal(fixed.out.readOnly, false);
+    assert.deepEqual(fixed.out.params, ["text:string"], "the stored example stood in");
+    const refused = JSON.parse((await cli("call", "demo", "send", "text=never asked for")).stdout);
+    assert.equal(refused.class, "refused", JSON.stringify(refused));
+
+    // with --example it is learned again, and without --write that would save it as a read
+    const relearn = await send("--pick-request", "2", "--example", "text=hello alice");
+    assert.equal(relearn.code, 1, relearn.stdout);
+    assert.match(relearn.out.error, /--write/);
+    assert.match((await cli("ops", "demo")).stdout, /"readOnly":false/);
+    // nor under a name that differs only in case, which is no existing op's
+    const cased = await cli(
+      "add",
+      "demo",
+      "SEND",
+      "--from",
+      "cpost",
+      "--pick-request",
+      "2",
+      "--example",
+      "text=hello alice",
+    );
+    assert.equal(cased.code, 1, cased.stdout);
+    assert.doesNotMatch((await cli("ops", "demo")).stdout, /"SEND"/);
+    // by its trigger too: refused before any browser runs it unintercepted
+    process.env.API_ANYTHING_HOME = HOME;
+    const again = { site: "demo", op: "send", trigger: { url: `${fx.url}/compose`, steps: steps("{text}") } };
+    await assert.rejects(addOperation({ ...again, examples: [{ text: "hello alice" }] }), /--write/);
+    assert.equal(posts(), 0, "no POST reached the site");
+  });
+});
+
+const noChrome = !chromeAvailable() && "Google Chrome not installed";
+
+describe("capture's next hint", { skip: noChrome }, () => {
+  const capture = async (path: string, ...flags: string[]) =>
+    JSON.parse((await cli("capture", `${fx.url}${path}`, ...flags)).stdout);
+  const signInPage = /sign-in page.*api-anything login/;
+  const learn = /\badd <site> <op> --from c/;
+  const alsoForm = /sign-in form.*api-anything login/;
+
+  test("'sign-in page' takes a login path and a sign-in form on it, asked for or redirected to", async () => {
+    for (const path of ["/account", "/signin"]) {
+      const { next } = await capture(path);
+      assert.match(next, signInPage, path);
+      assert.doesNotMatch(next, learn, path);
+      assert.match(next, /api-anything inspect c\w+ \d+/, "the stop still says how to look at the page");
+    }
+    // a public page that merely lives under a login-like path is learned from like any other
+    const docs = (await capture("/docs/login", "--example", "name=alice")).next;
+    assert.match(docs, learn);
+    assert.doesNotMatch(docs, /sign-in/);
+  });
+
+  test("example values that no candidate returned, on a page with a sign-in form, are a stronger caveat, not a stop", async () => {
+    const { next } = await capture("/private", "--example", "name=alice");
+    assert.match(next, learn);
+    assert.match(next, /none of the example values.*sign-in form.*check the example values.*api-anything login/);
+    assert.doesNotMatch(next, signInPage);
+  });
+
+  test("login wording with no sign-in form on the page adds nothing to the recommendation", async () => {
+    const { next } = await capture("/notice", "--example", "name=zelda");
+    assert.match(next, learn);
+    assert.doesNotMatch(next, /sign-in/);
+  });
+
+  test("a sign-in form with nothing to say the data is missing is said beside the recommendation", async () => {
+    const pages = [
+      ["/private"], // a login page served in place, but no example to miss
+      ["/card/alice"], // public data in the page's state JSON, under a login box
+      ["/catalog"], // a public listing that sits inside the search form
+      ["/community"], // a redirect, to a public page with a login box
+      ["/forum/alice", "--example", "name=alice"], // the example is in a JSON request's answer, not in the page
+    ];
+    for (const [path, ...flags] of pages) {
+      const { next } = await capture(path!, ...flags);
+      assert.doesNotMatch(next, signInPage, path);
+      assert.match(next, learn, path);
+      assert.match(next, alsoForm, path);
+    }
+  });
+
+  test("an HTTP error is a dead end only when the erroring page is itself the best candidate", async () => {
+    const gone = (await capture("/no/such/page")).next;
+    assert.match(gone, /404.*URL/);
+    assert.doesNotMatch(gone, learn);
+    // a static host's 404 fallback serving the app, which fetches the user's JSON
+    const out = await capture("/app/alice", "--example", "name=alice");
+    assert.equal(out.candidates[0].kind, "fetch");
+    assert.match(out.next, learn);
+    assert.doesNotMatch(out.next, /check the URL/);
+    assert.equal(out.pageStatus, 404, "the document's status is reported on its own");
+  });
+});

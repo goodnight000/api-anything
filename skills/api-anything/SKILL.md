@@ -96,10 +96,16 @@ don't capture pages the user didn't ask for.
    the request whose URL or operationName matches the data you want. Add `--outline` to get a
    summary of each top candidate's response (see above) instead of inspecting them one by one. `kind` is the resource type:
    `document` is the page itself. If the output has `blocked`, the site served a bot challenge:
-   follow `next` (the user logs in and clears it) instead of picking a request.
-   - `api-anything inspect <captureId> <id> [--path a.b]` prints a candidate's response, with no
-     browser. JSON inside strings (Google's batchexecute payloads, a form's `f.req`) is shown
-     decoded.
+   follow `next` (the user logs in and clears it) instead of picking a request. Do the same when
+   `next` says the page is a sign-in page (the user logs in) or answered an HTTP error (check the URL).
+   "Sign-in page" is said only when the page landed on a login path and shows a sign-in form.
+   When `next` adds that the page also shows a sign-in form, go on: a login is needed only if the
+   data is missing. If it adds that none of your `--example` values came back, check the values
+   first. `pageStatus` is the page's own HTTP error when a request it loaded is still usable.
+   - `api-anything inspect <captureId> <id> [--extract a.b] [--pick x,y]` prints a candidate's
+     response, with no browser. JSON inside strings (Google's batchexecute payloads, a form's
+     `f.req`) is shown decoded. A path or selector that finds nothing fails; `[]` is a real empty
+     list (with a `note` when an `--html` items container is on the page and empty).
    - If the page is a single-page app and the data request only fires on in-app navigation, add
      `--soft-from <another page on the site>`: it loads that page first and navigates in-app.
    - If the data is server-rendered, prefer the `document` itself over hunting for an XHR: it has
@@ -114,12 +120,24 @@ don't capture pages the user didn't ask for.
    ```
    - Give two different example sets whenever you can. The second run separates params from
      nonces and signatures.
-   - Example values must be at least 3 characters and distinct from each other, and they must
-     appear in the request. `add` fails if an example is not in the chosen request: pick another
-     request rather than dropping the param.
+   - Example values must be at least 3 characters (a second example lifts this, see the next
+     point) and distinct from each other, and they must appear in the request. `add` fails if an
+     example is not in the chosen request: pick another request rather than dropping the param.
+   - A shorter value (a country code, a page number, a small enum) needs both examples, with
+     different values: `--example country=US --example2 country=CA`. It is placed only where a
+     whole value in the request equals it and becomes the other one in the second run, so a
+     `gl=US` that rides on every request is left alone. Given once, a short value is refused.
+   - To teach a paged operation, capture two different pages, with the page number as the example:
+     ```
+     api-anything add site list --trigger "https://site.com/list?q={q}&page={page}" \
+       --example q=kittens --example page=2 --example2 q=kittens --example2 page=3
+     ```
+     Use pages 2 and 3: many sites leave the page number out of the first page's request.
    - An op with no args (a feed, a list) needs `--match path=/api/feed` to say which request.
    - If `add` warns that the match is ambiguous, or picks the wrong request, run `capture` again
-     and use `add --from <captureId> --pick-request <id>`.
+     and use `add --from <captureId> --pick-request <id>`. A capture holds one run, so a second
+     example needs its own: capture the page with those values, then add `--from2 <captureId2>
+     --example2 k=v`.
    - A copy of the page's own URL in a request (analytics `page.url`, `?src=`) is not evidence
      that the request reads the arg, so `add` won't learn from it on its own. If the data request
      really takes the page path (a route resolver posting `{"path":"/facebook/react"}`), pick it
@@ -134,9 +152,11 @@ don't capture pages the user didn't ask for.
    - A header that carries a public constant (a web app's shared bearer, the same for every
      visitor) can stay literal with `--public authorization`. Only do this when it is not the user's.
    - Check `preview` in the output: it is what a call returns, judged on the captured response. If
-     it is wrong, or a warning says the op fails on the captured response, fix `--extract`, `--pick`,
-     `--html` or `--embedded` and re-run `add --from <captureId>` (ids are in `captures`). That needs
-     no browser. Re-running `add` for an existing op replaces it (`replaced: true`).
+     it is wrong, or a warning says the op fails on the captured response, fix the recipe: run
+     `add <site> <op> --from <captureId>` (ids are in `captures`) with the recipe flags
+     (`--extract`, `--pick`, `--html`, `--embedded`). That needs no browser and no `--example`:
+     the op's stored examples are used, so its params stay (`replaced: true`). If it says the
+     capture does not carry them, the capture was made with other values: pass those with `--example`.
    - If a warning says the captured response is `blocked` or `auth`, or `add` fails because the
      trigger landed on a sign-in page, the recipe is not the problem: ask the user to run
      `api-anything login <site>`, then add again.
@@ -199,7 +219,9 @@ site.
 ## Write safety
 
 - Writes (posting, liking, sending, buying) are ops added with `--write`. While api-anything learns
-  one, it aborts the request in the browser, so learning never performs the action.
+  one, it aborts the request in the browser, so learning never performs the action. Learning an
+  existing write again, or a request a `--write` capture aborted, needs `--write`: `add` refuses to
+  save either as a read.
 - Calling a write needs `--allow-writes` (or an MCP server started with `--allow-writes`). Add
   it only when the user asked for **that specific action with that content**. Confirm the exact
   text or target with the user first if there is any doubt.

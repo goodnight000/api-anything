@@ -2,7 +2,8 @@
  * Offline stand-in for a real GUI-only site. Each route mimics one real-world pattern
  * api-anything must handle: persisted GraphQL ids in a hashed bundle (X), layered form/JSON
  * encoding with an XSSI prefix (Google), UI-triggered writes, per-request signatures,
- * login walls served as 200 HTML, rate limits, and server-rendered HTML lists.
+ * login walls served as 200 HTML or by redirect, a login box on a public page, rate limits, and
+ * server-rendered HTML lists.
  */
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -89,8 +90,9 @@ if((m=p.match(/^\\/u\\/([^/]+)$/))){
 const page = (build: string, body = "") =>
   `<!doctype html><html><head><meta charset="utf-8"><title>Fixture</title></head><body>${body}<div id="app"></div><script src="/static/app.${build}.js"></script></body></html>`;
 
-const LOGIN_PAGE =
-  '<!doctype html><html><head><title>Log in</title></head><body><form action="/login" method="get"><input name="user"><input type="password" name="password"><button>Sign in</button></form></body></html>';
+const LOGIN_FORM =
+  '<form action="/login" method="get"><input name="user"><input type="password" name="password"><button>Sign in</button></form>';
+const LOGIN_PAGE = `<!doctype html><html><head><title>Log in</title></head><body>${LOGIN_FORM}</body></html>`;
 
 const LIST_USERS = ["alice", "bob", "carol"];
 
@@ -193,13 +195,18 @@ export async function startFixture(): Promise<Fixture> {
         "self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',e=>e.respondWith(fetch(e.request)));",
       );
     }
+    // ?q= searches the list: no match leaves the list there, empty
     if (p === "/list")
       return html(
         200,
-        `<!doctype html><html><body><ul class="users">${LIST_USERS.map(
-          (n) =>
-            `<li class="user"><a class="name" href="/u/${n}">${n}</a> <span class="followers">${n.length * 100}</span></li>`,
-        ).join("")}</ul></body></html>`,
+        `<!doctype html><html><body><ul class="users">${LIST_USERS.filter((n) =>
+          n.includes(u.searchParams.get("q") ?? ""),
+        )
+          .map(
+            (n) =>
+              `<li class="user"><a class="name" href="/u/${n}">${n}</a> <span class="followers">${n.length * 100}</span></li>`,
+          )
+          .join("")}</ul></body></html>`,
       );
     if (p === `/static/app.${state.build}.js`) return send(res, 200, "application/javascript", appJs(state));
 
@@ -215,6 +222,54 @@ export async function startFixture(): Promise<Fixture> {
       return jar.session && !revoked.has(jar.session)
         ? json(res, 200, { data: { secret: "only for you" } })
         : html(200, LOGIN_PAGE);
+    // The other login wall: a redirect to the sign-in page.
+    if (p === "/account") return send(res, 302, "text/plain", "", { location: "/signin?next=%2Faccount" });
+    if (p === "/signin") return html(200, LOGIN_PAGE);
+    // A single-page app on a static host: a deep link answers 404 with the app's shell (the host's
+    // 404.html fallback), and the shell loads the data all the same.
+    if (p.startsWith("/app/"))
+      return html(
+        404,
+        `<!doctype html><html><body><div id="app"></div><script>fetch("/api/scoped?q="+location.pathname.slice(5))</script></body></html>`,
+      );
+    // A forum as a guest sees it: a quick-login box in every page's header, the public content under
+    // it. The member list is in the markup (/community redirects to it); a member's page fetches
+    // their posts as JSON; a member's card keeps the profile in the page's state JSON.
+    if (p === "/community") return send(res, 302, "text/plain", "", { location: "/forum" });
+    // a public page whose path reads like a login page's
+    if (p === "/docs/login")
+      return html(
+        200,
+        `<!doctype html><html><body><ul>${LIST_USERS.map((n) => `<li>${n}</li>`).join("")}</ul></body></html>`,
+      );
+    // public content that mentions logging in, with no form anywhere
+    if (p === "/notice")
+      return html(
+        200,
+        `<!doctype html><html><body><p>Please log in to comment.</p><ul>${LIST_USERS.map((n) => `<li>${n}</li>`).join("")}</ul></body></html>`,
+      );
+    // ...and its catalog, where the whole listing sits inside the search form (as a server-side
+    // forms framework wraps a page in one).
+    if (p === "/catalog")
+      return html(
+        200,
+        `<!doctype html><html><body>${LOGIN_FORM}<form action="/catalog"><input name="q"><ul>${LIST_USERS.map((n) => `<li>${n}</li>`).join("")}</ul></form></body></html>`,
+      );
+    if (p.startsWith("/card/"))
+      return html(
+        200,
+        `<!doctype html><html><body>${LOGIN_FORM}<script>window.state = ${JSON.stringify({ member: { name: p.slice(6) } })}</script></body></html>`,
+      );
+    if (p === "/forum")
+      return html(
+        200,
+        `<!doctype html><html><body>${LOGIN_FORM}<ul>${LIST_USERS.map((n) => `<li>${n}</li>`).join("")}</ul></body></html>`,
+      );
+    if (p.startsWith("/forum/"))
+      return html(
+        200,
+        `<!doctype html><html><body>${LOGIN_FORM}<script>fetch("/api/scoped?q="+location.pathname.slice(7))</script></body></html>`,
+      );
 
     m = p.match(/^\/api\/graphql\/([^/]+)\/(UserByName|CreatePost)$/);
     if (m) {
@@ -296,6 +351,9 @@ export async function startFixture(): Promise<Fixture> {
       return json(res, 200, {
         data: { results: [`${u.searchParams.get("q")} one`, `${u.searchParams.get("q")} two`] },
       });
+    // An answer keyed by the visitor's session id ("guest" without one), as a per-session cache key
+    // is: a recipe suggested from a signed-in visitor's answer would carry the cookie's value.
+    if (p === "/api/mine") return json(res, 200, { [jar.session ?? "guest"]: [{ name: u.searchParams.get("name") }] });
     if (p === "/api/follow" || p === "/api/sw-write") return json(res, 200, { ok: true });
     if (p === "/api/spa/user") return json(res, 200, { name: u.searchParams.get("name") });
 

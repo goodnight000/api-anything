@@ -42,10 +42,22 @@ The `add` and `call` output is real, from 2026-09-27, shortened; the `capture` l
 shape (ids and sizes vary). `--pick`
 accepts `name=path` to rename a field, `name=path~regex` to keep the part of a string the
 regex's group 1 finds (`publicId=navigationUrl~/in/([^/?]+)`), and `[*]` in a path collects from every array item
-(`sections[*].items` joins each section's items); items with none of the picked fields are dropped. If the preview is wrong, fix `--extract`/`--pick` and
-re-run `add --from <one of the captures>`: no browser needed. For a server-rendered page, use
-`--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page;
-`inspect` accepts the same flags, so you can try selectors first.
+(`sections[*].items` joins each section's items); items with none of the picked fields are dropped. If the preview is wrong, fix the recipe: re-run
+`add <site> <op> --from <one of the captures>` with the recipe flags (`--extract`, `--pick`,
+`--html`, `--embedded`). No browser is needed, and no `--example`: the operation's stored examples
+are used, so its params stay. From a capture made with other values, pass those with `--example`.
+For a server-rendered page, use
+`--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page.
+`inspect` accepts the same recipe flags (`--extract`, `--pick`, `--html`, `--embedded`), so you can
+try a recipe first: it exits non-zero when a path or selector finds nothing. An `--html` items
+container that is on the page and empty is a page with no results: `data: []`, with a `note`.
+
+In `capture`'s output, `pageStatus` is the page's own HTTP error when a request it loaded is
+recommended all the same, and `blocked` is the bot challenge the site served.
+
+`add` can also learn from a saved capture instead of running the trigger: `add <site> <op> --from
+<capture> --pick-request <id> --example k=v`. A capture holds one run, so the second example needs a
+second capture of the page, made with its values: `--from2 <capture2> --example2 k=v2`.
 
 ## Replay, fallback and repair
 
