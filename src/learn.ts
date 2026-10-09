@@ -888,17 +888,19 @@ function addRef(refs: Refs, at: Step[], slot: Omit<Slot, "at">, value?: string):
  * Pass 1: a leaf equal to a live cookie or storage value, whatever the leaf is called. A field
  * named like a query id (queryId, hash) exempts nothing: a token the page stores and sends there
  * reads exactly like a query id it caches, and only one that is in no cookie and no storage is
- * left to be a volatile anchor. A name marked public exempts one thing: a leaf equal to a stored
- * value that is no credential (a setting, a text the page saved) stays as captured.
+ * left to be a volatile anchor. A name marked public exempts nothing either: a stored value is a
+ * ref whatever the leaf is called and whatever the value looks like. Only what the name says of it
+ * is not heard.
  */
-function liveRefs(refs: Refs, leaves: Leaf[], isPublic: (at: Step[]) => boolean): void {
+function liveRefs(refs: Refs, leaves: Leaf[], publicNames: Set<string>): void {
   for (const leaf of leaves) {
     const l = refs.live.get(leaf.value);
     // string leaves only: a ref is filled with a string, which would retype a JSON number
     if (!l || leaf.type !== "string" || refs.taken.has(key(leaf.at))) continue;
-    if (l.secret === false && isPublic(leaf.at)) continue;
     // a stored setting is a credential after all where the request sends it under a credential's name
-    if (l.value !== undefined && isCredential(leafName(leaf.at), leaf.value)) l.secret = true;
+    const name = leafName(leaf.at);
+    if (l.value !== undefined && !publicNames.has(name.toLowerCase()) && isCredential(name, leaf.value))
+      l.secret = true;
     addRef(refs, leaf.at, { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}) }, l.value);
   }
 }
@@ -1036,13 +1038,10 @@ function templatedRef(refs: Refs, leaf: Leaf, long: [string, Live][]): void {
  * A live value inside a longer leaf ("v1:<cookie>", a next= URL holding it percent-encoded, a
  * JSON-escaped copy) is a templated ref, re-encoded like the leaf had it.
  */
-function embeddedRefs(refs: Refs, leaves: Leaf[], request: Request, isPublic: (at: Step[]) => boolean): Request {
-  const all = [...refs.live].filter(([v]) => v.length >= 16);
-  // as in pass 1: under a name marked public a stored value that is no credential stays
-  const credentials = all.filter(([, l]) => l.secret !== false);
+function embeddedRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
+  const long = [...refs.live].filter(([v]) => v.length >= 16);
   for (const leaf of leaves) {
     if (leaf.container || leaf.type !== "string") continue;
-    const long = isPublic(leaf.at) ? credentials : all;
     // A param's templated leaf can carry one too (next=/search?q={q}&auth=<cookie>): its template gets a ref hole.
     const own = refs.taken.has(key(leaf.at))
       ? refs.slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(leaf.at))
@@ -1091,17 +1090,17 @@ function refuseLeftoverText(slots: Slot[], leaves: Leaf[]): void {
  * Slots do not overlap. A container that is a session value (a JSON header named like a
  * credential, a JSON body the app also keeps in storage) is sent whole from the session, so none
  * of it is in the spec: the refs inside it are dropped. A param inside it could not be filled, and
- * the learn is refused. `credentials`: the stored values that are credentials.
+ * the learn is refused. `held`: every cookie and stored value, as the passes began.
  */
-function sentWhole(refs: Refs, credentials: string[]): void {
+function sentWhole(refs: Refs, held: Set<string>): void {
   const inside = (whole: Slot, s: Slot) =>
     s.at.length > whole.at.length && whole.at.every((step, i) => s.at[i] === step);
   for (const whole of refs.slots.filter((s) => s.ref)) {
     const param = refs.slots.find((s) => s.param && inside(whole, s));
     if (param) {
       const where = whole.at.join(" > ");
-      // a cookie or a stored credential is a ref under a name marked public too: no way on there
-      const live = whole.ref!.startsWith("cookie:") || credentials.includes(refs.sessionValues[whole.ref!.slice(8)]!);
+      // a cookie or a stored value is a ref under a name marked public too: no way on there
+      const live = whole.ref!.startsWith("cookie:") || held.has(refs.sessionValues[whole.ref!.slice(8)]!);
       const vouch = live
         ? ""
         : `if the rest of ${where} is the same for every visitor, mark it with --public ${leafName(whole.at)}; otherwise `;
@@ -1144,6 +1143,7 @@ function sessionRefs(
   const stored = Object.fromEntries(
     [...live].flatMap(([value, l]) => (l.secret ? [[`storage:${l.ref.slice(8)}`, value]] : [])),
   );
+  const held = new Set(live.keys());
   const refs: Refs = {
     // copies: pass 5 writes ref holes into a param's template
     slots: params.map((s) => ({ ...s })),
@@ -1152,12 +1152,11 @@ function sessionRefs(
     sessionValues: {},
   };
   // The caller's word that a name is public is about the name: the rules that go by one (passes 2
-  // to 4, the text beside a param) skip its leaf. Passes 1 and 5 see every leaf, since a cookie or a
-  // stored credential is one under any name.
+  // to 4, the text beside a param) skip its leaf. Passes 1 and 5 see every leaf: no name, and no
+  // guess at what a stored value is, keeps a cookie or a stored value from being a ref.
   const publicNames = new Set((input.public ?? []).map((h) => h.toLowerCase()));
-  const isPublic = (at: Step[]) => publicNames.has(leafName(at).toLowerCase());
-  const open = leaves.filter((l) => !isPublic(l.at));
-  liveRefs(refs, leaves, isPublic);
+  const open = leaves.filter((l) => !publicNames.has(leafName(l.at).toLowerCase()));
+  liveRefs(refs, leaves, publicNames);
   const { secretNamed, shipped } = secretTest(input.exchanges);
   fieldRefs(refs, open, secretNamed);
   headerRefs(refs, open, secretNamed);
@@ -1165,14 +1164,14 @@ function sessionRefs(
     e.id < ex.id && e.response?.body && !staticBundle(e) ? [e.response.body] : [],
   );
   issuedRefs(refs, open, issued);
-  let request = embeddedRefs(refs, leaves, captured, isPublic);
+  let request = embeddedRefs(refs, leaves, captured);
   refuseLeftoverText(refs.slots, open);
   // A stored setting a leaf repeated is a ref, so it stays fresh; that does not make it a credential.
   // Taken before a container's inner refs are dropped: what they held is still looked for.
   const values = Object.fromEntries(
     Object.entries(refs.sessionValues).filter(([, v]) => refs.live.get(v)?.secret !== false),
   );
-  sentWhole(refs, Object.values(stored));
+  sentWhole(refs, held);
   // A ref'd leaf's value lives in the session, not the spec: blank it.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
   refuseLeftover(request, refs.slots, { cookies, values, stored });

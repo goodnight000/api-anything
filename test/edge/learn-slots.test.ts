@@ -122,15 +122,16 @@ test("a name marked public is exempt from the rules that go by a name, never fro
     names,
   );
   const { operation: op, sessionValues } = learn([ex], [{ q: "kittens" }], { ...input, public: names });
-  // What only a name decided stays as captured, and so does a stored setting. A cookie and a stored
-  // credential are references whatever the leaf is called: the caller's word is about the name.
+  // What only a name decided stays as captured. A cookie and a stored value, a setting too, are
+  // references whatever the leaf is called: the caller's word is about the name.
   assert.deepEqual(op.slots, [
     { param: "q", at: ["query:q"] },
     { ref: "session:op/cached", at: ["query:sv"] },
+    { ref: "session:op/theme", at: ["query:theme"] },
     { ref: "cookie:sid", at: ["header:x-app"] },
     { ref: "cookie:sid", at: ["header:x-ctx"], template: "v1:{cookie:sid}" },
   ]);
-  assert.deepEqual(sessionValues, { "op/cached": B });
+  assert.deepEqual(sessionValues, { "op/cached": B, "op/theme": "solarized-dark" });
   assert.deepEqual(op.public, names);
   for (const live of [SID, B]) assert.ok(!JSON.stringify(op).includes(live), `${live} is in the spec`);
   // ...so a replay follows the jar after the cookie rotates
@@ -255,7 +256,6 @@ test("a param inside a container that is a session value refuses the learn, and 
     ]),
     ["an opaque key", csrf(whole), []],
     ["a short cookie beside the param", csrf({ q: "kittens", stamp: "aB3dE" }), short],
-    ["a body the app also keeps whole in storage", posted(savedBody), short, { savedRequest: savedBody }],
   ];
   const before = readdirSync(HOME, { recursive: true }).sort();
   for (const [what, ex, cookies, storage] of cases) {
@@ -271,9 +271,9 @@ test("a param inside a container that is a session value refuses the learn, and 
 });
 
 // --public is the caller's word about a name. It turns off the rules that go by the name, so a
-// container that was a session value by its header's name, or as a text the page saved, stays as
-// captured. A live credential is a reference under any name.
-test("marked public, a container with nothing live inside stays as captured and its param is filled", async () => {
+// container that was a session value by its header's name stays as captured. A cookie or a stored
+// value is a reference under any name, whatever the value looks like.
+test("marked public, a container that is in no cookie and no storage stays as captured and its param is filled", async () => {
   const short = [cookie("sess", "aB3dE")];
   const header = await add("public-header", csrf({ q: "kittens", aB3dE: "v1" }), short, undefined, ["x-csrf-token"]);
   assert.deepEqual(header.operation.slots, [
@@ -284,10 +284,33 @@ test("marked public, a container with nothing live inside stays as captured and 
     buildRequest(header.operation, { q: "puppies" }, noSession).headers["x-csrf-token"],
     '{"q":"puppies","aB3dE":"v1"}',
   );
-  // a body the app keeps in storage is an ordinary body: `body` names it
-  const body = await add("public-body", posted(savedBody), short, { savedRequest: savedBody }, ["body"]);
-  assert.deepEqual(body.operation.slots, [{ param: "q", at: ["body", "json:/q"] }]);
-  assert.equal(buildRequest(body.operation, { q: "puppies" }, noSession).body, '{"q":"puppies","stamp":"aB3dE"}');
+});
+
+test("under a public name a stored value is a reference, whatever it looks like", async () => {
+  // none of these reads as a credential by its storage key or its shape: that is no proof it is none
+  const cases: [string, Record<string, string>, string, string][] = [
+    ["authorization", { authorization: `Bearer ${A}` }, `Bearer ${A}`, "cache"],
+    ["x-app", { "x-app": "aB3dEf9hK2" }, "aB3dEf9hK2", "cache"],
+    ["x-app", { "x-app": '{"token":"aB3dE4x"}' }, '{"token":"aB3dE4x"}', "cache"],
+    ["x-app", { "x-app": "aB3dEf9hK2" }, '{"access":"aB3dEf9hK2"}', "cache/access"],
+    // a setting the page keeps is one too, as it is under any other name
+    ["x-theme", { "x-theme": "solarized-dark" }, "solarized-dark", "cache"],
+  ];
+  for (const [name, headers, cache, ref] of cases) {
+    const ex = () => xhr({ url: `${local}?q=kittens`, headers });
+    const input = { storage: { cache }, public: [name] };
+    const learned = learn([ex()], [{ q: "kittens" }], input);
+    const { sessionValues } = learned;
+    for (const { operation: op } of [learned, await add(`stored-${nextId}`, ex(), [], input.storage, input.public)]) {
+      assert.deepEqual(op.slots.at(-1), { ref: `session:op/${ref}`, at: [`header:${name}`] }, cache);
+      assert.equal(op.request.headers[name], "");
+      assert.ok(!JSON.stringify(op).includes(headers[name]!.replace(/"/g, '\\"')), `${cache} is in the spec`);
+      assert.equal(
+        buildRequest(op, { q: "puppies" }, { cookies: [], values: sessionValues }).headers[name],
+        headers[name],
+      );
+    }
+  }
 });
 
 test("a live cookie inside a public container is a reference, and one no pass can make a reference is refused", async () => {
@@ -310,15 +333,6 @@ test("a live cookie inside a public container is a reference, and one no pass ca
       JSON.stringify({ q: "puppies", token: B, flag: true }),
     );
   }
-  // a public body the page keeps in storage
-  const body = JSON.stringify({ q: "kittens", sid: A, lang: "en" });
-  const { operation: op } = await add("public-live-body", posted(body), jar, { savedRequest: body }, ["body"]);
-  assert.deepEqual(op.slots, [
-    { param: "q", at: ["body", "json:/q"] },
-    { ref: "cookie:sid", at: ["body", "json:/sid"] },
-  ]);
-  assert.ok(!JSON.stringify(op).includes(A), "the cookie is in the spec");
-  assert.equal(buildRequest(op, { q: "puppies" }, rotated).body, JSON.stringify({ q: "puppies", sid: B, lang: "en" }));
 
   // too short to be a reference, or in base64: the caller's word does not let a live cookie stay
   const before = readdirSync(HOME, { recursive: true }).sort();
@@ -335,13 +349,15 @@ test("a live cookie inside a public container is a reference, and one no pass ca
   assert.deepEqual(readdirSync(HOME, { recursive: true }).sort(), before, "a refused add writes nothing");
 });
 
-test("a container that is a live credential as a whole is sent whole under a public name too", async () => {
+test("a container that is a cookie or a stored value as a whole is sent whole under a public name too", async () => {
   const state = { q: "kittens", lang: "en" };
-  // a cookie as the page decodes it, in a header and as a body; a text stored under a credential's name
+  // a cookie as the page decodes it, in a header and as a body; a body the page keeps in storage,
+  // under a credential's name or any other
   const cases: [string, Exchange, StoredCookie[], Record<string, string>?][] = [
     ["header:x-csrf-token", csrf(state), [cookie("ctx", encodeURIComponent(JSON.stringify(state)))]],
     ["body", posted(savedBody), bodyCookie],
     ["body", posted(savedBody), [], { token: savedBody }],
+    ["body", posted(savedBody), [cookie("sess", "aB3dE")], { savedRequest: savedBody }],
   ];
   const before = readdirSync(HOME, { recursive: true }).sort();
   for (const [at, ex, cookies, storage] of cases) {
@@ -649,9 +665,10 @@ test("the check knows a stored credential that no pass made a reference, and no 
     () => run({ state: b64(T) }, { storage: { token: T }, public: ["state"] }),
     /body > json:\/state holds the live session value storage:token\./,
   );
-  // ...but it keeps a stored setting from becoming one by the name the request sends it under
+  // ...and no stored setting from being a ref, but the name it is sent under no longer makes it a credential
   const waived = run({ token: locale, state: b64(locale) }, { storage: { locale }, public: ["token"] });
-  assert.deepEqual(waived.operation.slots, [{ param: "q", at: ["body", "json:/q"] }]);
+  assert.deepEqual(waived.operation.slots.at(-1), { ref: "session:op/locale", at: ["body", "json:/token"] });
+  assert.equal(JSON.parse(waived.operation.request.body!).state, b64(locale));
   // exempt by position: the caller's own example
   const ID = "550e8400-e29b-41d4-a716-446655440000";
   const viewed = learn([xhr({ url: `https://api.site.test/v1/items/${ID}` })], [{ id: ID }], {
