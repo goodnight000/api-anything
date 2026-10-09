@@ -387,12 +387,14 @@ independent alternative.
     when a path or selector finds nothing (an empty list at a path is a result, and so is an `--html`
     items container that is on the page with no item in it, as the classifier judges a call); JSON inside strings (batchexecute
     payloads, a form's `f.req`) is shown decoded, in the response and the request body. Every `add` saves its trigger runs as
-    captures, so a recipe is repaired without Chrome: `add --from <id>` on an existing op with recipe
-    flags only (no `--example`, and nothing that shapes the request: `--trigger`, `--match`, `--public`,
-    `--example2`, `--from2`, `--write`) keeps the op as it is and replaces only its `response`, learned
-    from the answer the op's own `match` finds in the capture (or `--pick-request` names). The request is
-    not learned again, so no param can be re-bound or dropped. With `--example` the op is learned again;
-    a request-shaping flag without it is refused for an op that takes params, and learning an existing
+    captures, so a recipe is fixed without Chrome: `add --from <id>` on an existing op with the recipe
+    flags. There is one way an op is learned, and this is it: with no `--example`, what the command
+    leaves out is taken from the stored op (its examples; its recipe when no recipe flag is given; its
+    description; a `minTier` an earlier two-run diff raised), so its params are never silently dropped
+    and the credential checks and the session kept are those of any add. The capture must carry the
+    stored example values where the op takes them: when it does not, or carries them somewhere else
+    (the op's example user as the viewer of another's page), the add is refused and says to pass
+    `--example` with the values the capture was made with. Learning an existing
     write again without `--write` is refused before any browser run, never saved as a read. So is
     learning a request that a `--write` capture aborted, under any op name: the guard stopped it as a
     write, and that verdict counts, not the method (a POST the capture let through is a read). Captures hold

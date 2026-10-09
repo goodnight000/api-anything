@@ -142,11 +142,11 @@ don't capture pages the user didn't ask for.
    - A header that carries a public constant (a web app's shared bearer, the same for every
      visitor) can stay literal with `--public authorization`. Only do this when it is not the user's.
    - Check `preview` in the output: it is what a call returns, judged on the captured response. If
-     it is wrong, or a warning says the op fails on the captured response, repair the recipe: run
-     `add <site> <op> --from <captureId>` (ids are in `captures`) with only the recipe flags
-     (`--extract`, `--pick`, `--html`, `--embedded`). That needs no browser and changes only what
-     the op returns (`repaired`): its request, params and trigger stay. With `--example`, `add`
-     learns the whole op again and replaces it (`replaced: true`).
+     it is wrong, or a warning says the op fails on the captured response, fix the recipe: run
+     `add <site> <op> --from <captureId>` (ids are in `captures`) with the recipe flags
+     (`--extract`, `--pick`, `--html`, `--embedded`). That needs no browser and no `--example`:
+     the op's stored examples are used, so its params stay (`replaced: true`). If it says the
+     capture does not carry them, the capture was made with other values: pass those with `--example`.
    - If a warning says the captured response is `blocked` or `auth`, or `add` fails because the
      trigger landed on a sign-in page, the recipe is not the problem: ask the user to run
      `api-anything login <site>`, then add again.

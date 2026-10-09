@@ -8,22 +8,12 @@ import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
-import {
-  type Args,
-  ASSET_EXT,
-  capturePages,
-  checkExamples,
-  hashLike,
-  learnOperation,
-  learnResponse,
-  matches,
-} from "./learn.js";
+import { type Args, ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches } from "./learn.js";
 import {
   cookieHeaderFor,
   home,
   loadSession,
   mergeCapture,
-  mergeCookies,
   parseCookieHeader,
   pruneCaptures,
   readJson,
@@ -383,7 +373,6 @@ export interface AddResult {
   /** an op of that name existed and was overwritten */
   replaced: boolean;
   /** the op was kept and one thing replaced: its response recipe, or (given alone) its description */
-  repaired?: "recipe" | "description";
 }
 
 /** Put `{name}` back where an example value sits in a literal step (a typed value, a selector). */
@@ -587,136 +576,24 @@ function saveOperation(
   return { operation, warnings, path, ...(preview ? { preview } : {}), replaced };
 }
 
-/**
- * What is secret in the request a repair reads, by the learner's own rules: a cookie or stored value
- * it repeats, a per-session field, a token an earlier answer issued. The request is not learned from
- * this, only asked; a request the learner refuses is one a repair is refused from too. What the kept
- * op holds public is not passed on: that was said of the value it was learned with, and this request
- * may send another there.
- */
-function credentialsIn(old: Operation, capture: CaptureFile, exchange: Exchange): Record<string, string> {
-  return learnOperation({
-    exchanges: capture.exchanges,
-    pages: capturePages(capture),
-    examples: [{}],
-    cookies: capture.cookies,
-    storage: capture.storage,
-    id: exchange.id,
-    name: old.name,
-    trigger: old.trigger,
-    readOnly: old.readOnly,
-  }).sessionValues;
-}
-
-/**
- * A repair adds text to a spec that is otherwise kept (a recipe, a description): refuse it when that
- * text holds a credential. Each set of values is scanned on its own: two that name a ref alike must
- * not hide one another.
- */
-function refuseAdded(added: object, live: Session, ...more: Record<string, string>[]): void {
-  const sets = [live.values, ...more];
-  const found = new Set(sets.flatMap((values) => scanSecrets(added, { ...live, values }, new Set()).secrets));
-  if (found.size) throw new Error(`refusing to save a spec containing a credential: ${[...found].join("; ")}`);
-}
-
-/** The op with the description given: an empty one clears it, none given leaves it. */
-function described(op: Operation, description: string | undefined): Operation {
-  if (description === undefined) return op;
-  const { description: _old, ...rest } = op;
-  return description ? { ...rest, description } : rest;
-}
-
-/**
- * A recipe repair: the op stays as it is (request, slots, params, match, trigger, readOnly) and only
- * its `response` is learned again, from the answer its own match finds in the capture. The request
- * is not learned, so no example is needed: none can be bound to the wrong field or go missing, and
- * a write stays a write.
- */
-function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["from"]>, i: AddInput): AddResult {
-  const { capture, id } = from;
-  const r = i.response ?? {};
-  const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
-  const own = Object.keys(old.match).length > 0;
-  const pool = capture.exchanges.filter((e) => (id !== undefined ? e.id === id : own && matches(old.match, e.request)));
-  const answers = pool.filter((e) => e.response);
-  // The answer the recipe finds data in (a challenge page, or a soft navigation's first page, may match too).
-  const exchange = answers.findLast((e) => resolves(spec, e.response?.body)) ?? answers.at(-1) ?? pool.at(-1);
-  // No request, nothing to check the added text against: a description is refused then too.
-  if (!exchange)
-    throw new Error(
-      id !== undefined
-        ? `no captured request with id ${id}`
-        : `capture ${capture.id} has no request that ${old.name}'s match finds (${JSON.stringify(old.match)}): name it with --pick-request <id>; api-anything inspect ${capture.id} lists them`,
-    );
-  // What the kept spec is checked against, as it was when it was saved: the jar with this capture's cookies,
-  // and its own session refs as this request sent them.
-  const now = loadSession(site);
-  const live: Session = {
-    ...now,
-    cookies: mergeCookies(now.cookies, capture.cookies),
-    values: { ...now.values, ...sessionValuesOf(old, exchange) },
-  };
-  // What a full add from this request would check the spec against, which the text a repair adds must
-  // pass too: every stored value (one the kept op's ref has since moved on from is still a credential),
-  // with what the learner finds secret in the request over them.
-  const secret = { ...now.values, ...credentialsIn(old, capture, exchange) };
-  // The capture is also the freshest sight of the session, as it is to a full add: once the repair is saved,
-  // its cookies are kept, and the kept op's refs as this request sent them when the request is one of the
-  // op's own (another request's positions say nothing of them).
-  const refresh = () => {
-    const mine = !own || matches(old.match, exchange.request);
-    mergeCapture(site, capture.cookies, mine ? sessionValuesOf(old, exchange) : {});
-  };
-  // A description with no recipe flag is metadata: nothing is learned again, and the recipe stays.
-  if (i.description !== undefined && !Object.values(r).some((x) => x !== undefined)) {
-    refuseAdded({ description: i.description }, live, secret);
-    const saved = saveOperation(site, described(old, i.description), undefined, [], live, undefined);
-    refresh();
-    return { ...saved, captures: [], repaired: "description" };
-  }
-  // the stored examples only steer the suggested extract, as the examples do in a full add
-  const values = old.params.flatMap((p) => (p.example === undefined ? [] : [String(p.example).toLowerCase()]));
-  const learned: string[] = [];
-  const response = withRecipe(learnResponse(exchange, values, learned), r);
-  const warnings = recipeWarnings(learned, r);
-  if (own && !matches(old.match, exchange.request))
-    warnings.push(
-      `request ${exchange.id} is not one ${old.name}'s match finds, and the request was not learned from it: only the recipe was, from its answer. To learn the request too, pass --example`,
-    );
-  if (!exchange.response)
-    warnings.push(
-      `the recipe was not checked: capture ${capture.id} holds no answer for request ${exchange.id}${exchange.aborted ? " (it was aborted, as a --write capture aborts a write)" : ""}`,
-    );
-  refuseAdded({ response, ...(i.description !== undefined ? { description: i.description } : {}) }, live, secret);
-  const saved = saveOperation(
-    site,
-    { ...described(old, i.description), response },
-    exchange,
-    warnings,
-    live,
-    capture.id,
-  );
-  refresh();
-  return { ...saved, captures: [], repaired: "recipe" };
-}
-
-/**
- * Learn an op and save it to the user spec dir. Without `from`, the trigger runs twice (with
- * example 2, or example 1 again) so nonces show up. A write is learned from aborted requests only.
- */
 export async function addOperation(input: AddInput): Promise<AddResult> {
   const i = { ...input, site: safeName(input.site) };
   const existing = loadSite(i.site)?.site;
   const old = existing?.operations.find((o) => o.name === i.op);
-  const [ex1, ex2] = i.examples;
-  if (old && i.from && !Object.keys(ex1).length) {
-    // An existing op, a capture, no example: a repair, unless something given shapes the request.
-    if (!(i.trigger || i.match || i.public?.length || ex2 || i.from2 || i.write))
-      return repairRecipe(i.site, old, i.from, i);
-    if (old.params.length)
+  const ex2 = i.examples[1];
+  let ex1 = i.examples[0];
+  // An existing op added again from a capture with no --example (a recipe being fixed) is the same
+  // learning as any add, with what the command leaves out taken from the stored op: its examples, so
+  // its params are never silently dropped; its recipe when no recipe flag is given; its description.
+  // The capture must carry the example values where the op takes them.
+  const prior = old && i.from && !Object.keys(ex1).length ? old : undefined;
+  if (prior?.params.length) {
+    const bare = prior.params.filter((p) => p.example === undefined).map((p) => p.name);
+    if (bare.length)
       throw new Error(
-        `${i.op} takes ${old.params.map((p) => p.name).join(", ")}: learning its request again (--trigger, --match, --public, --example2, --from2 or --write does that) needs --example with the values capture ${i.from.capture.id} was made with. To change only what it returns, pass the recipe flags alone`,
+        `${i.op} has no stored example for ${bare.join(", ")}: pass --example with the values capture ${i.from?.capture.id} was made with`,
       );
+    ex1 = Object.fromEntries(prior.params.map((p) => [p.name, p.example as Args[string]]));
   }
   // Before any browser run: learned as a read, a write is sent while learning it, and then on every call.
   if (old && !old.readOnly && !i.write)
@@ -766,25 +643,54 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       );
     run2 = await run(ex2 ?? ex1);
   }
-  const r = i.response ?? {};
+  const flags = i.response ?? {};
+  const kept = prior?.response;
+  const r: Recipe =
+    kept && !Object.values(flags).some((x) => x !== undefined)
+      ? { extract: kept.extract, pick: kept.pick, html: kept.html, embedded: kept.embedded }
+      : flags;
   const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
-  const learned = learnOrExplain(i.site, run1, {
-    exchanges: run1.exchanges,
-    pages: capturePages(run1),
-    exchanges2: run2?.exchanges,
-    examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
-    cookies: (run2 ?? run1).cookies,
-    storage: { ...run2?.storage, ...run1.storage },
-    match: i.match,
-    id: i.from?.id,
-    name: i.op,
-    trigger,
-    readOnly: !i.write,
-    loginCookies: existing?.loginCookies,
-    public: i.public,
-    // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
-    ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
-  });
+  const learn = () =>
+    learnOrExplain(i.site, run1, {
+      exchanges: run1.exchanges,
+      pages: capturePages(run1),
+      exchanges2: run2?.exchanges,
+      examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
+      cookies: (run2 ?? run1).cookies,
+      storage: { ...run2?.storage, ...run1.storage },
+      match: i.match,
+      id: i.from?.id,
+      name: i.op,
+      trigger,
+      readOnly: !i.write,
+      loginCookies: existing?.loginCookies,
+      public: i.public,
+      // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
+      ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
+    });
+  let learned: ReturnType<typeof learn>;
+  // said when the stored examples do not fit the capture
+  const stored = () =>
+    `No --example was given, so ${i.op}'s stored ones were used (${Object.entries(ex1)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(", ")}): pass --example with the values capture ${i.from?.capture.id} was made with`;
+  try {
+    learned = learn();
+  } catch (e) {
+    if (!prior?.params.length) throw e;
+    throw new Error(`${(e as Error).message}. ${stored()}`);
+  }
+  // A stored value may sit in the capture by chance (the op's example user as the viewer of another's
+  // page): bound there, the param would fill the wrong place from then on.
+  const places = (o: Operation) =>
+    o.slots
+      .filter((s) => s.param)
+      .map((s) => `${s.param} at ${s.at.join(" > ")}`)
+      .sort();
+  if (prior?.params.length && places(prior).join("; ") !== places(learned.operation).join("; "))
+    throw new Error(
+      `request ${learned.exchange.id} carries the stored example values in other places (${places(learned.operation).join("; ")}) than ${i.op} takes them (${places(prior).join("; ")}). ${stored()}`,
+    );
   // What a --write capture aborted, its guard stopped as a write: that is the evidence, not the
   // method (a POST it let through is a read) and not the name the op is given.
   if (!i.write && learned.exchange.aborted && i.from?.capture.write)
@@ -801,9 +707,13 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     warnings.push(
       `the trigger has no {${missing.join("}, {")}}: tier-3 runs and heals would load the example's page; put the param in --trigger`,
     );
+  // Learned again with nothing new said about it, an op keeps what this one capture cannot tell: its
+  // description, and a tier an earlier two-run diff raised (--description "" clears the first).
+  const description = i.description ?? prior?.description;
   let operation: Operation = {
     ...learned.operation,
-    ...(i.description ? { description: i.description } : {}),
+    ...(description ? { description } : {}),
+    ...(prior && !run2 && prior.minTier > learned.operation.minTier ? { minTier: prior.minTier } : {}),
     response: withRecipe(learned.operation.response, r),
   };
   const session = mergeCapture(i.site, (run2 ?? run1).cookies, learned.sessionValues);

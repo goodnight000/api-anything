@@ -156,7 +156,7 @@ describe("flags and command names", () => {
   });
 
   test("a command's help names the output fields an agent has to act on", async () => {
-    const named = { capture: ["blocked", "pageStatus"], add: ["repaired", "replaced"], inspect: ["note"] };
+    const named = { capture: ["blocked", "pageStatus"], add: ["replaced"], inspect: ["note"] };
     for (const [command, fields] of Object.entries(named)) {
       const help = (await cli(command, "--help")).stdout;
       for (const field of fields) assert.match(help, new RegExp(`\\b${field}\\b`), `${command} --help: ${field}`);
@@ -364,17 +364,17 @@ describe("add from a saved capture", () => {
 
   const carol = async (op: string) => JSON.parse((await cli("call", "fixture", op, "name=carol")).stdout).data;
 
-  test("a recipe repair (add --from with recipe flags only) replaces the recipe and says so", async () => {
+  test("a recipe is fixed by adding the op again from its capture: the stored examples stand in for --example", async () => {
     const wrong = await add("getUser", "alice", "--example name=alice --extract data.wrong");
     assert.deepEqual(wrong.out.params, ["name:string"]);
     assert.match(wrong.out.warnings.join("\n"), /add --from calice/);
 
-    // that advice, followed: no example, and the op's own match finds the request in the capture
+    // that advice, followed: no example and no --pick-request, and the stored example finds the request
     const r = await cli("add", "fixture", "getUser", "--from", "calice", "--extract", "data.user", "--pick", "name");
     const fixed = JSON.parse(r.stdout);
     assert.equal(r.code, 0, r.stdout);
-    assert.match(fixed.repaired, /request/, "the output says the request was kept");
-    assert.deepEqual(fixed.params, ["name:string"]);
+    assert.equal(fixed.replaced, true);
+    assert.deepEqual(fixed.params, ["name:string"], "the param is not dropped");
     assert.deepEqual(fixed.preview, { first: { name: "alice" } });
     assert.deepEqual(await carol("getUser"), { name: "carol" });
 
@@ -383,19 +383,25 @@ describe("add from a saved capture", () => {
     assert.equal(still.out.preview, undefined);
     assert.match(still.out.warnings.join("\n"), /data\.nope.*add --from calice/);
 
-    // a flag that shapes the request makes it a re-learn, which needs the example: nothing is saved
-    const relearn = await add("getUser", "alice", "--match path=/api/graphql/*/UserByName --extract data.user");
-    assert.equal(relearn.code, 1, relearn.stdout);
-    assert.match(relearn.out.error, /--example/);
-    const ops = JSON.parse((await cli("ops", "fixture")).stdout).operations;
-    assert.equal(ops.find((o: { name: string }) => o.name === "getUser").params.length, 1, "nothing was saved");
+    // a flag that shapes the request needs no example either
+    const pinned = await add(
+      "getUser",
+      "alice",
+      "--match path=/api/graphql/*/UserByName --extract data.user --pick name",
+    );
+    assert.equal(pinned.code, 0, pinned.stdout);
+    assert.deepEqual(pinned.out.params, ["name:string"]);
+    assert.deepEqual(await carol("getUser"), { name: "carol" });
 
-    // --pick-request names the answer to read; when it is not the op's request, the output says so
+    // another request of the capture carries the example somewhere else (the page's own URL): the op is
+    // not quietly re-bound to it
     const page = await cli("add", "fixture", "getUser", "--from", "calice", "--pick-request", "1");
-    assert.match(JSON.parse(page.stdout).warnings.join("\n"), /request 1 .*match/);
+    assert.equal(page.code, 1, page.stdout);
+    assert.match(JSON.parse(page.stdout).error, /other places.*stored ones were used \(name=alice\).*--example/);
+    assert.deepEqual(await carol("getUser"), { name: "carol" }, "the op is as it was");
   });
 
-  test("a repair from a capture made with other values binds no param anew", async () => {
+  test("a capture made with other values is not learned with the stored ones: a value that sits elsewhere binds nothing", async () => {
     await add("viewed", "alice", "--example name=alice --extract data.user --pick name");
     // bob's page, where the stored example (alice) is the viewer in the same request
     const variables = encodeURIComponent(JSON.stringify({ name: "bob", withExtras: true }));
@@ -410,31 +416,35 @@ describe("add from a saved capture", () => {
         ),
       ],
     });
-    const repaired = await add("viewed", "viewer", "--extract data.user --pick name,followers");
-    assert.deepEqual(repaired.out.preview, { first: { name: "bob", followers: 300 } });
-    assert.deepEqual(await carol("viewed"), { name: "carol", followers: 500 }, "name still fills the user asked for");
+    const refused = await add("viewed", "viewer", "--extract data.user --pick name,followers");
+    assert.equal(refused.code, 1, refused.stdout);
+    assert.match(refused.out.error, /other places.*stored ones were used \(name=alice\).*--example/);
+    assert.deepEqual(await carol("viewed"), { name: "carol" }, "the op is as it was");
+    // with the values the capture was made with, it is learned from it
+    const learned = await add("viewed", "viewer", "--example name=bob --extract data.user --pick name,followers");
+    assert.deepEqual(learned.out.preview, { first: { name: "bob", followers: 300 } });
+    assert.deepEqual(await carol("viewed"), { name: "carol", followers: 500 }, "name fills the user asked for");
   });
 
-  test("--description alone changes the description: the recipe is left as it is", async () => {
+  test("--description alone changes the description: with no recipe flag the stored recipe stands", async () => {
     await add("described", "alice", "--example name=alice --extract data.user --pick name");
     const r = await cli("add", "fixture", "described", "--from", "calice", "--description", "A user's name");
     const out = JSON.parse(r.stdout);
     assert.equal(r.code, 0, r.stdout);
-    assert.match(out.repaired, /description/);
-    assert.doesNotMatch(out.repaired, /returns changed/);
+    assert.equal(out.replaced, true);
     assert.deepEqual(await carol("described"), { name: "carol" }, "extract and pick are still there");
     const ops = JSON.parse((await cli("ops", "fixture")).stdout).operations;
     assert.equal(ops.find((o: { name: string }) => o.name === "described").description, "A user's name");
 
     // an empty one clears it, and still leaves the recipe alone
     const cleared = await cli("add", "fixture", "described", "--from", "calice", "--description", "");
-    assert.match(JSON.parse(cleared.stdout).repaired, /description/, cleared.stdout);
+    assert.equal(cleared.code, 0, cleared.stdout);
     assert.deepEqual(await carol("described"), { name: "carol" }, "extract and pick are still there");
     const after = JSON.parse((await cli("ops", "fixture")).stdout).operations;
     assert.equal(after.find((o: { name: string }) => o.name === "described").description, undefined);
   });
 
-  test("a repair keeps a param that has no stored example", async () => {
+  test("an op with no stored example is not learned again without one: its params are not dropped", async () => {
     await add("bare", "alice", "--example name=alice --extract data.wrong");
     // a shared spec is exported without its example values
     const file = join(HOME, "sites", "fixture.json");
@@ -442,12 +452,15 @@ describe("add from a saved capture", () => {
     for (const op of spec.operations) for (const p of op.params) delete p.example;
     writeFileSync(file, JSON.stringify(spec));
 
-    const repaired = await add("bare", "alice", "--extract data.user --pick name");
-    assert.deepEqual(repaired.out.params, ["name:string"]);
+    const refused = await add("bare", "alice", "--extract data.user --pick name");
+    assert.equal(refused.code, 1, refused.stdout);
+    assert.match(refused.out.error, /no stored example for name.*--example.*calice/);
+    const fixed = await add("bare", "alice", "--example name=alice --extract data.user --pick name");
+    assert.deepEqual(fixed.out.params, ["name:string"]);
     assert.deepEqual(await carol("bare"), { name: "carol" });
   });
 
-  test("a repair is scanned for credentials as a full add is: the capture's cookies count, unsaved", async () => {
+  test("an op added again is scanned for credentials as any add is: the capture's cookies and tokens count", async () => {
     // /api/mine keys its answer by the session cookie's value, "guest" without one
     const SESSION = "cookie-value-new-session";
     const mine = async (id: string, session?: string) =>
@@ -466,17 +479,15 @@ describe("add from a saved capture", () => {
     const learned = await add("mine", "--from", "cguest", "--pick-request", "1", "--example", "name=alice");
     assert.match(learned.out.extract, /^guest/, learned.stdout);
 
-    // the same request captured signed in: the suggested extract now runs through the cookie's value
+    // the same request captured signed in: an extract through the cookie's value is refused, typed or suggested
     await mine("csigned", SESSION);
-    const repair = await add("mine", "--from", "csigned");
-    assert.equal(repair.code, 1, repair.stdout);
-    assert.match(repair.out.error, /credential/);
-    for (const kept of ["sites", "sessions"])
-      assert.doesNotMatch(readFileSync(join(HOME, kept, "fixture.json"), "utf8"), new RegExp(SESSION), kept);
-    // a full add from that capture refuses for the same reason
-    const full = await add("mine2", "--from", "csigned", "--pick-request", "1", "--example", "name=alice");
-    assert.equal(full.code, 1, full.stdout);
-    assert.match(full.out.error, /credential/);
+    const typed = await add("mine", "--from", "csigned", "--extract", `${SESSION}[0]`);
+    assert.equal(typed.code, 1, typed.stdout);
+    assert.match(typed.out.error, /credential/);
+    const suggested = await add("mine2", "--from", "csigned", "--pick-request", "1", "--example", "name=alice");
+    assert.equal(suggested.code, 1, suggested.stdout);
+    assert.match(suggested.out.error, /credential/);
+    assert.doesNotMatch(readFileSync(join(HOME, "sites", "fixture.json"), "utf8"), new RegExp(SESSION));
 
     // a credential the captured request carries in a header the op has no slot for counts too
     const TOKEN = "NewPrivateSession9876543210";
@@ -527,7 +538,7 @@ describe("add from a saved capture", () => {
       assert.doesNotMatch(readFileSync(join(HOME, "sites", "fixture.json"), "utf8"), new RegExp(secret));
   });
 
-  test("a repair may name a random-looking value that is not a credential: a build id the response is keyed by", async () => {
+  test("a recipe may name a random-looking value that is not a credential: a build id the response is keyed by", async () => {
     const BUILD = "R7q8Ab9Cd0Ef1Gh2Ij3Kl4Mn";
     const guest = await answered(1, "fetch", "/api/mine?name=alice");
     seed("cbuild", {
@@ -547,10 +558,10 @@ describe("add from a saved capture", () => {
     assert.equal((await add("--pick-request", "1", "--example", "name=alice")).code, 0);
     const repaired = await add("--extract", BUILD);
     assert.equal(repaired.code, 0, repaired.stdout);
-    assert.match(repaired.out.repaired, /returns changed/);
+    assert.equal(repaired.out.replaced, true);
   });
 
-  test("a repair is not refused for the caller's own example, however much it looks like a key", async () => {
+  test("an op added again is not refused for its own example, however much it looks like a key", async () => {
     // a public object id passed as the param: random-looking, and under a name that reads like a credential's
     const KEY = "PublicObjectAbc12345";
     seed("cobject", {
@@ -565,10 +576,10 @@ describe("add from a saved capture", () => {
     assert.equal(learned.code, 0, learned.stdout);
     const repaired = await add("--extract", "guest", "--pick", "name");
     assert.equal(repaired.code, 0, repaired.stdout);
-    assert.match(repaired.out.repaired, /returns changed/);
+    assert.equal(repaired.out.replaced, true);
   });
 
-  describe("what a repair is checked against", () => {
+  describe("an op added again from a capture is checked as any add is", () => {
     /** A request no page of the fixture sends, and an answer for it: only what add does with the capture is under test. */
     const lookup = (path: string, body?: string) => ({
       id: 1,
@@ -605,7 +616,7 @@ describe("add from a saved capture", () => {
       for (const token of [OLD, QUERY, BODY]) assert.doesNotMatch(saved(), new RegExp(token));
     });
 
-    test("a request the learner refuses is one a repair is refused from: what it holds was never listed", async () => {
+    test("a request the learner cannot place the examples in is refused, and what it holds is not saved", async () => {
       const SHORT = "abcd1234";
       seed("cnamed", { url: `${fx.url}/page`, exchanges: [lookup("/api/named?name=alice")] });
       assert.equal((await add("named", "cnamed", "--example", "name=alice", "--extract", "data")).code, 0);
@@ -691,7 +702,7 @@ describe("add from a saved capture", () => {
       for (const secret of [FIRST, ROTATED]) assert.doesNotMatch(saved(), new RegExp(secret));
     });
 
-    test("a repair keeps the session its capture shows, as a full add does: the next call sends the new login", async () => {
+    test("adding an op again keeps the session its capture shows: the next call sends the new login", async () => {
       const jar = (session: string) => [...JAR, { ...JAR[0], name: "session", value: session, httpOnly: true }];
       const signedIn = async (session: string) => ({
         url: `${fx.url}/private`,
@@ -721,43 +732,22 @@ describe("add from a saved capture", () => {
       }
     });
 
-    test("a repair refreshes the kept op's refs from a request of its own, and from no other", async () => {
-      const [FIRST, NEXT, ELSEWHERE] = [
-        "FirstOpaqueValueAbc12345",
-        "NextOpaqueValueBcd23456",
-        "ElsewhereValueCde34567",
-      ];
-      const opaque = (path: string, value: string) => {
-        const e = lookup(path);
+    test("adding an op again from its own request refreshes the session value its ref reads", async () => {
+      const [FIRST, NEXT] = ["FirstOpaqueValueAbc12345", "NextOpaqueValueBcd23456"];
+      const opaque = (value: string) => {
+        const e = lookup("/api/reffed?name=alice");
         return { ...e, request: { ...e.request, headers: { "x-opaque": value } } };
       };
       const stored = () =>
         Object.values(JSON.parse(readFileSync(join(HOME, "sessions", "fixture.json"), "utf8")).values);
-      seed("cref", {
-        url: `${fx.url}/page`,
-        cookies: [],
-        storage: { opaque: FIRST },
-        exchanges: [opaque("/api/reffed?name=alice", FIRST)],
-      });
+      seed("cref", { url: `${fx.url}/page`, cookies: [], storage: { opaque: FIRST }, exchanges: [opaque(FIRST)] });
       assert.equal((await add("reffed", "cref", "--example", "name=alice", "--extract", "data")).code, 0);
       assert.ok(stored().includes(FIRST));
-      // the op's own request, sending the value the page holds now
-      seed("cref2", {
-        url: `${fx.url}/page`,
-        cookies: [],
-        storage: { opaque: NEXT },
-        exchanges: [opaque("/api/reffed?name=alice", NEXT)],
-      });
+      // the same request, sending the value the page holds now
+      seed("cref2", { url: `${fx.url}/page`, cookies: [], storage: { opaque: NEXT }, exchanges: [opaque(NEXT)] });
       assert.equal((await add("reffed", "cref2", "--extract", "data", "--pick", "name")).code, 0);
       assert.ok(stored().includes(NEXT) && !stored().includes(FIRST), "the ref now holds what the request sent");
-      // another endpoint's request, picked for its answer only: what it sends there is not this op's
-      seed("cref3", {
-        url: `${fx.url}/page`,
-        cookies: [],
-        exchanges: [opaque("/api/unrelated?name=alice", ELSEWHERE)],
-      });
-      assert.equal((await add("reffed", "cref3", "--extract", "data")).code, 0);
-      assert.ok(stored().includes(NEXT) && !stored().includes(ELSEWHERE));
+      for (const value of [FIRST, NEXT]) assert.doesNotMatch(saved(), new RegExp(value));
     });
 
     test("a description is not saved from a capture that holds no request of the op: nothing says what is secret in it", async () => {
@@ -767,19 +757,22 @@ describe("add from a saved capture", () => {
       seed("celse", { url: `${fx.url}/page`, exchanges: [lookup(`/api/other?token=${TOKEN}`)] });
       const r = await cli("add", "fixture", "base", "--from", "celse", "--description", TOKEN);
       assert.equal(r.code, 1, r.stdout);
-      assert.match(JSON.parse(r.stdout).error, /no request that base's match finds.*--pick-request/);
+      assert.match(
+        JSON.parse(r.stdout).error,
+        /no captured request carries the example values.*stored ones were used \(name=alice\)/,
+      );
       assert.doesNotMatch(saved(), new RegExp(TOKEN));
     });
 
-    test("the kept request is not checked again by rules it already passed: a param under a credential's name stays", async () => {
+    test("a param under a credential's name stays a param: the stored example says so", async () => {
       const KEY = "PublicObjectAbc12345";
       seed("ckeyed", { url: `${fx.url}/page`, exchanges: [lookup(`/api/keyed?api_key=${KEY}`)] });
       const learned = await add("keyed", "ckeyed", "--example", `key=${KEY}`, "--extract", "data");
       assert.equal(learned.code, 0, learned.stdout);
-      // with no example the learner would call that value a credential; the repair keeps the request as learned
+      // learned with no example that value would be called a credential; the stored example says it is the param
       const repaired = await add("keyed", "ckeyed", "--extract", "data", "--pick", "name");
       assert.equal(repaired.code, 0, repaired.stdout);
-      assert.match(repaired.out.repaired, /returns changed/);
+      assert.equal(repaired.out.replaced, true);
       assert.deepEqual(
         JSON.parse(saved())
           .operations.find((o: { name: string }) => o.name === "keyed")
@@ -856,7 +849,7 @@ describe("add from a saved capture", () => {
     assert.equal(posts(), 0, "no POST reached the site");
   });
 
-  test("a write stays a write: a repair keeps it one, and learning it again without --write is refused", async () => {
+  test("a write stays a write: learning it again, to fix its recipe too, is refused without --write", async () => {
     const send = async (...flags: string[]) => {
       const r = await cli("add", "demo", "send", "--from", "cpost", ...flags);
       return { ...r, out: JSON.parse(r.stdout) };
@@ -864,10 +857,14 @@ describe("add from a saved capture", () => {
     const learned = await send("--write", "--example", "text=hello alice");
     assert.equal(learned.out.readOnly, false, learned.stdout);
 
-    const repaired = await send("--extract", "data.create_post");
-    assert.equal(repaired.out.readOnly, false, "a repair does not relabel the write as a read");
-    // the aborted POST has no answer in the capture, so the new recipe was tried on nothing
-    assert.match(repaired.out.warnings.join("\n"), /not checked.*no answer/);
+    // fixing its recipe is learning it again: without --write that is refused, with it the op stays a write
+    const bare = await send("--extract", "data.create_post");
+    assert.equal(bare.code, 1, bare.stdout);
+    assert.match(bare.out.error, /is a write.*--write/);
+    const fixed = await send("--write", "--extract", "data.create_post");
+    assert.equal(fixed.code, 0, fixed.stdout);
+    assert.equal(fixed.out.readOnly, false);
+    assert.deepEqual(fixed.out.params, ["text:string"], "the stored example stood in");
     const refused = JSON.parse((await cli("call", "demo", "send", "text=never asked for")).stdout);
     assert.equal(refused.class, "refused", JSON.stringify(refused));
 

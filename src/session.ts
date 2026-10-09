@@ -139,14 +139,6 @@ export function saveSession(site: string, s: Session): void {
 const expired = (c: StoredCookie, now: number) => c.expires > 0 && c.expires * 1000 <= now;
 
 /** Merge a browser run's cookies and session values into the stored session and save it. */
-/** The jar after a capture's cookies are merged in: the capture's win, and expired ones are dropped. */
-export function mergeCookies(jar: StoredCookie[], cookies: StoredCookie[], now = Date.now()): StoredCookie[] {
-  const key = (c: StoredCookie) => `${c.name}\0${c.domain.toLowerCase()}\0${c.path}`;
-  const merged = new Map(jar.map((c) => [key(c), c]));
-  for (const c of cookies) merged.set(key(c), c);
-  return [...merged.values()].filter((c) => !expired(c, now));
-}
-
 export function mergeCapture(
   site: string,
   cookies: StoredCookie[],
@@ -155,8 +147,11 @@ export function mergeCapture(
 ): Session {
   return withLock(sessionFile(site), () => {
     const s = loadSession(site);
+    const key = (c: StoredCookie) => `${c.name}\0${c.domain.toLowerCase()}\0${c.path}`;
+    const jar = new Map(s.cookies.map((c) => [key(c), c]));
+    for (const c of cookies) jar.set(key(c), c);
     const merged = {
-      cookies: mergeCookies(s.cookies, cookies, now),
+      cookies: [...jar.values()].filter((c) => !expired(c, now)),
       values: { ...s.values, ...values },
       source: s.source,
     };

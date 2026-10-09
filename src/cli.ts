@@ -87,10 +87,10 @@ const HELP: Record<string, string> = {
   --soft-from     neutral page to load first, then navigate in-page to the trigger
   --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON)
   --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser).
-                  Every add saves its own runs as captures, so a wrong recipe is repaired this way: for an
-                  existing op, --from with recipe flags only (--extract, --pick, --html, --embedded) replaces
-                  what it returns and keeps its request, params and trigger. With --example the whole op is
-                  learned again
+                  Every add saves its own runs as captures, so a wrong recipe is fixed this way: add the op
+                  again --from the capture it was learned from, with the recipe flags (--extract, --pick,
+                  --html, --embedded). With no --example the op's stored examples are used, so the capture
+                  must carry them; from a capture made with other values, pass those with --example
   --from2 <id>    a second capture, made with the --example2 values, for the two-run diff; with --from,
                   --example2 needs it: capture the page again with those values
   --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
@@ -102,10 +102,9 @@ const HELP: Record<string, string> = {
   --write         the op changes state: it is learned from intercepted, aborted requests only. A request a
                   --write capture aborted, or an existing write learned again, needs --write: neither is
                   ever saved as a read
-  --description <text>  with --from and nothing else, for an existing op: only the description changes
+  --description <text>  what the op is for; an op added again with no --example keeps the one it had ("" clears it)
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.
-  replaced: an op of that name was learned again. repaired: it was kept, and only its recipe (or only
-  its description) changed.`,
+  replaced: an op of that name was learned again.`,
   call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--max-tier 1|2|3] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, ms, next?}. --dry prints the request with credentials redacted.`,
   verify: `api-anything verify [site]
@@ -550,11 +549,6 @@ function captureAgain(
 }
 
 /** What a repair says it changed: the op was kept, and one thing in it replaced. */
-const REPAIRED = {
-  recipe: "only what it returns changed: the request, params and trigger are as they were",
-  description: "only the description changed: what it returns, the request, params and trigger are as they were",
-};
-
 async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   const [site, name] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything add --help");
@@ -612,7 +606,7 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     ok: true,
     site,
     op: op.name,
-    ...(r.repaired ? { repaired: REPAIRED[r.repaired] } : r.replaced ? { replaced: true } : {}),
+    ...(r.replaced ? { replaced: true } : {}),
     request: `${op.request.method} ${op.request.url.split("?")[0]}`,
     params: op.params.map((p) => `${p.name}:${p.type}`),
     readOnly: op.readOnly,

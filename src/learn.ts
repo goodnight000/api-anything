@@ -1057,7 +1057,7 @@ export function suggestExtract(root: unknown, values: string[]): string | undefi
   return bestArray?.path ?? holder?.path ?? anyArray?.path;
 }
 
-export function learnResponse(e: Exchange, values: string[], warnings: string[]): ResponseSpec {
+function learnResponse(e: Exchange, values: string[], warnings: string[]): ResponseSpec {
   const r = e.response;
   if (!r) return { format: "json" };
   const body = r.body ?? "";
