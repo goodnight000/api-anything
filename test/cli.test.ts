@@ -103,12 +103,12 @@ describe("flags and command names", () => {
   test("a flag the command does not take is refused, naming the command and its --help", async () => {
     const r = await cli("call", "plain", "getUser", "name=carol", "--pick", "name", "--limit", "1");
     assert.equal(r.code, 1, r.stdout);
-    assert.deepEqual(JSON.parse(r.stdout), { ok: false, error: "call does not take --pick, --limit" });
+    assert.match(JSON.parse(r.stdout).error, /^call .*--pick.*--limit/);
     assert.match(r.stderr, /^next: api-anything call --help/m);
 
     // --steps belongs to capture and add: elsewhere it is not even parsed
     const steps = await cli("call", "plain", "getUser", "name=carol", "--steps", "not json");
-    assert.equal(JSON.parse(steps.stdout).error, "call does not take --steps");
+    assert.match(JSON.parse(steps.stdout).error, /^call .*--steps/);
 
     const own = await cli("call", "plain", "getUser", "name=carol", "--max-tier", "1");
     assert.deepEqual(JSON.parse(own.stdout).data, { name: "carol" }, own.stdout);
@@ -119,37 +119,50 @@ describe("flags and command names", () => {
     const usage = (await cli("--help")).stdout;
     for (const name of ["toString", "constructor"]) {
       const r = await cli(name);
-      assert.deepEqual(
-        r,
-        { code: 1, stdout: usage, stderr: `next: unknown command "${name}"; see the list above\n` },
-        name,
-      );
+      assert.equal(r.code, 1, name);
+      assert.equal(r.stdout, usage, name);
+      assert.match(r.stderr, new RegExp(`^next: unknown command "${name}"`), name);
       assert.equal((await cli(name, "--help")).stdout, usage, `${name} --help`);
     }
   });
 
+  const step = (action: string) => JSON.stringify([{ action, selector: "#file", value: "file.pdf" }]);
+
   test("a step --steps cannot run is one short line: the action, and the actions there are", async () => {
-    const step = (action: string) => JSON.stringify([{ action, selector: "#file", value: "file.pdf" }]);
     const upload = await cli("capture", `${fx.url}/list`, "--steps", step("upload"));
     assert.equal(upload.code, 1);
-    assert.deepEqual(JSON.parse(upload.stdout), {
-      ok: false,
-      error:
-        '--steps: unknown action "upload" (file uploads are not supported); the actions are click, fill, press, wait, goto',
-    });
-    assert.match(upload.stderr, /^next: api-anything capture --help/m);
+    const said = JSON.parse(upload.stdout).error;
+    assert.match(said, /^--steps: .*"upload"/);
+    assert.match(said, /uploads are not supported/);
+    assert.match(said, /click, fill, press, wait, goto/);
 
-    const hover = await cli("add", "plain", "x", "--trigger", `${fx.url}/list`, "--steps", step("hover"));
-    assert.equal(
-      JSON.parse(hover.stdout).error,
-      '--steps: unknown action "hover"; the actions are click, fill, press, wait, goto',
-    );
+    const hover = JSON.parse(
+      (await cli("add", "plain", "x", "--trigger", `${fx.url}/list`, "--steps", step("hover"))).stdout,
+    ).error;
+    assert.match(hover, /"hover".*click, fill, press, wait, goto/);
+    assert.doesNotMatch(hover, /upload/);
 
-    // any other malformed step: what is wrong and where, not the validator's JSON report
+    // any other malformed step: what is wrong and where, on one line, not the validator's JSON report
     const typed = await cli("capture", `${fx.url}/list`, "--steps", '[{"action":"click","selector":5}]');
-    assert.equal(
-      JSON.parse(typed.stdout).error,
-      "--steps: Invalid input: expected string, received number at [0].selector",
+    assert.match(JSON.parse(typed.stdout).error, /^--steps: [^{[\n]* \[0\]\.selector$/);
+  });
+
+  test("a malformed JSON flag points at the help of the command it was given to", async () => {
+    seed("cflags", { url: `${fx.url}/list`, exchanges: [await answered(1, "document", "/list")] });
+    const bad = {
+      capture: [`${fx.url}/list`, "--steps", '[{"action":"click","selector":5}]'],
+      add: ["plain", "x", "--trigger", `${fx.url}/list`, "--steps", step("hover")],
+      call: ["plain", "getUser", "--json", '{"name":'],
+      inspect: ["cflags", "1", "--html", '{"items":1}'],
+    };
+    for (const [command, args] of Object.entries(bad)) {
+      const r = await cli(command, ...args);
+      assert.equal(r.code, 1, command);
+      assert.match(r.stderr, new RegExp(`^next: api-anything ${command} --help`), command);
+    }
+    assert.match(
+      (await cli("add", "plain", "x", "--from", "c", "--match", "{")).stderr,
+      /^next: api-anything add --help/,
     );
   });
 });

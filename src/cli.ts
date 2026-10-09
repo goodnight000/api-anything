@@ -81,7 +81,8 @@ const HELP: Record<string, string> = {
   Runs the trigger twice in Chrome (with --example, then --example2 or --example again), picks the request
   carrying the example values, and saves the learned operation to ~/.api-anything/sites/<site>.json.
   --trigger       page URL with {param} placeholders, e.g. https://site.com/u/{name}
-  --steps <json>  UI steps after load; {param} is filled in selector/value
+  --steps <json>  UI steps after load, [{action: click|fill|press|wait|goto, selector?, value?, ms?}];
+                  {param} is filled in selector/value
   --soft-from     neutral page to load first, then navigate in-page to the trigger
   --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON)
   --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser).
@@ -154,6 +155,9 @@ function kv(list: string[] | undefined): Record<string, string> {
   return args;
 }
 
+/** The command being run: a hint about one of its flags points at its own --help. */
+let command = "";
+
 function json<T>(text: string | undefined, schema: z.ZodType<T>, flag: string): T | undefined {
   if (text === undefined) return undefined;
   try {
@@ -161,7 +165,7 @@ function json<T>(text: string | undefined, schema: z.ZodType<T>, flag: string): 
   } catch (e) {
     // a ZodError's own message is its issue list as JSON
     const why = e instanceof z.ZodError ? z.prettifyError(e) : (e as Error).message;
-    throw new Fail(`--${flag}: ${oneLine(why)}`, `api-anything --help shows the --${flag} format`);
+    throw new Fail(`--${flag}: ${oneLine(why)}`, `api-anything ${command} --help shows --${flag}`);
   }
 }
 
@@ -175,7 +179,7 @@ function stepsOf(text: string | undefined): TriggerStep[] | undefined {
   if (bad)
     throw new Fail(
       `--steps: unknown action "${bad}"${/upload/i.test(bad) ? " (file uploads are not supported)" : ""}; the actions are ${actions.join(", ")}`,
-      "api-anything capture --help shows the --steps format",
+      `api-anything ${command} --help shows --steps`,
     );
   return json(text, z.array(TriggerStepSchema), "steps");
 }
@@ -313,7 +317,7 @@ async function cmdLogout({ pos }: Parsed): Promise<number> {
 function positive(text: string | undefined, flag: string): number | undefined {
   if (text === undefined) return undefined;
   if (!/^[1-9]\d*$/.test(text))
-    throw new Fail(`--${flag} must be a positive integer, got "${text}"`, `api-anything --help`);
+    throw new Fail(`--${flag} must be a positive integer, got "${text}"`, `api-anything ${command} --help`);
   return Number(text);
 }
 
@@ -580,12 +584,12 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   if (v.from && ex2 && !v.from2) {
     const c = loadCapture(v.from);
     const write = !!(c.write || v.write);
-    const command = captureAgain(c, ex1, ex2, write);
+    const again = captureAgain(c, ex1, ex2, write);
     throw new Fail(
       "--example2 with --from needs --from2: a capture holds one run",
       `${
-        command
-          ? `capture the page again with the second example's values: ${command}`
+        again
+          ? `capture the page again with the second example's values: ${again}`
           : `the first example's values are not in capture ${c.id}'s url or steps, so the command cannot be written out: capture that page again the way ${c.id} was made (${["its url", c.softFrom && "--soft-from", c.steps && "--steps", write && "--write"].filter(Boolean).join(", ")}), with the second example's values`
       }; then run this add again with --from2 <the new capture's id>`,
     );
@@ -846,6 +850,7 @@ async function run(argv: string[]): Promise<number> {
   const extra = Object.keys(v).filter((k) => !c.flags.includes(k as Flag));
   if (extra.length)
     throw new Fail(`${cmd} does not take --${extra.join(", --")}`, `api-anything ${cmd} --help lists its flags`);
+  command = cmd;
   return c.run({ v, pos, steps: stepsOf(v.steps) });
 }
 
