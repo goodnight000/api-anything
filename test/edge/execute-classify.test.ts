@@ -509,6 +509,21 @@ describe("execution ladder", () => {
     assert.equal(fx.hits.length, 0, "nothing sent");
   });
 
+  test("a numeric arg in a form that would be rounded past 2^53 is input, and nothing is sent", async () => {
+    site("big", {
+      ...rd("items", "/api/items?page=1"),
+      slots: [{ param: "page", at: ["query:page"] }],
+      params: [{ name: "page", type: "number" }],
+    });
+    const r = await call("big", "items", { page: "9007199254740993e0" }, t1);
+    assert.equal(r.class, "input", JSON.stringify(r));
+    assert.match(r.reason ?? "", /would lose precision/);
+    assert.equal(fx.hits.length, 0, "nothing sent");
+    assert.deepEqual((await call("big", "items", { page: "9007199254740993" }, t1)).data, [
+      { page: "9007199254740993" },
+    ]);
+  });
+
   test("a corrupt session or state file is reported as such: not 'check the args', and call() does not throw", async () => {
     site("corrupt", rd("l", "/plain"));
     const { mkdirSync, writeFileSync } = await import("node:fs");

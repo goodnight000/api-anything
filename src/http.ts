@@ -27,15 +27,23 @@ export interface SendOptions {
   minIntervalMs?: number;
 }
 
-/** Coerce an arg to the param's declared type. Integers past 2^53 become bigint, never a rounded number. */
+/**
+ * Coerce an arg to the param's declared type. Past 2^53 plain digits become bigint; any other form
+ * is refused, never rounded.
+ */
 function coerce(p: Param, v: unknown): unknown {
   const bad = () => new Error(`param "${p.name}" must be ${p.type}, got ${JSON.stringify(v)}`);
   switch (p.type) {
     case "number":
       if (typeof v === "number" || typeof v === "bigint") return v;
       if (typeof v === "string" && /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(v)) {
-        if (/^-?\d+$/.test(v) && !Number.isSafeInteger(Number(v))) return BigInt(v);
-        return Number(v);
+        const n = Number(v);
+        if (Math.abs(n) <= Number.MAX_SAFE_INTEGER) return n;
+        if (/^-?\d+$/.test(v)) return BigInt(v);
+        // ponytail: also refuses 1e21, which a double holds; parse the exponent into a bigint if that form is needed
+        throw new Error(
+          `param "${p.name}" would lose precision: ${JSON.stringify(v)} is past 2^53 and would be sent as ${n}; write the integer as plain digits`,
+        );
       }
       throw bad();
     case "boolean":

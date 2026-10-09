@@ -67,7 +67,8 @@ A JSON leaf replaced by a param keeps the arg's native type, except that a leaf 
 string stays a string (`"id":"123"` next to `ids:[123]`). Params default to type `string`.
 A param may declare `pattern` (a regex the whole value must match) and `hint` (what a valid value
 is, "a date as YYYY-MM-DD"): an arg that fails it is `input`, named with the hint, and nothing is sent.
-Numbers are never coerced beyond 2^53, and `"false"` is false.
+Numbers are never rounded: past 2^53, plain digits are sent exactly, and any other form (an exponent, a
+decimal point: `9007199254740993e0`) is `input`, saying so, with nothing sent. `"false"` is false.
 
 ## Learning (`learn.ts`)
 
