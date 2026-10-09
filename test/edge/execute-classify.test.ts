@@ -5,12 +5,13 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer as createHttpServer, type ServerResponse } from "node:http";
+import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { addCookiesToProfile, chromeAvailable, closeBrowser } from "../../src/browser.js";
+import { addCookiesToProfile, chromeAvailable, closeBrowser, openBrowser } from "../../src/browser.js";
 import { classify, judge, type Observed } from "../../src/classify.js";
 import { call } from "../../src/execute.js";
 import { capOutput } from "../../src/extract.js";
@@ -68,6 +69,24 @@ function site(name: string, ...operations: Record<string, unknown>[]) {
   saveSite(parseSite({ name, baseUrl: fx.base, operations }));
 }
 const t1 = { maxTier: 1 as const, minIntervalMs: 0, timeoutMs: 3000 };
+
+/** A write whose body holds a session value two layers down: base64 of JSON, inside a JSON string. */
+const wrapped = (path: string, over: Record<string, unknown> = {}) => ({
+  name: "post",
+  readOnly: false,
+  request: {
+    method: "POST",
+    url: `${fx.base}${path}`,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ state: Buffer.from('{"token":"PLACEHOLDER-TOKEN"}').toString("base64") }),
+  },
+  slots: [{ ref: "session:token", at: ["body", "json:/state", "b64", "json:/token"] }],
+  trigger: { url: `${fx.base}/` },
+  response: { format: "json" },
+  ...over,
+});
+/** What a `wrapped` body carried, as the server decodes it. */
+const unwrapped = (body: string) => Buffer.from(JSON.parse(body).state, "base64").toString();
 
 /* ----------------------------------------------------------------- cookies and redirects */
 
@@ -143,6 +162,38 @@ describe("tier 1 cookies and redirects", () => {
       undefined,
       "even a literal authorization is dropped cross-origin",
     );
+  });
+
+  test("a cross-origin 307 is not followed when a body slot holds a session value, whatever encodes it (base64)", async () => {
+    site("xob64", wrapped("/away?s=307"));
+    saveSession("xob64", { cookies: [], values: { token: "SECRET-BODY-TOKEN-123" } });
+    const r = await call("xob64", "post", {}, { ...t1, allowWrites: true });
+    assert.match(unwrapped(fx.hits[0]!.body), /SECRET-BODY-TOKEN-123/, "the site itself gets its token");
+    assert.equal(fx.otherHits.length, 0, `the other origin got ${fx.otherHits[0]?.body}`);
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.match(r.reason ?? "", /not following the HTTP 307 redirect to http:\/\/localhost/);
+    assert.match(r.next ?? "", /may have run: check the site first.* re-learn it with api-anything add xob64 post/);
+    assert.doesNotMatch(r.next ?? "", /retry once/);
+    assert.equal(fx.hits.length, 1, "sent once");
+  });
+
+  test("a cross-origin redirect drops a header whose ref sits under a JSON layer", async () => {
+    site("xowrap", {
+      ...rd("me", "/away?s=302"),
+      request: {
+        method: "GET",
+        url: `${fx.base}/away?s=302`,
+        headers: { "x-wrap": '{"token":""}', "x-keep": "1" },
+      },
+      slots: [{ ref: "cookie:ct0", at: ["header:x-wrap", "json:/token"] }],
+      response: { format: "json" },
+    });
+    saveSession("xowrap", { cookies: [cookie("ct0", "SECRET-CSRF-VALUE-123", "127.0.0.1")], values: {} });
+    const r = await call("xowrap", "me", {}, t1);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.match(String(fx.hits[0]!.headers["x-wrap"]), /SECRET-CSRF-VALUE-123/, "the site itself gets it");
+    assert.equal(fx.otherHits[0]!.headers["x-wrap"], undefined);
+    assert.equal(fx.otherHits[0]!.headers["x-keep"], "1");
   });
 
   test("a redirect loop ends with a non-ok answer instead of hanging", async () => {
@@ -675,6 +726,126 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     const r = await call("prg", "follow", {}, { allowWrites: true, maxTier: 2, minIntervalMs: 0, timeoutMs: 5000 });
     const posts = fx.hits.filter((h) => h.method === "POST" && h.url === "/api/follow").length;
     assert.equal(posts, 1, `POST sent ${posts} times; result ${JSON.stringify(r)}`);
+  });
+
+  test("tier 2 follows tier 1's redirect policy: a cross-origin 307 gets no ref'd header and no body holding a session value", async () => {
+    site(
+      "t2xo",
+      rd("me", "/away?s=307", {
+        minTier: 2,
+        request: { method: "GET", url: `${fx.base}/away?s=307`, headers: { "x-csrf": "", "x-keep": "1" } },
+        slots: [{ ref: "cookie:ct", at: ["header:x-csrf"] }],
+        response: { format: "json" },
+      }),
+      wrapped("/away?s=307", { minTier: 2 }),
+    );
+    saveSession("t2xo", {
+      cookies: [cookie("ct", "SECRET-CSRF-VALUE-123", "127.0.0.1")],
+      values: { token: "SECRET-BODY-TOKEN-123" },
+    });
+    const o = { maxTier: 2 as const, minIntervalMs: 0, timeoutMs: 5000 };
+    // the other origin approves every CORS preflight, so only the policy stands between it and the request
+    const landed = () => fx.otherHits.filter((h) => h.method !== "OPTIONS");
+    const r = await call("t2xo", "me", {}, o);
+    assert.equal(fx.hits.find((h) => h.url === "/away?s=307")?.headers["x-csrf"], "SECRET-CSRF-VALUE-123");
+    assert.equal(landed().length, 1, JSON.stringify(r));
+    assert.equal(landed()[0]!.headers["x-csrf"], undefined, "the CSRF header went to another origin");
+    assert.equal(landed()[0]!.headers["x-keep"], "1");
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 2);
+
+    fx.hits.length = 0;
+    fx.otherHits.length = 0;
+    const w = await call("t2xo", "post", {}, { ...o, allowWrites: true });
+    assert.match(unwrapped(fx.hits[0]!.body), /SECRET-BODY-TOKEN-123/, "the site itself gets its token");
+    assert.equal(landed().length, 0, `the other origin got ${landed()[0]?.body}`);
+    assert.equal(w.ok, false, JSON.stringify(w));
+    assert.equal(w.tier, 2);
+    assert.match(w.reason ?? "", /not following the HTTP 307 redirect to http:\/\/localhost/);
+    assert.match(w.next ?? "", /may have run: check the site first.* re-learn it with api-anything add t2xo post/);
+    assert.equal(fx.hits.filter((h) => h.method === "POST").length, 1, "the write was sent once");
+  });
+
+  test("tier 2 same-origin redirects: a hop's cookie rides on the next; 307 keeps POST and body, 303 makes a bodiless GET; a loop ends", async () => {
+    const post = (s: number) => ({
+      ...rd(`post${s}`, `/hop?s=${s}`, { minTier: 2 }),
+      readOnly: false,
+      request: {
+        method: "POST",
+        url: `${fx.base}/hop?s=${s}`,
+        headers: { "content-type": "application/json" },
+        body: '{"id":"1"}',
+      },
+    });
+    site("t2hop", rd("boot", "/bootstrap", { minTier: 2 }), post(307), post(303), rd("loop", "/loop", { minTier: 2 }));
+    const o = { maxTier: 2 as const, minIntervalMs: 0, timeoutMs: 5000 };
+    await (await openBrowser({ profileDir: profileDir() })).clearCookies({ name: "step" });
+    const r = await call("t2hop", "boot", {}, o);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 2);
+    assert.match(fx.hits.find((h) => h.url === "/needs-step")?.headers.cookie ?? "", /(^|; )step=1/);
+
+    for (const [s, method, body, type] of [
+      [307, "POST", '{"id":"1"}', "application/json"],
+      [303, "GET", "", undefined],
+    ] as const) {
+      fx.hits.length = 0;
+      const w = await call("t2hop", `post${s}`, {}, { ...o, allowWrites: true });
+      assert.equal(w.ok, true, JSON.stringify(w));
+      const landed = fx.hits.find((h) => h.url === "/landed");
+      assert.deepEqual([landed?.method, landed?.body, landed?.headers["content-type"]], [method, body, type], `${s}`);
+      assert.equal(fx.hits.filter((h) => h.url.startsWith("/hop")).length, 1, "the write was sent once");
+    }
+
+    fx.hits.length = 0;
+    const loop = await call("t2hop", "loop", {}, o);
+    assert.equal(loop.ok, false);
+    assert.equal(loop.class, "error", JSON.stringify(loop));
+    assert.ok(fx.hits.length <= 6, `${fx.hits.length} requests`);
+
+    // Post/Redirect/Get to a page that refuses scripts: the 403 answers the redirect's follow-up, so the write ran
+    site("t2prg", {
+      ...post(303),
+      name: "follow",
+      request: { method: "POST", url: `${fx.base}/api/follow`, headers: {}, body: "x=1" },
+    });
+    fx.hits.length = 0;
+    const ran = await call("t2prg", "follow", {}, { ...o, allowWrites: true });
+    assert.equal(ran.tier, 2, JSON.stringify(ran));
+    assert.equal(fx.hits.filter((h) => h.method === "POST").length, 1, "the write was sent once");
+    assert.match(ran.next ?? "", /may have gone through/, "a redirected write is one that ran");
+  });
+
+  test("tier 2 refuses a redirect it cannot tell from another's: the origin page sent the same request at the same time", async () => {
+    const waiting: ServerResponse[] = [];
+    const landed: string[] = [];
+    const twin = createHttpServer((req, res) => {
+      if (req.url === "/")
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end('<!doctype html><title>twin</title><script>fetch("/twin",{method:"POST",body:"q"})</script>');
+      // a POST: Chrome's cache makes a second GET of one URL wait for the first
+      if (req.url === "/twin") {
+        // held until the page's own request and the call's are both in; then each is sent somewhere else
+        if (waiting.push(res) === 2) waiting.forEach((w, i) => void w.writeHead(302, { location: `/to-${i}` }).end());
+        return;
+      }
+      landed.push(req.url!);
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+    });
+    await new Promise<void>((r) => twin.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(twin.address() as AddressInfo).port}`;
+    try {
+      const request = { method: "POST", url: `${base}/twin`, headers: {}, body: "q" };
+      saveSite(parseSite({ name: "twin", baseUrl: base, operations: [rd("query", "/twin", { minTier: 2, request })] }));
+      const r = await call("twin", "query", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 5000 });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.reason ?? "", /not following a redirect from .*\/twin: .* cannot be told apart/);
+      assert.ok(!landed.includes("/to-1"), `followed anyway: ${landed}`);
+    } finally {
+      twin.closeAllConnections();
+      twin.close();
+    }
   });
 
   test("a param's default reaches the tier-3 trigger: the page opens with it, not with a literal {page}", async () => {

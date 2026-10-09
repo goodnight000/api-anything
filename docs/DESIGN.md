@@ -364,9 +364,24 @@ the browser profile) stops at once and marks nothing stale.
 
 | tier | transport | when |
 |---|---|---|
-| 1 | Node `fetch` + domain/path-scoped cookie jar + session values; redirects followed by hand (cookies set on a hop ride on the next; credential headers dropped on an origin change; a hop to another origin that would carry a `session:`/`cookie:` value in its body or URL is not taken, and the call fails naming the redirect); Set-Cookie answers are merged into the jar; the body is decoded with its declared charset | default |
-| 2 | `fetch()` inside a real page on the site origin (real TLS, cookies, sec-fetch) | tier 1 `blocked`, or op `minTier: 2` |
+| 1 | Node `fetch` + domain/path-scoped cookie jar + session values; redirects followed by hand under the redirect policy below (cookies set on a hop ride on the next); Set-Cookie answers are merged into the jar; the body is decoded with its declared charset | default |
+| 2 | `fetch()` inside a real page on the site origin (real TLS, cookies, sec-fetch); redirects one hop at a time under the same policy | tier 1 `blocked`, or op `minTier: 2` |
 | 3 | run the trigger in the browser, capture the matched response | op `minTier: 3`, or after a heal fails for reads |
+
+One redirect policy, for tiers 1 and 2 (`nextHop`), at most 5 hops: 303, and 301/302 after a POST,
+make a bodiless GET; 307/308 keep method and body. On an origin change the credential headers are
+dropped: authorization, cookie, and every header a `cookie:`/`session:` ref fills, at any depth
+(a ref inside a header's JSON too). A hop to another origin is not taken when it would re-send a
+body in which any ref slot lives, which is decided from the slots and not by searching the bytes
+(a value under base64 or any other layer is not found that way), nor when its Location repeats a
+session value the query, path or body carried. The call then fails naming the redirect, and its
+`next` says not to retry (for a write: to check the site first, since the request the redirect
+answered was sent). At tier 2 a page's own `fetch()` would follow a redirect with every header and
+the body, so the page fetches with `redirect: "manual"`. It is then told nothing about the redirect,
+not even its status, so each hop's status and Location are read from what Playwright saw of the
+request. The origin page or another call may have sent the same request at the same moment (same
+method, address and body): if their redirects differ, this call's cannot be told apart and it fails
+saying so. Cookies a hop sets are in the profile for the next, as with a browser's own redirect.
 
 Heal strategies, cheapest first:
 - **rescan**: no browser. Fetch the trigger document and the JS bundles it references (resolved

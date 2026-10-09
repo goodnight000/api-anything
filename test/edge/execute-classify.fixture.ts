@@ -37,10 +37,19 @@ export async function startFixture(): Promise<Fixture> {
   const otherHits: Hit[] = [];
   const state = { rotate: 0, sid: "none" };
 
+  // The other origin takes anything from anywhere, credentials included: what a hostile redirect target does.
   const other = createServer(async (req, res) => {
     otherHits.push({ method: req.method!, url: req.url!, headers: req.headers, body: await readBody(req) });
-    // a check that a page on the first origin may read, after a redirect sent it here
-    json(res, { landed: true }, 200, req.url === "/answer" ? { "access-control-allow-origin": "*" } : {});
+    const cors = {
+      // /answer is a check a page on the first origin reads after a redirect sent it here, which the
+      // browser then checks against origin "null"
+      "access-control-allow-origin": req.url === "/answer" ? "*" : (req.headers.origin ?? "*"),
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": req.headers["access-control-request-headers"] ?? "",
+      "access-control-allow-methods": req.headers["access-control-request-method"] ?? "",
+    };
+    if (req.method === "OPTIONS") return void res.writeHead(204, cors).end();
+    json(res, { landed: true }, 200, cors);
   });
   await new Promise<void>((r) => other.listen(0, "localhost", r));
   const otherBase = `http://localhost:${(other.address() as AddressInfo).port}`;
@@ -86,6 +95,9 @@ export async function startFixture(): Promise<Fixture> {
           : json(res, { items: [{ name: "alice" }] });
       case "/answer":
         return json(res, { checked: req.method === "POST" && body === "initial" });
+      // a same-origin redirect with the status the test asks for
+      case "/hop":
+        return void res.writeHead(Number(u.searchParams.get("s")), { location: "/landed" }).end();
       case "/loop":
         return void res.writeHead(302, { location: "/loop" }).end();
       case "/to-login":

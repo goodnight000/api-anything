@@ -178,13 +178,55 @@ async function pace(site: string, minIntervalMs: number): Promise<void> {
   if (at > now) await new Promise((r) => setTimeout(r, at - now));
 }
 
-const REDIRECT = new Set([301, 302, 303, 307, 308]);
+export const REDIRECT = new Set([301, 302, 303, 307, 308]);
+
+/** A redirect the policy does not take: nothing was sent to its target. */
+export class RedirectRefused extends Error {}
 
 /**
- * Send the filled template. Redirects are followed by hand (at most 5): on an origin change the
- * credential headers (every ref'd header, authorization, cookie) are dropped, since undici only
- * strips authorization and cookie and would hand a CSRF header to the other origin.
+ * The redirect policy of tiers 1 and 2: the request a redirect asks for next, or a refusal.
+ * 303, and 301/302 after a POST, make a bodiless GET. On an origin change the credential headers go
+ * (authorization, cookie, every header a ref fills), since neither undici nor a page's fetch()
+ * would keep a CSRF header from the other origin. A hop that would still carry a session's value
+ * there is not taken: a body it re-sends when any ref slot lives in the body (decided from the
+ * slots: a value can sit under any number of encoding layers, so searching the bytes misses it), or
+ * a Location that copied one from the query.
  */
+export function nextHop(op: Operation, session: Session, from: Request, status: number, location: string): Request {
+  const next = new URL(location, from.url);
+  const refused = (why: string) =>
+    new RedirectRefused(`not following the HTTP ${status} redirect to ${next.origin}: ${why}`);
+  if (!/^https?:$/.test(next.protocol)) throw refused("it is not an http(s) address");
+  const toGet = status === 303 || ((status === 301 || status === 302) && from.method === "POST");
+  const cross = next.origin !== new URL(from.url).origin;
+  // The slots that hold a cookie:/session: value, by the layer their path starts in ("header:x-csrf", "form[1]:tok").
+  const held = op.slots.filter(holdsRef).map((s) => ({
+    s,
+    refs: [...(s.ref ? [s.ref] : []), ...templateRefs(s.template ?? "")],
+    layer: /^[a-z]+/.exec(s.at[0]!)?.[0],
+  }));
+  const secret = new Set(["authorization", "cookie"]);
+  for (const h of held) if (h.layer === "header") secret.add(h.s.at[0]!.slice(7).toLowerCase());
+  const drop = (name: string) => (toGet && name === "content-type") || (cross && secret.has(name));
+  const headers = Object.fromEntries(Object.entries(from.headers).filter(([k]) => !drop(k.toLowerCase())));
+  const body = toGet ? undefined : from.body;
+  if (cross) {
+    const inBody = body !== undefined && held.some((h) => h.layer === "body" || h.layer === "form");
+    const carried = held.flatMap(({ s, refs, layer }) =>
+      layer === "header"
+        ? []
+        : refs.flatMap((r) => {
+            const v = resolveRef(r, session, op.request.url);
+            return v && v.length >= 4 ? [s.ref === r ? transform(v, s.transform) : v] : [];
+          }),
+    );
+    if (inBody || carried.some((v) => next.href.includes(v) || next.href.includes(encodeURIComponent(v))))
+      throw refused("the request would carry this session's values to another origin");
+  }
+  return { url: next.href, method: toGet ? "GET" : from.method, headers, body };
+}
+
+/** Send the filled template. Redirects are followed by hand (at most 5), each hop decided by `nextHop`. */
 export async function send(
   op: Operation,
   args: Record<string, unknown>,
@@ -195,30 +237,7 @@ export async function send(
   await pace(opts.site, opts.minIntervalMs ?? 1000);
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const signal = AbortSignal.timeout(timeoutMs);
-  const inHeader = (s: Operation["slots"][number]) => s.at.length === 1 && s.at[0]!.startsWith("header:");
-  const secret = new Set([
-    "authorization",
-    "cookie",
-    ...op.slots.flatMap((s) => (holdsRef(s) && inHeader(s) ? [s.at[0]!.slice(7).toLowerCase()] : [])),
-  ]);
-  // session/cookie values the body or query carry: no other origin may receive them
-  const carried = op.slots.flatMap((s) => {
-    if (inHeader(s)) return [];
-    const refs =
-      s.template !== undefined
-        ? [...new Set([...(s.ref ? [s.ref] : []), ...templateRefs(s.template)])]
-        : s.ref
-          ? [s.ref]
-          : [];
-    return refs.flatMap((r) => {
-      const v = resolveRef(r, session, op.request.url);
-      return v && v.length >= 4 ? [s.ref === r ? transform(v, s.transform) : v] : [];
-    });
-  });
-  const leaks = (target: string, sentBody?: string) =>
-    carried.some((v) => [v, encodeURIComponent(v)].some((x) => target.includes(x) || !!sentBody?.includes(x)));
-  let { url, method, headers } = req;
-  let body = method === "GET" || method === "HEAD" ? undefined : req.body;
+  let hop: Request = { ...req, body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body };
   const t0 = performance.now();
   // Cookies set along the way (a consent or session bootstrap hop) ride on the next hop, as in a browser.
   let jar = session.cookies;
@@ -226,7 +245,8 @@ export async function send(
   let redirected: boolean | undefined;
   try {
     for (let hops = 0; ; hops++) {
-      const res = await (opts.fetchImpl ?? fetch)(url, { method, headers, body, redirect: "manual", signal });
+      const { url, ...init } = hop;
+      const res = await (opts.fetchImpl ?? fetch)(url, { ...init, redirect: "manual", signal });
       for (const line of res.headers.getSetCookie?.() ?? []) {
         const c = parseSetCookie(line, url);
         if (!c) continue;
@@ -242,25 +262,11 @@ export async function send(
       redirected ??= REDIRECT.has(res.status) && !!location;
       if (REDIRECT.has(res.status) && location && hops < 5) {
         await res.body?.cancel();
-        const next = new URL(location, url);
-        const cross = next.origin !== new URL(url).origin;
-        headers = Object.fromEntries(
-          Object.entries(headers).filter(([k]) => k !== "cookie" && !(cross && secret.has(k.toLowerCase()))),
-        );
-        const cookie = cookieHeaderFor(jar, next.href);
-        if (cookie) headers.cookie = cookie;
-        if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === "POST")) {
-          method = "GET";
-          body = undefined;
-          headers = Object.fromEntries(Object.entries(headers).filter(([k]) => k.toLowerCase() !== "content-type"));
-        }
-        // A 307/308 resends the body; a location may copy the query. Neither may carry a credential elsewhere.
-        if (cross && leaks(next.href, body)) {
-          throw new Error(
-            `not following the HTTP ${res.status} redirect to ${next.origin}: the request would carry this session's values to another origin`,
-          );
-        }
-        url = next.href;
+        hop = nextHop(op, session, hop, res.status, location);
+        // the jar's cookies for the new address, whichever origin it is
+        const { cookie: _sent, ...headers } = hop.headers;
+        const cookie = cookieHeaderFor(jar, hop.url);
+        hop.headers = cookie ? { ...headers, cookie } : headers;
         continue;
       }
       const raw = unzstd(new Uint8Array(await res.arrayBuffer()), res.headers.get("content-encoding"));

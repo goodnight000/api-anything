@@ -17,6 +17,7 @@ import {
 } from "playwright-core";
 import { botWall } from "./classify.js";
 import { siteOf } from "./session.js";
+import type { Request as Hop } from "./spec.js";
 import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
 
 let current: { profileDir: string; headless: boolean; ctx: Promise<BrowserContext> } | undefined;
@@ -931,8 +932,33 @@ export interface PageFetchResult {
   body: string;
   url: string;
   ms: number;
-  /** the fetch followed a redirect */
+  /** the first answer was a redirect */
   redirected?: boolean;
+}
+
+/**
+ * The redirect a page's manual fetch() got, read from what Playwright saw of it: the page itself is
+ * told nothing, not even the status. The page (or another call) may have sent the same request at
+ * the same moment; when their redirects differ, which one is this call's cannot be told.
+ */
+async function redirectOf(seen: Response[], hop: Hop, url: string) {
+  const bare = (u: string) => u.split("#")[0];
+  const mine = () =>
+    seen.filter((res) => {
+      const req = res.request();
+      return req.method() === hop.method && bare(req.url()) === bare(url) && (req.postData() ?? hop.body) === hop.body;
+    });
+  for (const end = Date.now() + 1000; !mine().length && Date.now() < end; ) await sleep(20);
+  const answers = await Promise.all(
+    mine().map(async (res) => ({ status: res.status(), headers: await res.allHeaders().catch(() => res.headers()) })),
+  );
+  if (new Set(answers.map((a) => `${a.status} ${a.headers.location ?? ""}`)).size !== 1) {
+    const why = answers.length
+      ? "the page sent the same request at the same time and their redirects differ, so this one's cannot be told apart"
+      : "its answer was not seen, so where it leads is unknown";
+    throw new Error(`not following a redirect from ${bare(url)}: ${why}`);
+  }
+  return { ...answers[0]!, body: "", url, location: answers[0]!.headers.location };
 }
 
 /** A page on `origin` to fetch from: its root, or a blank stand-in when the root redirects elsewhere (api.* to www). */
@@ -974,77 +1000,98 @@ export async function pageFetch(o: {
    * context), wait for it to load and fetch once more. A write is never resent: it may have left.
    */
   retryOnNavigation?: boolean;
+  /**
+   * The request a redirect asks for next, or a throw refusing it. The page takes one hop at a time
+   * so that this is asked about each: left to itself, a page's fetch() follows a redirect to
+   * another origin with every header and the body. Without it no redirect is followed, and the
+   * redirect itself is the answer.
+   */
+  redirect?: (from: Hop, status: number, location: string) => Hop;
 }): Promise<PageFetchResult> {
   const timeoutMs = o.timeoutMs ?? 30_000;
   const release = hold();
   try {
     const ctx = await openBrowser(o);
-    // Pseudo-headers are invalid names for fetch(); forbidden ones (cookie, host, ...) the browser drops itself.
-    const headers = Object.fromEntries(Object.entries(o.headers).filter(([k]) => !k.startsWith(":")));
-    const body = o.method === "GET" || o.method === "HEAD" ? undefined : o.body;
-    const once = async (page: Page) => {
+    const once = async (page: Page, hop: Hop, left: number) => {
+      const redirects: Response[] = [];
+      const onResponse = (res: Response) => void (res.status() >= 300 && res.status() < 400 && redirects.push(res));
+      page.on("response", onResponse);
       const run = page.evaluate(
-        async ({ url, method, headers, body, timeoutMs }) => {
-          const t = performance.now();
+        async ({ url, method, headers, body, left }) => {
           const r = await fetch(url, {
             method,
             headers,
             body,
             credentials: "include",
-            signal: AbortSignal.timeout(timeoutMs),
+            redirect: "manual",
+            signal: AbortSignal.timeout(left),
           });
+          if (r.type === "opaqueredirect") return { opaque: true as const, url: r.url };
           const h: Record<string, string> = {};
           r.headers.forEach((v, k) => {
             h[k] = v;
           });
-          const text = await r.text();
-          return {
-            status: r.status,
-            headers: h,
-            body: text,
-            url: r.url,
-            ms: Math.round(performance.now() - t),
-            redirected: r.redirected,
-          };
+          return { opaque: false as const, status: r.status, headers: h, body: await r.text(), url: r.url };
         },
-        { url: o.url, method: o.method, headers, body, timeoutMs },
+        { ...hop, left },
       );
       // the page itself can hang (a stuck renderer): the budget holds either way
       let timer: NodeJS.Timeout | undefined;
       const late = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`no response within ${timeoutMs} ms`)), timeoutMs + 1000);
+        timer = setTimeout(() => reject(new Error(`no response within ${timeoutMs} ms`)), left + 1000);
       });
       try {
-        return await Promise.race([run, late]);
+        const r = await Promise.race([run, late]);
+        return r.opaque ? await redirectOf(redirects, hop, r.url) : { ...r, location: undefined };
       } catch (e) {
         if (/TimeoutError|timed out|signal timed out/i.test((e as Error).message))
           throw new Error(`no response within ${timeoutMs} ms`);
         throw e;
       } finally {
         clearTimeout(timer);
+        page.off("response", onResponse);
       }
     };
-    const page = await originPage(ctx, o.origin, timeoutMs);
-    try {
-      return await once(page);
-    } catch (e) {
-      if (!o.retryOnNavigation || !/Execution context was destroyed|navigat/i.test((e as Error).message)) throw e;
-      // waitForFunction outlives a context swap (a bare load-state wait can resolve on the old document)
-      await page
-        .waitForFunction(() => document.readyState !== "loading", undefined, { timeout: timeoutMs })
-        .catch(() => {});
-      // it may have landed on another origin (a challenge's redirect): start from a fresh page on ours
-      let here = "";
+    let page = await originPage(ctx, o.origin, timeoutMs);
+    const deadline = Date.now() + timeoutMs;
+    const fetchHop = async (hop: Hop) => {
+      const left = () => Math.max(1, deadline - Date.now());
       try {
-        here = new URL(page.url()).origin;
-      } catch {
-        /* about:blank */
+        return await once(page, hop, left());
+      } catch (e) {
+        if (!o.retryOnNavigation || !/Execution context was destroyed|navigat/i.test((e as Error).message)) throw e;
+        // waitForFunction outlives a context swap (a bare load-state wait can resolve on the old document)
+        await page
+          .waitForFunction(() => document.readyState !== "loading", undefined, { timeout: timeoutMs })
+          .catch(() => {});
+        // it may have landed on another origin (a challenge's redirect): start from a fresh page on ours
+        let here = "";
+        try {
+          here = new URL(page.url()).origin;
+        } catch {
+          /* about:blank */
+        }
+        if (here !== o.origin) {
+          originPages.delete(o.origin);
+          await page.close().catch(() => {});
+          page = await originPage(ctx, o.origin, timeoutMs);
+        }
+        return await once(page, hop, left());
       }
-      if (here !== o.origin) {
-        originPages.delete(o.origin);
-        await page.close().catch(() => {});
-      }
-      return await once(here === o.origin ? page : await originPage(ctx, o.origin, timeoutMs));
+    };
+    // Pseudo-headers are invalid names for fetch(); forbidden ones (cookie, host, ...) the browser drops itself.
+    const headers = Object.fromEntries(Object.entries(o.headers).filter(([k]) => !k.startsWith(":")));
+    const body = o.method === "GET" || o.method === "HEAD" ? undefined : o.body;
+    let hop: Hop = { url: o.url, method: o.method, headers, body };
+    const t0 = performance.now();
+    let redirected = false;
+    // Redirects are taken by hand, as at tier 1 (at most 5): the fifth is the answer.
+    for (let hops = 0; ; hops++) {
+      const { location, ...r } = await fetchHop(hop);
+      redirected ||= !!location;
+      if (!location || !o.redirect || hops >= 5)
+        return { ...r, ms: Math.round(performance.now() - t0), ...(redirected ? { redirected } : {}) };
+      hop = o.redirect(hop, r.status, location);
     }
   } finally {
     release();
