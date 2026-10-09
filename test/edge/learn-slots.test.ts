@@ -691,6 +691,15 @@ test("the text beside a param in its leaf is judged by the leaf's name, as a who
       learn([xhr({ url: `${search}kittens&ctx=kittens|550e8400-e29b-41d4-a716-446655440000` })], [{ q: "kittens" }]),
     /^Error: query:ctx holds a param inside text that is a credential \(an unbroken random-looking run/,
   );
+
+  // every character of the text counts, a NUL the value carries included: nine here, not the seven around them
+  assert.throws(
+    () => learn([post(JSON.stringify({ q: "kittens", token: "kittens.aB\u0000cD\u0000eF" }))], [{ q: "kittens" }]),
+    /^Error: body > json:\/token holds a param inside text that is a credential \(by the leaf's name, token\)/,
+  );
+  // control: seven characters, NULs counted, are under the rule's eight
+  const short = learn([post(JSON.stringify({ q: "kittens", token: "kittens.a\u0000c\u0000eF" }))], [{ q: "kittens" }]);
+  assert.equal(short.operation.slots.at(-1)!.template, "{q}.a\u0000c\u0000eF");
 });
 
 test("structured text beside a param is no credential, whatever the leaf is called", () => {
