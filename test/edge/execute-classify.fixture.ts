@@ -39,7 +39,8 @@ export async function startFixture(): Promise<Fixture> {
 
   const other = createServer(async (req, res) => {
     otherHits.push({ method: req.method!, url: req.url!, headers: req.headers, body: await readBody(req) });
-    json(res, { landed: true });
+    // a check that a page on the first origin may read, after a redirect sent it here
+    json(res, { landed: true }, 200, req.url === "/answer" ? { "access-control-allow-origin": "*" } : {});
   });
   await new Promise<void>((r) => other.listen(0, "localhost", r));
   const otherBase = `http://localhost:${(other.address() as AddressInfo).port}`;

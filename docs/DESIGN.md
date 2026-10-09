@@ -195,11 +195,12 @@ has no network id, which is what a document sends as it unloads (a pagehide beac
 fetch, an image ping) and a deferred `fetchLater()`. So each guarded page also has a DevTools
 session of the run's own, where the same guard decides those; a hop is judged at its own address
 with the resource type of the request that was redirected, and is told by its network id (Chrome
-marks a cross-origin fetch's hop with no `redirectedRequestId`). One exception, for reads: a hop
-of a chain that started with the op's own unsafe request is the op's own as long as it stays on
-that origin (a signed read the server checks at another path with a 307). Any other hop (an asset,
-a request let through for another reason, any hop to another origin) is judged at its address, so
-a stylesheet sent on to a write is still aborted. Not covered: a frame on another site. It is a
+marks a cross-origin fetch's hop with no `redirectedRequestId`). One exception, for reads: every hop
+of a chain that started with the op's own unsafe request is the op's own, on any origin, as Chrome
+would follow it (a signed read the server checks elsewhere with a 307). The hops of any other chain
+(an asset, a request let through for another reason) are judged at their address, so a stylesheet
+sent on to a write is still aborted. Not covered: the op's own read sent on by a 307 to a write
+endpoint, which passes as the read did before hops were judged. Not covered: a frame on another site. It is a
 DevTools target of its own: its redirect hops would need a session on the frame, and that target is
 gone before the frame's document unloads, so what the frame sends as it unloads
 is seen by no session, one attached to the frame included (tried); what it sends while the page is
