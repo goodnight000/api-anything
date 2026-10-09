@@ -628,19 +628,41 @@ async function cmdMcp({ v }: Parsed): Promise<number> {
   return -1; // keep serving
 }
 
-const COMMANDS: Record<string, (p: Parsed) => number | Promise<number>> = {
-  login: cmdLogin,
-  logout: cmdLogout,
-  capture: cmdCapture,
-  inspect: cmdInspect,
-  add: cmdAdd,
-  call: cmdCall,
-  verify: cmdVerify,
-  sites: cmdSites,
-  ops: cmdOps,
-  heal: cmdHeal,
-  export: cmdExport,
-  mcp: cmdMcp,
+type Flag = keyof typeof OPTIONS;
+/** Each command and the flags it takes: run() refuses any other, so none is silently ignored. */
+const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; flags: Flag[] }> = {
+  login: { run: cmdLogin, flags: ["profile", "window", "cookies"] },
+  logout: { run: cmdLogout, flags: [] },
+  capture: { run: cmdCapture, flags: ["steps", "soft-from", "example", "write", "limit", "outline"] },
+  inspect: { run: cmdInspect, flags: ["path", "html", "embedded", "outline", "example"] },
+  add: {
+    run: cmdAdd,
+    flags: [
+      "trigger",
+      "example",
+      "example2",
+      "steps",
+      "soft-from",
+      "match",
+      "from",
+      "pick-request",
+      "from2",
+      "extract",
+      "pick",
+      "html",
+      "embedded",
+      "public",
+      "write",
+      "description",
+    ],
+  },
+  call: { run: cmdCall, flags: ["json", "allow-writes", "max-tier", "dry"] },
+  verify: { run: cmdVerify, flags: [] },
+  sites: { run: cmdSites, flags: [] },
+  ops: { run: cmdOps, flags: [] },
+  heal: { run: cmdHeal, flags: [] },
+  export: { run: cmdExport, flags: ["out", "keep-examples", "force"] },
+  mcp: { run: cmdMcp, flags: ["allow-writes"] },
 };
 
 async function run(argv: string[]): Promise<number> {
@@ -660,9 +682,14 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${HELP[cmd]}\n`);
     return 0;
   }
-  const steps = json(v.steps, z.array(TriggerStepSchema), "steps");
   // A name HELP only inherits (`toString`) gets past the check above; it has always exited 0 in silence.
-  return Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd]({ v, pos, steps }) : 0;
+  if (!Object.hasOwn(COMMANDS, cmd)) return 0;
+  const c = COMMANDS[cmd]!;
+  const extra = Object.keys(v).filter((k) => !c.flags.includes(k as Flag));
+  if (extra.length)
+    throw new Fail(`${cmd} does not take --${extra.join(", --")}`, `api-anything ${cmd} --help lists its flags`);
+  const steps = json(v.steps, z.array(TriggerStepSchema), "steps");
+  return c.run({ v, pos, steps });
 }
 
 try {
