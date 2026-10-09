@@ -13,6 +13,8 @@ export interface EdgeFixture {
   calls: string[];
   /** text frames received over /ws (each one a message the page sent: a write over a WebSocket) */
   wsMessages(): number;
+  /** answer the /held-vote requests that have been waiting */
+  release(): void;
   close(): Promise<void>;
 }
 
@@ -33,6 +35,7 @@ export const TOKEN = "q2Fz/9kLmT0vX+Yb7NcW1pRe/Hs3JuQa8Df+Lg6ZoVy4=";
 export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Promise<EdgeFixture> {
   const calls: string[] = [];
   const hanging = new Set<ServerResponse>();
+  const held: ServerResponse[] = [];
   let port = 0;
   const server = createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://x");
@@ -125,10 +128,44 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
             `<button id="script" onclick="const s=document.createElement('script');s.src='/api/vote?how=script';document.body.appendChild(s)">jsonp</button>` +
             `<button id="iframe" onclick="const f=document.createElement('iframe');f.src='/api/vote?how=iframe';document.body.appendChild(f)">frame</button>` +
             `<button id="post" onclick="fetch('/api/vote?how=post',{method:'POST',body:'up'})">post</button>` +
+            // the write is a new tab's first navigation
+            `<a id="newtab" target="_blank" href="/api/vote?how=newtab">vote in a tab</a>` +
+            `<button id="open" onclick="window.open('/api/vote?how=open')">open</button>` +
+            // an asset load the write guard allows during the steps: the server seeing it shows they have started
+            `<button id="css" onclick="const l=document.createElement('link');l.rel='stylesheet';l.href='/acting.css';document.head.appendChild(l)">css</button>` +
             // a client that sends a failed request again (axios-retry, Apollo's RetryLink), here with no backoff
             `<button id="retry" onclick="const go=()=>fetch('/api/vote?how=retry').catch(go);go()">retry</button>` +
             dataFetch(name),
         );
+      case "/leave-page": {
+        // writes a page sends as it goes away, the way analytics and autosave do
+        const vote = JSON.stringify(`/api/vote?how=${u.searchParams.get("how")}`);
+        const send: Record<string, string> = {
+          beacon: `addEventListener("pagehide",()=>navigator.sendBeacon(${vote},"up"))`,
+          keepalive: `addEventListener("pagehide",()=>fetch(${vote},{method:"POST",body:"up",keepalive:true}))`,
+          hidden: `document.addEventListener("visibilitychange",()=>navigator.sendBeacon(${vote},"up"))`,
+          img: `addEventListener("pagehide",()=>{new Image().src=${vote}})`,
+          // a handler that is slow to get to it
+          slow: `addEventListener("pagehide",()=>{const t=Date.now();while(Date.now()-t<400);navigator.sendBeacon(${vote},"up")})`,
+          // no handler at all: the browser itself sends it when the document goes; the fetch after it says it registered
+          later: `fetchLater(${vote},{method:"POST",body:"up"});fetch("/api/data?name=registered")`,
+        };
+        return html(res, `<script>${send[u.searchParams.get("how") ?? ""] ?? ""}</script>${dataFetch(name)}`);
+      }
+      case "/late-tab-page":
+        // opens a tab whose document is slow: the tab has no page yet when the run that opened it ends
+        return html(res, `<script>window.open("/held-vote")</script>${dataFetch(name)}`);
+      case "/stuck-page":
+        // the renderer hangs for good shortly after load: nothing run in the page ever answers again
+        return html(res, `${dataFetch(name)}<script>setTimeout(()=>{for(;;){}},300)</script>`);
+      case "/chain-page":
+        // opens a tab that opens the slow tab and closes itself: the slow tab's opener is gone when its page comes
+        return html(res, `<script>window.open("/chain-tab")</script>${dataFetch(name)}`);
+      case "/chain-tab":
+        return html(res, `<script>window.open("/held-vote");setTimeout(()=>window.close(),200)</script>`);
+      case "/held-vote":
+        held.push(res); // answered by release(), with a page that writes
+        return;
       case "/api/vote":
         res.writeHead(200, { "content-type": "text/plain" });
         return res.end("voted");
@@ -181,8 +218,12 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
     url: `http://127.0.0.1:${port}`,
     calls,
     wsMessages: () => wsMessages,
+    release() {
+      for (const res of held.splice(0))
+        html(res, `<script>fetch("/api/vote?how=latetab",{method:"POST",body:"up"})</script>`);
+    },
     close() {
-      for (const r of hanging) r.destroy();
+      for (const r of [...hanging, ...held]) r.destroy();
       for (const s of sockets) s.destroy();
       server.closeAllConnections();
       return new Promise((resolve) => server.close(() => resolve()));
