@@ -823,9 +823,11 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
       if (req.url === "/")
         return void res
           .writeHead(200, { "content-type": "text/html" })
-          .end('<!doctype html><title>twin</title><script>fetch("/twin",{method:"POST",body:"q"})</script>');
+          .end(
+            '<!doctype html><title>twin</title><script>fetch("/twin?token=SECRET-query-token-123",{method:"POST",body:"q"})</script>',
+          );
       // a POST: Chrome's cache makes a second GET of one URL wait for the first
-      if (req.url === "/twin") {
+      if (req.url?.startsWith("/twin")) {
         // held until the page's own request and the call's are both in; then each is sent somewhere else
         if (waiting.push(res) === 2) waiting.forEach((w, i) => void w.writeHead(302, { location: `/to-${i}` }).end());
         return;
@@ -836,11 +838,15 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     await new Promise<void>((r) => twin.listen(0, "127.0.0.1", r));
     const base = `http://127.0.0.1:${(twin.address() as AddressInfo).port}`;
     try {
-      const request = { method: "POST", url: `${base}/twin`, headers: {}, body: "q" };
-      saveSite(parseSite({ name: "twin", baseUrl: base, operations: [rd("query", "/twin", { minTier: 2, request })] }));
+      const request = { method: "POST", url: `${base}/twin?token=x`, headers: {}, body: "q" };
+      const slots = [{ ref: "session:token", at: ["query:token"] }];
+      const query = rd("query", "/twin", { minTier: 2, request, slots });
+      saveSite(parseSite({ name: "twin", baseUrl: base, operations: [query] }));
+      saveSession("twin", { cookies: [], values: { token: "SECRET-query-token-123" } });
       const r = await call("twin", "query", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 5000 });
       assert.equal(r.ok, false, JSON.stringify(r));
-      assert.match(r.reason ?? "", /not following a redirect from .*\/twin: .* cannot be told apart/);
+      assert.match(r.reason ?? "", /not following a redirect from http:\/\/127\.0\.0\.1:\d+: .* cannot be told apart/);
+      assert.doesNotMatch(JSON.stringify(r), /SECRET-query-token-123/, "the result carries the session's token");
       assert.ok(!landed.includes("/to-1"), `followed anyway: ${landed}`);
     } finally {
       twin.closeAllConnections();

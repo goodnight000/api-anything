@@ -986,7 +986,8 @@ async function redirectOf(seen: Response[], hop: Hop, url: string) {
     const why = answers.length
       ? "the page sent the same request at the same time and their redirects differ, so this one's cannot be told apart"
       : "its answer was not seen, so where it leads is unknown";
-    throw new Error(`not following a redirect from ${bare(url)}: ${why}`);
+    // the origin only: the address is the filled request's, and can hold a session's value
+    throw new Error(`not following a redirect from ${new URL(url).origin}: ${why}`);
   }
   return { ...answers[0]!, body: "", url, location: answers[0]!.headers.location };
 }
