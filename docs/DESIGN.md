@@ -120,7 +120,9 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Capture also snapshots the
    final page origin's localStorage and sessionStorage; a leaf equal to a stored value (or to a
    string inside a JSON entry, as auth SDKs keep tokens; ≥ 8 chars) becomes a `session:` ref named
-   after the storage key. A key or header named like a credential (its words: token, secret, key,
+   after the storage key. Not under a persisted-query key (`sha256Hash`, `doc_id`, `queryId`): an app
+   that caches its query ids in storage does not make them credentials, whole or inside the leaf, at any
+   length; they stay volatile anchors. A key or header named like a credential (its words: token, secret, key,
    auth, sess(ion), sid, signature, password, credential; "author" is not) with a random-looking
    value (≥ 16 chars, two character classes, ≥ 3 bits/char) is a `session:` ref too, unless the site
    ships that value in a static bundle to every visitor (a public API key): then it stays

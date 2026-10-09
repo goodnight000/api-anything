@@ -108,3 +108,30 @@ test("a name the caller marked public is a constant in every pass", () => {
   assert.equal(r.url, `https://api.site.test/v1/search?q=cats&token=${A}&sv=${B}`);
   assert.deepEqual([r.headers["x-app"], r.headers["x-ctx"]], [SID, `v1:${SID}`]);
 });
+
+/* -------------------------------------------------- 4: cached query hashes */
+
+test("a persisted-query hash the app caches in storage stays a volatile anchor at any length", () => {
+  const hash = "e0f2a1b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f";
+  const extensions = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: hash } });
+  const ex = xhr({
+    url: `https://site.test/graphql?operationName=Search&variables=${encodeURIComponent('{"q":"nasa"}')}&extensions=${encodeURIComponent(extensions)}`,
+  });
+  const stores: Record<string, string>[] = [
+    { "pq:Search": hash },
+    { "apollo-cache": JSON.stringify({ Search: { id: hash } }) },
+  ];
+  for (const storage of stores) {
+    const { operation: op, sessionValues } = learn([ex], [{ q: "nasa" }], { storage });
+    assert.deepEqual(
+      op.slots.filter((s) => s.ref),
+      [],
+    );
+    assert.deepEqual(sessionValues, {});
+    assert.deepEqual(
+      op.volatile.map((v) => [v.at, v.anchor]),
+      [[["query:extensions", "json:/persistedQuery/sha256Hash"], "Search"]],
+    );
+    assert.ok(op.request.url.includes(hash), "the hash stays in the template for the cheap heal to swap");
+  }
+});

@@ -779,14 +779,18 @@ function addRef(refs: Refs, at: Step[], slot: Omit<Slot, "at">, value?: string):
   refs.taken.add(key(at));
 }
 
+/**
+ * An app caching a persisted-query hash in storage does not make the hash a credential: under a
+ * query-id key a stored value is no ref, whole or inside the leaf, and stays a volatile anchor.
+ */
+const cachedHash = (leaf: Leaf, l: Live) => l.value !== undefined && VOLATILE_KEY.test(lastToken(leaf.at));
+
 /** Pass 1: a leaf equal to a live cookie or storage value. */
 function liveRefs(refs: Refs, leaves: Leaf[]): void {
   for (const leaf of leaves) {
     const l = refs.live.get(leaf.value);
     // string leaves only: a ref is filled with a string, which would retype a JSON number
-    if (!l || leaf.type !== "string" || refs.taken.has(key(leaf.at))) continue;
-    // an app caching a persisted-query hash in storage does not make the hash a credential
-    if (l.value !== undefined && VOLATILE_KEY.test(lastToken(leaf.at))) continue;
+    if (!l || leaf.type !== "string" || refs.taken.has(key(leaf.at)) || cachedHash(leaf, l)) continue;
     addRef(refs, leaf.at, { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}) }, l.value);
   }
 }
@@ -918,8 +922,9 @@ function embeddedRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
     const own = refs.taken.has(key(leaf.at))
       ? refs.slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(leaf.at))
       : undefined;
-    if (own) request = holeRefs(refs, own, long, request);
-    else if (!refs.taken.has(key(leaf.at))) templatedRef(refs, leaf, long);
+    const held = long.filter(([, l]) => !cachedHash(leaf, l));
+    if (own) request = holeRefs(refs, own, held, request);
+    else if (!refs.taken.has(key(leaf.at))) templatedRef(refs, leaf, held);
   }
   return request;
 }
