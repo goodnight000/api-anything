@@ -305,13 +305,12 @@ const within = <T>(p: Promise<T>, otherwise: T): Promise<T> => {
  * Who opened each tab of a browser, kept on a DevTools session of the browser itself. That session
  * outlives every page, so a tab can be asked about, and closed, after the tab that opened it is
  * gone; and the record is kept as tabs appear, since the browser forgets who opened a tab once the
- * opener is closed (as does Playwright's opener()).
+ * opener is closed (as does Playwright's opener()). It holds open tabs only: when one closes, the
+ * tabs it opened pass to the tab that opened it, so ancestry survives without the dead.
  */
 interface Tabs {
-  /** each tab the browser reported, with the tab that opened it */
+  /** each open tab that another tab opened, with that tab (or, once it closed, the one that opened it) */
   openerOf: Map<string, string>;
-  /** the tabs that have closed */
-  gone: Set<string>;
   /** called whenever a tab closes */
   watchers: Set<() => void>;
   /** resolves with every tab the browser has now in the record */
@@ -320,7 +319,7 @@ interface Tabs {
   close(targetId: string): Promise<unknown>;
 }
 const tabRecords = new WeakMap<BrowserContext, Promise<Tabs>>();
-function tabsOf(ctx: BrowserContext): Promise<Tabs> {
+export function tabsOf(ctx: BrowserContext): Promise<Tabs> {
   let record = tabRecords.get(ctx);
   if (!record) {
     record = (async () => {
@@ -329,7 +328,6 @@ function tabsOf(ctx: BrowserContext): Promise<Tabs> {
       const cdp = await browser.newBrowserCDPSession();
       const tabs: Tabs = {
         openerOf: new Map(),
-        gone: new Set(),
         watchers: new Set(),
         sync: async () => (await cdp.send("Target.getTargets")).targetInfos.forEach(note),
         close: (targetId) => cdp.send("Target.closeTarget", { targetId }),
@@ -337,8 +335,10 @@ function tabsOf(ctx: BrowserContext): Promise<Tabs> {
       const note = (t: { targetId: string; openerId?: string }) =>
         void (t.openerId && tabs.openerOf.set(t.targetId, t.openerId));
       cdp.on("Target.targetCreated", (e) => note(e.targetInfo));
-      cdp.on("Target.targetDestroyed", (e) => {
-        tabs.gone.add(e.targetId);
+      cdp.on("Target.targetDestroyed", ({ targetId }) => {
+        const opener = tabs.openerOf.get(targetId);
+        tabs.openerOf.delete(targetId);
+        if (opener) for (const [id, by] of tabs.openerOf) if (by === targetId) tabs.openerOf.set(id, opener);
         for (const changed of [...tabs.watchers]) changed();
       });
       await cdp.send("Target.setDiscoverTargets", { discover: true });
@@ -536,7 +536,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       n = kin.size;
       for (const [id, opener] of tabs.openerOf) if (kin.has(opener)) kin.add(id);
     }
-    return [...kin].filter((id) => !held.has(id) && !tabs.gone.has(id));
+    return [...kin].filter((id) => !held.has(id));
   };
   /**
    * Whether a tab that has no page yet can be this run's, with the record brought up to date first

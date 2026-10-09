@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { chromeAvailable, closeBrowser, openBrowser, pageFetch, runTrigger } from "../../src/browser.js";
+import { chromeAvailable, closeBrowser, openBrowser, pageFetch, runTrigger, tabsOf } from "../../src/browser.js";
 import { call } from "../../src/execute.js";
 import { addOperation, capturePage, loadCapture, profileDir } from "../../src/heal.js";
 import { createServer } from "../../src/mcp.js";
@@ -620,6 +620,16 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
       await run;
       await other.close().catch(() => {});
     }
+  });
+
+  test("the record of who opened which tab keeps nothing of tabs that have closed", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    for (let i = 0; i < 3; i++)
+      await capturePage({ url: `${fx.url}/vote-page`, steps: [{ action: "click", selector: "#newtab" }], write: true });
+    // the record lives as long as the browser does: a long-lived server would grow it with every tab
+    const tabs = await tabsOf(await openBrowser({ profileDir: profileDir() }));
+    assert.ok(await until(() => tabs.openerOf.size === 0, 2000), `${tabs.openerOf.size} closed tabs still on record`);
+    assert.deepEqual(Object.keys(tabs).sort(), ["close", "openerOf", "sync", "watchers"], "and no other history");
   });
 
   for (const [how, by] of [
