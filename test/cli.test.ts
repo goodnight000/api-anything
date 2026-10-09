@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { chromeAvailable } from "../src/browser.js";
 import { type Fixture, startFixture } from "./fixture/server.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-cli-"));
@@ -109,5 +110,22 @@ describe("flags and command names", () => {
       JSON.parse(typed.stdout).error,
       "--steps: Invalid input: expected string, received number at [0].selector",
     );
+  });
+});
+
+describe("capture's next hint", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
+  const next = async (path: string, ...flags: string[]) =>
+    JSON.parse((await cli("capture", `${fx.url}${path}`, ...flags)).stdout).next as string;
+
+  test("a sign-in page or an HTTP error is not offered as something to learn from", async () => {
+    const signIn = /^the page is a sign-in page.* ask the user to run api-anything login <site>, then capture again$/;
+    assert.match(await next("/private"), signIn, "the wall served in place, as 200 HTML");
+    assert.match(await next("/account"), signIn, "the wall served by redirect");
+    assert.match(await next("/no/such/page"), /^the page answered HTTP 404.* check the URL/);
+  });
+
+  test("a login box above public content does not make the page a sign-in page", async () => {
+    assert.match(await next("/forum", "--example", "name=alice"), /^the best candidate is the HTML page/);
+    assert.match(await next("/forum/alice", "--example", "name=alice"), /^api-anything add <site> <op> --from/);
   });
 });

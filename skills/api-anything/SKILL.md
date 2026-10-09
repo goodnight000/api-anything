@@ -96,7 +96,8 @@ don't capture pages the user didn't ask for.
    the request whose URL or operationName matches the data you want. Add `--outline` to get a
    summary of each top candidate's response (see above) instead of inspecting them one by one. `kind` is the resource type:
    `document` is the page itself. If the output has `blocked`, the site served a bot challenge:
-   follow `next` (the user logs in and clears it) instead of picking a request.
+   follow `next` (the user logs in and clears it) instead of picking a request. Do the same when
+   `next` says the page is a sign-in page (the user logs in) or answered an HTTP error (check the URL).
    - `api-anything inspect <captureId> <id> [--path a.b]` prints a candidate's response, with no
      browser. JSON inside strings (Google's batchexecute payloads, a form's `f.req`) is shown
      decoded.

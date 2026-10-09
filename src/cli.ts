@@ -4,10 +4,18 @@ import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { chromeAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
-import { botWall } from "./classify.js";
+import { botWall, judge } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, innerJson, returnedFields, splitPick } from "./extract.js";
-import { addOperation, capturePage, loadCapture, PROFILE_HINT, profileDir } from "./heal.js";
+import {
+  addOperation,
+  type CaptureFile,
+  capturePage,
+  loadCapture,
+  loginWall,
+  PROFILE_HINT,
+  profileDir,
+} from "./heal.js";
 import { buildRequest } from "./http.js";
 import { AmbiguousProfile } from "./import.js";
 import { capturePages, pageUrls, rankCandidates } from "./learn.js";
@@ -15,7 +23,7 @@ import { cookieNames, importSession, logout, resolveLoginTarget } from "./login.
 import { serveStdio, VERSION } from "./mcp.js";
 import { type Outline, outline } from "./outline.js";
 import { loadSession, loggedIn, saveSession, sessionFile, withLock } from "./session.js";
-import { HtmlRecipeSchema, MatchSchema, type Operation, TriggerStepSchema } from "./spec.js";
+import { HtmlRecipeSchema, MatchSchema, type Operation, OperationSchema, TriggerStepSchema } from "./spec.js";
 import { exportSite, listSites, loadSite, siteNotes } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
 
@@ -298,6 +306,36 @@ function positive(text: string | undefined, flag: string): number | undefined {
   return Number(text);
 }
 
+/**
+ * Why the page a capture ended on is not one to learn from: a sign-in page, or an HTTP error.
+ * A public page can carry a login box above its content, so the classifier is asked about the
+ * page only when it is the best candidate and shows none of the example values.
+ */
+function deadEnd(c: CaptureFile, url: string, top: Exchange | undefined, values: string[]): string | undefined {
+  const login = "ask the user to run api-anything login <site>, then capture again";
+  const redirected = loginWall(c, url);
+  if (redirected) return `the page is a sign-in page (${redirected}): ${login}`;
+  const pages = capturePages(c).map((u) => u.split("#")[0]);
+  // the main frame's last document: a widget's iframe is a document too
+  const page = c.exchanges
+    .filter((e) => e.resourceType === "document" && e.response && pages.includes(e.request.url))
+    .at(-1);
+  if (!page?.response) return undefined;
+  const { status, headers, body = "" } = page.response;
+  // what the classifier makes of a page nothing was learned from yet: a read whose recipe finds nothing
+  const unlearned = OperationSchema.parse({
+    name: "page",
+    readOnly: true,
+    request: { method: "GET", url },
+    trigger: { url },
+    response: { format: "embedded" },
+  });
+  const shown = values.some((x) => x.length >= 3 && body.toLowerCase().includes(x.toLowerCase()));
+  if (page === top && !shown && judge(unlearned, { status, headers, body, url: c.finalUrl }).class === "auth")
+    return `the page is a sign-in page: ${login}`;
+  return status >= 400 ? `the page answered HTTP ${status}: check the URL, then capture again` : undefined;
+}
+
 async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
   const url = pos[0];
   if (!url) throw new Fail("missing <url>", "api-anything capture <url>");
@@ -343,9 +381,10 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     ...(wall ? { blocked: wall } : {}),
     next: wall
       ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> (clear the challenge in the window), then capture again`
-      : html
-        ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
-        : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`,
+      : (deadEnd(c, url, topEx, values) ??
+        (html
+          ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
+          : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`)),
   });
   return 0;
 }
