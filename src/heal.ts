@@ -109,15 +109,23 @@ export const writeGuard = (m?: Match, o: { url?: string; args?: Args } = {}) => 
 
 /**
  * A read's trigger must not write either: a shared spec that says "read" but clicks a button that
- * POSTs. Once the steps run, unsafe requests other than the op's own are aborted.
+ * POSTs. Once the steps run, unsafe requests other than the op's own are aborted. A hop of a
+ * redirect (`via`: where its chain started) is the op's own too when the chain started with the
+ * op's own unsafe request and the hop stays on that origin (a signed read the server checks at
+ * another path with a 307). Any other hop is judged by its own address: an asset, a request let
+ * through for another reason, or one sent to another origin.
  */
-const readGuard =
-  (m: Match) =>
-  (e: Exchange, acting: boolean): boolean =>
+const readGuard = (m: Match) => {
+  const own = (e: Exchange) =>
+    !SAFE_METHODS.has(e.request.method.toUpperCase()) && Object.keys(m).length > 0 && matches(m, e.request);
+  const sameOrigin = (a: Exchange, b: Exchange) => new URL(a.request.url).origin === new URL(b.request.url).origin;
+  return (e: Exchange, acting: boolean, via?: Exchange): boolean =>
     acting &&
     e.resourceType !== "websocket" &&
     !SAFE_METHODS.has(e.request.method.toUpperCase()) &&
-    !(Object.keys(m).length > 0 && matches(m, e.request));
+    !own(e) &&
+    !(via && own(via) && sameOrigin(e, via));
+};
 
 /** Values of the op's session: refs as the browser just sent them. */
 function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {

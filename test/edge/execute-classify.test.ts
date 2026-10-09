@@ -14,7 +14,7 @@ import { addCookiesToProfile, chromeAvailable, closeBrowser } from "../../src/br
 import { classify, judge, type Observed } from "../../src/classify.js";
 import { call } from "../../src/execute.js";
 import { capOutput } from "../../src/extract.js";
-import { profileDir } from "../../src/heal.js";
+import { profileDir, runOpTrigger } from "../../src/heal.js";
 import { importSession } from "../../src/login.js";
 import { cookieHeaderFor, cookieValue, loadSession, saveSession } from "../../src/session.js";
 import { type Operation, OperationSchema, parseSite } from "../../src/spec.js";
@@ -738,6 +738,49 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     } finally {
       delete process.env.API_ANYTHING_BROWSER_ROOTS;
     }
+  });
+
+  test("a tier-3 read's own request may be sent on by a same-origin 307; anything else it reaches is judged by its address", async () => {
+    site("signed", {
+      ...rd("q", "/read", { minTier: 3, trigger: { url: `${fx.base}/signed-page` } }),
+      request: { method: "POST", url: `${fx.base}/read`, headers: {}, body: "final" },
+      match: { method: "POST", path: "/read" },
+    });
+    fx.hits.length = 0;
+    const r = await call("signed", "q", {}, { maxTier: 3, minIntervalMs: 0, timeoutMs: 5000 });
+    assert.deepEqual(
+      fx.hits.filter((h) => h.method === "POST").map((h) => `${h.url} ${h.body}`),
+      ["/read initial", "/answer initial", "/read final"],
+      JSON.stringify(r),
+    );
+    assert.equal(r.tier, 3, JSON.stringify(r));
+    assert.deepEqual(r.data, [{ name: "alice" }]);
+
+    // sent on to another origin: judged at its own address there, and stopped (the trigger run alone:
+    // a heal's tier-2 replay follows redirects by itself on this branch)
+    const far = parseSite({
+      name: "signedfar",
+      baseUrl: fx.base,
+      operations: [
+        {
+          ...rd("q", "/read?far=1", { minTier: 3, trigger: { url: `${fx.base}/signed-page?far=1` } }),
+          request: { method: "POST", url: `${fx.base}/read?far=1`, headers: {}, body: "final" },
+          match: { method: "POST", path: "/read" },
+        },
+      ],
+    });
+    saveSite(far);
+    fx.otherHits.length = 0;
+    const run = await runOpTrigger("signedfar", far.operations[0]!, {});
+    assert.deepEqual(
+      fx.otherHits.filter((h) => h.method === "POST").map((h) => h.url),
+      [],
+      "the read's own request was carried to another origin",
+    );
+    assert.deepEqual(
+      run.capture.exchanges.filter((e) => e.aborted).map((e) => e.request.url),
+      [`${fx.other}/answer`],
+    );
   });
 
   test("auth at tier 3 re-imports the browser session into the profile and retries once", async () => {

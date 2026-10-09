@@ -470,7 +470,7 @@ export function tabsOf(ctx: BrowserContext): Promise<Tabs> {
  * any paused request that has no network id, which is what a document sends as it unloads (a
  * pagehide beacon, a keepalive fetch, an image ping) and a deferred fetchLater(). `drop` is asked
  * about each request, and told whether a route will see it too; a hop keeps the resource type of
- * the request that was redirected.
+ * the request that was redirected, and `drop` is given the request that started its chain (`via`).
  * ponytail: a frame on another site is a target of its own. Its redirect hops would need a tap on
  * the frame; what it sends as it unloads is seen by no session, its own included (tried: the
  * target is gone before the document unloads), only by interception on the browser target, for
@@ -482,9 +482,15 @@ interface Tap {
   /** resolves once every request paused so far has its answer */
   answered(): Promise<void>;
 }
-async function tap(ctx: BrowserContext, page: Page, drop: (e: Exchange, routed: boolean) => boolean): Promise<Tap> {
+async function tap(
+  ctx: BrowserContext,
+  page: Page,
+  drop: (e: Exchange, routed: boolean, via?: Exchange) => boolean,
+): Promise<Tap> {
   const cdp = await ctx.newCDPSession(page);
   const answers = new Set<Promise<unknown>>();
+  /** the request each chain of redirects started from, by network id */
+  const chains = new Map<string, Exchange>();
   cdp.on("Fetch.requestPaused", (e) => {
     const ex: Exchange = {
       id: 0,
@@ -497,7 +503,11 @@ async function tap(ctx: BrowserContext, page: Page, drop: (e: Exchange, routed: 
       },
     };
     const { requestId } = e;
-    const stop = drop(ex, !!e.networkId && !e.redirectedRequestId);
+    // A hop goes on under its request's network id. Chrome marks it with redirectedRequestId, but
+    // not a cross-origin fetch's: the id seen before is what tells it.
+    const via = e.networkId ? chains.get(e.networkId) : undefined;
+    if (e.networkId && !via) chains.set(e.networkId, ex);
+    const stop = drop(ex, !!e.networkId && !via && !e.redirectedRequestId, via);
     // a shared worker's script waits until the worker is guarded (see workersAttaching)
     const answer = Promise.all(workersAttaching)
       .then(() =>
@@ -533,9 +543,9 @@ export interface TriggerOptions {
    * recorded with aborted:true; `acting` is true once the page has loaded and the steps run, and
    * false again while the page is a bot challenge's interstitial (its own verify POSTs must go
    * through, or it never reloads). A WebSocket message the page sends is asked as resourceType
-   * "websocket", method "SEND".
+   * "websocket", method "SEND". For a hop of a redirect, `via` is the request its chain started from.
    */
-  intercept?: (e: Exchange, acting: boolean) => boolean;
+  intercept?: (e: Exchange, acting: boolean, via?: Exchange) => boolean;
   /**
    * the op's own request: the run waits for one to answer (up to the budget), then ends after a
    * short settle instead of waiting for the whole page to go quiet
@@ -623,12 +633,12 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const held = new Set<string>();
   const cover = (p: Page) => {
     if (!intercept || taps.has(p)) return;
-    const drop = (ex: Exchange, routed: boolean) => {
+    const drop = (ex: Exchange, routed: boolean, via?: Exchange) => {
       // What a route will see is the route's to judge, until the run ends: then this is the last word.
       if (routed && !sealed) return false;
       // Once sealed everything is stopped, but only what the guard itself stops joins the capture:
       // a write a page sends as it leaves can be learned, the rest of a closing page's traffic is noise.
-      if (!intercept(ex, acting)) return sealed;
+      if (!intercept(ex, acting, via)) return sealed;
       exchanges.push({ ...ex, id: exchanges.length + 1, aborted: true });
       return true;
     };

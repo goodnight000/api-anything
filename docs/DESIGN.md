@@ -194,8 +194,12 @@ allowed, answered with a redirect to the write, would be sent on to it) and any 
 has no network id, which is what a document sends as it unloads (a pagehide beacon, a keepalive
 fetch, an image ping) and a deferred `fetchLater()`. So each guarded page also has a DevTools
 session of the run's own, where the same guard decides those; a hop is judged at its own address
-with the resource type of the request that was redirected, so a read's unsafe request that is
-redirected away from the op's `match` is aborted. Not covered: a frame on another site. It is a
+with the resource type of the request that was redirected, and is told by its network id (Chrome
+marks a cross-origin fetch's hop with no `redirectedRequestId`). One exception, for reads: a hop
+of a chain that started with the op's own unsafe request is the op's own as long as it stays on
+that origin (a signed read the server checks at another path with a 307). Any other hop (an asset,
+a request let through for another reason, any hop to another origin) is judged at its address, so
+a stylesheet sent on to a write is still aborted. Not covered: a frame on another site. It is a
 DevTools target of its own: its redirect hops would need a session on the frame, and that target is
 gone before the frame's document unloads, so what the frame sends as it unloads
 is seen by no session, one attached to the frame included (tried); what it sends while the page is
