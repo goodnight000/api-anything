@@ -397,7 +397,12 @@ Heal strategies, cheapest first:
   it, a log message). A token in the anchor's own group beats a nearer one outside it: between them
   no bracket closes the group and no `;` ends a statement at that level (Meta's previous module
   ends in `}),null);`, while its own `"use strict";` is nested); a tie is no answer. For a write, whose validation
-  is a real send, only a token that is the single candidate is tried.
+  is a real send, only a token that is the single candidate is tried. And for a write, the pages the
+  rescan fetches must not be the write: a trigger that is the write's own address (a GET vote link)
+  would be performed by a plain fetch, before any validation and with nothing to intercept it. So
+  redirects are taken by hand, and no address matching the op's `match` as a GET (or, for an op with
+  no `match`, its template's own address) is fetched, at first or at any hop. The rescan then finds
+  nothing and the recapture, which intercepts, does the work.
 - **recapture**: run the trigger in the browser, match, re-learn, and validate by replaying at the op's
   tier (at most 2: at tier 3 the site's own request would answer, validating nothing) with the current
   args (classifier must say `ok` and the extract must resolve). It learns from the call's args with

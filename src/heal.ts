@@ -843,22 +843,38 @@ function nearestToken(texts: string[], v: Volatile, strict = false): string | un
   return tied.size === 1 ? [...tied][0] : undefined;
 }
 
+/**
+ * A page's text and where it ended up, for the rescan. Redirects are taken by hand (at most 5) so
+ * that `off` is asked about every address before it is fetched: one it rules out is not fetched,
+ * and the text is empty.
+ */
 async function fetchText(
   url: string,
-  headers: Record<string, string>,
+  headers: (url: string) => Record<string, string>,
   fetchImpl: typeof fetch,
+  off: (url: string) => boolean,
 ): Promise<{ text: string; url: string }> {
   try {
-    const r = await fetchImpl(url, { headers, redirect: "follow", signal: AbortSignal.timeout(15_000) });
-    return { text: r.ok ? await r.text() : "", url: r.url || url };
+    const signal = AbortSignal.timeout(15_000);
+    for (let hops = 0; hops <= 5 && !off(url); hops++) {
+      const r = await fetchImpl(url, { headers: headers(url), redirect: "manual", signal });
+      const location = r.status >= 300 && r.status < 400 ? r.headers.get("location") : null;
+      if (!location) return { text: r.ok ? await r.text() : "", url };
+      await r.body?.cancel();
+      url = new URL(location, url).href;
+    }
   } catch {
-    return { text: "", url };
+    /* unreachable, or too slow: no clues from it */
   }
+  return { text: "", url };
 }
 
 /**
  * Browserless heal: fetch the trigger document and the scripts it references, and swap in the
  * token of each volatile's shape nearest its anchor. Undefined when nothing new was found.
+ * For a write, no address that is the write itself is fetched, at first or after a redirect (a GET
+ * vote link is its own trigger): a plain fetch would perform it, with nothing to intercept it. The
+ * rescan then finds nothing, and the recapture, which intercepts, does the work.
  */
 export async function rescan(
   site: string,
@@ -877,7 +893,12 @@ export async function rescan(
     if (cookie) h.cookie = cookie;
     return h;
   };
-  const { text: doc, url: docUrl } = await fetchText(url, headers(url), fetchImpl);
+  // An op with no `match` is told by its template's own address.
+  const own = Object.keys(op.match).length
+    ? op.match
+    : { method: op.request.method, host: new URL(op.request.url).hostname, path: new URL(op.request.url).pathname };
+  const theWrite = (u: string) => !op.readOnly && matches(own, { method: "GET", url: u, headers: {} });
+  const { text: doc, url: docUrl } = await fetchText(url, headers, fetchImpl, theWrite);
   if (!doc) return undefined;
   // relative to the document's final URL: a redirect (a locale prefix) moves where "../static" points
   const refs = [
@@ -886,7 +907,7 @@ export async function rescan(
   ].map((m) => new URL(m[1]!, docUrl).href);
   // ponytail: only scripts the document references directly; ids in lazily loaded chunks need recapture.
   const scripts = await Promise.all(
-    [...new Set(refs)].slice(0, 40).map(async (s) => (await fetchText(s, headers(s), fetchImpl)).text),
+    [...new Set(refs)].slice(0, 40).map(async (s) => (await fetchText(s, headers, fetchImpl, theWrite)).text),
   );
   const texts = [doc, ...scripts];
 
