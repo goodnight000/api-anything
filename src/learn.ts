@@ -1046,61 +1046,25 @@ function embeddedRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
   return request;
 }
 
-/** A template in order: each hole by its name, and the literal text between holes with its braces unescaped. */
-function templateParts(template: string): ["hole" | "text", string][] {
-  const parts: ["hole" | "text", string][] = [];
-  for (const p of template.split(/(\{\{|\}\}|\{[^{}]+\})/)) {
-    if (!p) continue;
-    const hole = p.length > 2 && p.startsWith("{") && p.endsWith("}");
-    const last = parts.at(-1);
-    if (hole) parts.push(["hole", p.slice(1, -1)]);
-    else if (last?.[0] === "text") last[1] += p === "{{" ? "{" : p === "}}" ? "}" : p;
-    else parts.push(["text", p === "{{" ? "{" : p === "}}" ? "}" : p]);
-  }
-  return parts;
-}
-
 /**
- * Pass 6, in a param's templated leaf: the text left around the holes is judged by the leaf's name
- * the way a whole leaf is (isCredential): `x-csrf-token: kittens.<token>` keeps a credential beside
- * the arg. That text becomes a `{session:x}` hole named by its position, when it is one piece, the
- * leaf has no escape of its own, and a character stands between it and each hole beside it (which
- * stays literal, so a later capture can tell where the value ends). Otherwise the learn is refused.
- * Returns the request with the value taken out of the leaf.
+ * In a param's templated leaf, the text left around the holes is judged by the leaf's name the way
+ * a whole leaf is (isCredential): `x-csrf-token: kittens.<token>` keeps a credential beside the
+ * arg. It cannot be a reference: no later capture could tell where the arg ends and the credential
+ * begins, so a refresh would store the wrong text. The learn is refused instead.
  */
-function leftoverRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
+function refuseLeftoverText(slots: Slot[], leaves: Leaf[]): void {
   for (const { at } of leaves) {
-    const own = refs.slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(at));
+    const own = slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(at));
     if (!own) continue;
-    const parts = templateParts(own.template!);
-    const texts = parts.flatMap(([kind], i) => (kind === "text" ? [i] : []));
+    const text = own.template!.replace(/\{\{|\}\}|\{[^{}]+\}/g, (m) => (m === "{{" ? "{" : m === "}}" ? "}" : ""));
     const name = leafName(at);
-    if (!isCredential(name, texts.map((i) => parts[i]![1]).join(""))) continue;
-    const i = texts[0]!;
-    const text = parts[i]![1];
-    const beside = (edge: string | undefined, hole: boolean) => (hole ? (edge ?? "") : "");
-    const [left, right] = [beside(text[0], i > 0), beside(text.at(-1), i < parts.length - 1)];
-    const unclean = own.escape
-      ? "the leaf is filled escaped"
-      : texts.length > 1
-        ? "it is in several pieces"
-        : [left, right].some((c) => /[A-Za-z0-9]/.test(c))
-          ? "nothing separates it from the hole beside it"
-          : undefined;
-    if (unclean)
+    if (isCredential(name, text))
       throw new Error(
-        `${at.join(" > ")} holds a param inside text that is a credential by the leaf's name (${name}), and ${unclean}, ` +
-          `so the text cannot be a reference and would stay in the spec. Not learned. If that text is the same for every ` +
+        `${at.join(" > ")} holds a param inside text that is a credential by the leaf's name (${name}): ` +
+          `that text cannot be a reference and would stay in the spec. Not learned. If it is the same for every ` +
           `visitor, mark the field or header with --public ${name}; otherwise ${ANOTHER_REQUEST}`,
       );
-    const value = text.slice(left.length, text.length - right.length);
-    const ref = sessionRef(refs, `session:${name}@${encodeURIComponent(key(at))}`, value, at);
-    parts[i] = ["text", left];
-    parts.splice(i + 1, 0, ["hole", ref], ["text", right]);
-    own.template = parts.map(([kind, p]) => (kind === "hole" ? `{${p}}` : escapeTemplate(p))).join("");
-    request = setAt(request, own.at, (getAt(request, own.at) as string).split(value).join(""));
   }
-  return request;
 }
 
 /**
@@ -1186,7 +1150,7 @@ function sessionRefs(
   );
   issuedRefs(refs, open, issued);
   let request = embeddedRefs(refs, open, captured);
-  request = leftoverRefs(refs, open, request);
+  refuseLeftoverText(refs.slots, open);
   innerWins(refs, open);
   // A ref'd leaf's value lives in the session, not the spec: blank it.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");

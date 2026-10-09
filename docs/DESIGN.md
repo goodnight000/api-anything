@@ -163,10 +163,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    there unquoted or URL-decoded has no safe form, and learning refuses the request rather than keep its text. When that slot has no
    escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. The text then left
    around the holes of a param's leaf is judged by the leaf's name, the way a whole leaf is (`x-csrf-token: kittens.<token>`,
-   `token=kittens.<token>`): when it is a credential by that test it becomes a `{session:x}` hole named by its position,
-   and the one character between it and the hole beside it stays literal, so a capture can tell where the value ends. In
-   several pieces, under an escape, or with nothing between it and the param it cannot be a hole, and learning refuses
-   the request. Text that is no credential by that test stays (`cache_key=search:{q}:page1`). A capture refreshes a
+   `token=kittens.<token>`): when it is a credential by that test, learning refuses the request. It is not made a
+   hole, because no later capture could tell where the arg ends and the credential begins (`red.fox.<token>`), and a
+   refresh would store the wrong text. The caller can mark the name public when the text is the same for every visitor.
+   Text that is no credential by that test stays (`cache_key=search:{q}:page1`). A capture refreshes a
    templated `session:` value from its place in the leaf. Slots never overlap: a ref for a whole container
    (a JSON body the app saved in storage, a JSON-valued header) yields to the params and refs inside it,
    since blanking the whole would take their positions away. A container that is a credential (by its header's name, a
