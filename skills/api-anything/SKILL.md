@@ -98,6 +98,8 @@ don't capture pages the user didn't ask for.
    `document` is the page itself. If the output has `blocked`, the site served a bot challenge:
    follow `next` (the user logs in and clears it) instead of picking a request. Do the same when
    `next` says the page is a sign-in page (the user logs in) or answered an HTTP error (check the URL).
+   When it only adds that the page also shows a sign-in form, go on: a login is needed only if the
+   data is missing.
    - `api-anything inspect <captureId> <id> [--extract a.b] [--pick x,y]` prints a candidate's
      response, with no browser. JSON inside strings (Google's batchexecute payloads, a form's
      `f.req`) is shown decoded. A path or selector that finds nothing fails; `[]` is a real empty list.

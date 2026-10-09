@@ -418,18 +418,36 @@ describe("add from a saved capture", () => {
 const noChrome = !chromeAvailable() && "Google Chrome not installed";
 
 describe("capture's next hint", { skip: noChrome }, () => {
-  const next = async (path: string, ...flags: string[]) =>
-    JSON.parse((await cli("capture", `${fx.url}${path}`, ...flags)).stdout).next as string;
+  const capture = async (path: string, ...flags: string[]) =>
+    JSON.parse((await cli("capture", `${fx.url}${path}`, ...flags)).stdout);
+  const signInPage = /sign-in page.*api-anything login/;
+  const learn = /\badd <site> <op> --from c/;
+  const alsoForm = /sign-in form.*api-anything login/;
 
   test("a sign-in page or an HTTP error is not offered as something to learn from", async () => {
-    const signIn = /^the page is a sign-in page.* ask the user to run api-anything login <site>, then capture again$/;
-    assert.match(await next("/private"), signIn, "the wall served in place, as 200 HTML");
-    assert.match(await next("/account"), signIn, "the wall served by redirect");
-    assert.match(await next("/no/such/page"), /^the page answered HTTP 404.* check the URL/);
+    const walls = { "/private": "served in place: nothing on it but the form", "/account": "landed on a login path" };
+    for (const [path, why] of Object.entries(walls)) {
+      const { next } = await capture(path);
+      assert.match(next, signInPage, why);
+      assert.doesNotMatch(next, learn, why);
+    }
+    const gone = (await capture("/no/such/page")).next;
+    assert.match(gone, /HTTP 404.*check the URL/);
+    assert.doesNotMatch(gone, learn);
   });
 
-  test("a login box above public content does not make the page a sign-in page", async () => {
-    assert.match(await next("/forum", "--example", "name=alice"), /^the best candidate is the HTML page/);
-    assert.match(await next("/forum/alice", "--example", "name=alice"), /^api-anything add <site> <op> --from/);
+  test("a sign-in form on a page with content or data is said beside the recommendation, not instead", async () => {
+    const pages = [
+      ["/forum"], // the member list under a login box, no example given
+      ["/community", "--example", "name=zelda"], // a redirect to it, with an example that is not on it
+      ["/card/alice", "--example", "name=alice"], // the example only in the page's state JSON
+      ["/forum/alice", "--example", "name=alice"], // the data in a JSON request
+    ];
+    for (const [path, ...flags] of pages) {
+      const { next } = await capture(path!, ...flags);
+      assert.doesNotMatch(next, signInPage, path);
+      assert.match(next, learn, path);
+      assert.match(next, alsoForm, path);
+    }
   });
 });

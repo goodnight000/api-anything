@@ -221,7 +221,14 @@ export async function startFixture(): Promise<Fixture> {
     if (p === "/account") return send(res, 302, "text/plain", "", { location: "/signin?next=%2Faccount" });
     if (p === "/signin") return html(200, LOGIN_PAGE);
     // A forum as a guest sees it: a quick-login box in every page's header, the public content under
-    // it. The member list is in the markup; a member's page fetches their posts as JSON.
+    // it. The member list is in the markup (/community redirects to it); a member's page fetches
+    // their posts as JSON; a member's card keeps the profile in the page's state JSON.
+    if (p === "/community") return send(res, 302, "text/plain", "", { location: "/forum" });
+    if (p.startsWith("/card/"))
+      return html(
+        200,
+        `<!doctype html><html><body>${LOGIN_FORM}<script>window.state = ${JSON.stringify({ member: { name: p.slice(6) } })}</script></body></html>`,
+      );
     if (p === "/forum")
       return html(
         200,

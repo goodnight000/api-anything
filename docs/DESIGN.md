@@ -360,7 +360,11 @@ independent alternative.
 - **CLI** `api-anything`:
   - `login <site|url> [--profile "Chrome/Profile 1"] [--window] [--cookies <file>]`, `logout <site>`
   - `capture <url> [--steps ...] [--interactive]` prints a compact, noise-filtered list of candidate
-    requests with ids
+    requests with ids. Its `next` recommends the learn step, unless the page is a bot challenge or a
+    sign-in page. "Sign-in page" takes strong evidence: the navigation landed on a login path, or the
+    final document is a sign-in form and nothing else (no other candidate, none of the example values,
+    no text outside its forms). A sign-in form beside content or data requests (a public page's login
+    box) is said next to the recommendation, not instead of it, redirect or not
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--write]`
   - `call <site> <op> [k=v ...] [--allow-writes]`
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
