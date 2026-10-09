@@ -167,8 +167,12 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    for different tokens that share a name: one name never means two values, wherever the second was
    found (a storage entry called `token` inside `v1:<value>`, next to a `token` field holding another). All discovered credentials participate in compound-copy
    removal. Learning ends with one check behind all of these rules: the save-time secret scan, run over the stored
-   request and the slot templates against the cookies and the session values just found. A copy no rule could turn
-   into a ref (too short to template, base64, percent-encoded twice) fails the learn, closed. Add and heal run the
+   request and the slot templates. What it looks for does not depend on which refs were made: every cookie (the
+   jar's and the request's own Cookie header), every value a rule above recorded as a credential (a container's
+   whose ref yielded too), and every stored value that is a credential, whether or not anything made it a ref. A
+   stored setting (a theme, a locale) is not looked for. A copy no rule could turn into a ref (too short to
+   template, base64, percent-encoded twice) fails the learn, closed. What is exempt is a position, never a value: a
+   name marked public, and for stored values the caller's own example and a persisted-query key. Add and heal run the
    same scan again before saving, against the site's whole session, and refuse to save any spec that still contains a detected live credential.
    The spec never holds a credential. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix

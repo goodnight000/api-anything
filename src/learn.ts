@@ -810,6 +810,8 @@ interface Refs {
   sessionValues: Record<string, string>;
   /** positions whose ref is a stored value that is no credential by itself (a setting, a saved request) */
   plain: Set<string>;
+  /** values of credential containers whose ref yielded to the slots inside them, by name */
+  yielded: Record<string, string>;
 }
 
 /**
@@ -1032,7 +1034,12 @@ function innerWins(refs: Refs, leaves: Leaf[]): void {
     addRef(refs, leaf.at, { ref: `session:${leafName(leaf.at)}@${encodeURIComponent(key(leaf.at))}` }, leaf.value);
   }
   const used = new Set(refs.slots.flatMap((s) => [s.ref, ...templateRefs(s.template ?? "")]));
-  for (const name of Object.keys(refs.sessionValues)) if (!used.has(`session:${name}`)) delete refs.sessionValues[name];
+  for (const [name, value] of Object.entries(refs.sessionValues)) {
+    if (used.has(`session:${name}`)) continue;
+    // no longer stored, but still looked for by the final check
+    if (credentials.some((o) => o.ref === `session:${name}`)) refs.yielded[name] = value;
+    delete refs.sessionValues[name];
+  }
 }
 
 /** A slot at `at` takes in the leaf: the leaf is deeper in its layers, or below its JSON pointer. */
@@ -1058,13 +1065,19 @@ function sessionRefs(
   params: Slot[],
 ): { request: Request; slots: Slot[]; sessionValues: Record<string, string>; publicNames: string[] } {
   const cookies = [...input.cookies, ...sentCookies(ex)];
+  const live = liveValues(cookies, input.storage);
+  // Stored credentials, whether or not a pass makes them refs: the final check looks for each one.
+  const stored = Object.fromEntries(
+    [...live].flatMap(([value, l]) => (l.secret ? [[`storage:${l.ref.slice(8)}`, value]] : [])),
+  );
   const refs: Refs = {
     // copies: pass 5 writes ref holes into a param's template
     slots: params.map((s) => ({ ...s })),
     taken: new Set(params.map((s) => key(s.at))),
-    live: liveValues(cookies, input.storage),
+    live,
     sessionValues: {},
     plain: new Set(),
+    yielded: {},
   };
   // A name the caller marked public is a constant: no pass sees its leaf.
   const publicNames = new Set((input.public ?? []).map((h) => h.toLowerCase()));
@@ -1081,21 +1094,54 @@ function sessionRefs(
   innerWins(refs, open);
   // The spec never holds a credential: blank every ref'd leaf.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
-  const listed = [...new Set([...publicNames, ...shipped])];
-  refuseLeftover(request, refs.slots, { cookies, values: refs.sessionValues }, listed);
-  return { request, slots: refs.slots, sessionValues: refs.sessionValues, publicNames: listed };
+  const listed = new Set([...publicNames, ...shipped]);
+  const found = { cookies, values: { ...refs.yielded, ...refs.sessionValues } };
+  refuseLeftover(request, refs.slots, found, stored, listed);
+  return { request, slots: refs.slots, sessionValues: refs.sessionValues, publicNames: [...listed] };
 }
 
 /**
- * The check behind every pass: no cookie, and no value a pass made a session: ref, is left in the
- * stored request or in a slot template, in any encoding the save-time scan reads. A copy the
- * passes could not turn into a ref (too short to template, base64, encoded twice) fails closed here.
+ * The check behind every pass. What it looks for does not depend on which refs were made: every
+ * cookie, every value a pass recorded as a credential (`found`, which includes a container's whose
+ * ref yielded), and every stored value that is a credential by the rules in secrets.ts (`stored`).
+ * None may be left in the stored request or a slot template, in any encoding the save-time scan
+ * reads: a copy no pass could turn into a ref (base64, encoded twice, too short to template)
+ * fails closed here. What is exempt is a position, never a value: a name marked public, and for
+ * stored values the caller's own example and a persisted-query key (see cachedHash).
  */
-function refuseLeftover(request: Request, slots: Slot[], live: Session, publicNames: string[]): void {
-  const allowed = new Set(publicNames.map((h) => `$.request.headers.${h}`));
-  const { secrets } = scanSecrets({ request, slots }, live, allowed);
+function refuseLeftover(
+  request: Request,
+  slots: Slot[],
+  found: Session,
+  stored: Record<string, string>,
+  publicNames: Set<string>,
+): void {
+  const isPublic = (at: Step[]) => publicNames.has(leafName(at).toLowerCase());
+  const cached = (at: Step[]) => isPublic(at) || VOLATILE_KEY.test(lastToken(at));
+  const example = (at: Step[]) => slots.some((s) => s.param && (key(s.at) === key(at) || covers(s.at, at)));
+  // The stored request with the exempt leaves blank, and the templates of the slots that are not exempt.
+  const without = (leaf: (at: Step[]) => boolean, slot: (at: Step[]) => boolean) => {
+    let rest = request;
+    const gone: Step[][] = [];
+    for (const { at } of walk(request)) {
+      if (!leaf(at) || gone.some((g) => covers(g, at))) continue;
+      rest = setAt(rest, at, "");
+      gone.push(at);
+    }
+    return { request: rest, slots: slots.map((s) => (slot(s.at) ? {} : s)) };
+  };
+  const secrets = [
+    ...scanSecrets(without(isPublic, isPublic), found).secrets,
+    ...scanSecrets(
+      without((at) => cached(at) || example(at), cached),
+      { cookies: [], values: stored },
+    ).secrets,
+  ];
   if (secrets.length)
-    throw new Error(`refusing to learn a request that would keep a credential in the spec: ${secrets.join("; ")}`);
+    throw new Error(
+      `refusing to learn a request that would keep a credential in the spec: ${secrets.join("; ")}. ` +
+        `If a value there is the same for every visitor, mark its field or header with --public <name>; otherwise ${ANOTHER_REQUEST}`,
+    );
 }
 
 /**

@@ -315,6 +315,58 @@ test("learning refuses a request it could not clear of a live value, in any enco
   assert.equal(op.request.headers["x-ctx"], "v1:secret123");
 });
 
+test("the check knows a stored credential that no pass made a reference, and no stored setting", () => {
+  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  const run = (fields: Record<string, unknown>, extra: Parameters<typeof learn>[2]) =>
+    learn([post(JSON.stringify({ q: "kittens", ...fields }))], [{ q: "kittens" }], extra);
+
+  // under a credential's name, and random-looking inside a JSON entry under an ordinary one
+  assert.throws(
+    () => run({ state: b64(T) }, { storage: { token: T } }),
+    /keep a credential in the spec: \$\.request\.body holds the live session value storage:token/,
+  );
+  assert.throws(
+    () => run({ state: b64(T) }, { storage: { cache: JSON.stringify({ user: { id: T } }) } }),
+    /\$\.request\.body holds the live session value storage:cache\/user\/id.*--public/,
+  );
+  // a short per-session value inside a longer leaf, where no pass templates it
+  assert.throws(() => run({ ctx: "v1:Ab3dEf9h" }, { storage: { csrf: "Ab3dEf9h" } }), /storage:csrf/);
+
+  // a setting is no credential, wherever else it turns up
+  const settings = { theme: "dark-mode", prefs: JSON.stringify({ locale: "en-US-posix", tz: "Europe/Berlin" }) };
+  const plain = run({ style: "dark-mode-v2", state: b64("en-US-posix|Europe/Berlin") }, { storage: settings });
+  assert.deepEqual(plain.operation.slots, [{ param: "q", at: ["body", "json:/q"] }]);
+
+  // exempt by position: a name the caller marked public, the caller's own example, a cached query hash
+  assert.equal(
+    JSON.parse(run({ state: b64(T) }, { storage: { token: T }, public: ["state"] }).operation.request.body!).state,
+    b64(T),
+  );
+  const ID = "550e8400-e29b-41d4-a716-446655440000";
+  const viewed = learn([xhr({ url: `https://api.site.test/v1/items/${ID}` })], [{ id: ID }], {
+    storage: { lastViewed: ID },
+  });
+  assert.deepEqual(viewed.operation.slots, [{ param: "id", at: ["path:2"] }]);
+  const hash = "e0f2a1b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f";
+  const cached = run({ extensions: { persistedQuery: { sha256Hash: hash } } }, { storage: { "pq:Search": hash } });
+  assert.equal(cached.operation.volatile.length, 1);
+  // ...which waives the position, not the value: the same hash elsewhere is still looked for
+  assert.throws(
+    () =>
+      run(
+        { extensions: { persistedQuery: { sha256Hash: hash } }, state: b64(hash) },
+        { storage: { "pq:Search": hash } },
+      ),
+    /storage:pq:Search/,
+  );
+
+  // a credential container whose ref yielded to a param inside it is still looked for whole
+  const csrf = JSON.stringify({ q: "kittens", n: "ab" });
+  const copied = post(JSON.stringify({ q: "kittens", state: b64(csrf) }), { "x-csrf-token": csrf });
+  assert.throws(() => learn([copied], [{ q: "kittens" }]), /request\.body holds the live session value x-csrf-token/);
+});
+
 /* ------------------------------------------- what example 2 disproves */
 
 const noSession = { cookies: [] as StoredCookie[], values: {} as Record<string, string> };
