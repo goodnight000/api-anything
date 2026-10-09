@@ -1084,7 +1084,8 @@ function leftoverRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
     if (unclean)
       throw new Error(
         `${at.join(" > ")} holds a param inside text that is a credential by the leaf's name (${name}), and ${unclean}, ` +
-          `so the text cannot be a reference and would stay in the spec. Not learned: ${ANOTHER_REQUEST}`,
+          `so the text cannot be a reference and would stay in the spec. Not learned. If that text is the same for every ` +
+          `visitor, mark the field or header with --public ${name}; otherwise ${ANOTHER_REQUEST}`,
       );
     const value = text.slice(left.length, text.length - right.length);
     const ref = sessionRef(refs, `session:${name}@${encodeURIComponent(key(at))}`, value, at);
