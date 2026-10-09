@@ -327,7 +327,7 @@ function positive(text: string | undefined, flag: string): number | undefined {
 
 /**
  * What the page a capture ended on says about learning from it. `stop`: nothing to learn here, the
- * navigation ended on a login path or the page itself answered an HTTP error. `also`: the page shows
+ * navigation ended on a login path that shows a sign-in form, or the page itself answered an HTTP error. `also`: the page shows
  * a sign-in form, as a public page may too, so that is said next to the recommendation and never
  * instead of it. `status`: the page's HTTP error, when a request it loaded is recommended all the same.
  */
@@ -336,8 +336,6 @@ function pageSays(
   ranked: Candidate[],
   values: string[],
 ): { stop?: string; also?: string; status?: number } {
-  if (loginPath(c.finalUrl))
-    return { stop: "the page is a sign-in page: ask the user to run api-anything login <site>, then capture again" };
   const pages = capturePages(c).map((u) => u.split("#")[0]);
   // the main frame's last document: a widget's iframe is a document too
   const page = c.exchanges
@@ -345,6 +343,11 @@ function pageSays(
     .at(-1);
   if (!page?.response) return {};
   const { status, body = "" } = page.response;
+  // A login path is where sign-in pages live, and where a public /docs/login/... page may too: it takes the form as well.
+  if (loginPath(c.finalUrl) && signInForm(body))
+    return {
+      stop: `the page is a sign-in page: ask the user to run api-anything login <site>, then capture again (api-anything inspect ${c.id} ${page.id} shows the page, if it is what you wanted)`,
+    };
   // What would be learned from: the candidates' answers. A beacon that echoes the page is not one.
   const asked = values.filter((x) => x.length >= 3).map((x) => x.toLowerCase());
   const answers = ranked.map((r) => (c.exchanges.find((e) => e.id === r.id)?.response?.body ?? "").toLowerCase());

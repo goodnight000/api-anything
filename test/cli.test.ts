@@ -490,7 +490,42 @@ describe("add from a saved capture", () => {
     const header = await add("mine", "--from", "cheader", "--extract", TOKEN);
     assert.equal(header.code, 1, header.stdout);
     assert.match(header.out.error, /credential/);
-    assert.doesNotMatch(readFileSync(join(HOME, "sites", "fixture.json"), "utf8"), new RegExp(TOKEN));
+    // so does a description that names it, though nothing else changes
+    const named = await add("mine", "--from", "cheader", "--description", `the session ${TOKEN}`);
+    assert.equal(named.code, 1, named.stdout);
+    assert.match(named.out.error, /credential/);
+    // and a random-looking value under an ordinary header name that the page also keeps in storage
+    const OPAQUE = "Zq7RandomOpaque0192837465abc";
+    seed("copaque", {
+      url: `${fx.url}/mine?name=alice`,
+      storage: { opaque: OPAQUE },
+      exchanges: [
+        { ...guest, request: { ...guest.request, headers: { ...guest.request.headers, "x-opaque": OPAQUE } } },
+      ],
+    });
+    const opaque = await add("mine", "--from", "copaque", "--extract", OPAQUE);
+    assert.equal(opaque.code, 1, opaque.stdout);
+    assert.match(opaque.out.error, /credential/);
+    for (const secret of [TOKEN, OPAQUE])
+      assert.doesNotMatch(readFileSync(join(HOME, "sites", "fixture.json"), "utf8"), new RegExp(secret));
+  });
+
+  test("a repair is not refused for the caller's own example, however much it looks like a key", async () => {
+    // a public object id passed as the param: random-looking, and under a name that reads like a credential's
+    const KEY = "PublicObjectAbc12345";
+    seed("cobject", {
+      url: `${fx.url}/mine?name=${KEY}`,
+      exchanges: [await answered(1, "fetch", `/api/mine?name=${KEY}`)],
+    });
+    const add = async (...flags: string[]) => {
+      const r = await cli("add", "fixture", "object", "--from", "cobject", ...flags);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    const learned = await add("--pick-request", "1", "--example", `name=${KEY}`);
+    assert.equal(learned.code, 0, learned.stdout);
+    const repaired = await add("--extract", "guest", "--pick", "name");
+    assert.equal(repaired.code, 0, repaired.stdout);
+    assert.match(repaired.out.repaired, /returns changed/);
   });
 
   test("a request a --write capture aborted is learned as a write or not at all, whatever its name", async () => {
@@ -571,12 +606,17 @@ describe("capture's next hint", { skip: noChrome }, () => {
   const learn = /\badd <site> <op> --from c/;
   const alsoForm = /sign-in form.*api-anything login/;
 
-  test("'sign-in page' is said only when the navigation ended on a login path, asked for or redirected to", async () => {
+  test("'sign-in page' takes a login path and a sign-in form on it, asked for or redirected to", async () => {
     for (const path of ["/account", "/signin"]) {
       const { next } = await capture(path);
       assert.match(next, signInPage, path);
       assert.doesNotMatch(next, learn, path);
+      assert.match(next, /api-anything inspect c\w+ \d+/, "the stop still says how to look at the page");
     }
+    // a public page that merely lives under a login-like path is learned from like any other
+    const docs = (await capture("/docs/login", "--example", "name=alice")).next;
+    assert.match(docs, learn);
+    assert.doesNotMatch(docs, /sign-in/);
   });
 
   test("example values that no candidate returned, on a page with a sign-in form, are a stronger caveat, not a stop", async () => {

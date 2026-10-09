@@ -14,6 +14,7 @@ import {
   capturePages,
   checkExamples,
   hashLike,
+  highEntropy,
   isCredential,
   leafName,
   learnOperation,
@@ -588,6 +589,34 @@ function saveOperation(
   return { operation, warnings, path, ...(preview ? { preview } : {}), replaced };
 }
 
+/**
+ * A repair adds text to a spec that is otherwise kept: a recipe and maybe a description. Refuse it when
+ * that text holds anything in the capture that could be a credential: a cookie, a session value, a
+ * stored value or a request value that is one by its name or looks random. A full add would have made
+ * those references or refused; here nothing is learned, so the added text is checked against all of them.
+ * The caller's own params and what the op lists as public are not credentials.
+ */
+function refuseAdded(old: Operation, added: object, capture: CaptureFile, sent: Exchange[], live: Session): void {
+  const open = new Set((old.public ?? []).map((n) => n.toLowerCase()));
+  const params = new Set(old.slots.flatMap((s) => (s.param ? [JSON.stringify(s.at)] : [])));
+  const secret = (name: string, value: string) => isCredential(name, value) || highEntropy(value);
+  const carried = sent.flatMap((e) =>
+    walk(e.request).flatMap((l) =>
+      l.type === "string" &&
+      !l.container &&
+      !params.has(JSON.stringify(l.at)) &&
+      !open.has(leafName(l.at).toLowerCase()) &&
+      secret(leafName(l.at), l.value)
+        ? [l.value]
+        : [],
+    ),
+  );
+  const stored = Object.entries(capture.storage ?? {}).flatMap(([k, v]) => (secret(k, v) ? [v] : []));
+  const values = Object.fromEntries([...new Set([...carried, ...stored])].map((v, n) => [`capture:${n}`, v]));
+  const found = scanSecrets(added, { ...live, values: { ...live.values, ...values } }, new Set()).secrets;
+  if (found.length) throw new Error(`refusing to save a spec containing a credential: ${found.join("; ")}`);
+}
+
 /** The op with the description given: an empty one clears it, none given leaves it. */
 function described(op: Operation, description: string | undefined): Operation {
   if (description === undefined) return op;
@@ -610,6 +639,7 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
   const live: Session = { ...now, cookies: [...now.cookies, ...capture.cookies] };
   // A description with no recipe flag is metadata: nothing is learned again, and the recipe stays.
   if (i.description !== undefined && !Object.values(r).some((x) => x !== undefined)) {
+    refuseAdded(old, { description: i.description }, capture, capture.exchanges, live);
     const saved = saveOperation(site, described(old, i.description), undefined, [], live, undefined);
     return { ...saved, captures: [], repaired: "description" };
   }
@@ -639,15 +669,14 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
       `the recipe was not checked: capture ${capture.id} holds no answer for request ${exchange.id}${exchange.aborted ? " (it was aborted, as a --write capture aborts a write)" : ""}`,
     );
   const operation: Operation = { ...described(old, i.description), response };
-  // A credential the request carries where the op has no slot (a new header, a moved field) is live too.
-  const carried = walk(exchange.request).flatMap((l) =>
-    l.type === "string" && !l.container && isCredential(leafName(l.at), l.value) ? [l.value] : [],
+  live.values = { ...now.values, ...sessionValuesOf(old, exchange) };
+  refuseAdded(
+    old,
+    { response, ...(i.description !== undefined ? { description: i.description } : {}) },
+    capture,
+    pool,
+    live,
   );
-  live.values = {
-    ...now.values,
-    ...Object.fromEntries(carried.map((v, n) => [`capture:${n}`, v])),
-    ...sessionValuesOf(old, exchange),
-  };
   const saved = saveOperation(site, operation, exchange, warnings, live, capture.id);
   return { ...saved, captures: [], repaired: "recipe" };
 }

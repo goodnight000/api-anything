@@ -376,10 +376,10 @@ independent alternative.
     requests with ids. Its `next` recommends the learn step, unless the page is a bot challenge, a
     sign-in page, or an HTTP error that is itself the best candidate (an erroring document that loaded
     a usable data request is reported as `pageStatus`, and the request is recommended). "Sign-in page"
-    takes direct evidence, never the look of the page: the navigation landed on a login path, or
-    `--example` values were given, no response in the capture holds one, and the final document shows
-    a sign-in form. Any other page that shows a sign-in form (a public page's login box; a login page
-    captured with no example) gets the recommendation, with a clause that says so, redirect or not
+    is said in one case: the navigation ended on a login path and the final document shows a sign-in
+    form. Any other page that shows a sign-in form (a public page's login box; a login page served in
+    place) gets the recommendation, with a clause that says so, redirect or not; the clause is stronger
+    when `--example` values were given and no candidate's response holds one
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--write]`
   - `call <site> <op> [k=v ...] [--allow-writes]`
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
