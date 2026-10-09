@@ -89,23 +89,35 @@ function base64Texts(s: string): string[] {
 }
 
 /**
- * How a value reads inside base64 text, whatever stands before or after it: its encoding at each of
- * the three byte offsets, without the characters that also carry a neighbouring byte, in the
- * standard and the URL-safe alphabet. Decoding the text does not find these: text in front shifts
- * every byte, and a short value's run is too short to tell from a word.
+ * A test for text that holds `value` base64-encoded, whatever stands before or after it. Decoding
+ * the text whole does not find that: text in front shifts every byte, and a short value's run is
+ * too short to tell from a word. So the value's own encoding is looked for, at each of the three
+ * byte offsets and in the standard and the URL-safe alphabet, without the characters that also
+ * carry a neighbouring byte. Those characters carry bits of the value too, so another value can
+ * share what is left ("xqbcdef" with "abcdef"): a find only says where to look, and the bytes
+ * decoded there, at that offset, must be the value's.
  */
-function base64Cores(value: string): string[] {
+function inBase64(value: string): (text: string) => boolean {
   const bytes = Buffer.from(value, "utf8");
-  const out = new Set<string>();
-  for (let lead = 0; lead < 3; lead++) {
-    const text = Buffer.concat([Buffer.alloc(lead), bytes])
+  const places = [0, 1, 2].flatMap((lead) => {
+    const whole = Buffer.concat([Buffer.alloc(lead), bytes])
       .toString("base64")
       .replace(/=+$/, "");
     // the first characters hold the bytes in front, and the last one bits of the byte that follows
-    const core = text.slice([0, 2, 3][lead], (lead + bytes.length) % 3 ? -1 : undefined);
-    out.add(core).add(core.replace(/\+/g, "-").replace(/\//g, "_"));
-  }
-  return [...out];
+    const skip = [0, 2, 3][lead]!;
+    const core = whole.slice(skip, (lead + bytes.length) % 3 ? -1 : undefined);
+    const cores = new Set([core, core.replace(/\+/g, "-").replace(/\//g, "_")]);
+    return [...cores].map((c) => ({ core: c, lead, skip, length: whole.length }));
+  });
+  return (text) =>
+    places.some(({ core, lead, skip, length }) => {
+      for (let i = text.indexOf(core); i >= 0; i = text.indexOf(core, i + 1)) {
+        if (i < skip) continue;
+        const there = Buffer.from(text.slice(i - skip, i - skip + length), "base64");
+        if (there.subarray(lead, lead + bytes.length).equals(bytes)) return true;
+      }
+      return false;
+    });
 }
 
 /**
@@ -153,8 +165,8 @@ export function ipIn(v: string): string | undefined {
 /**
  * `secrets`: exact hits of live jar/session values (6+ chars, raw, unquoted or URL-decoded). Each
  * is looked for in the text and in what the text decodes to (three layers of percent-encoding,
- * JSON escapes and whole base64 runs), and by its own base64 encoding at any byte offset. A hit
- * is the value itself, so callers fail closed. `warnings`: regex heuristics, which do misfire.
+ * JSON escapes and whole base64 runs), and by its own base64 encoding at any byte offset, confirmed
+ * by decoding there. A hit is the value itself, so callers fail closed. `warnings`: regex heuristics, which do misfire.
  * `allowed`: JSON paths a human marked public (an op's `public` headers); skipped.
  */
 export function scanSecrets(
@@ -162,10 +174,10 @@ export function scanSecrets(
   session: Session,
   allowed: Set<string> = new Set(),
 ): { secrets: string[]; warnings: string[] } {
-  const live: [string, string][] = [];
+  const live: [string, string, (text: string) => boolean][] = [];
   const add = (label: string, v: string) => {
     for (const f of new Set([v, v.replace(/^"|"$/g, ""), pctDecode(v, false)]))
-      if (f.length >= 6) for (const text of [f, ...base64Cores(f)]) live.push([label, text]);
+      if (f.length >= 6) live.push([label, f, inBase64(f)]);
   };
   for (const c of session.cookies) add(`cookie ${c.name}`, c.value);
   for (const [k, v] of Object.entries(session.values)) add(`session value ${k}`, v);
@@ -175,8 +187,8 @@ export function scanSecrets(
     if (allowed.has(path)) return;
     if (typeof v === "string") {
       const forms = live.length ? [...decodings(v)] : [];
-      for (const [label, s] of live)
-        if (forms.some((f) => f.includes(s))) secrets.push(`${path} holds the live ${label}`);
+      for (const [label, s, encoded] of live)
+        if (forms.some((f) => f.includes(s) || encoded(f))) secrets.push(`${path} holds the live ${label}`);
       const text = pctDecode(v, false); // percent-encoded bodies hide the blob's shape
       const hit = (
         [

@@ -479,6 +479,39 @@ test("the scan finds a base64 copy whatever sits before it, and of a value too s
     );
 });
 
+test("the scan reports a base64 copy only when the bytes there are the value's", () => {
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  const jar = (value: string) => ({ cookies: [cookie("sid", value)], values: {} });
+  const found = (text: string, value: string) => scanSecrets({ cursor: text }, jar(value)).secrets.length > 0;
+
+  // "xqbcdef" shares every character of abcdef's encoding that does not touch a neighbour: only
+  // the first byte's top bits differ, and those sit in a character the value shares with what precedes it
+  assert.equal(Buffer.from("eHFiY2RlZg==", "base64").toString(), "xqbcdef");
+  assert.ok(!found("eHFiY2RlZg==", "abcdef"), "another value with the same middle");
+  // ...and learning the request that carries such a cursor is no longer refused
+  const { operation: op } = learn(
+    [post(JSON.stringify({ q: "kittens", cursor: "eHFiY2RlZg==" }))],
+    [{ q: "kittens" }],
+    {
+      cookies: [cookie("sid", "abcdef")],
+    },
+  );
+  assert.equal(JSON.parse(op.request.body!).cursor, "eHFiY2RlZg==");
+
+  // every byte beside the value changed in turn: the value itself is found, a neighbour of it never
+  const value = "aB3dE4-z";
+  for (let lead = 0; lead < 3; lead++) {
+    for (let tail = 0; tail < 3; tail++) {
+      const around = (v: string) => b64("xy".slice(0, lead) + v + "pq".slice(0, tail));
+      assert.ok(found(`id=${around(value)}&n=1`, value), `missed at offset ${lead}, ${tail} byte(s) after`);
+      for (let i = 0; i < value.length; i++) {
+        const other = value.slice(0, i) + String.fromCharCode(value.charCodeAt(i) ^ 0x10) + value.slice(i + 1);
+        assert.ok(!found(around(other), value), `flagged ${other} at offset ${lead}, ${tail} byte(s) after`);
+      }
+    }
+  }
+});
+
 test("the check knows a stored credential that no pass made a reference, and no stored setting", () => {
   const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
   const b64 = (s: string) => Buffer.from(s).toString("base64");
