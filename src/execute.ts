@@ -168,7 +168,7 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         timeoutMs: ctx.opts.timeoutMs,
         retryOnNavigation: op.readOnly,
         // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
-        redirect: (from, status, location) => nextHop(op, session, from, status, location),
+        redirect: (from, status, location, taken) => nextHop(op, session, from, status, location, taken),
       });
     }
     return { tier, status: r.status, ...(r.redirected ? { redirected: true } : {}), ...judge(op, r) };
@@ -177,10 +177,15 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     if (e instanceof ProfileInUse) return { tier, class: "error", reason: e.message, hint: PROFILE_HINT };
     if (e instanceof RedirectRefused) {
       // The redirect is the site's answer, so a retry meets it again; the request it answered was sent.
-      const relearn = `re-learn it with api-anything add ${ctx.site} ${op.name} ...${op.readOnly ? "" : " --write"} if the site moved there`;
+      const add = `api-anything add ${ctx.site} ${op.name} ...${op.readOnly ? "" : " --write"}`;
+      const why = e.limit
+        ? `the site's redirects for this request do not end (a loop, or a chain past the limit); learn the operation again from the page that uses it, at the address the site now answers from: ${add}`
+        : op.readOnly
+          ? `the site sends this request on to another origin, which was not followed; re-learn it with ${add} if the site moved there`
+          : `re-learn it with ${add} if the site moved there`;
       const hint = op.readOnly
-        ? `do not retry: the site sends this request on to another origin, which was not followed; ${relearn}`
-        : `the write may have run: check the site first. Do not retry: ${relearn}`;
+        ? `do not retry: ${why}`
+        : `the write may have run: check the site first. Do not retry: ${why}`;
       return { tier, class: "error", reason: e.message, ambiguous: true, hint };
     }
     return { tier, class: "error", reason: (e as Error).message.split("\n")[0]!, ambiguous: true };

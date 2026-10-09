@@ -1034,10 +1034,10 @@ export async function pageFetch(o: {
   /**
    * The request a redirect asks for next, or a throw refusing it. The page takes one hop at a time
    * so that this is asked about each: left to itself, a page's fetch() follows a redirect to
-   * another origin with every header and the body. Without it no redirect is followed, and the
-   * redirect itself is the answer.
+   * another origin with every header and the body. `taken`: the redirects before this one, for
+   * the caller's limit. Without it no redirect is followed, and the redirect itself is the answer.
    */
-  redirect?: (from: Hop, status: number, location: string) => Hop;
+  redirect?: (from: Hop, status: number, location: string, taken: number) => Hop;
 }): Promise<PageFetchResult> {
   const timeoutMs = o.timeoutMs ?? 30_000;
   const release = hold();
@@ -1118,13 +1118,13 @@ export async function pageFetch(o: {
     let hop: Hop = { url: o.url, method: o.method, headers, body };
     const t0 = performance.now();
     let redirected = false;
-    // Redirects are taken by hand, as at tier 1 (at most 5): the fifth is the answer.
+    // Redirects are taken by hand, as at tier 1; how many is the policy's to say.
     for (let hops = 0; ; hops++) {
       const { location, ...r } = await fetchHop(hop);
       redirected ||= !!location;
-      if (!location || !o.redirect || hops >= 5)
+      if (!location || !o.redirect)
         return { ...r, ms: Math.round(performance.now() - t0), ...(redirected ? { redirected } : {}) };
-      hop = o.redirect(hop, r.status, location);
+      hop = o.redirect(hop, r.status, location, hops);
     }
   } finally {
     release();

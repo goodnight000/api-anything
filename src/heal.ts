@@ -7,7 +7,7 @@ import { chromeAvailable, ProfileInUse, runTrigger } from "./browser.js";
 import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
-import { buildRequest, send } from "./http.js";
+import { buildRequest, MAX_REDIRECTS, REDIRECT, send } from "./http.js";
 import { type Args, ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches } from "./learn.js";
 import { scanSecrets } from "./secrets.js";
 import {
@@ -844,7 +844,7 @@ function nearestToken(texts: string[], v: Volatile, strict = false): string | un
 }
 
 /**
- * A page's text and where it ended up, for the rescan. Redirects are taken by hand (at most 5) so
+ * A page's text and where it ended up, for the rescan. Redirects are taken by hand (as many as a plain fetch would follow) so
  * that `off` is asked about every address before it is fetched: one it rules out is not fetched,
  * and the text is empty.
  */
@@ -856,9 +856,9 @@ async function fetchText(
 ): Promise<{ text: string; url: string }> {
   try {
     const signal = AbortSignal.timeout(15_000);
-    for (let hops = 0; hops <= 5 && !off(url); hops++) {
+    for (let hops = 0; hops <= MAX_REDIRECTS && !off(url); hops++) {
       const r = await fetchImpl(url, { headers: headers(url), redirect: "manual", signal });
-      const location = r.status >= 300 && r.status < 400 ? r.headers.get("location") : null;
+      const location = REDIRECT.has(r.status) ? r.headers.get("location") : null;
       if (!location) return { text: r.ok ? await r.text() : "", url };
       await r.body?.cancel();
       url = new URL(location, url).href;

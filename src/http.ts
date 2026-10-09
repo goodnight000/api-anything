@@ -189,8 +189,18 @@ const BODY_HEADERS = new Set([
   "content-type",
 ]);
 
-/** A redirect the policy does not take: nothing was sent to its target. */
-export class RedirectRefused extends Error {}
+/** How many redirects one request is taken through: what a browser's own fetch allows. */
+export const MAX_REDIRECTS = 20;
+
+/** A redirect the policy does not take: nothing was sent to its target. `limit`: it was one too many. */
+export class RedirectRefused extends Error {
+  constructor(
+    message: string,
+    readonly limit = false,
+  ) {
+    super(message);
+  }
+}
 
 /**
  * The redirect policy of tiers 1 and 2: the request a redirect asks for next, or a refusal.
@@ -199,10 +209,20 @@ export class RedirectRefused extends Error {}
  * would keep a CSRF header from the other origin. A hop that would still carry a session's value
  * there is not taken: a body it re-sends when any ref slot lives in the body (decided from the
  * slots: a value can sit under any number of encoding layers, so searching the bytes misses it), or
- * a Location that repeats the value of any ref slot, wherever the request carried it.
+ * a Location that repeats the value of any ref slot, wherever the request carried it. `taken`: the
+ * redirects before this one; one past the limit is refused too, saying that it is the limit.
  */
-export function nextHop(op: Operation, session: Session, from: Request, status: number, location: string): Request {
+export function nextHop(
+  op: Operation,
+  session: Session,
+  from: Request,
+  status: number,
+  location: string,
+  taken = 0,
+): Request {
   const next = new URL(location, from.url);
+  if (taken >= MAX_REDIRECTS)
+    throw new RedirectRefused(`stopped after ${MAX_REDIRECTS} redirects, the last one to ${next.origin}`, true);
   const refused = (why: string) =>
     new RedirectRefused(`not following the HTTP ${status} redirect to ${next.origin}: ${why}`);
   if (!/^https?:$/.test(next.protocol)) throw refused("it is not an http(s) address");
@@ -251,7 +271,7 @@ export function nextHop(op: Operation, session: Session, from: Request, status: 
   return { url: next.href, method: toGet ? "GET" : from.method, headers, body };
 }
 
-/** Send the filled template. Redirects are followed by hand (at most 5), each hop decided by `nextHop`. */
+/** Send the filled template. Redirects are followed by hand, each hop decided by `nextHop`. */
 export async function send(
   op: Operation,
   args: Record<string, unknown>,
@@ -285,9 +305,9 @@ export async function send(
       }
       const location = res.headers.get("location");
       redirected ??= REDIRECT.has(res.status) && !!location;
-      if (REDIRECT.has(res.status) && location && hops < 5) {
+      if (REDIRECT.has(res.status) && location) {
         await res.body?.cancel();
-        hop = nextHop(op, session, hop, res.status, location);
+        hop = nextHop(op, session, hop, res.status, location, hops);
         // the jar's cookies for the new address, whichever origin it is
         const { cookie: _sent, ...headers } = hop.headers;
         const cookie = cookieHeaderFor(jar, hop.url);

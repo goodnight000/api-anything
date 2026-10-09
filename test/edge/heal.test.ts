@@ -532,6 +532,27 @@ describe("heal without a browser (maxTier 1)", () => {
     }
   });
 
+  test("a read's rescan follows a long chain of redirects, and takes only a redirect status for one", async () => {
+    const server = createServer((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      const n = Number(u.searchParams.get("n") ?? 0);
+      const page = `<script>x={queryId:"${NEW}",operationName:"User"}</script>`;
+      if (u.pathname === "/u/far" && n < 6) return void res.writeHead(302, { location: `/u/far?n=${n + 1}` }).end();
+      // not a redirect, whatever its Location says
+      if (u.pathname === "/u/cached") return void res.writeHead(304, { location: "/u/far?n=6" }).end();
+      res.writeHead(200, { "content-type": "text/html" }).end(page);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const op = { ...userSite("far6").operations[0]!, trigger: { url: `${base}/u/{name}` } };
+      assert.equal((await rescan("far6", op, { name: "far" }))?.diff, `path:1: ${OLD} -> ${NEW}`);
+      assert.equal(await rescan("far6", op, { name: "cached" }), undefined);
+    } finally {
+      server.close();
+    }
+  });
+
   // Was a bug: a write whose heal failed is marked stale; the next drift's `next` tells the agent to
   // force `api-anything heal`, which refuses every write.
   test("a stale write's next hint does not point at `api-anything heal` (which refuses writes)", async () => {

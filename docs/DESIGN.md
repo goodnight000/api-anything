@@ -374,7 +374,9 @@ the browser profile) stops at once and marks nothing stale.
 | 2 | `fetch()` inside a real page on the site origin (real TLS, cookies, sec-fetch); redirects one hop at a time under the same policy | tier 1 `blocked`, or op `minTier: 2` |
 | 3 | run the trigger in the browser, capture the matched response | op `minTier: 3`, or after a heal fails for reads |
 
-One redirect policy, for tiers 1 and 2 (`nextHop`), at most 5 hops: 303, and 301/302 after a POST,
+One redirect policy, for tiers 1 and 2 (`nextHop`), at most 20 redirects as in a browser's own
+fetch (one more fails the call saying that the limit was reached, and its `next` says not to retry
+but to learn the operation where the site now answers): 303, and 301/302 after a POST,
 make a bodiless GET, without the headers that described the body (Content-Type, -Language,
 -Encoding, -Location, -Length), as a browser's own redirect does; 307/308 keep method and body. On an origin change the credential headers are
 dropped: authorization, cookie, and every header a `cookie:`/`session:` ref fills, at any depth
@@ -402,7 +404,7 @@ Heal strategies, cheapest first:
   is a real send, only a token that is the single candidate is tried. And for a write, the pages the
   rescan fetches must not be the write: a trigger that is the write's own address (a GET vote link)
   would be performed by a plain fetch, before any validation and with nothing to intercept it. So
-  redirects are taken by hand, and no address matching the op's `match` as a GET (or, for an op with
+  redirects (301, 302, 303, 307, 308 only; at most 20, for reads too) are taken by hand, and no address matching the op's `match` as a GET (or, for an op with
   no `match`, its template's own address) is fetched, at first or at any hop. The rescan then finds
   nothing and the recapture, which intercepts, does the work.
 - **recapture**: run the trigger in the browser, match, re-learn, and validate by replaying at the op's

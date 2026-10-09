@@ -201,7 +201,7 @@ describe("tier 1 cookies and redirects", () => {
     const r = await call("loop", "l", {}, t1);
     assert.equal(r.ok, false);
     assert.equal(r.class, "error");
-    assert.ok(fx.hits.length <= 6);
+    assert.ok(fx.hits.length <= 21);
   });
 
   test("a redirect to a login page where JSON was expected is auth", async () => {
@@ -801,7 +801,7 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     const loop = await call("t2hop", "loop", {}, o);
     assert.equal(loop.ok, false);
     assert.equal(loop.class, "error", JSON.stringify(loop));
-    assert.ok(fx.hits.length <= 6, `${fx.hits.length} requests`);
+    assert.ok(fx.hits.length <= 21, `${fx.hits.length} requests`);
 
     // Post/Redirect/Get to a page that refuses scripts: the 403 answers the redirect's follow-up, so the write ran
     site("t2prg", {
@@ -851,6 +851,19 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
         const r = await call(`strict${tier}s${s}`, "q", {}, o);
         assert.equal(r.ok, true, `HTTP ${s}: ${JSON.stringify(r)}`);
       }
+    });
+
+    test(`tier ${tier}: six redirects are followed to the data; a loop ends saying so, and how to go on`, async () => {
+      site(`chain${tier}`, rd("far", "/chain", { minTier: tier }), rd("round", "/loop", { minTier: tier }));
+      const far = await call(`chain${tier}`, "far", {}, o);
+      assert.deepEqual(far.data, [{ end: 6 }], JSON.stringify(far));
+
+      fx.hits.length = 0;
+      const r = await call(`chain${tier}`, "round", {}, o);
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.reason ?? "", /^stopped after 20 redirects, the last one to http:\/\/127\.0\.0\.1:\d+$/);
+      assert.match(r.next ?? "", /do not retry.*api-anything add chain\d round/);
+      assert.equal(fx.hits.filter((h) => h.url === "/loop").length, 21);
     });
   }
 
