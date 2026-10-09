@@ -436,6 +436,42 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     });
   }
 
+  for (const [how, what] of [
+    ["beacon", "a pagehide beacon"],
+    ["keepalive", "a keepalive fetch on pagehide"],
+    ["hidden", "a beacon when the page is hidden"],
+    ["img", "an image ping on pagehide"],
+    ["slow", "a pagehide handler that takes 400 ms to send"],
+    ["later", "a deferred fetchLater()"],
+  ] as const) {
+    test(`capture --write: ${what} never reaches the server when the run ends`, async () => {
+      process.env.API_ANYTHING_HOME = home;
+      const before = votes().length;
+      await capturePage({ url: `${fx.url}/leave-page?how=${how}`, write: true });
+      await sleep(300); // what a closing page got out arrives after the run has returned
+      assert.deepEqual(votes().slice(before), [], "the write was performed while learning it");
+    });
+  }
+
+  test("capture --write: a beacon a page sends as the run leaves it for the next is aborted and recorded", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    // the neutral page is left by a plain load (it has no router): its pagehide fires mid-run
+    const r = await capturePage({
+      url: `${fx.url}/data-page`,
+      softFrom: `${fx.url}/leave-page?how=beacon`,
+      write: true,
+    });
+    await sleep(300);
+    assert.deepEqual(votes().slice(before), [], "the write was performed while learning it");
+    const beacon = r.exchanges.find((e) => e.request.url.endsWith("/api/vote?how=beacon"));
+    assert.deepEqual(
+      [beacon?.aborted, beacon?.request.method, beacon?.request.body],
+      [true, "POST", "up"],
+      JSON.stringify(r.exchanges.map((e) => e.request.url)),
+    );
+  });
+
   test("capture --write: a message sent over an already-open WebSocket never reaches the server", async () => {
     process.env.API_ANYTHING_HOME = home;
     const before = fx.wsMessages();

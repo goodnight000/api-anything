@@ -174,7 +174,16 @@ example value: `<link rel=stylesheet href=/api/vote?id=..>`), and anything match
 known write's `match`; WebSocket messages any of the run's pages sends (a popup's too: the socket
 route is context-wide) are dropped too. The guards are lifted only after the run's pages are closed:
 an open page still sends (a client's retry; Chrome reloads an aborted navigation's error page after
-about a second), and removing a route releases the requests paused in it. Service workers are
+about a second), and removing a route releases the requests paused in it. A route is not asked about
+every request: Playwright continues by itself any paused request that has no network id, which is
+what a document sends as it unloads (a pagehide beacon, a keepalive fetch, an image ping) and a
+deferred `fetchLater()`. So each guarded page also has a DevTools session of the run's own, where the
+same guard decides those (the page's own target: a cross-origin iframe's unload is not covered).
+Closing a page is not atomic either: its unload handlers send, Playwright calls no route handler for
+a page once `close()` was called, and Chrome sends a request paused in a session on to the network
+when that session detaches. So when a guarded run ends, each of its pages is first taken to
+`about:blank` with its session and the guards still live, and everything it sends from then on
+fails; what is closed afterwards has nothing left to send. Service workers are
 blocked in the profile, since their fetches bypass routing. The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
 run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the

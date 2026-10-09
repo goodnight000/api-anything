@@ -129,6 +129,21 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
             `<button id="retry" onclick="const go=()=>fetch('/api/vote?how=retry').catch(go);go()">retry</button>` +
             dataFetch(name),
         );
+      case "/leave-page": {
+        // writes a page sends as it goes away, the way analytics and autosave do
+        const vote = JSON.stringify(`/api/vote?how=${u.searchParams.get("how")}`);
+        const send: Record<string, string> = {
+          beacon: `addEventListener("pagehide",()=>navigator.sendBeacon(${vote},"up"))`,
+          keepalive: `addEventListener("pagehide",()=>fetch(${vote},{method:"POST",body:"up",keepalive:true}))`,
+          hidden: `document.addEventListener("visibilitychange",()=>navigator.sendBeacon(${vote},"up"))`,
+          img: `addEventListener("pagehide",()=>{new Image().src=${vote}})`,
+          // a handler that is slow to get to it
+          slow: `addEventListener("pagehide",()=>{const t=Date.now();while(Date.now()-t<400);navigator.sendBeacon(${vote},"up")})`,
+          // no handler at all: the browser itself sends it when the document goes
+          later: `fetchLater(${vote},{method:"POST",body:"up"})`,
+        };
+        return html(res, `<script>${send[u.searchParams.get("how") ?? ""] ?? ""}</script>${dataFetch(name)}`);
+      }
       case "/api/vote":
         res.writeHead(200, { "content-type": "text/plain" });
         return res.end("voted");
