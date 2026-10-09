@@ -714,6 +714,12 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
     ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
   });
+  // What a --write capture aborted, its guard stopped as a write: that is the evidence, not the
+  // method (a POST it let through is a read) and not the name the op is given.
+  if (!i.write && learned.exchange.aborted && i.from?.capture.write)
+    throw new Error(
+      `capture ${i.from.capture.id} was made with --write and intercepted request ${learned.exchange.id} as a write: learning it needs --write`,
+    );
   const warnings = recipeWarnings(learned.warnings, r);
   if (missing.length)
     warnings.push(

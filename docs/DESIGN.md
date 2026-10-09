@@ -393,7 +393,9 @@ independent alternative.
     from the answer the op's own `match` finds in the capture (or `--pick-request` names). The request is
     not learned again, so no param can be re-bound or dropped. With `--example` the op is learned again;
     a request-shaping flag without it is refused for an op that takes params, and learning an existing
-    write again without `--write` is refused before any browser run, never saved as a read. Captures hold
+    write again without `--write` is refused before any browser run, never saved as a read. So is
+    learning a request that a `--write` capture aborted, under any op name: the guard stopped it as a
+    write, and that verdict counts, not the method (a POST the capture let through is a read). Captures hold
     full responses and the run's cookie values (one page can be tens of MB), so each new one prunes
     the directory to the newest 20, none older than 24 h.
   - `capture --outline` / `inspect --outline` (the explorer's scout, `outline.ts`): for the top

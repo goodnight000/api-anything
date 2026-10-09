@@ -207,7 +207,8 @@ site.
 
 - Writes (posting, liking, sending, buying) are ops added with `--write`. While api-anything learns
   one, it aborts the request in the browser, so learning never performs the action. Learning an
-  existing write again needs `--write` again: `add` refuses to save it as a read.
+  existing write again, or a request a `--write` capture aborted, needs `--write`: `add` refuses to
+  save either as a read.
 - Calling a write needs `--allow-writes` (or an MCP server started with `--allow-writes`). Add
   it only when the user asked for **that specific action with that content**. Confirm the exact
   text or target with the user first if there is any doubt.

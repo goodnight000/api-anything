@@ -251,8 +251,16 @@ describe("inspect", () => {
 });
 
 describe("add from a saved capture", () => {
-  // Captures of /u/alice and /u/bob: request 1 is the page, 2 the user's JSON.
+  /** The steps that post a text on /compose. */
+  const steps = (text: string): TriggerStep[] => [
+    { action: "fill", selector: "#text", value: text },
+    { action: "click", selector: "#post" },
+  ];
+  const post = () => `/api/graphql/${fx.state.createQueryId}/CreatePost`;
+  const posts = () => fx.calls.filter((c) => c.path === post()).length;
+
   before(async () => {
+    // calice, cbob: /u/<name>. Request 1 is the page, 2 the user's JSON.
     for (const name of ["alice", "bob"]) {
       const variables = encodeURIComponent(JSON.stringify({ name, withExtras: true }));
       seed(`c${name}`, {
@@ -263,12 +271,30 @@ describe("add from a saved capture", () => {
         ],
       });
     }
+    // cpost: /compose captured with --write. Request 2 is the POST the guard aborted, so it has no
+    // answer; 3 is a search the page also POSTed, which went through and was answered.
+    const search = JSON.stringify([[["search", JSON.stringify(["kittens", 10]), null, "generic"]]]);
+    seed("cpost", {
+      url: `${fx.url}/compose`,
+      write: true,
+      steps: steps("hello alice"),
+      exchanges: [
+        await answered(1, "document", "/compose"),
+        {
+          id: 2,
+          resourceType: "fetch",
+          request: {
+            method: "POST",
+            url: `${fx.url}${post()}`,
+            headers: { "x-csrf-token": CSRF, authorization: PUBLIC_BEARER, "content-type": "application/json" },
+            body: JSON.stringify({ variables: { text: "hello alice" }, queryId: fx.state.createQueryId }),
+          },
+          aborted: true,
+        },
+        await answered(3, "xhr", "/api/rpc?rpcids=search", { form: `f.req=${encodeURIComponent(search)}` }),
+      ],
+    });
   });
-  /** The steps that post a text on /compose. */
-  const steps = (text: string): TriggerStep[] => [
-    { action: "fill", selector: "#text", value: text },
-    { action: "click", selector: "#post" },
-  ];
   /** add fixture <op> from the capture of that user's page; `flags` are split on spaces. */
   const add = async (op: string, from: string, flags: string) => {
     const r = await cli("add", "fixture", op, "--from", `c${from}`, "--pick-request", "2", ...flags.split(" "));
@@ -426,29 +452,25 @@ describe("add from a saved capture", () => {
     assert.match(full.out.error, /credential/);
   });
 
+  test("a request a --write capture aborted is learned as a write or not at all, whatever its name", async () => {
+    const add = async (op: string, request: string, example: string) => {
+      const r = await cli("add", "demo", op, "--from", "cpost", "--pick-request", request, "--example", example);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    // no op of that name yet, so nothing but the capture says it is a write
+    const fresh = await add("post", "2", "text=hello alice");
+    assert.equal(fresh.code, 1, fresh.stdout);
+    assert.match(fresh.out.error, /intercepted.*--write/);
+    assert.equal((await cli("ops", "demo")).code, 1, "nothing was saved");
+
+    // the method alone says nothing: a POST the same capture let through, and answered, is a read
+    const search = await add("search", "3", "q=kittens");
+    assert.equal(search.code, 0, search.stdout);
+    assert.equal(search.out.readOnly, true);
+    assert.equal(posts(), 0, "no POST reached the site");
+  });
+
   test("a write stays a write: a repair keeps it one, and learning it again without --write is refused", async () => {
-    const post = `/api/graphql/${fx.state.createQueryId}/CreatePost`;
-    const posts = () => fx.calls.filter((c) => c.path === post).length;
-    // /compose captured with --write: the POST was aborted in the browser, so it has no answer
-    seed("cpost", {
-      url: `${fx.url}/compose`,
-      write: true,
-      steps: steps("hello alice"),
-      exchanges: [
-        await answered(1, "document", "/compose"),
-        {
-          id: 2,
-          resourceType: "fetch",
-          request: {
-            method: "POST",
-            url: `${fx.url}${post}`,
-            headers: { "x-csrf-token": CSRF, authorization: PUBLIC_BEARER, "content-type": "application/json" },
-            body: JSON.stringify({ variables: { text: "hello alice" }, queryId: fx.state.createQueryId }),
-          },
-          aborted: true,
-        },
-      ],
-    });
     const send = async (...flags: string[]) => {
       const r = await cli("add", "demo", "send", "--from", "cpost", ...flags);
       return { ...r, out: JSON.parse(r.stdout) };
@@ -466,6 +488,20 @@ describe("add from a saved capture", () => {
     assert.equal(relearn.code, 1, relearn.stdout);
     assert.match(relearn.out.error, /--write/);
     assert.match((await cli("ops", "demo")).stdout, /"readOnly":false/);
+    // nor under a name that differs only in case, which is no existing op's
+    const cased = await cli(
+      "add",
+      "demo",
+      "SEND",
+      "--from",
+      "cpost",
+      "--pick-request",
+      "2",
+      "--example",
+      "text=hello alice",
+    );
+    assert.equal(cased.code, 1, cased.stdout);
+    assert.doesNotMatch((await cli("ops", "demo")).stdout, /"SEND"/);
     // by its trigger too: refused before any browser runs it unintercepted
     process.env.API_ANYTHING_HOME = HOME;
     const again = { site: "demo", op: "send", trigger: { url: `${fx.url}/compose`, steps: steps("{text}") } };
