@@ -332,6 +332,9 @@ export async function startFixture(): Promise<Fixture> {
       return json(res, 200, {
         data: { results: [`${u.searchParams.get("q")} one`, `${u.searchParams.get("q")} two`] },
       });
+    // An answer keyed by the visitor's session id ("guest" without one), as a per-session cache key
+    // is: a recipe suggested from a signed-in visitor's answer would carry the cookie's value.
+    if (p === "/api/mine") return json(res, 200, { [jar.session ?? "guest"]: [{ name: u.searchParams.get("name") }] });
     if (p === "/api/follow" || p === "/api/sw-write") return json(res, 200, { ok: true });
     if (p === "/api/spa/user") return json(res, 200, { name: u.searchParams.get("name") });
 

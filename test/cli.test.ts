@@ -48,17 +48,24 @@ function seed(id: string, capture: { url: string; exchanges: unknown[]; [k: stri
   writeFileSync(join(HOME, "captures", `${id}.json`), JSON.stringify(file));
 }
 
-/** One request as the fixture's pages send it, and the fixture's answer to it. */
-async function answered(id: number, resourceType: string, path: string) {
+/** One request as the fixture's pages send it, and the fixture's answer to it. `form`: a POST's body. */
+async function answered(id: number, resourceType: string, path: string, o: { cookie?: string; form?: string } = {}) {
   const headers: Record<string, string> =
     resourceType === "document"
       ? {}
-      : { "x-csrf-token": CSRF, authorization: PUBLIC_BEARER, cookie: `ct0=${CSRF}`, referer: `${fx.url}/` };
-  const res = await fetch(`${fx.url}${path}`, { headers });
+      : {
+          "x-csrf-token": CSRF,
+          authorization: PUBLIC_BEARER,
+          cookie: [`ct0=${CSRF}`, ...(o.cookie ? [o.cookie] : [])].join("; "),
+          referer: `${fx.url}/`,
+          ...(o.form ? { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" } : {}),
+        };
+  const method = o.form ? "POST" : "GET";
+  const res = await fetch(`${fx.url}${path}`, { method, headers, body: o.form });
   return {
     id,
     resourceType,
-    request: { method: "GET", url: `${fx.url}${path}`, headers },
+    request: { method, url: `${fx.url}${path}`, headers, ...(o.form ? { body: o.form } : {}) },
     response: {
       status: res.status,
       headers: {},
@@ -385,6 +392,38 @@ describe("add from a saved capture", () => {
     const repaired = await add("bare", "alice", "--extract data.user --pick name");
     assert.deepEqual(repaired.out.params, ["name:string"]);
     assert.deepEqual(await carol("bare"), { name: "carol" });
+  });
+
+  test("a repair is scanned for credentials as a full add is: the capture's cookies count, unsaved", async () => {
+    // /api/mine keys its answer by the session cookie's value, "guest" without one
+    const SESSION = "cookie-value-new-session";
+    const mine = async (id: string, session?: string) =>
+      seed(id, {
+        url: `${fx.url}/mine?name=alice`,
+        cookies: session ? [...JAR, { ...JAR[0], name: "session", value: session }] : JAR,
+        exchanges: [
+          await answered(1, "fetch", "/api/mine?name=alice", session ? { cookie: `session=${session}` } : {}),
+        ],
+      });
+    const add = async (op: string, ...flags: string[]) => {
+      const r = await cli("add", "fixture", op, ...flags);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    await mine("cguest");
+    const learned = await add("mine", "--from", "cguest", "--pick-request", "1", "--example", "name=alice");
+    assert.match(learned.out.extract, /^guest/, learned.stdout);
+
+    // the same request captured signed in: the suggested extract now runs through the cookie's value
+    await mine("csigned", SESSION);
+    const repair = await add("mine", "--from", "csigned");
+    assert.equal(repair.code, 1, repair.stdout);
+    assert.match(repair.out.error, /credential/);
+    for (const kept of ["sites", "sessions"])
+      assert.doesNotMatch(readFileSync(join(HOME, kept, "fixture.json"), "utf8"), new RegExp(SESSION), kept);
+    // a full add from that capture refuses for the same reason
+    const full = await add("mine2", "--from", "csigned", "--pick-request", "1", "--example", "name=alice");
+    assert.equal(full.code, 1, full.stdout);
+    assert.match(full.out.error, /credential/);
   });
 
   test("a write stays a write: a repair keeps it one, and learning it again without --write is refused", async () => {

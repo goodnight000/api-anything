@@ -617,7 +617,15 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
       `request ${exchange.id} is not one ${old.name}'s match finds, and the request was not learned from it: only the recipe was, from its answer. To learn the request too, pass --example`,
     );
   const operation: Operation = { ...old, ...(i.description ? { description: i.description } : {}), response };
-  const saved = saveOperation(site, operation, exchange, warnings, loadSession(site), capture.id);
+  // Scanned against what a full add would have merged into the session first: the capture's cookies
+  // and the values this request sent for the op's session refs. Live for the scan, saved by nothing here.
+  const now = loadSession(site);
+  const live: Session = {
+    ...now,
+    cookies: [...now.cookies, ...capture.cookies],
+    values: { ...now.values, ...sessionValuesOf(old, exchange) },
+  };
+  const saved = saveOperation(site, operation, exchange, warnings, live, capture.id);
   return { ...saved, captures: [], repaired: true };
 }
 
