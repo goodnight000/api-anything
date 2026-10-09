@@ -131,6 +131,8 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
             // the write is a new tab's first navigation
             `<a id="newtab" target="_blank" href="/api/vote?how=newtab">vote in a tab</a>` +
             `<button id="open" onclick="window.open('/api/vote?how=open')">open</button>` +
+            // an asset load the write guard allows during the steps: the server seeing it shows they have started
+            `<button id="css" onclick="const l=document.createElement('link');l.rel='stylesheet';l.href='/acting.css';document.head.appendChild(l)">css</button>` +
             // a client that sends a failed request again (axios-retry, Apollo's RetryLink), here with no backoff
             `<button id="retry" onclick="const go=()=>fetch('/api/vote?how=retry').catch(go);go()">retry</button>` +
             dataFetch(name),
@@ -145,8 +147,8 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
           img: `addEventListener("pagehide",()=>{new Image().src=${vote}})`,
           // a handler that is slow to get to it
           slow: `addEventListener("pagehide",()=>{const t=Date.now();while(Date.now()-t<400);navigator.sendBeacon(${vote},"up")})`,
-          // no handler at all: the browser itself sends it when the document goes
-          later: `fetchLater(${vote},{method:"POST",body:"up"})`,
+          // no handler at all: the browser itself sends it when the document goes; the fetch after it says it registered
+          later: `fetchLater(${vote},{method:"POST",body:"up"});fetch("/api/data?name=registered")`,
         };
         return html(res, `<script>${send[u.searchParams.get("how") ?? ""] ?? ""}</script>${dataFetch(name)}`);
       }
