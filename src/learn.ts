@@ -17,6 +17,17 @@ import {
   walk,
 } from "./codec.js";
 import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
+import {
+  credentialName,
+  headerName,
+  highEntropy,
+  lastToken,
+  leafName,
+  SESSION_FIELD,
+  SESSION_HEADER,
+  scanSecrets,
+  URLISH,
+} from "./secrets.js";
 import { loggedIn, parseCookieHeader, type Session } from "./session.js";
 import {
   type Match,
@@ -29,7 +40,6 @@ import {
   type Trigger,
   type Volatile,
 } from "./spec.js";
-import { scanSecrets } from "./store.js";
 import type { CaptureResult, Exchange, StoredCookie } from "./types.js";
 
 export type Args = Record<string, unknown>;
@@ -130,7 +140,6 @@ export interface Candidate {
 // The page URL rides along in these on every XHR, so they say nothing about which request carries the args.
 const NOT_EVIDENCE = new Set(["header:cookie", "header:referer", "header:origin"]);
 // Telemetry posts the page URL in its body (web-vitals, perf logs); a value seen only inside a URL is weak evidence.
-const URLISH = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 /** Lower-cased and percent-decoded (up to 3 layers, + as a space): a location reads the same in any leaf. */
 function norm(s: string): string {
@@ -400,12 +409,6 @@ function buildMatch(req: Request, slots: Slot[]): Match {
 // Conditional headers (a revalidating browser's If-None-Match) would turn every replay into a 304.
 // The body is stored decoded, so its content-encoding goes too.
 const DROP_HEADER = /^(:.*|host|content-length|connection|cookie|accept-encoding|content-encoding|if-[a-z-]+)$/i;
-const SESSION_HEADER =
-  /^(authorization|x-[a-z0-9-]*token|x-csrf[a-z0-9-]*|x-xsrf[a-z0-9-]*|x-goog-batchexecute-bgr|x-client-transaction-id|x-fb-lsd|x-ig-www-claim)$/i;
-// Per-session credentials sent in forms, queries or JSON bodies: Google's `at`, Meta's fb_dtsg/lsd,
-// Rails', ASP.NET's anti-CSRF fields, and OAuth-style access tokens.
-const SESSION_FIELD =
-  /^(at|fb_dtsg|lsd|authenticity_token|__RequestVerificationToken|_?csrf(_?token)?|_?xsrf(_?token)?|csrfmiddlewaretoken|(access_?)?token|session_?id)$/i;
 // Headers the browser computes itself: an example inside them is a coincidence ("apple" in the
 // user-agent, "app" in application/json), and they never carry a nonce of the site's.
 const BROWSER_HEADER =
@@ -415,14 +418,7 @@ const URL_SHAPED = /^([a-z][a-z0-9+.-]*:\/\/|\/)\S*$/i;
 const VOLATILE_KEY = /^(doc_?id|query_?id|document_?id|sha256_?hash|query_?hash|persisted_?query_?hash|hash)$/i;
 
 const key = (at: Step[]) => JSON.stringify(at);
-const headerName = (at: Step[]) => (at[0]!.startsWith("header:") ? at[0]!.slice(7) : undefined);
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const lastToken = (at: Step[]) => {
-  const s = at[at.length - 1]!;
-  return s.startsWith("json:") ? s.slice(s.lastIndexOf("/") + 1) : s.slice(s.indexOf(":") + 1);
-};
-/** The name a leaf goes by: its header, field, query key or JSON key. */
-export const leafName = (at: Step[]) => headerName(at) ?? lastToken(at);
 
 /**
  * Example values are distinct and can be located. A short one can only with `other`, the other
@@ -722,40 +718,6 @@ type Disproved = Map<string, string>;
 const pairKey = (param: string, at: Step[]) => `${param}\0${key(at)}`;
 const disprovedFor = (d: Disproved, param: string) =>
   [...d].flatMap(([k, why]) => (k.startsWith(`${param}\0`) ? [why] : []));
-
-/* ------------------------------------------------------------ credentials */
-
-// Words that name a credential in a key or header: api_key, authToken, x-session-id, sid, X-Amz-Signature.
-const CREDENTIAL_WORD =
-  /^(?:auth(?!or)[a-z0-9]*|[a-z0-9]*(?:token|secret|key|signature|password|passwd|pwd|credential|bearer)s?|sess(?:ion)?[a-z0-9]*|sid)$/;
-
-/** A key or header named like a credential, judged by its words (authToken -> auth, token; "author" is not). */
-export function credentialName(name: string): boolean {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .some((w) => CREDENTIAL_WORD.test(w));
-}
-
-/** Random-looking: 16+ chars, no spaces, not a URL, two character classes, 3+ bits of entropy per char. */
-export function highEntropy(v: string): boolean {
-  if (v.length < 16 || /\s/.test(v) || URLISH.test(v)) return false;
-  if ([/[a-z]/, /[A-Z]/, /\d/].filter((r) => r.test(v)).length < 2) return false;
-  const n = new Map<string, number>();
-  for (const c of v) n.set(c, (n.get(c) ?? 0) + 1);
-  let bits = 0;
-  for (const k of n.values()) bits -= (k / v.length) * Math.log2(k / v.length);
-  return bits >= 3;
-}
-
-/** A literal a spec must not hold: a per-session field or header, or a random value under a credential's name. */
-export function isCredential(name: string, value: string): boolean {
-  return (
-    ((SESSION_FIELD.test(name) || SESSION_HEADER.test(name)) && value.length >= 8) ||
-    (credentialName(name) && highEntropy(value))
-  );
-}
 
 /**
  * A script every visitor gets byte for byte: a GET whose answer shared caches may keep (not private

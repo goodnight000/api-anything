@@ -9,6 +9,7 @@ import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk 
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
 import { type Args, ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches } from "./learn.js";
+import { scanSecrets } from "./secrets.js";
 import {
   cookieHeaderFor,
   home,
@@ -22,7 +23,7 @@ import {
   writePrivate,
 } from "./session.js";
 import type { Match, Operation, ResponseSpec, Site, Slot, Trigger, Volatile } from "./spec.js";
-import { appendHeal, clearStale, loadSite, rememberTier, scanSecrets, updateSite } from "./store.js";
+import { appendHeal, clearStale, loadSite, rememberTier, updateSite } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
 
 export const profileDir = () => join(home(), "profile");

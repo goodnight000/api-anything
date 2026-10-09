@@ -11,13 +11,16 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/spec.ts` | zod schema of a site spec |
 | `src/codec.ts` | read and write values through decoded request layers; untouched bytes stay identical |
 | `src/learn.ts` | exchanges + example args -> Operation |
+| `src/secrets.ts` | what counts as a credential, and the scan that finds one in a spec |
+| `src/outline.ts` | a compact summary of a captured response, for choosing a request and a recipe |
 | `src/classify.ts` | response -> ok/drift/auth/rate/blocked/input/error; `judge` also extracts |
 | `src/extract.ts` | parse, extract, pick, cap |
 | `src/http.ts` | tier 1: fill the template, send with Node fetch |
 | `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login |
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |
 | `src/execute.ts` | `call()`: the tier ladder, classifier actions, heal guards, write rules |
-| `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, export scan |
+| `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, export |
+| `src/login.ts`, `src/import.ts` | sign in by importing the everyday browser's cookies; re-import on `auth` |
 | `src/cli.ts`, `src/mcp.ts`, `src/index.ts` | entry points |
 
 ## Rules
