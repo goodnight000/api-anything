@@ -78,7 +78,8 @@ const HELP: Record<string, string> = {
   --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages;
                   "all:<css>[@attr]" returns every match as a list (genres, tags)
   --embedded <regex>  JSON inside the page: group 1 marks where the JSON value starts; then --extract
-  --public <header,...>  headers holding public constants (a web app's bearer): kept literal, allowed by export
+  --public <name,...>  headers or fields (`body` for a whole body) that are the same for every visitor (a web
+                  app's bearer): kept literal, allowed by export. Only when the value is not the user's
   --write         the op changes state: it is learned from intercepted, aborted requests only
   --description <text>
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.`,
