@@ -72,4 +72,17 @@ describe("flags and command names", () => {
     assert.deepEqual(JSON.parse(own.stdout).data, { name: "carol" }, own.stdout);
     assert.equal((await cli("call", "--limit", "1", "--help")).code, 0, "--help still answers");
   });
+
+  test("a name every object inherits is an unknown command like any other", async () => {
+    const usage = (await cli("--help")).stdout;
+    for (const name of ["toString", "constructor"]) {
+      const r = await cli(name);
+      assert.deepEqual(
+        r,
+        { code: 1, stdout: usage, stderr: `next: unknown command "${name}"; see the list above\n` },
+        name,
+      );
+      assert.equal((await cli(name, "--help")).stdout, usage, `${name} --help`);
+    }
+  });
 });

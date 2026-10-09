@@ -672,7 +672,9 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${VERSION}\n`);
     return 0;
   }
-  if (!cmd || !HELP[cmd]) {
+  // an own key only: `toString` is on every object
+  const c = cmd && Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd] : undefined;
+  if (!cmd || !c) {
     process.stdout.write(`${USAGE}\n`);
     if (!cmd || v.help) return 0;
     process.stderr.write(`next: unknown command "${cmd}"; see the list above\n`);
@@ -682,9 +684,6 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${HELP[cmd]}\n`);
     return 0;
   }
-  // A name HELP only inherits (`toString`) gets past the check above; it has always exited 0 in silence.
-  if (!Object.hasOwn(COMMANDS, cmd)) return 0;
-  const c = COMMANDS[cmd]!;
   const extra = Object.keys(v).filter((k) => !c.flags.includes(k as Flag));
   if (extra.length)
     throw new Fail(`${cmd} does not take --${extra.join(", --")}`, `api-anything ${cmd} --help lists its flags`);
