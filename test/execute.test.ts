@@ -255,3 +255,51 @@ test("add --from a capture judges the op on the captured response: a wrong --ext
   assert.deepEqual(good.preview, { first: { name: "NASA" } });
   assert.equal(good.replaced, true);
 });
+
+test("an API that answers newline-delimited JSON or an event stream is learned as JSON and called through its recipe", async () => {
+  const { addOperation } = await import("../src/heal.js");
+  const answers: Record<string, (q: string) => string> = {
+    "application/x-ndjson": (q) => `{"title":"${q} one","n":1}\n{"title":"${q} two","n":2}\n`,
+    "text/event-stream": (q) =>
+      `data: {"title":"${q} one","n":1}\n\ndata: {"title":"${q} two","n":2}\n\ndata: [DONE]\n\n`,
+  };
+  for (const [contentType, answer] of Object.entries(answers)) {
+    const name = contentType.replace(/\W/g, "_");
+    const page = "https://t.test/search?q=nasa";
+    const added = await addOperation({
+      site: "lines",
+      op: name,
+      examples: [{ q: "nasa" }],
+      from: {
+        capture: {
+          id: `c${name}`,
+          at: "",
+          url: page,
+          cookies: [],
+          finalUrl: page,
+          exchanges: [
+            {
+              id: 1,
+              resourceType: "fetch",
+              request: { method: "GET", url: `https://t.test/api/${name}?q=nasa`, headers: {} },
+              response: { status: 200, headers: {}, contentType, body: answer("nasa") },
+            },
+          ],
+        },
+        id: 1,
+      },
+      response: { pick: ["title"] },
+    });
+    assert.equal(added.operation.response.format, "json", added.warnings.join("\n"));
+    assert.deepEqual(added.preview, { count: 2, first: { title: "nasa one" } });
+    const r = await call(
+      "lines",
+      name,
+      { q: "esa" },
+      opts(
+        (u) => new Response(answer(new URL(u).searchParams.get("q")!), { headers: { "content-type": contentType } }),
+      ),
+    );
+    assert.deepEqual(r.data, [{ title: "esa one" }, { title: "esa two" }], JSON.stringify(r));
+  }
+});

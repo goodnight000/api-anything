@@ -295,6 +295,13 @@ in Node; a field written `all:<css>[@attr]` returns every match as a list (a boo
 "embedded"` with a regex whose capture group is JSON, followed by `extract`. Seroval/JS-literal
 payloads are out of scope for v1.
 
+A body that is several JSON values parses as a list of them, so the same `extract` and `pick` apply:
+Google's `rt=c` length-prefixed chunks, an XSSI prefix repeated before each value, newline-delimited
+JSON (one value per line, every line) and a finite `text/event-stream` (one value per `data:` line;
+data that is not JSON, such as a `[DONE]` end marker, is skipped). The body alone decides, so
+learning and calling agree: a one-line NDJSON body is its one value, not a list of one. Any other
+text is not JSON, and is classified as before. Never-ending streams are out of scope.
+
 ## Spec files and where they live
 
 One JSON file per site: `{ name, displayName, baseUrl, description, operations[] }`, zod-validated.
