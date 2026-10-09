@@ -378,7 +378,8 @@ independent alternative.
     id-like keys (Apollo's `Book:kca://...`) are flagged, since they don't generalize.
   - `verify [site]` (health-checks every read op with its example, healing as needed)
   - `sites`, `ops <site>` (params with their format, and the site's notes: `<site>.md` beside its
-    spec, the user's copy first), `heal <site> <op>`, `export <site>`, `mcp`
+    spec, the user's copy first, up to its `## Maintainer notes` heading; the rest of the file is
+    for people working on the spec), `heal <site> <op>`, `export <site>`, `mcp`
   - All output is JSON-first, compact, and ends with a `next` hint on failure.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `list_operations`,
   `call_operation`, and `login` (so an agent can fix an `auth` failure itself), so the tool list

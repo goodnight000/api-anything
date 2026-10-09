@@ -28,7 +28,11 @@ bundled spec is a starting point that each user's machine keeps healing.
    - add `loginCookies` (the cookie names that mean "signed in") if the site needs an account;
    - check that the kept `example` values are public and harmless (a well-known account, not
      yours), so `verify` works for others.
-5. In the PR description, say what you verified, on what date, and whether you were logged in.
+5. Write `sites/<site>.md`, the notes every `ops` and `list_operations` call sends: only what a
+   caller needs and the spec doesn't say (arg formats, unclear result fields, account, limits).
+   Everything from a `## Maintainer notes` heading to the end of the file is not sent: put what you
+   verified, how the request works and what failed there.
+6. In the PR description, say what you verified, on what date, and whether you were logged in.
 
 Rules for bundled specs:
 

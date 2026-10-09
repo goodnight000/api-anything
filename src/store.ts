@@ -35,11 +35,17 @@ export function loadSite(name: string, bundledDir = BUNDLED_DIR): Resolved | und
   return undefined;
 }
 
-/** A site's notes (caveats, arg formats, login advice): `<site>.md` beside its spec, the user's copy first. */
+/**
+ * A site's notes for whoever calls it (caveats, arg formats, login advice): `<site>.md` beside its spec, the
+ * user's copy first. Every caller pays for them in tokens, so a `## Maintainer notes` heading ends them:
+ * from there on the file is for people working on the spec.
+ */
 export function siteNotes(name: string, bundledDir = BUNDLED_DIR): string | undefined {
   for (const dir of [userSitesDir(), bundledDir]) {
     const path = join(dir, `${safeName(name)}.md`);
-    if (existsSync(path)) return readFileSync(path, "utf8").trim();
+    if (!existsSync(path)) continue;
+    const [forCallers] = readFileSync(path, "utf8").split(/^## Maintainer notes\s*$/im);
+    return forCallers!.trim();
   }
   return undefined;
 }
