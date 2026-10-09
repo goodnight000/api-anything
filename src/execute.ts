@@ -397,14 +397,16 @@ export async function call(
       next: `delete ${sessionFile(siteName)}, then ask the user to run api-anything login ${siteName} if the site needs an account`,
     });
   }
-  let bare: boolean;
   try {
-    // No cookie and no session value goes out with this request: nothing a login could renew.
-    bare = !buildRequest(op, args, session).headers.cookie && !op.slots.some(holdsRef) && !op.learnedLoggedIn;
+    buildRequest(op, args, session);
   } catch (e) {
     return done({ ok: false, class: "input", reason: (e as Error).message, next: nextFor("input", siteName, op) });
   }
 
+  // No login on record for this site: none was run (a login leaves its source, even after its cookies
+  // expire), no login cookie is in the jar, and the op neither takes a credential nor was learned signed in.
+  const noLogin =
+    !session.source && !loggedIn(session.cookies, site.loginCookies) && !op.slots.some(holdsRef) && !op.learnedLoggedIn;
   const ctx: Ctx = { site: siteName, args, opts, maxTier: opts.maxTier ?? 3 };
   const remembered = rememberedTier(siteName, op.name);
   // A remembered escalation is a speed hint, not a requirement: under a lower cap, start at the op's own tier.
@@ -467,13 +469,13 @@ export async function call(
       tier++;
       continue;
     }
-    // An auth answer to a request that carried no credential is not a session that ran out: the
-    // transport was turned away (a wall that answers 419 or 401 to a client it does not like), or the
-    // page computes a token the template lacks. A browser tier settles it, and a real login wall still
-    // answers auth there. Only when that tier can run, so the answer stays auth where it cannot.
-    if (a.class === "auth" && bare && tier < Math.min(write ? 2 : 3, ctx.maxTier) && chromeAvailable()) {
-      notes.push(`tier ${tier} said auth to a request that carried no credential (${a.reason})`);
-      tier++;
+    // Plain HTTP answered auth, and there is no login on record to have run out: more likely the
+    // client was turned away (a wall that answers 419 or 401 to what is not a browser) than a session
+    // expired. The same request from a real page tells which, once; if that says auth too, recovery
+    // and the login hint follow as usual. With a login on record, recovery comes first, as before.
+    if (a.class === "auth" && noLogin && tier === 1 && ctx.maxTier >= 2 && chromeAvailable()) {
+      notes.push(`tier 1 said auth with no login on record for this site (${a.reason})`);
+      tier = 2;
       continue;
     }
     // Once per call, at any tier. A write gets here only when it certainly did not run.

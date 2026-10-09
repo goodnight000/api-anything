@@ -260,10 +260,13 @@ more; a write is never resent. The tier-3 answer is the matching request whose d
 materialized call, including short and structured values, and whose response judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
 A param's default is filled into the args once, before the first tier, so every tier runs with the
 same values: the tier-3 trigger opens `?count=20`, never a literal `{count}`.
-An `auth` answer to a request that carried no credential (no cookie sent, no cookie or session slot,
-an op not learned signed in) is not a session that ran out: the transport was turned away, or the page
-computes a token the template lacks. It is tried at the next tier the way `blocked` is, when that tier
-may run; a real login wall answers `auth` there too, and the call ends with the login hint.
+When tier 1 answers `auth` and there is no login on record for the site (no `login` was run, no login
+cookie is in the jar, the op takes no cookie or session value and was not learned signed in), the
+likelier cause is a wall that answers 419 or 401 to a client that is not a browser, not an expired
+session. The request is sent once from a real page (tier 2), when that tier may run. If the page gets
+the data, the tier is remembered; if it says `auth` too, recovery and the login hint follow as usual.
+With a login on record, recovery comes first, as before. This is a guess from what is known before the
+call, not proof: a site that started requiring an account costs one page fetch more per failed call.
 An `auth` answer starts recovery at whichever tier got it (an op with `minTier: 2` or `3`, or one a
 remembered escalation starts there), at most once per call. At tier 3 only the re-import applies,
 and only to a read: the page just ran with the profile's own cookies and session values, so there is
