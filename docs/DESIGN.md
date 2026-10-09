@@ -161,7 +161,12 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    it is a `{cookie:x}` hole in the param's template, filled at call time. A hole is filled with the value as
    stored; only a ref slot's own value takes a `transform`. So a cookie that could only be a hole and sits
    there unquoted or URL-decoded has no safe form, and learning refuses the request rather than keep its text. When that slot has no
-   escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. A capture refreshes a
+   escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. The text then left
+   around the holes of a param's leaf is judged by the leaf's name, the way a whole leaf is (`x-csrf-token: kittens.<token>`,
+   `token=kittens.<token>`): when it is a credential by that test it becomes a `{session:x}` hole named by its position,
+   and the one character between it and the hole beside it stays literal, so a capture can tell where the value ends. In
+   several pieces, under an escape, or with nothing between it and the param it cannot be a hole, and learning refuses
+   the request. Text that is no credential by that test stays (`cache_key=search:{q}:page1`). A capture refreshes a
    templated `session:` value from its place in the leaf. Slots never overlap: a ref for a whole container
    (a JSON body the app saved in storage, a JSON-valued header) yields to the params and refs inside it,
    since blanking the whole would take their positions away. A container that is a credential (by its header's name, a
@@ -185,8 +190,11 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    escaping and base64. It does not prove a spec holds no credential. These can still reach one: a cookie or value under
    6 characters; a credential that is a number (a number leaf is never a ref, and digits alone are not random-looking, so
    one is caught only as a copy of a known value); a credential split across two leaves; a copy under four or more
-   layers of encoding; a cookie that only the second run's request carried and the jar does not hold; and a credential no
-   rule recognizes (not a cookie, not stored, not named like one, not issued by an earlier answer). Export scans a
+   layers of encoding; a cookie that only the second run's request carried and the jar does not hold; a value under a
+   credential's name that is too plain for the name's rule (under 8 characters for a per-session name, not random-looking
+   for a credential-like one), whole or beside a param; and a credential no rule recognizes (not a cookie, not stored,
+   not named like one, not issued by an earlier answer), which beside a param in an ordinarily named leaf stays in the
+   template with the rest of the leaf's text. Export scans a
    spec again, by name and by shape, before it is shared. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.

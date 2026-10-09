@@ -419,6 +419,78 @@ test("the check knows a stored credential that no pass made a reference, and no 
   assert.throws(() => learn([copied], [{ q: "kittens" }]), /request\.body holds the live session value x-csrf-token/);
 });
 
+/* --------------------------------------------- the text beside a param */
+
+test("the text beside a param in its leaf is judged by the leaf's name, as a whole leaf would be", () => {
+  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
+  const T2 = "Zx9Qw8vLm7Kj6HgF5dS4aP3oI2uY1tRe";
+  const search = "https://api.site.test/v1/search?q=";
+  // [where the leaf is, the request for an arg and a token, the leaf's text for them]
+  const shapes: [string, (q: string, t: string) => Parameters<typeof xhr>[0], (q: string, t: string) => string][] = [
+    [
+      "header:x-csrf-token",
+      (q, t) => ({ url: search + q, headers: { "x-csrf-token": `${q}.${t}` } }),
+      (q, t) => `${q}.${t}`,
+    ],
+    ["query:token", (q, t) => ({ url: `${search}${q}&token=${q}.${t}` }), (q, t) => `${q}.${t}`],
+    ["query:api_key", (q, t) => ({ url: `${search}${q}&api_key=${t}:${q}` }), (q, t) => `${t}:${q}`],
+  ];
+  for (const [at, request, text] of shapes) {
+    const { operation: op, sessionValues } = learn([xhr(request("kittens", T))], [{ q: "kittens" }, { q: "puppies" }], {
+      exchanges2: [xhr(request("puppies", T2))],
+    });
+    assert.ok(!JSON.stringify(op).includes(T), `${at}: the token stayed in the spec`);
+    const slot = op.slots.find((s) => s.at[0] === at)!;
+    assert.equal(slot.template!.replace(/\{session:[^}]+\}/, "<ref>"), text("{q}", "<ref>"));
+    assert.deepEqual(Object.values(sessionValues), [T], "the token is stored, without the separator or the arg");
+    assert.equal(op.minTier, 1, "another session's token in run 2 is no nonce");
+    const sent = buildRequest(op, { q: "tigers" }, { cookies: [], values: sessionValues });
+    const got = at.startsWith("header:") ? sent.headers[at.slice(7)] : new URL(sent.url).searchParams.get(at.slice(6));
+    assert.equal(got, text("tigers", T));
+  }
+
+  // control: a credential-like name whose leftover text is no credential by the same test changes nothing
+  const cache = learn([xhr({ url: `${search}kittens&cache_key=search:kittens:page1` })], [{ q: "kittens" }]);
+  assert.deepEqual(cache.operation.slots.at(-1), {
+    param: "q",
+    at: ["query:cache_key"],
+    template: "search:{q}:page1",
+  });
+  assert.deepEqual(cache.sessionValues, {});
+  assert.equal(
+    buildRequest(cache.operation, { q: "tigers" }, noSession).url,
+    `${search}tigers&cache_key=search:tigers:page1`,
+  );
+
+  // what cannot be one clean hole refuses, naming the position
+  const refused: [string, RegExp][] = [
+    [`token=a1B2c3D4.kittens.${T}`, /query:token holds a param inside text that is a credential .* several pieces/],
+    [`token=kittens${T}`, /query:token holds a param inside text that is a credential .* nothing separates/],
+    [
+      `token=https://sso.site.test/${T}/kittens`,
+      /query:token holds a param inside text that is a credential .* escaped/,
+    ],
+  ];
+  for (const [pair, why] of refused)
+    assert.throws(() => learn([xhr({ url: `${search}kittens&${pair}` })], [{ q: "kittens" }]), why);
+});
+
+test("beside a param under an ordinary name, a known live value too short to template is refused by the check", () => {
+  const ctx = (value: string) => [
+    xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-ctx": `kittens.${value}` } }),
+  ];
+  assert.throws(
+    () => learn(ctx("secret123"), [{ q: "kittens" }], { cookies: [cookie("sess", "secret123")] }),
+    /keep a credential in the spec: .*holds the live cookie sess/,
+  );
+  assert.throws(
+    () => learn(ctx("Ab3dEf9h"), [{ q: "kittens" }], { storage: { csrf: "Ab3dEf9h" } }),
+    /keep a credential in the spec: \$\.slots\[1\]\.template holds the live session value storage:csrf/,
+  );
+  // control: the same leaf with nothing known in it learns
+  assert.equal(learn(ctx("Ab3dEf9h"), [{ q: "kittens" }]).operation.slots.length, 2);
+});
+
 /* ------------------------------------------- what example 2 disproves */
 
 const noSession = { cookies: [] as StoredCookie[], values: {} as Record<string, string> };
