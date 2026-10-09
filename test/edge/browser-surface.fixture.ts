@@ -157,18 +157,6 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
       case "/late-tab-page":
         // opens a tab whose document is slow: the tab has no page yet when the run that opened it ends
         return html(res, `<script>window.open("/held-vote")</script>${dataFetch(name)}`);
-      case "/shared-worker-page": {
-        // hands its write to a shared worker, started by the page or through a frame it makes (a
-        // worker of its own each time: one a page of an earlier run still had would be joined)
-        const start =
-          u.searchParams.get("how") === "frame"
-            ? `const f=document.createElement("iframe");document.body.appendChild(f);new f.contentWindow.SharedWorker("/shared-worker.js?"+Math.random())`
-            : `new SharedWorker("/shared-worker.js?"+Math.random())`;
-        return html(res, `${dataFetch(name)}<script>${start}</script>`);
-      }
-      case "/shared-worker.js":
-        res.writeHead(200, { "content-type": "application/javascript" });
-        return res.end(`fetch("/api/vote?how=shared",{method:"POST",body:"up"})`);
       // an app that starts only once its shared worker has answered (a session kept across tabs)
       case "/worker-app":
         return html(

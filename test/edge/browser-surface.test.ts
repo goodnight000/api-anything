@@ -659,36 +659,6 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     assert.deepEqual(Object.keys(tabs).sort(), ["close", "openerOf", "sync", "watchers"], "and no other history");
   });
 
-  for (const [how, by] of [
-    ["page", "the page"],
-    ["frame", "a frame the page makes"],
-  ] as const) {
-    test(`a shared worker started by ${by} runs, and its write is stopped and recorded like the page's`, async () => {
-      process.env.API_ANYTHING_HOME = home;
-      const before = votes().length;
-      const seen = fx.calls.length;
-      // guarded like a write's learning run: no unsafe request leaves, whoever sends it
-      const r = await runTrigger({
-        url: `${fx.url}/shared-worker-page?how=${how}&name=worker`,
-        profileDir: profileDir(),
-        intercept: (e) => e.request.method !== "GET",
-      });
-      await sleep(300);
-      const calls = fx.calls.slice(seen);
-      assert.ok(calls.includes("/api/data?name=worker"), "the page ran");
-      assert.ok(
-        calls.some((c) => c.startsWith("/shared-worker.js")),
-        "the shared worker was not started",
-      );
-      assert.deepEqual(votes().slice(before), [], "a shared worker wrote");
-      assert.deepEqual(
-        r.exchanges.filter((e) => e.aborted).map((e) => `${e.request.method} ${new URL(e.request.url).pathname}`),
-        ["POST /api/vote"],
-        "the stopped write is not in the capture",
-      );
-    });
-  }
-
   test("an app that waits for its shared worker starts, guarded or not", async () => {
     process.env.API_ANYTHING_HOME = home;
     for (const intercept of [undefined, (e: { request: { method: string } }) => e.request.method !== "GET"]) {

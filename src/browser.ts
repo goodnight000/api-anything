@@ -282,126 +282,6 @@ async function guardSockets(ctx: BrowserContext, guard: SocketGuard): Promise<()
   return () => g.guards.delete(guard);
 }
 
-/**
- * Shared workers being attached to. Playwright's own session lets a new worker run as soon as it
- * has looked at it, so holding one is no guarantee; but its script is fetched through the page
- * that started it, and a guarded page's tap answers nothing while these are under way: the worker
- * has no code to run before its requests are paused.
- */
-const workersAttaching = new Set<Promise<void>>();
-const workerGuards = new WeakMap<BrowserContext, { guards: Set<SocketGuard>; ready: Promise<void> }>();
-
-/**
- * Stop a shared worker's requests while `guard` says so. A shared worker is a target of its own,
- * no page's: no route sees what it sends, nor any page's tap, and a guarded page can join one an
- * unguarded page started. So, from the first guarded run on, every shared worker in the browser
- * is attached to, through the browser's own session: a new one is held before it runs a line
- * (`waitForDebuggerOnStart`) until its requests are paused too, then let go. Each request it sends
- * is put to the guards of the runs under way and fails if any of them says so; with none it goes
- * on. A worker whose requests cannot be paused is closed while a guard is set, else let run.
- * Returns the function that removes this guard.
- * ponytail: a worker can't be traced to a run, so every guarded run judges every worker's requests;
- * that errs on the side of not sending. Playwright's session only takes a flat child session, and
- * drops what such a session says, so each worker gets a second, non-flat one to pause it through.
- */
-async function guardWorkers(ctx: BrowserContext, guard: SocketGuard): Promise<() => void> {
-  let g = workerGuards.get(ctx);
-  if (!g) {
-    const guards = new Set<SocketGuard>();
-    const ready = (async () => {
-      const browser = ctx.browser();
-      if (!browser) throw new Error("this browser gives no session to guard its shared workers through");
-      const cdp = await browser.newBrowserCDPSession();
-      let n = 0;
-      const replies = new Map<string, (m: { error?: unknown }) => void>();
-      /** `sent`: the browser took the command; `done`: the worker answered it */
-      const ask = (sessionId: string, method: string, params: object = {}) => {
-        const id = ++n;
-        const reply = new Promise<{ error?: unknown }>((r) => replies.set(`${sessionId} ${id}`, r));
-        const sent = cdp.send("Target.sendMessageToTarget", {
-          sessionId,
-          message: JSON.stringify({ id, method, params }),
-        });
-        const done = Promise.all([sent, reply]).then(([, m]) => {
-          if (m.error) throw new Error(JSON.stringify(m.error));
-        });
-        return Object.assign(done, { sent });
-      };
-      cdp.on("Target.receivedMessageFromTarget", ({ sessionId, message }) => {
-        const m = JSON.parse(message);
-        if (m.id) return void replies.get(`${sessionId} ${m.id}`)?.(m);
-        if (m.method !== "Fetch.requestPaused") return;
-        const p = m.params;
-        const ex: Exchange = {
-          id: 0,
-          resourceType: String(p.resourceType).toLowerCase(),
-          request: {
-            method: p.request.method,
-            url: p.request.url + (p.request.urlFragment ?? ""),
-            headers: Object.fromEntries(
-              Object.entries(p.request.headers).map(([k, v]) => [k.toLowerCase(), String(v)]),
-            ),
-            body: p.request.postData,
-          },
-        };
-        const stop = [...guards].some((drop) => drop(ex));
-        void ask(
-          sessionId,
-          stop ? "Fetch.failRequest" : "Fetch.continueRequest",
-          stop ? { requestId: p.requestId, errorReason: "Aborted" } : { requestId: p.requestId },
-        ).catch(() => {}); // the worker is gone
-      });
-      const watched = new Set<string>();
-      cdp.on("Target.attachedToTarget", async ({ sessionId: flat, targetInfo }) => {
-        // attaching a second session is reported too: one per worker
-        if (targetInfo.type !== "shared_worker" || watched.has(targetInfo.targetId)) return;
-        const { targetId } = targetInfo;
-        watched.add(targetId);
-        // Taken by the browser is enough for the script to be let through: the worker handles its
-        // commands in order, before it runs anything, and it answers them only once it has its script.
-        let taken = () => {};
-        const queued = new Promise<void>((r) => (taken = r));
-        workersAttaching.add(queued);
-        try {
-          const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: false });
-          const fetch = ask(sessionId, "Fetch.enable", { patterns: [{ urlPattern: "*" }] });
-          // without the network domain on too, Chrome pauses none of a worker's requests
-          const network = ask(sessionId, "Network.enable");
-          await Promise.all([fetch.sent, network.sent]);
-          taken();
-          await Promise.all([fetch, network]);
-        } catch {
-          if (guards.size) await cdp.send("Target.closeTarget", { targetId }).catch(() => {});
-        } finally {
-          taken();
-          workersAttaching.delete(queued);
-        }
-        // letting go of the flat session lets a held worker run
-        await cdp.send("Target.detachFromTarget", { sessionId: flat }).catch(() => {});
-      });
-      cdp.on("Target.targetDestroyed", ({ targetId }) => watched.delete(targetId));
-      await cdp.send("Target.setDiscoverTargets", { discover: true });
-      await cdp.send("Target.setAutoAttach", {
-        autoAttach: true,
-        waitForDebuggerOnStart: true,
-        flatten: true,
-        filter: [{ type: "shared_worker" }],
-      });
-    })();
-    g = { guards, ready };
-    workerGuards.set(ctx, g);
-    ready.catch(() => workerGuards.delete(ctx));
-  }
-  g.guards.add(guard);
-  try {
-    await g.ready;
-  } catch (e) {
-    g.guards.delete(guard);
-    throw e;
-  }
-  return () => g.guards.delete(guard);
-}
-
 // How long a page gets to be emptied, and then to close, before the run ends without waiting for it.
 const SEAL_MS = 5000;
 /** A call into a page, given up on after a while: a hung renderer answers nothing, and evaluate() and close() have no timeout. */
@@ -507,15 +387,11 @@ async function tap(
     // not a cross-origin fetch's: the id seen before is what tells it.
     const via = e.networkId ? chains.get(e.networkId) : undefined;
     if (e.networkId && !via) chains.set(e.networkId, ex);
-    const stop = drop(ex, !!e.networkId && !via && !e.redirectedRequestId, via);
-    // a shared worker's script waits until the worker is guarded (see workersAttaching)
-    const answer = Promise.all(workersAttaching)
-      .then(() =>
-        stop
-          ? cdp.send("Fetch.failRequest", { requestId, errorReason: "Aborted" })
-          : cdp.send("Fetch.continueRequest", { requestId }),
-      )
-      .catch(() => {}); // the request or its page is gone
+    const answer = (
+      drop(ex, !!e.networkId && !via && !e.redirectedRequestId, via)
+        ? cdp.send("Fetch.failRequest", { requestId, errorReason: "Aborted" })
+        : cdp.send("Fetch.continueRequest", { requestId })
+    ).catch(() => {}); // the request or its page is gone
     answers.add(answer);
     void answer.then(() => answers.delete(answer));
   });
@@ -864,7 +740,6 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   };
   const answered = () => exchanges.some((e) => o.match!(e) && (e.response || e.aborted));
   let dropSocketSends: (() => void) | undefined;
-  let unguardWorkers: (() => void) | undefined;
   const waitForData = async () => {
     if (o.match) {
       // The op's own request answering is the signal; then a short settle.
@@ -951,13 +826,6 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     if (guard) await ctx.route("**/*", guard);
     // A chat "send" goes over an open socket, where no HTTP route sees it; a popup's socket too.
     if (intercept) dropSocketSends = await guardSockets(ctx, (ex) => intercept(ex, acting));
-    // A shared worker's requests reach no route and no tap: the run judges them as its pages'.
-    if (intercept)
-      unguardWorkers = await guardWorkers(ctx, (ex) => {
-        if (!intercept(ex, acting)) return false;
-        if (!sealed) exchanges.push({ ...ex, id: exchanges.length + 1, aborted: true });
-        return true;
-      });
     // in place before the first document, so that what it defers (fetchLater) passes through it
     cover(page);
     if (intercept && !(await within(Promise.resolve(taps.get(page)), undefined)))
@@ -1034,7 +902,6 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       ctx.off("page", onPage);
       if (guard) await ctx.unroute("**/*", guard).catch(() => {});
       dropSocketSends?.();
-      unguardWorkers?.();
     };
     // New tabs are still adopted while the run ends: one opened now is the run's to close as well.
     // The pages are closed before the guards are lifted: an open page still sends (a client's
