@@ -486,6 +486,19 @@ function pickRequest(input: LearnInput, args: Args, warnings: string[]): { excha
   return { exchange: ex, pages };
 }
 
+/**
+ * A JSON object that repeats a key has a leaf no step path reaches, so a credential there could be
+ * neither blanked nor filled. JSON.stringify never writes one, so a frontend's own request has none.
+ */
+function refuseRepeatedKeys(leaves: Leaf[]): void {
+  const leaf = leaves.find((l) => l.repeated);
+  if (!leaf) return;
+  throw new Error(
+    `the request has a JSON object that repeats a key (${leaf.at.join(" > ")}): only the key's first occurrence can be read or filled, ` +
+      "so a value in a later one would stay in the spec as captured. Not learned; pick a request without the repeated key",
+  );
+}
+
 /** Pointers inside a JSON text whose value equals want (an array or object example). */
 function jsonPointers(root: unknown, want: string, ptr = ""): string[] {
   if (JSON.stringify(root) === want) return [ptr];
@@ -1189,6 +1202,7 @@ export function learnOperation(input: LearnInput): Learned {
   const { exchange, pages } = pickRequest(input, args1, warnings);
   const captured = templateOf(exchange);
   const leaves = walk(captured);
+  refuseRepeatedKeys(leaves);
 
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).

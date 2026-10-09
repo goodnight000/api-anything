@@ -22,6 +22,8 @@ export interface Leaf {
   type: "string" | "number" | "boolean" | "null";
   /** the string was itself JSON and its leaves follow in the walk */
   container?: boolean;
+  /** under a key its JSON object repeats: `at` reaches the key's first occurrence, never this leaf */
+  repeated?: boolean;
 }
 
 /* ------------------------------------------------------------- JSON spans */
@@ -380,20 +382,29 @@ function walkJsonString(s: string, at: Step[], out: Leaf[]): boolean {
   } catch {
     return false;
   }
-  const visit = (i: number, ptr: string) => {
+  const visit = (i: number, ptr: string, repeated: boolean) => {
     const c = s[i];
-    if (c === "{" || c === "[") return eachChild(s, i, (key, child) => void visit(child, `${ptr}/${escapeToken(key)}`));
+    if (c === "{" || c === "[") {
+      const seen = new Set<string>();
+      return eachChild(s, i, (key, child) => {
+        const again = repeated || (c === "{" && seen.has(key));
+        seen.add(key);
+        visit(child, `${ptr}/${escapeToken(key)}`, again);
+      });
+    }
     const span = s.slice(i, jsonValueEnd(s, i));
     const steps = [...at, `json:${ptr}`];
+    const flag = repeated ? { repeated } : {};
     if (c === '"') {
-      const leaf: Leaf = { at: steps, value: JSON.parse(span) as string, type: "string" };
+      const leaf: Leaf = { at: steps, value: JSON.parse(span) as string, type: "string", ...flag };
       out.push(leaf);
       if (walkInner(leaf.value, steps, out)) leaf.container = true;
     } else {
-      out.push({ at: steps, value: span, type: c === "t" || c === "f" ? "boolean" : c === "n" ? "null" : "number" });
+      const type = c === "t" || c === "f" ? "boolean" : c === "n" ? "null" : "number";
+      out.push({ at: steps, value: span, type, ...flag });
     }
   };
-  visit(start, "");
+  visit(start, "", false);
   return true;
 }
 

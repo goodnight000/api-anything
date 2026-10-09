@@ -51,7 +51,9 @@ Store the captured request **verbatim** (method, url, headers, body string) plus
 Step kinds: `path:<i>` (URL path segment), `query:<key>`, `header:<name>`, `form:<key>`,
 `json:<RFC6901 pointer>` (the current string is parsed as JSON), `b64` (the current string is
 base64 of JSON), `body` (the whole body). A repeated key's later occurrences are `query[1]:<key>`,
-`form[1]:<key>`, and so on. Header names are lower-cased when a spec is parsed.
+`form[1]:<key>`, and so on. A JSON object has no such form: a pointer reaches a key's first occurrence
+only, so learning refuses a request whose JSON repeats a key (`{"token":A,"token":B}`) rather than
+leave the later value where it can be neither blanked nor filled. Header names are lower-cased when a spec is parsed.
 Filling decodes only the layers a slot touches, sets the value, and re-encodes only those layers.
 Untouched bytes stay identical, so RestLi parens, key order and the exact encoding survive.
 No `{x}` string interpolation over raw captured text. In a slot `template`, `{{` and `}}` are
