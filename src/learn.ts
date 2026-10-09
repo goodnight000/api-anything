@@ -73,6 +73,8 @@ export interface Learned {
   operation: Operation;
   /** the captured request it was learned from */
   exchange: Exchange;
+  /** run 2's request the two-run diff read, when it found one */
+  exchange2?: Exchange;
   warnings: string[];
   /** literal values of session: refs, for the session store; never written to the spec */
   sessionValues: Record<string, string>;
@@ -1498,11 +1500,11 @@ function twoRunDiff(
   warnings: string[],
   disproved: Disproved,
   short: Set<string>,
-): 1 | 3 {
+): { minTier: 1 | 3; exchange2?: Exchange } {
   const [args1, args2] = input.examples;
   if (!input.exchanges2 || !args2) {
     warnings.push("learned from one example; a second example set separates params from nonces");
-    return 1;
+    return { minTier: 1 };
   }
   const pool = input.exchanges2.filter((e) => matches(match, e.request));
   const byId = (c: Candidate) => pool.find((e) => e.id === c.id)!;
@@ -1528,7 +1530,7 @@ function twoRunDiff(
   if (!top) {
     unproven(`run 2 produced no request matching ${JSON.stringify(match)}`);
     warnings.push("run 2 produced no matching request; skipped the two-run diff");
-    return 1;
+    return { minTier: 1 };
   }
   if (!answers.length) {
     unproven("run 2's matching request does not answer like run 1's");
@@ -1536,13 +1538,14 @@ function twoRunDiff(
       "run 2's matching request does not answer like run 1's (no data, or not what the recipe reads): it disproves nothing",
     );
   }
-  const req2 = { ...byId(top).request, headers: headersOf(byId(top)) };
+  const exchange2 = byId(top);
+  const req2 = { ...exchange2.request, headers: headersOf(exchange2) };
   // a request that is not run 1's counterpart still shows nonces, but is no evidence against a slot
   const proof = answers.length ? disproved : new Map();
   const nonces = diffRuns(request, req2, slots, [args1, args2], warnings, proof, short);
-  if (!nonces.length) return 1;
+  if (!nonces.length) return { minTier: 1, exchange2 };
   warnings.push(`changes between runs without an arg change (nonce/signature), so minTier 3: ${nonces.join("; ")}`);
-  return 3;
+  return { minTier: 3, exchange2 };
 }
 
 export function learnOperation(input: LearnInput): Learned {
@@ -1588,7 +1591,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
 
   // 3. two-run diff. A place run 2 disproved was never the param's: learn again without it.
   const found: Disproved = new Map(disproved);
-  const minTier = twoRunDiff(input, exchange, request, slots, match, warnings, found, short);
+  const { minTier, exchange2 } = twoRunDiff(input, exchange, request, slots, match, warnings, found, short);
   if (found.size > disproved.size) return learn(input, found);
 
   // 8. response
@@ -1624,6 +1627,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   return {
     operation,
     exchange,
+    ...(exchange2 ? { exchange2 } : {}),
     warnings,
     sessionValues: Object.fromEntries(
       Object.entries(sessionValues).map(([k, v]) => [`${encodeURIComponent(input.name)}/${k}`, v]),

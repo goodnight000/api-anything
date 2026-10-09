@@ -61,12 +61,20 @@ const LOGIN_SAID =
   /"require_login"\s*:\s*true|login_required|not logged in|(log|sign) ?in to continue|please (log|sign) ?in|authentication required|bad authentication|could not authenticate|bad guest token|invalid session|session (has )?expired/i;
 const LOGIN = new RegExp(`${LOGIN_SAID.source}|type=["']password["']|accounts\\.google\\.com\\/ServiceLogin`, "i");
 /** A sign-in form: a password field next to a username field, a current-password hint, or a form posting to a login path. */
-const signInForm = (body: string) =>
+export const signInForm = (body: string) =>
   /type=["']?password/i.test(body) &&
   /<input[^>]*name=["']?(user(name)?|e-?mail|login|session_key)\b|autocomplete=["']?(current-password|username)|<form[^>]*action=["']?[^"'>\s]*(log_?in|sign_?in|sign-in|session)/i.test(
     body,
   );
 const LOGIN_URL = /\/(login|signin|sign_in|sign-in|accounts\/login|i\/flow\/login|onboarding|ServiceLogin)(\/|$|\?)/i;
+/** The URL's path is a sign-in page's, whether it was asked for or redirected to. */
+export function loginPath(url: string): boolean {
+  try {
+    return LOGIN_URL.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
 /**
  * A document that is a login page. Only what the page says or shows counts: every logged-out page
  * can link a sign-in page (Google's Sign-in button goes to ServiceLogin), and a login redirect is
@@ -170,7 +178,7 @@ function containerOf(selector: string): { container: string; item: string } | un
  * items' tag (any element, when the selector names no tag). Items there under another class
  * are a renamed selector (drift), not zero results.
  */
-function emptyResults(body: string, items: string): boolean {
+export function emptyResults(body: string, items: string): boolean {
   const parts = containerOf(items);
   if (!parts) return false;
   try {

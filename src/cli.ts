@@ -4,13 +4,23 @@ import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { chromeAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
-import { botWall } from "./classify.js";
+import { botWall, emptyResults, loginPath, signInForm } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
-import { capOutput, extract, innerJson, returnedFields, splitPick } from "./extract.js";
-import { addOperation, capturePage, loadCapture, PROFILE_HINT, profileDir } from "./heal.js";
+import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
+import {
+  addOperation,
+  type CaptureFile,
+  capturePage,
+  captureTrigger,
+  fillTrigger,
+  loadCapture,
+  PROFILE_HINT,
+  profileDir,
+  unplaced,
+} from "./heal.js";
 import { buildRequest } from "./http.js";
 import { AmbiguousProfile } from "./import.js";
-import { capturePages, pageUrls, rankCandidates } from "./learn.js";
+import { type Candidate, capturePages, pageUrls, rankCandidates } from "./learn.js";
 import { cookieNames, importSession, logout, resolveLoginTarget } from "./login.js";
 import { serveStdio, VERSION } from "./mcp.js";
 import { type Outline, outline } from "./outline.js";
@@ -29,8 +39,8 @@ function outlineOf(e: Exchange | undefined, values: string[]): { outline?: Outli
 /** A multi-line error (a zod report) on one line, so JSON output keeps all of it. */
 const oneLine = (m: string) =>
   m
-    .replace(/\s*\n\s*(✖\s*)?/g, " ")
-    .replace(/\s*→\s*/g, " at ")
+    .replace(/(^|\s*\n\s*)(✖\s*)?/g, " ")
+    .replace(/\s*→\s*(at\s+)?/g, " at ")
     .trim();
 
 const HELP: Record<string, string> = {
@@ -58,21 +68,31 @@ const HELP: Record<string, string> = {
   --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser
   --outline    for the top 3 candidates, summarize the response instead of making you inspect it: where the
                example values are, a suggested --extract and --pick fields with samples, JSON the page
-               embeds (a ready --embedded regex), and a repeated HTML list as a ready --html recipe`,
-  inspect: `api-anything inspect <captureId> [<requestId>] [--path <p>] [--html <json>] [--embedded <regex>] [--outline --example k=v]
+               embeds (a ready --embedded regex), and a repeated HTML list as a ready --html recipe
+  Output: capture (the id), candidates, next (what to do). blocked: the bot challenge the site served.
+  pageStatus: the page's own HTTP error, when a request it loaded is recommended all the same.`,
+  inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline --example k=v]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
-  response: JSON at --path, or items from an --html / --embedded recipe (try selectors before add).
+  response through add's recipe flags, so a recipe is tried here first: --extract (also spelled --path),
+  --pick, --html, --embedded. A path, selector or regex that finds nothing fails (exit 1). An empty
+  list at a path is a result, and so is an --html items selector "<container> <item>" whose container
+  is on the page with no item in it (data: [], with a note).
   --outline summarizes the response (as capture --outline does) instead of printing it.`,
   add: `api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
   Runs the trigger twice in Chrome (with --example, then --example2 or --example again), picks the request
   carrying the example values, and saves the learned operation to ~/.api-anything/sites/<site>.json.
   --trigger       page URL with {param} placeholders, e.g. https://site.com/u/{name}
-  --steps <json>  UI steps after load; {param} is filled in selector/value
+  --steps <json>  UI steps after load, [{action: click|fill|press|wait|goto, selector?, value?, ms?}];
+                  {param} is filled in selector/value
   --soft-from     neutral page to load first, then navigate in-page to the trigger
   --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON)
-  --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser);
-                  every add saves its own runs as captures, so a wrong --extract is fixed this way
-  --from2 <id>    a second capture made with --example2 values, for the two-run diff
+  --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser).
+                  Every add saves its own runs as captures, so a wrong recipe is fixed this way: add the op
+                  again --from the capture it was learned from, with the recipe flags (--extract, --pick,
+                  --html, --embedded). With no --example the op's stored examples are used, so the capture
+                  must carry them; from a capture made with other values, pass those with --example
+  --from2 <id>    a second capture, made with the --example2 values, for the two-run diff; with --from,
+                  --example2 needs it: capture the page again with those values
   --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
   --pick a,b.c,name=x.y  fields kept per item; name=path renames the key, name=path~regex keeps regex group 1
   --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages;
@@ -81,9 +101,12 @@ const HELP: Record<string, string> = {
   --public <name,...>  a header, or a credential-like field such as api_key, whose value is the same for every
                   visitor (a web app's bearer): kept literal unless the value is in a cookie or the page's
                   storage. A per-session field (token, csrf) stays a reference. Only when it is not the user's
-  --write         the op changes state: it is learned from intercepted, aborted requests only
-  --description <text>
-  Output: preview (what a call returns, from the captured response), warnings (read them), captures.`,
+  --write         the op changes state: it is learned from intercepted, aborted requests only. A request a
+                  --write capture aborted, or an existing write learned again, needs --write: neither is
+                  ever saved as a read
+  --description <text>  what the op is for; an op added again with no --example keeps the one it had ("" clears it)
+  Output: preview (what a call returns, from the captured response), warnings (read them), captures.
+  replaced: an op of that name was learned again.`,
   call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--max-tier 1|2|3] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, ms, next?}. --dry prints the request with credentials redacted.`,
   verify: `api-anything verify [site]
@@ -137,13 +160,33 @@ function kv(list: string[] | undefined): Record<string, string> {
   return args;
 }
 
+/** The command being run: a hint about one of its flags points at its own --help. */
+let command = "";
+
 function json<T>(text: string | undefined, schema: z.ZodType<T>, flag: string): T | undefined {
   if (text === undefined) return undefined;
   try {
     return schema.parse(JSON.parse(text));
   } catch (e) {
-    throw new Fail(`--${flag}: ${oneLine((e as Error).message)}`, `api-anything --help shows the --${flag} format`);
+    // a ZodError's own message is its issue list as JSON
+    const why = e instanceof z.ZodError ? z.prettifyError(e) : (e as Error).message;
+    throw new Fail(`--${flag}: ${oneLine(why)}`, `api-anything ${command} --help shows --${flag}`);
   }
+}
+
+/** --steps. An unknown action is named here, with the ones that exist: the schema's report would not say which it was. */
+function stepsOf(text: string | undefined): TriggerStep[] | undefined {
+  const actions: readonly string[] = TriggerStepSchema.shape.action.options;
+  const given = json(text, z.unknown(), "steps");
+  const bad = (Array.isArray(given) ? given : [])
+    .map((s) => s?.action)
+    .find((a) => typeof a === "string" && !actions.includes(a));
+  if (bad)
+    throw new Fail(
+      `--steps: unknown action "${bad}"${/upload/i.test(bad) ? " (file uploads are not supported)" : ""}; the actions are ${actions.join(", ")}`,
+      `api-anything ${command} --help shows --steps`,
+    );
+  return json(text, z.array(TriggerStepSchema), "steps");
 }
 
 const needChrome = () => {
@@ -279,8 +322,47 @@ async function cmdLogout({ pos }: Parsed): Promise<number> {
 function positive(text: string | undefined, flag: string): number | undefined {
   if (text === undefined) return undefined;
   if (!/^[1-9]\d*$/.test(text))
-    throw new Fail(`--${flag} must be a positive integer, got "${text}"`, `api-anything --help`);
+    throw new Fail(`--${flag} must be a positive integer, got "${text}"`, `api-anything ${command} --help`);
   return Number(text);
+}
+
+/**
+ * What the page a capture ended on says about learning from it. `stop`: nothing to learn here, the
+ * navigation ended on a login path that shows a sign-in form, or the page itself answered an HTTP error. `also`: the page shows
+ * a sign-in form, as a public page may too, so that is said next to the recommendation and never
+ * instead of it. `status`: the page's HTTP error, when a request it loaded is recommended all the same.
+ */
+function pageSays(
+  c: CaptureFile,
+  ranked: Candidate[],
+  values: string[],
+): { stop?: string; also?: string; status?: number } {
+  const pages = capturePages(c).map((u) => u.split("#")[0]);
+  // the main frame's last document: a widget's iframe is a document too
+  const page = c.exchanges
+    .filter((e) => e.resourceType === "document" && e.response && pages.includes(e.request.url))
+    .at(-1);
+  if (!page?.response) return {};
+  const { status, body = "" } = page.response;
+  // A login path is where sign-in pages live, and where a public /docs/login/... page may too: it takes the form as well.
+  if (loginPath(c.finalUrl) && signInForm(body))
+    return {
+      stop: `the page is a sign-in page: ask the user to run api-anything login <site>, then capture again (api-anything inspect ${c.id} ${page.id} shows the page, if it is what you wanted)`,
+    };
+  // What would be learned from: the candidates' answers. A beacon that echoes the page is not one.
+  const asked = values.filter((x) => x.length >= 3).map((x) => x.toLowerCase());
+  const answers = ranked.map((r) => (c.exchanges.find((e) => e.id === r.id)?.response?.body ?? "").toLowerCase());
+  const unseen = asked.length > 0 && !answers.some((a) => asked.some((x) => a.includes(x)));
+  const also = !signInForm(body)
+    ? undefined
+    : unseen
+      ? `none of the example values is in what these requests returned, and the page shows a sign-in form: check the example values (api-anything inspect ${c.id} <id> shows a response); if the data is missing, ask the user to run api-anything login <site>, then capture again`
+      : "the page also shows a sign-in form: if the data you want is missing, ask the user to run api-anything login <site> first";
+  // An error is a dead end when the erroring page is itself what would be recommended, not when a
+  // data request it loaded is (a static host's 404 fallback serving the app).
+  if (status >= 400 && (ranked[0]?.id ?? page.id) === page.id)
+    return { stop: `the page answered HTTP ${status}: check the URL, then capture again${also ? `; ${also}` : ""}` };
+  return { ...(also ? { also } : {}), ...(status >= 400 ? { status } : {}) };
 }
 
 async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
@@ -320,17 +402,20 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
         e?.response && botWall({ status: e.response.status, headers: e.response.headers, body: e.response.body ?? "" }),
     )
     .find(Boolean);
+  const page: ReturnType<typeof pageSays> = wall ? {} : pageSays(c, ranked, values);
+  const learn = html
+    ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
+    : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`;
   out({
     capture: c.id,
     finalUrl: c.finalUrl,
     requests: c.exchanges.length,
     candidates,
     ...(wall ? { blocked: wall } : {}),
+    ...(page.status ? { pageStatus: page.status } : {}),
     next: wall
       ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> (clear the challenge in the window), then capture again`
-      : html
-        ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
-        : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`,
+      : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),
   });
   return 0;
 }
@@ -385,21 +470,39 @@ function cmdInspect({ v, pos }: Parsed): number {
     return 0;
   }
   const html = json(v.html, HtmlRecipeSchema, "html");
+  const path = v.extract ?? v.path;
   const body = e.response?.body ?? "";
-  const response = {
-    format: html ? "html" : v.embedded ? "embedded" : "json",
-    ...(html ? { html } : {}),
-    ...(v.embedded ? { embedded: { regex: v.embedded } } : {}),
-  } as const;
-  let data: unknown;
-  try {
-    data =
-      html || v.embedded || !/html/i.test(e.response?.contentType ?? "")
-        ? unlayer(extract({ ...response, extract: v.path }, body))
-        : body;
-  } catch {
-    data = body; // not JSON: show the text
+  // A recipe that finds nothing says so: no data field, or [] from a selector, reads as "no results".
+  const nothing = (what: string) =>
+    new Fail(
+      `${what} in request ${e.id}'s response`,
+      `api-anything inspect ${id} ${e.id} --outline --example k=v suggests a recipe; with no recipe flag it prints the whole response`,
+    );
+  let data: unknown = body;
+  let note: string | undefined;
+  if (html) {
+    data = extract({ format: "html", html }, body);
+    if (!(data as unknown[]).length) {
+      // a results page with no results is an answer, as a call would give it; a selector that is not there is not
+      if (!emptyResults(body, html.items)) throw nothing(`the --html items selector "${html.items}" matched nothing`);
+      note = `no items: the container of "${html.items}" is on the page and empty, so this is a page with no results`;
+    }
+  } else if (v.embedded) {
+    data = extract({ format: "embedded", embedded: { regex: v.embedded } }, body);
+    if (data === undefined) throw nothing("the --embedded regex found no JSON");
+  } else if (!/html/i.test(e.response?.contentType ?? "")) {
+    try {
+      data = extract({ format: "json" }, body);
+    } catch {
+      // not JSON: show the text
+    }
   }
+  if (path) {
+    data = getPath(data, path);
+    // an empty list at the path is a result; a path that is not there is not
+    if (data === undefined) throw nothing(`nothing at "${path}"`);
+  }
+  if (v.pick) data = pick(data, splitPick(v.pick));
   const sent = e.request.body;
   const form =
     sent !== undefined &&
@@ -415,11 +518,39 @@ function cmdInspect({ v, pos }: Parsed): number {
       ...(shownBody !== undefined ? { body: capOutput(shownBody, 4000).data } : {}),
     },
     ...(e.response ? { status: e.response.status, type: e.response.contentType } : { aborted: !!e.aborted }),
-    ...capOutput(data),
+    ...capOutput(unlayer(data)),
+    ...(note ? { note } : {}),
   });
   return 0;
 }
 
+/** One shell word, quoted: a space, a quote or JSON in a hint's command pastes as a single argument. */
+const sh = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
+
+/**
+ * The command that repeats how capture `c` was made, with the second example's values where the
+ * first's sit in its URL and steps. Undefined when they sit in neither: there is nothing to swap.
+ */
+function captureAgain(
+  c: CaptureFile,
+  ex1: Record<string, string>,
+  ex2: Record<string, string>,
+  write: boolean,
+): string | undefined {
+  const made = captureTrigger(c, ex1);
+  if (!Object.keys(ex2).length || Object.keys(ex1).some((k) => !(k in ex2)) || unplaced(made, ex2).length)
+    return undefined;
+  const t = fillTrigger(made, ex2);
+  return [
+    `api-anything capture ${sh(t.url)}`,
+    ...(t.softFrom ? [`--soft-from ${sh(t.softFrom)}`] : []),
+    ...(t.steps ? [`--steps ${sh(JSON.stringify(t.steps))}`] : []),
+    ...(write ? ["--write"] : []),
+    ...Object.entries(ex2).map(([k, x]) => `--example ${sh(`${k}=${x}`)}`),
+  ].join(" ");
+}
+
+/** What a repair says it changed: the op was kept, and one thing in it replaced. */
 async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   const [site, name] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything add --help");
@@ -437,6 +568,19 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   if (!v.from) needChrome();
   if (v.from2 && !ex2)
     throw new Fail("--from2 needs --example2 (the values that capture was made with)", "api-anything add --help");
+  if (v.from && ex2 && !v.from2) {
+    const c = loadCapture(v.from);
+    const write = !!(c.write || v.write);
+    const again = captureAgain(c, ex1, ex2, write);
+    throw new Fail(
+      "--example2 with --from needs --from2: a capture holds one run",
+      `${
+        again
+          ? `capture the page again with the second example's values: ${again}`
+          : `the first example's values are not in capture ${c.id}'s url or steps, so the command cannot be written out: capture that page again the way ${c.id} was made (${["its url", c.softFrom && "--soft-from", c.steps && "--steps", write && "--write"].filter(Boolean).join(", ")}), with the second example's values`
+      }; then run this add again with --from2 <the new capture's id>`,
+    );
+  }
   const r = await addOperation({
     site,
     op: name,
@@ -630,19 +774,41 @@ async function cmdMcp({ v }: Parsed): Promise<number> {
   return -1; // keep serving
 }
 
-const COMMANDS: Record<string, (p: Parsed) => number | Promise<number>> = {
-  login: cmdLogin,
-  logout: cmdLogout,
-  capture: cmdCapture,
-  inspect: cmdInspect,
-  add: cmdAdd,
-  call: cmdCall,
-  verify: cmdVerify,
-  sites: cmdSites,
-  ops: cmdOps,
-  heal: cmdHeal,
-  export: cmdExport,
-  mcp: cmdMcp,
+type Flag = keyof typeof OPTIONS;
+/** Each command and the flags it takes: run() refuses any other, so none is silently ignored. */
+const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; flags: Flag[] }> = {
+  login: { run: cmdLogin, flags: ["profile", "window", "cookies"] },
+  logout: { run: cmdLogout, flags: [] },
+  capture: { run: cmdCapture, flags: ["steps", "soft-from", "example", "write", "limit", "outline"] },
+  inspect: { run: cmdInspect, flags: ["path", "extract", "pick", "html", "embedded", "outline", "example"] },
+  add: {
+    run: cmdAdd,
+    flags: [
+      "trigger",
+      "example",
+      "example2",
+      "steps",
+      "soft-from",
+      "match",
+      "from",
+      "pick-request",
+      "from2",
+      "extract",
+      "pick",
+      "html",
+      "embedded",
+      "public",
+      "write",
+      "description",
+    ],
+  },
+  call: { run: cmdCall, flags: ["json", "allow-writes", "max-tier", "dry"] },
+  verify: { run: cmdVerify, flags: [] },
+  sites: { run: cmdSites, flags: [] },
+  ops: { run: cmdOps, flags: [] },
+  heal: { run: cmdHeal, flags: [] },
+  export: { run: cmdExport, flags: ["out", "keep-examples", "force"] },
+  mcp: { run: cmdMcp, flags: ["allow-writes"] },
 };
 
 async function run(argv: string[]): Promise<number> {
@@ -652,7 +818,9 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${VERSION}\n`);
     return 0;
   }
-  if (!cmd || !HELP[cmd]) {
+  // an own key only: `toString` is on every object
+  const c = cmd && Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd] : undefined;
+  if (!cmd || !c) {
     process.stdout.write(`${USAGE}\n`);
     if (!cmd || v.help) return 0;
     process.stderr.write(`next: unknown command "${cmd}"; see the list above\n`);
@@ -662,9 +830,11 @@ async function run(argv: string[]): Promise<number> {
     process.stdout.write(`${HELP[cmd]}\n`);
     return 0;
   }
-  const steps = json(v.steps, z.array(TriggerStepSchema), "steps");
-  // A name HELP only inherits (`toString`) gets past the check above; it has always exited 0 in silence.
-  return Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd]({ v, pos, steps }) : 0;
+  const extra = Object.keys(v).filter((k) => !c.flags.includes(k as Flag));
+  if (extra.length)
+    throw new Fail(`${cmd} does not take --${extra.join(", --")}`, `api-anything ${cmd} --help lists its flags`);
+  command = cmd;
+  return c.run({ v, pos, steps: stepsOf(v.steps) });
 }
 
 try {
