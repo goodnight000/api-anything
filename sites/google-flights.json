@@ -103,7 +103,7 @@
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false,
-      "description": "One-way flights: Google's \"other departing flights\" list, sorted by price. Origin and destination take airport codes, metro codes (NYC) or city names. Per item: airline (names; several when carriers mix), price (USD, whole one-way itinerary), from/to (airports), departureDate/arrivalDate [y,m,d], departureTime/arrivalTime local [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), durationMinutes, stops (null = nonstop; else one [layover minutes, airport, airport, null, airport name, city, ...] per stop)."
+      "description": "One-way flights: Google's \"other departing flights\" list, sorted by price. Origin and destination take airport codes, metro codes (NYC) or city names. Per item: airline (names; several when carriers mix), price (USD, whole one-way itinerary), from/to (airports), departureTime/arrivalTime local [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), arrivalDate [y,m,d] (the departure date is the one you asked for), durationMinutes, via (stop airports in order; absent for a nonstop flight)."
     },
     {
       "name": "top",
@@ -204,7 +204,7 @@
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false,
-      "description": "One-way flights: Google's \"top departing flights\" (best) list; disjoint from search, together they are the full results page. Same args as search. Per item: airline (names; several when carriers mix), price (USD, whole one-way itinerary), from/to (airports), departureDate/arrivalDate [y,m,d], departureTime/arrivalTime local [h,m] (missing entries are 0: [9] = 09:00, [null,56] = 00:56), durationMinutes, stops (null = nonstop; else one [layover minutes, airport, airport, null, airport name, city, ...] per stop)."
+      "description": "One-way flights: Google's \"top departing flights\" (best) list; disjoint from search, together they are the full results page. Same args and item fields as search."
     },
     {
       "name": "priceCalendar",
