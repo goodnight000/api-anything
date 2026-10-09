@@ -14,9 +14,6 @@ import {
   capturePages,
   checkExamples,
   hashLike,
-  highEntropy,
-  isCredential,
-  leafName,
   learnOperation,
   learnResponse,
   matches,
@@ -26,6 +23,7 @@ import {
   home,
   loadSession,
   mergeCapture,
+  mergeCookies,
   parseCookieHeader,
   pruneCaptures,
   readJson,
@@ -590,30 +588,42 @@ function saveOperation(
 }
 
 /**
- * A repair adds text to a spec that is otherwise kept: a recipe and maybe a description. Refuse it when
- * that text holds anything in the capture that could be a credential: a cookie, a session value, a
- * stored value or a request value that is one by its name or looks random. A full add would have made
- * those references or refused; here nothing is learned, so the added text is checked against all of them.
- * The caller's own params and what the op lists as public are not credentials.
+ * The session a full add from this capture would have checked the spec against: the capture's cookies
+ * merged into the jar, and every value the learner itself finds to be a credential in the request the
+ * repair reads (a cookie or stored value it repeats, a per-session field, a token an earlier answer
+ * issued). The request is not learned from this; it is only asked what is secret in it. Saved by nothing.
  */
-function refuseAdded(old: Operation, added: object, capture: CaptureFile, sent: Exchange[], live: Session): void {
-  const open = new Set((old.public ?? []).map((n) => n.toLowerCase()));
-  const params = new Set(old.slots.flatMap((s) => (s.param ? [JSON.stringify(s.at)] : [])));
-  const secret = (name: string, value: string) => isCredential(name, value) || highEntropy(value);
-  const carried = sent.flatMap((e) =>
-    walk(e.request).flatMap((l) =>
-      l.type === "string" &&
-      !l.container &&
-      !params.has(JSON.stringify(l.at)) &&
-      !open.has(leafName(l.at).toLowerCase()) &&
-      secret(leafName(l.at), l.value)
-        ? [l.value]
-        : [],
-    ),
-  );
-  const stored = Object.entries(capture.storage ?? {}).flatMap(([k, v]) => (secret(k, v) ? [v] : []));
-  const values = Object.fromEntries([...new Set([...carried, ...stored])].map((v, n) => [`capture:${n}`, v]));
-  const found = scanSecrets(added, { ...live, values: { ...live.values, ...values } }, new Set()).secrets;
+function sessionAfter(site: string, old: Operation, capture: CaptureFile, exchange: Exchange | undefined): Session {
+  const now = loadSession(site);
+  let found: Record<string, string> = {};
+  if (exchange) {
+    try {
+      found = learnOperation({
+        exchanges: capture.exchanges,
+        pages: capturePages(capture),
+        examples: [{}],
+        cookies: capture.cookies,
+        storage: capture.storage,
+        id: exchange.id,
+        name: old.name,
+        trigger: old.trigger,
+        readOnly: old.readOnly,
+        public: old.public,
+      }).sessionValues;
+    } catch {
+      // a request the learner would refuse outright teaches nothing here; the cookies still count
+    }
+  }
+  return {
+    ...now,
+    cookies: mergeCookies(now.cookies, capture.cookies),
+    values: { ...now.values, ...found, ...(exchange ? sessionValuesOf(old, exchange) : {}) },
+  };
+}
+
+/** A repair adds text to a spec that is otherwise kept (a recipe, a description): refuse it when that text holds a credential. */
+function refuseAdded(added: object, live: Session): void {
+  const found = scanSecrets(added, live, new Set()).secrets;
   if (found.length) throw new Error(`refusing to save a spec containing a credential: ${found.join("; ")}`);
 }
 
@@ -633,22 +643,19 @@ function described(op: Operation, description: string | undefined): Operation {
 function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["from"]>, i: AddInput): AddResult {
   const { capture, id } = from;
   const r = i.response ?? {};
-  // Scanned against what a full add would have merged into the session first: the capture's cookies
-  // (and, below, the values this request sent for the op's session refs). Live for the scan, saved by nothing here.
-  const now = loadSession(site);
-  const live: Session = { ...now, cookies: [...now.cookies, ...capture.cookies] };
-  // A description with no recipe flag is metadata: nothing is learned again, and the recipe stays.
-  if (i.description !== undefined && !Object.values(r).some((x) => x !== undefined)) {
-    refuseAdded(old, { description: i.description }, capture, capture.exchanges, live);
-    const saved = saveOperation(site, described(old, i.description), undefined, [], live, undefined);
-    return { ...saved, captures: [], repaired: "description" };
-  }
   const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
   const own = Object.keys(old.match).length > 0;
   const pool = capture.exchanges.filter((e) => (id !== undefined ? e.id === id : own && matches(old.match, e.request)));
   const answers = pool.filter((e) => e.response);
   // The answer the recipe finds data in (a challenge page, or a soft navigation's first page, may match too).
   const exchange = answers.findLast((e) => resolves(spec, e.response?.body)) ?? answers.at(-1) ?? pool.at(-1);
+  const live = sessionAfter(site, old, capture, exchange);
+  // A description with no recipe flag is metadata: nothing is learned again, and the recipe stays.
+  if (i.description !== undefined && !Object.values(r).some((x) => x !== undefined)) {
+    refuseAdded({ description: i.description }, live);
+    const saved = saveOperation(site, described(old, i.description), undefined, [], live, undefined);
+    return { ...saved, captures: [], repaired: "description" };
+  }
   if (!exchange)
     throw new Error(
       id !== undefined
@@ -668,16 +675,15 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
     warnings.push(
       `the recipe was not checked: capture ${capture.id} holds no answer for request ${exchange.id}${exchange.aborted ? " (it was aborted, as a --write capture aborts a write)" : ""}`,
     );
-  const operation: Operation = { ...described(old, i.description), response };
-  live.values = { ...now.values, ...sessionValuesOf(old, exchange) };
-  refuseAdded(
-    old,
-    { response, ...(i.description !== undefined ? { description: i.description } : {}) },
-    capture,
-    pool,
+  refuseAdded({ response, ...(i.description !== undefined ? { description: i.description } : {}) }, live);
+  const saved = saveOperation(
+    site,
+    { ...described(old, i.description), response },
+    exchange,
+    warnings,
     live,
+    capture.id,
   );
-  const saved = saveOperation(site, operation, exchange, warnings, live, capture.id);
   return { ...saved, captures: [], repaired: "recipe" };
 }
 
@@ -703,11 +709,6 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   if (old && !old.readOnly && !i.write)
     throw new Error(
       `${i.op} is a write: learning it again needs --write${i.from ? ", and a capture made with --write" : ""}`,
-    );
-  // A read is checked by replaying run 1's template with run 2's values: never against a capture that held a write back.
-  if (i.from2?.write && !i.write)
-    throw new Error(
-      `capture ${i.from2.id} was made with --write, which holds writes back: learning from it needs --write. For a read, capture the second example without --write`,
     );
   // before any browser run: a too-short or duplicate example would only fail after it
   if (ex1) checkExamples(ex1, "example");
@@ -776,6 +777,15 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   if (!i.write && learned.exchange.aborted && i.from?.capture.write)
     throw new Error(
       `capture ${i.from.capture.id} was made with --write and intercepted request ${learned.exchange.id} as a write: learning it needs --write`,
+    );
+  // The same for the second capture, whose request the diff reads and a replay check may then be sent against.
+  const held =
+    !i.write && i.from2?.write
+      ? i.from2.exchanges.find((e) => e.aborted && matches(learned.operation.match, e.request))
+      : undefined;
+  if (held && i.from2)
+    throw new Error(
+      `capture ${i.from2.id} was made with --write and intercepted request ${held.id} as a write: learning it needs --write`,
     );
   const warnings = recipeWarnings(learned.warnings, r);
   if (missing.length)

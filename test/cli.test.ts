@@ -506,8 +506,48 @@ describe("add from a saved capture", () => {
     const opaque = await add("mine", "--from", "copaque", "--extract", OPAQUE);
     assert.equal(opaque.code, 1, opaque.stdout);
     assert.match(opaque.out.error, /credential/);
-    for (const secret of [TOKEN, OPAQUE])
+    // and a short token the page keeps inside a JSON entry of its storage
+    const SHORT = "abcd1234";
+    seed("cnested", {
+      url: `${fx.url}/mine?name=alice`,
+      storage: { auth: JSON.stringify({ access_token: SHORT }) },
+      exchanges: [
+        { ...guest, request: { ...guest.request, headers: { ...guest.request.headers, "x-opaque": SHORT } } },
+      ],
+    });
+    for (const flags of [
+      ["--extract", SHORT],
+      ["--description", `session ${SHORT}`],
+    ]) {
+      const nested = await add("mine", "--from", "cnested", ...flags);
+      assert.equal(nested.code, 1, nested.stdout);
+      assert.match(nested.out.error, /credential/);
+    }
+    for (const secret of [TOKEN, OPAQUE, SHORT])
       assert.doesNotMatch(readFileSync(join(HOME, "sites", "fixture.json"), "utf8"), new RegExp(secret));
+  });
+
+  test("a repair may name a random-looking value that is not a credential: a build id the response is keyed by", async () => {
+    const BUILD = "R7q8Ab9Cd0Ef1Gh2Ij3Kl4Mn";
+    const guest = await answered(1, "fetch", "/api/mine?name=alice");
+    seed("cbuild", {
+      url: `${fx.url}/mine?name=alice`,
+      exchanges: [
+        {
+          ...guest,
+          request: { ...guest.request, headers: { ...guest.request.headers, "x-build": BUILD } },
+          response: { ...guest.response, body: JSON.stringify({ [BUILD]: [{ name: "alice" }] }) },
+        },
+      ],
+    });
+    const add = async (...flags: string[]) => {
+      const r = await cli("add", "fixture", "built", "--from", "cbuild", ...flags);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    assert.equal((await add("--pick-request", "1", "--example", "name=alice")).code, 0);
+    const repaired = await add("--extract", BUILD);
+    assert.equal(repaired.code, 0, repaired.stdout);
+    assert.match(repaired.out.repaired, /returns changed/);
   });
 
   test("a repair is not refused for the caller's own example, however much it looks like a key", async () => {
@@ -545,13 +585,32 @@ describe("add from a saved capture", () => {
     assert.equal(search.out.readOnly, true);
     assert.equal(posts(), 0, "no POST reached the site");
 
-    // as the second capture of a pair it is refused before anything is replayed against it
+    // as the second capture of a pair, the request the diff reads from it decides, not how it was captured:
+    // the answered search is a read there too
     const pair = await cli(
       ...["add", "demo", "search2", "--from", "cpost", "--pick-request", "3", "--example", "q=kittens"],
-      ...["--from2", "cpost", "--example2", "q=puppies"],
+      ...["--from2", "cpost", "--example2", "q=kittens"],
     );
-    assert.equal(pair.code, 1, pair.stdout);
-    assert.match(JSON.parse(pair.stdout).error, /made with --write.*needs --write/);
+    assert.equal(pair.code, 0, pair.stdout);
+    assert.equal(JSON.parse(pair.stdout).readOnly, true);
+    // but a request it intercepted is a write there, whatever the first capture shows
+    const first = JSON.parse(readFileSync(join(HOME, "captures", "cpost.json"), "utf8"));
+    const sent = first.exchanges.map((e: { id: number; aborted?: boolean }) =>
+      e.id === 2
+        ? {
+            ...e,
+            aborted: undefined,
+            response: { status: 200, headers: {}, contentType: "application/json", body: '{"data":{"ok":true}}' },
+          }
+        : e,
+    );
+    seed("csent", { url: first.url, steps: first.steps, exchanges: sent });
+    const held = await cli(
+      ...["add", "demo", "post2", "--from", "csent", "--pick-request", "2", "--example", "text=hello alice"],
+      ...["--from2", "cpost", "--example2", "text=hello alice"],
+    );
+    assert.equal(held.code, 1, held.stdout);
+    assert.match(JSON.parse(held.stdout).error, /cpost .*intercepted request 2 as a write.*--write/);
     assert.equal(posts(), 0, "no POST reached the site");
   });
 
