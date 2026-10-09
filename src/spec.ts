@@ -79,6 +79,8 @@ function validRegex(p: string): boolean {
   }
 }
 
+export const HtmlRecipeSchema = z.object({ items: z.string(), fields: z.record(z.string(), z.string()) });
+
 export const ResponseSchema = z.object({
   format: z.enum(["json", "html", "embedded"]).default("json"),
   contentType: z.string().optional(),
@@ -97,7 +99,7 @@ export const ResponseSchema = z.object({
     .optional(),
   /** key path -> type, for drift detection */
   shape: z.record(z.string(), z.string()).optional(),
-  html: z.object({ items: z.string(), fields: z.record(z.string(), z.string()) }).optional(),
+  html: HtmlRecipeSchema.optional(),
   /** capture group 1 is where the JSON starts */
   embedded: z.object({ regex: z.string() }).optional(),
 });
