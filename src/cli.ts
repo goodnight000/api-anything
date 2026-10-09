@@ -68,7 +68,9 @@ const HELP: Record<string, string> = {
   --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser
   --outline    for the top 3 candidates, summarize the response instead of making you inspect it: where the
                example values are, a suggested --extract and --pick fields with samples, JSON the page
-               embeds (a ready --embedded regex), and a repeated HTML list as a ready --html recipe`,
+               embeds (a ready --embedded regex), and a repeated HTML list as a ready --html recipe
+  Output: capture (the id), candidates, next (what to do). blocked: the bot challenge the site served.
+  pageStatus: the page's own HTTP error, when a request it loaded is recommended all the same.`,
   inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline --example k=v]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
   response through add's recipe flags, so a recipe is tried here first: --extract (also spelled --path),
@@ -101,7 +103,9 @@ const HELP: Record<string, string> = {
                   --write capture aborted, or an existing write learned again, needs --write: neither is
                   ever saved as a read
   --description <text>  with --from and nothing else, for an existing op: only the description changes
-  Output: preview (what a call returns, from the captured response), warnings (read them), captures.`,
+  Output: preview (what a call returns, from the captured response), warnings (read them), captures.
+  replaced: an op of that name was learned again. repaired: it was kept, and only its recipe (or only
+  its description) changed.`,
   call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--max-tier 1|2|3] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, ms, next?}. --dry prints the request with credentials redacted.`,
   verify: `api-anything verify [site]

@@ -104,7 +104,8 @@ don't capture pages the user didn't ask for.
    missing. `pageStatus` is the page's own HTTP error when a request it loaded is still usable.
    - `api-anything inspect <captureId> <id> [--extract a.b] [--pick x,y]` prints a candidate's
      response, with no browser. JSON inside strings (Google's batchexecute payloads, a form's
-     `f.req`) is shown decoded. A path or selector that finds nothing fails; `[]` is a real empty list.
+     `f.req`) is shown decoded. A path or selector that finds nothing fails; `[]` is a real empty
+     list (with a `note` when an `--html` items container is on the page and empty).
    - If the page is a single-page app and the data request only fires on in-app navigation, add
      `--soft-from <another page on the site>`: it loads that page first and navigates in-app.
    - If the data is server-rendered, prefer the `document` itself over hunting for an XHR: it has

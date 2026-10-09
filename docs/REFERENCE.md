@@ -45,11 +45,16 @@ regex's group 1 finds (`publicId=navigationUrl~/in/([^/?]+)`), and `[*]` in a pa
 (`sections[*].items` joins each section's items); items with none of the picked fields are dropped. If the preview is wrong, repair the recipe: re-run
 `add <site> <op> --from <one of the captures>` with only the recipe flags (`--extract`, `--pick`,
 `--html`, `--embedded`). No browser is needed, and only what the operation returns changes: its
-request, params and trigger are kept. With `--example`, `add` learns the whole operation again.
+request, params and trigger are kept, and the output says so in `repaired`. With `--example`, `add`
+learns the whole operation again.
 For a server-rendered page, use
 `--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page.
 `inspect` accepts the same recipe flags (`--extract`, `--pick`, `--html`, `--embedded`), so you can
-try a recipe first: it exits non-zero when a path or selector finds nothing.
+try a recipe first: it exits non-zero when a path or selector finds nothing. An `--html` items
+container that is on the page and empty is a page with no results: `data: []`, with a `note`.
+
+In `capture`'s output, `pageStatus` is the page's own HTTP error when a request it loaded is
+recommended all the same, and `blocked` is the bot challenge the site served.
 
 `add` can also learn from a saved capture instead of running the trigger: `add <site> <op> --from
 <capture> --pick-request <id> --example k=v`. A capture holds one run, so the second example needs a

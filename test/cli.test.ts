@@ -155,6 +155,14 @@ describe("flags and command names", () => {
     assert.match(JSON.parse(typed.stdout).error, /^--steps: [^{[\n]* \[0\]\.selector$/);
   });
 
+  test("a command's help names the output fields an agent has to act on", async () => {
+    const named = { capture: ["blocked", "pageStatus"], add: ["repaired", "replaced"], inspect: ["note"] };
+    for (const [command, fields] of Object.entries(named)) {
+      const help = (await cli(command, "--help")).stdout;
+      for (const field of fields) assert.match(help, new RegExp(`\\b${field}\\b`), `${command} --help: ${field}`);
+    }
+  });
+
   test("a malformed JSON flag points at the help of the command it was given to", async () => {
     seed("cflags", { url: `${fx.url}/list`, exchanges: [await answered(1, "document", "/list")] });
     const bad = {
