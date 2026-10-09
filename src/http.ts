@@ -27,15 +27,34 @@ export interface SendOptions {
   minIntervalMs?: number;
 }
 
-/** Coerce an arg to the param's declared type. Integers past 2^53 become bigint, never a rounded number. */
+/** Whether a decimal or exponent literal's exact value is past the largest safe integer (2^53 - 1) in size. */
+function pastSafeInteger(v: string): boolean {
+  const [, int = "", frac = "", exp = "0"] = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(v) ?? [];
+  const digits = (int + frac).replace(/^0+/, "");
+  const shift = Number(exp) - frac.length;
+  // The limit has 16 digits: a value with more is past it, one with fewer is under it, and only 16 needs comparing.
+  const places = digits.length + shift;
+  if (!digits || places !== 16) return !!digits && places > 16;
+  const max = BigInt(Number.MAX_SAFE_INTEGER);
+  return shift >= 0 ? BigInt(digits) * 10n ** BigInt(shift) > max : BigInt(digits) > max * 10n ** BigInt(-shift);
+}
+
+/**
+ * Coerce an arg to the param's declared type. A numeric string past the largest safe integer is
+ * never rounded: plain digits become a bigint, and any other form is refused.
+ */
 function coerce(p: Param, v: unknown): unknown {
   const bad = () => new Error(`param "${p.name}" must be ${p.type}, got ${JSON.stringify(v)}`);
   switch (p.type) {
     case "number":
       if (typeof v === "number" || typeof v === "bigint") return v;
       if (typeof v === "string" && /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(v)) {
-        if (/^-?\d+$/.test(v) && !Number.isSafeInteger(Number(v))) return BigInt(v);
-        return Number(v);
+        if (!pastSafeInteger(v)) return Number(v);
+        if (/^-?\d+$/.test(v)) return BigInt(v);
+        // ponytail: also refuses 1e21, which a double holds; parse the exponent into a bigint if that form is needed
+        throw new Error(
+          `param "${p.name}" would lose precision: ${JSON.stringify(v)} is past 2^53 and would be sent as ${Number(v)}; write the integer as plain digits`,
+        );
       }
       throw bad();
     case "boolean":
@@ -73,11 +92,22 @@ function transform(v: string, t: "strip-quotes" | "url-decode" | undefined): str
   return v;
 }
 
-/** The fully materialized request: params, cookie/session refs, and the jar's Cookie header. */
-export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session): Request {
-  const vals: Record<string, unknown> = {};
+/** The args a call runs with at every tier: a param the caller left out takes its default. */
+export function withDefaults(op: Operation, args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   for (const p of op.params) {
     const v = args[p.name] ?? p.default;
+    if (v !== undefined) out[p.name] = v;
+  }
+  return out;
+}
+
+/** The fully materialized request: params, cookie/session refs, and the jar's Cookie header. */
+export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session): Request {
+  const given = withDefaults(op, args);
+  const vals: Record<string, unknown> = {};
+  for (const p of op.params) {
+    const v = given[p.name];
     if (v === undefined) {
       if (p.required) throw new Error(`missing required param "${p.name}"`);
       continue;

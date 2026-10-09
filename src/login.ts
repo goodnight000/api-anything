@@ -110,13 +110,14 @@ export function browserSource(site: string): string | undefined {
  * "window" (independent session) and "file" (no path to re-read) sources.
  */
 export async function reimportIfBrowser(site: string, url: string, loginCookies?: string[]): Promise<boolean> {
-  const source = browserSource(site);
-  if (!source) return false;
-  const pin: ImportPin = parsePin(source);
   try {
+    const source = browserSource(site);
+    if (!source) return false;
+    const pin: ImportPin = parsePin(source);
     const r = await importSession(site, url, { loginCookies, profile: `${pin.browser}/${pin.profile}` });
     return !!r;
   } catch {
+    // an unreadable session file or a full disk: no recovery, and the call reports its own failure
     return false;
   }
 }

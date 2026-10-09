@@ -67,7 +67,8 @@ A JSON leaf replaced by a param keeps the arg's native type, except that a leaf 
 string stays a string (`"id":"123"` next to `ids:[123]`). Params default to type `string`.
 A param may declare `pattern` (a regex the whole value must match) and `hint` (what a valid value
 is, "a date as YYYY-MM-DD"): an arg that fails it is `input`, named with the hint, and nothing is sent.
-Numbers are never coerced beyond 2^53, and `"false"` is false.
+A numeric string whose exact value is past the largest safe integer (2^53 − 1) is never rounded: plain digits are sent exactly, and any other form (an
+exponent, a decimal point: `9007199254740993e0`) is `input`, saying so, with nothing sent. `"false"` is false.
 
 ## Learning (`learn.ts`)
 
@@ -171,7 +172,9 @@ an upvote may be `new Image().src`, a link, a GET form, JSONP or an iframe), tho
 the site's own endpoint in disguise (same site, and no asset extension or a query carrying an
 example value: `<link rel=stylesheet href=/api/vote?id=..>`), and anything matching a
 known write's `match`; WebSocket messages any of the run's pages sends (a popup's too: the socket
-route is context-wide) are dropped too. Service workers are
+route is context-wide) are dropped too. The guards are lifted only after the run's pages are closed:
+an open page still sends (a client's retry; Chrome reloads an aborted navigation's error page after
+about a second), and removing a route releases the requests paused in it. Service workers are
 blocked in the profile, since their fetches bypass routing. The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
 run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the
@@ -183,7 +186,8 @@ sign-in form (a password field next to a username field, or a form posting to a 
 the op's answer is not a page is `auth`: the session was gone and nothing ran. An explicit JSON `ok: false` or `success: false` rejects a write even with HTTP 200.
 A write executes exactly
 once per call. Retry only on a definite non-execution (400/401/403/404 answered to the request
-itself: after a redirect, as in Post/Redirect/Get, it ran); timeouts, 5xx and network errors are
+itself: after a redirect, as in Post/Redirect/Get, it ran; at tier 3 the page sent it, and the
+answer judged may be a redirect's follow-up, so a tier-3 write is never retried); timeouts, 5xx and network errors are
 ambiguous and are never retried. Writes need `allowWrites` at every entry point (CLI flag, MCP
 server flag, library option).
 
@@ -195,9 +199,9 @@ Every response is classified, never by status code alone:
 |---|---|---|
 | `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`; for an html recipe whose items selector is `<container> <item>`, the container present with no element of the item's tag), no GraphQL `errors` with null `data` or next to a null extract target; any 2xx to a write | return |
 | `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once |
-| `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, an html/embedded op's page without its data that says "sign in" or shows a sign-in form (a mere Sign-in link, like Google's ServiceLogin button, is not one), a redirect to a login path, `require_login: true`, a trigger that lands on a sign-in page | refresh cookies from the profile; for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
+| `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, a sign-in form that embeds a CAPTCHA widget or a vendor script that also rides on ordinary pages (reCAPTCHA on a login page guards the login; an interstitial's own markers still make the page `blocked`), an html/embedded op's page without its data that says "sign in" or shows a sign-in form (a mere Sign-in link, like Google's ServiceLogin button, is not one), a redirect to a login path, `require_login: true`, a trigger that lands on a sign-in page | once per call, at any tier (a write only when it certainly did not run, so never at tier 3): re-import a browser-imported session; else refresh the jar's cookies from the profile, retrying if that changes the request (a tier-2 page sends the profile's cookies itself, so there only a `cookie:` ref counts: an `x-csrf-token` header); for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429 (with the server's Retry-After), "please wait", "rate limit" | back off, report; no heal |
-| `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers | escalate transport tier; then diagnostic `gated`. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal |
+| `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers. A page showing a sign-in form is `auth`, not a wall, when its only challenge marker is one that also rides on ordinary pages (a CAPTCHA widget, a vendor script or header on a challenge status); an interstitial's own structure or title on that page is still a wall | escalate transport tier; then diagnostic `gated`. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
 | `error` | anything else (a network error names its cause) | return with details |
 
@@ -248,11 +252,18 @@ appended to `~/.api-anything/heals.jsonl` (op, strategy, diff summary). A tier a
 its own tier), and a call that ran above tier 1 says why in `reason`. The jar, `state.json` and a
 spec (every add and heal, re-read under the lock) are read-modify-written under a lock file, so
 concurrent processes and calls lose nothing.
-Tier 2 honours `timeoutMs`; when the origin's root redirects to another origin, it fetches from a
+Tier 2 honours `timeoutMs` (the wait for the site's answer, as at tier 1; starting Chrome is not
+counted); when the origin's root redirects to another origin, it fetches from a
 blank stand-in page on the request's origin. When the origin page navigates mid-fetch (its own
 challenge or redirect destroys the context), a read waits for the new document and fetches once
 more; a write is never resent. The tier-3 answer is the matching request whose declared parameter positions equal the
 materialized call, including short and structured values, and whose response judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
+A param's default is filled into the args once, before the first tier, so every tier runs with the
+same values: the tier-3 trigger opens `?count=20`, never a literal `{count}`.
+An `auth` answer starts recovery at whichever tier got it (an op with `minTier: 2` or `3`, or one a
+remembered escalation starts there), at most once per call. At tier 3 only the re-import applies,
+and only to a read: the page just ran with the profile's own cookies and session values, so there is
+nothing fresher to take, and a write the page sent is never sent again.
 
 ## Browser
 
@@ -344,8 +355,10 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON array (Cookie-Editor / Playwright)
   export, for servers/CI with no browser.
 - **Self-healing auth**: when a call classifies `auth` and the session came from a browser import,
-  exactly the recorded profile is silently re-imported once (browserless) and the call retried; only if it is
-  still `auth` does the result carry the "run `api-anything login`" hint.
+  exactly the recorded profile is silently re-imported once (browserless) and the call retried (a write
+  only when it certainly did not run, so never one the page sent at tier 3); only if it is
+  still `auth` does the result carry the "run `api-anything login`" hint. This runs at tiers 2 and 3 as at
+  tier 1: the import also lands in the Chrome profile those tiers send their cookies from.
 - **`logout <site>`** clears the jar and that site's cookies in the profile.
 
 `node:sqlite` is chosen over the `sqlite3` CLI: it is built in (no dependency, present on every

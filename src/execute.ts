@@ -15,18 +15,9 @@ import {
   profileDir,
   runOpTrigger,
 } from "./heal.js";
-import { buildRequest, type Sent, send } from "./http.js";
+import { buildRequest, type Sent, send, withDefaults } from "./http.js";
 import { reimportIfBrowser } from "./login.js";
-import {
-  cookieHeaderFor,
-  loadSession,
-  loggedIn,
-  mergeCapture,
-  type Session,
-  saveSession,
-  sessionFile,
-  withLock,
-} from "./session.js";
+import { loadSession, loggedIn, mergeCapture, type Session, saveSession, sessionFile, withLock } from "./session.js";
 import type { Operation, Site } from "./spec.js";
 import { lastHealAt, loadSite, markStale, rememberedTier, rememberTier, staleMark } from "./store.js";
 import type { StoredCookie } from "./types.js";
@@ -63,8 +54,12 @@ type Result = Omit<CallResult, "ms">;
 const HEAL_GUARD_MS = 10 * 60_000;
 // A write is retried only when the server certainly did not run it; timeouts and 5xx are ambiguous.
 const NOT_EXECUTED = new Set([400, 401, 403, 404]);
-/** Certainly not run: a 400/401/403/404 answered to the request itself. After a redirect (Post/Redirect/Get) it ran. */
-const notRun = (a?: Attempt) => a?.status !== undefined && NOT_EXECUTED.has(a.status) && !a.redirected;
+/**
+ * Certainly not run: a 400/401/403/404 answered to the request itself. After a redirect
+ * (Post/Redirect/Get) it ran. At tier 3 the page sent it and the answer judged may be a redirect's
+ * follow-up, with nothing to tell the two apart: never proof.
+ */
+const notRun = (a?: Attempt) => a?.status !== undefined && NOT_EXECUTED.has(a.status) && !a.redirected && a.tier !== 3;
 
 interface Ctx {
   site: string;
@@ -178,8 +173,11 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   }
 }
 
-/** Replace the jar with the profile's cookies. True when that changes what op's request would carry. */
-async function refreshCookies(site: string, op: Operation): Promise<boolean> {
+/**
+ * Replace the jar with the profile's cookies. True when that changes the request this tier sends:
+ * a tier-2 page sends the profile's own cookies, so there the jar only fills `cookie:` refs.
+ */
+async function refreshCookies(ctx: Ctx, op: Operation, tier: Tier): Promise<boolean> {
   if (!chromeAvailable()) return false;
   let fresh: StoredCookie[];
   try {
@@ -187,12 +185,26 @@ async function refreshCookies(site: string, op: Operation): Promise<boolean> {
   } catch {
     return false;
   }
-  return withLock(sessionFile(site), () => {
-    const s = loadSession(site);
-    const before = cookieHeaderFor(s.cookies, op.request.url);
-    saveSession(site, { ...s, cookies: fresh });
-    return cookieHeaderFor(fresh, op.request.url) !== before;
-  });
+  const swap = () => {
+    const s = loadSession(ctx.site);
+    const sent = (cookies: StoredCookie[]) => {
+      try {
+        const req = buildRequest(op, ctx.args, { ...s, cookies });
+        if (tier > 1) delete req.headers.cookie;
+        return JSON.stringify(req);
+      } catch {
+        return undefined; // a cookie: ref with nowhere to go; the retry reports it like any failed attempt
+      }
+    };
+    const before = sent(s.cookies);
+    saveSession(ctx.site, { ...s, cookies: fresh });
+    return sent(fresh) !== before;
+  };
+  try {
+    return withLock(sessionFile(ctx.site), swap);
+  } catch {
+    return false; // a full disk, an unreadable session file: nothing refreshed, and the call keeps its own answer
+  }
 }
 
 async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise<Result> {
@@ -372,6 +384,8 @@ export async function call(
       next: nextFor("input", siteName, op),
     });
   }
+  // Resolved once: the tier-3 trigger and its answer's match take a default just as the request does.
+  args = withDefaults(op, args);
   let session: Session;
   try {
     session = loadSession(siteName);
@@ -451,23 +465,24 @@ export async function call(
       tier++;
       continue;
     }
-    if (a.class === "auth" && tier === 1 && !authTried) {
+    // Once per call, at any tier. A write gets here only when it certainly did not run.
+    if (a.class === "auth" && !authTried) {
       authTried = true;
       // An imported session is a mirror of the everyday browser: silently re-import from the same
-      // profile once (browserless), in case the human re-signed in there. Then retry.
+      // profile once (browserless), in case the human re-signed in there. It lands in the jar and
+      // in the Chrome profile tiers 2 and 3 send from. Then retry.
       if (await reimportIfBrowser(siteName, op.request.url, site.loginCookies)) continue;
-      if (ctx.maxTier <= 1) return fail();
-      if (await refreshCookies(siteName, op)) continue;
+      // tier 3 ran the site's own page: the profile's cookies and session values are what it just used
+      if (tier === 3 || ctx.maxTier <= 1) return fail();
+      if (await refreshCookies(ctx, op, tier)) continue;
       // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
       // refreshes them, and for a read its answer is this call's answer.
       if (op.readOnly && ctx.maxTier >= 3 && chromeAvailable() && op.slots.some((s) => s.ref?.startsWith("session:"))) {
         const b = await attempt(ctx, op, 3);
-        if (b.class === "ok")
-          return done(
-            success(b, {
-              reason: `tier 1 said ${a.class} (${a.reason}); refreshed the session through the site's own request`,
-            }),
-          );
+        if (b.class === "ok") {
+          const why = [...notes, `tier ${tier} said ${a.class} (${a.reason})`].join("; ");
+          return done(success(b, { reason: `${why}; refreshed the session through the site's own request` }));
+        }
         // The run answered other args (a trigger fixed to one page), but it refreshed the session values: retry once.
         continue;
       }

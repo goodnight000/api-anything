@@ -120,6 +120,38 @@ test("a large legit HTML page that mentions recaptcha is not blocked", () => {
   assert.equal(cls(page, html(200, "<html><p>nothing here</p></html>")), "drift");
 });
 
+test("a sign-in form that embeds a CAPTCHA widget is auth; a CAPTCHA page with no sign-in form is blocked", () => {
+  const widget = `<script src="https://www.google.com/recaptcha/api.js" async defer></script><div class="g-recaptcha" data-sitekey="k"></div>`;
+  const signIn = `<!doctype html><html><head><title>Sign in</title></head><body><form action="/session" method="post"><input name="username"><input type="password" name="password">${widget}<button>Sign in</button></form></body></html>`;
+  const interstitial = `<!doctype html><html><head><title>One more step</title></head><body><form action="/verify" method="post">${widget}</form></body></html>`;
+  const listed = op({ response: { format: "html", html: { items: "li.r", fields: { t: "" } } } });
+  const write = op({ readOnly: false, response: { format: "json" } });
+  // an interstitial's own markers win over any form on the page (a hidden or unrelated login form)
+  const walled = `<!doctype html><html><head><title>One more step</title></head><body><script src="https://geo.captcha-delivery.com/captcha/"></script><form name="js_challenge"><input name="username"><input type="password" name="password"></form></body></html>`;
+  // a script that rides on ordinary pages, named first, must not hide another vendor's interstitial
+  const both = walled.replace(
+    "<body>",
+    '<body><script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>',
+  );
+  assert.equal(cls(op(), html(403, both)), "blocked");
+  // Kasada's headers ride on its sites' ordinary answers: a 403 sign-in form with them asks for a login
+  assert.equal(
+    cls(op(), { status: 403, headers: { "content-type": "text/html", "x-kpsdk-ct": "t" }, body: signIn }),
+    "auth",
+  );
+  assert.equal(
+    cls(op(), { status: 403, headers: { "content-type": "text/html", "x-kpsdk-ct": "t" }, body: walled }),
+    "blocked",
+  );
+  for (const o of [op(), listed, write]) {
+    for (const status of [200, 403]) {
+      assert.equal(cls(o, html(status, signIn)), "auth", `${o.response.format} ${status}`);
+      assert.equal(cls(o, html(status, interstitial)), "blocked", `${o.response.format} ${status}`);
+      assert.equal(cls(o, html(status, walled)), "blocked", `walled ${o.response.format} ${status}`);
+    }
+  }
+});
+
 test("input: 400 naming a param; error: 5xx and unexplained GraphQL errors", () => {
   assert.equal(cls(op(), json(400, { error: "screen_name is invalid" })), "input");
   assert.equal(cls(op(), json(400, { error: "something odd" })), "error");
@@ -156,6 +188,18 @@ test("auth and rate signals win over drift when the data is gone (X code 215, In
     "ok",
     "wording alone does not matter when the data is there",
   );
+});
+
+test("login wording on 400, 403 and 422 is auth; a 422 validation error or form page is not", () => {
+  for (const status of [400, 403, 422]) {
+    assert.equal(cls(op(), json(status, { message: "Bad Authentication data" })), "auth", `HTTP ${status}`);
+  }
+  assert.equal(cls(op(), json(422, { errors: { email: ["is invalid"] } })), "error");
+  assert.equal(cls(op(), json(422, { error: "screen_name is invalid" })), "error");
+  // a signup's "username taken" page shows a password field; only the wording counts
+  const taken =
+    '<form action="/users"><p>Username has already been taken</p><input name="username"><input type="password" name="pw"></form>';
+  assert.equal(cls(op({ readOnly: false }), html(422, taken)), "error");
 });
 
 test("missing data is drift flagged missing, so the caller can check the example args first", () => {

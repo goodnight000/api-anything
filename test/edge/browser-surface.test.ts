@@ -425,6 +425,8 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     ["#submit", "a GET form submission"],
     ["#script", "an injected script (JSONP)"],
     ["#iframe", "an injected iframe"],
+    // still retrying while the run ends: the guard has to outlive the page
+    ["#retry", "a fetch the page sends again after every failure"],
   ] as const) {
     test(`capture --write: a GET write sent by ${what} during the steps never reaches the server`, async () => {
       process.env.API_ANYTHING_HOME = home;

@@ -344,7 +344,13 @@ export function matches(m: Match, req: Request): boolean {
   return true;
 }
 
-function buildMatch(req: Request, paramSegments: Set<number>): Match {
+/** Stable identity, with param and hash-like path segments wildcarded. */
+function buildMatch(req: Request, slots: Slot[]): Match {
+  const paramSegments = new Set(
+    slots
+      .filter((s) => s.param && s.at.length === 1 && s.at[0]!.startsWith("path:"))
+      .map((s) => Number(s.at[0]!.slice(5))),
+  );
   const u = new URL(req.url);
   const path = u.pathname
     .split("/")
@@ -398,10 +404,30 @@ export function checkExamples(args: Args, label: string): void {
   }
 }
 
+/** Both example sets can be located; the second should name the same params as the first. */
+function checkExampleSets([args1, args2]: LearnInput["examples"], warnings: string[]): void {
+  checkExamples(args1, "example");
+  if (!args2) return;
+  checkExamples(args2, "example 2");
+  const k1 = Object.keys(args1).sort().join();
+  if (Object.keys(args2).sort().join() !== k1) warnings.push("example 2 names different params than example 1");
+}
+
+/** Step 6: the captured headers verbatim, minus the ones a replay must not send (DROP_HEADER). */
 function headersOf(e: Exchange): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(e.request.headers)) if (!DROP_HEADER.test(k)) out[k.toLowerCase()] = v;
   return out;
+}
+
+/** The captured request as the template every later step reads: verbatim, with step 6's headers. */
+function templateOf(e: Exchange): Request {
+  return {
+    method: e.request.method.toUpperCase(),
+    url: e.request.url,
+    headers: headersOf(e),
+    ...(e.request.body !== undefined ? { body: e.request.body } : {}),
+  };
 }
 
 function pickExchange(
@@ -438,6 +464,28 @@ function pickExchange(
   return byId(top!.id);
 }
 
+/**
+ * Step 1: the exchange to learn from, and the pages the capture ran on (its documents, every
+ * Referer, the filled trigger, and the locations the caller saw), which later tell an echo from evidence.
+ */
+function pickRequest(input: LearnInput, args: Args, warnings: string[]): { exchange: Exchange; pages: string[] } {
+  const enc = Object.fromEntries(Object.entries(args).map(([k, v]) => [k, encodeURIComponent(asText(v))]));
+  const pages = pageUrls(input.exchanges, [fillTemplate(input.trigger.url, enc), ...(input.pages ?? [])]);
+  const ex = pickExchange(input, input.exchanges, args, pages, warnings);
+  // A read's answer is data. Picked by rank alone, a data-less 2xx is a beacon's ack whose echo of the
+  // page went unrecognized; learning it would answer every call with {"success":true}.
+  const answer = (ex.response?.body ?? "").toLowerCase();
+  const echoesArgs = exampleValues(args).some(([, v]) => v.length >= 3 && answer.includes(v));
+  if (input.readOnly && isAck(ex) && !echoesArgs && input.id === undefined && !input.match) {
+    throw new Error(
+      `the request that carries the example values (#${ex.id} ${ex.request.method} ${ex.request.url.slice(0, 120)}) answers without data ` +
+        `(${JSON.stringify((ex.response?.body ?? "").trim().slice(0, 60))}): an analytics beacon's ack, not the op's answer. ` +
+        "Pick the data request (capture, then add --from <id> --pick-request <n>), or learn the page itself with --html or --embedded",
+    );
+  }
+  return { exchange: ex, pages };
+}
+
 /** Pointers inside a JSON text whose value equals want (an array or object example). */
 function jsonPointers(root: unknown, want: string, ptr = ""): string[] {
   if (JSON.stringify(root) === want) return [ptr];
@@ -470,7 +518,75 @@ function escapeOf(leaf: Leaf, hits: Hit[]): Escape | undefined {
 }
 
 /**
- * Slots for the example args. An exact leaf is a slot; a leaf holding the value inside other text
+ * Where a scalar example sits: the leaves equal to it, and the string leaves holding it (raw or
+ * percent-encoded) inside other text.
+ */
+function scalarHits(name: string, raw: unknown, leaves: Leaf[]): { exact: Leaf[]; part: Hit[] } {
+  const v = asText(raw).toLowerCase();
+  const literal = /^(true|false|null)$/.test(v);
+  const digits = /^\d+$/.test(v);
+  const enc = encodeURIComponent(asText(raw)).toLowerCase();
+  const forms = [...new Set([enc, enc.replace(/%20/g, "+")])].filter((f) => f !== v);
+  // digits inside a longer number (a timestamp, a cache-buster) are not the arg
+  const inside = (text: string, t: string) =>
+    digits ? new RegExp(`(?<!\\d)${t}(?!\\d)`).test(text) : text.includes(t);
+  let exact: Leaf[] = [];
+  const part: Hit[] = [];
+  for (const leaf of leaves) {
+    const header = headerName(leaf.at);
+    if (header === "cookie" || (header && BROWSER_HEADER.test(header))) continue;
+    const text = leaf.value.toLowerCase();
+    if (text === v) {
+      exact.push(leaf);
+      continue;
+    }
+    if (leaf.container || leaf.type !== "string" || literal) continue;
+    if (header && !URL_HEADER.has(leaf.at[0]!) && !header.startsWith("x-")) continue;
+    // a short example ("SFO") turns up by chance inside a random token: there it must stand alone
+    const within =
+      v.length <= 4 && highEntropy(leaf.value)
+        ? (t: string, x: string) => new RegExp(`(?<![a-z0-9])${escapeRe(x)}(?![a-z0-9])`).test(t)
+        : inside;
+    if (within(text, v)) part.push({ leaf, text: v, encoded: false });
+    else {
+      const f = forms.find((x) => within(text, x));
+      if (f) part.push({ leaf, text: f, encoded: true });
+    }
+  }
+  if (literal && exact.length) {
+    // X-style GraphQL sends dozens of true flags, and a lone one may be any flag: bind only the one named like the param
+    const named = exact.filter((l) => lastToken(l.at).toLowerCase() === name.toLowerCase());
+    if (!named.length) {
+      throw new Error(
+        `example value for "${name}" (${JSON.stringify(raw)}) matches ${exact.length} flag(s) (${exact.map((l) => l.at.join(" > ")).join("; ")}), none with the key "${name}"; name the param after its key so it binds to one`,
+      );
+    }
+    exact = named;
+  }
+  return { exact, part };
+}
+
+/** The slot for one leaf that holds param values inside other text. Each hit's text is `param\0found text`. */
+function templatedSlot(hits: Hit[]): Slot {
+  const leaf = hits[0]!.leaf;
+  const byText = new Map(
+    hits.map((h) => [h.text.slice(h.text.indexOf("\0") + 1), h.text.slice(0, h.text.indexOf("\0"))]),
+  );
+  // one alternation, longest first, so "nasa" never splits "nasagov"
+  const alts = [...byText.keys()]
+    .sort((a, b) => b.length - a.length)
+    .map((t) => (/^\d+$/.test(t) ? `(?<!\\d)${t}(?!\\d)` : escapeRe(escapeTemplate(t))));
+  const template = escapeTemplate(leaf.value).replace(
+    new RegExp(alts.join("|"), "gi"),
+    (m) => `{${byText.get(m.toLowerCase())}}`,
+  );
+  const plain = hits.map((h) => ({ ...h, text: h.text.slice(h.text.indexOf("\0") + 1) }));
+  const escape = escapeOf(leaf, plain);
+  return { param: byText.values().next().value!, at: leaf.at, template, ...(escape ? { escape } : {}) };
+}
+
+/**
+ * Step 2: slots for the example args. An exact leaf is a slot; a leaf holding the value inside other text
  * (never a number, flag or browser header) is a templated slot. Referer/Origin/Cookie and any echo
  * of the page's location follow the args but are not evidence: a value found only there changes
  * nothing the server reads.
@@ -496,48 +612,7 @@ function paramSlots(
       types.set(name, Array.isArray(raw) ? "array" : "object");
       continue;
     }
-    const v = asText(raw).toLowerCase();
-    const literal = /^(true|false|null)$/.test(v);
-    const digits = /^\d+$/.test(v);
-    const enc = encodeURIComponent(asText(raw)).toLowerCase();
-    const forms = [...new Set([enc, enc.replace(/%20/g, "+")])].filter((f) => f !== v);
-    // digits inside a longer number (a timestamp, a cache-buster) are not the arg
-    const inside = (text: string, t: string) =>
-      digits ? new RegExp(`(?<!\\d)${t}(?!\\d)`).test(text) : text.includes(t);
-    let exact: Leaf[] = [];
-    const part: Hit[] = [];
-    for (const leaf of leaves) {
-      const header = headerName(leaf.at);
-      if (header === "cookie" || (header && BROWSER_HEADER.test(header))) continue;
-      const text = leaf.value.toLowerCase();
-      if (text === v) {
-        exact.push(leaf);
-        continue;
-      }
-      if (leaf.container || leaf.type !== "string" || literal) continue;
-      if (header && !URL_HEADER.has(leaf.at[0]!) && !header.startsWith("x-")) continue;
-      // a short example ("SFO") turns up by chance inside a random token: there it must stand alone
-      const within =
-        v.length <= 4 && highEntropy(leaf.value)
-          ? (t: string, x: string) => new RegExp(`(?<![a-z0-9])${escapeRe(x)}(?![a-z0-9])`).test(t)
-          : inside;
-      if (within(text, v)) part.push({ leaf, text: v, encoded: false });
-      else {
-        const f = forms.find((x) => within(text, x));
-        if (f) part.push({ leaf, text: f, encoded: true });
-      }
-    }
-    if (literal && exact.length) {
-      // X-style GraphQL sends dozens of true flags, and a lone one may be any flag: bind only the one named like the param
-      const named = exact.filter((l) => lastToken(l.at).toLowerCase() === name.toLowerCase());
-      if (!named.length) {
-        throw new Error(
-          `example value for "${name}" (${JSON.stringify(raw)}) matches ${exact.length} flag(s) (${exact.map((l) => l.at.join(" > ")).join("; ")}), none with the key "${name}"; name the param after its key so it binds to one`,
-        );
-      }
-      exact = named;
-    }
-    found.set(name, { exact, part });
+    found.set(name, scalarHits(name, raw, leaves));
   }
   // A leaf that equals one param's value belongs to that param, even if another's value is inside it.
   const exactKeys = new Set([...found.values()].flatMap((f) => f.exact.map((l) => key(l.at))));
@@ -559,23 +634,7 @@ function paramSlots(
     for (const h of part)
       partial.set(key(h.leaf.at), [...(partial.get(key(h.leaf.at)) ?? []), { ...h, text: `${name}\0${h.text}` }]);
   }
-  for (const hits of partial.values()) {
-    const leaf = hits[0]!.leaf;
-    const byText = new Map(
-      hits.map((h) => [h.text.slice(h.text.indexOf("\0") + 1), h.text.slice(0, h.text.indexOf("\0"))]),
-    );
-    // one alternation, longest first, so "nasa" never splits "nasagov"
-    const alts = [...byText.keys()]
-      .sort((a, b) => b.length - a.length)
-      .map((t) => (/^\d+$/.test(t) ? `(?<!\\d)${t}(?!\\d)` : escapeRe(escapeTemplate(t))));
-    const template = escapeTemplate(leaf.value).replace(
-      new RegExp(alts.join("|"), "gi"),
-      (m) => `{${byText.get(m.toLowerCase())}}`,
-    );
-    const plain = hits.map((h) => ({ ...h, text: h.text.slice(h.text.indexOf("\0") + 1) }));
-    const escape = escapeOf(leaf, plain);
-    slots.push({ param: byText.values().next().value!, at: leaf.at, template, ...(escape ? { escape } : {}) });
-  }
+  for (const hits of partial.values()) slots.push(templatedSlot(hits));
   return { slots, types };
 }
 
@@ -675,6 +734,249 @@ function liveValues(
   return out;
 }
 
+/* ------------------------------------------------------ session references */
+
+/**
+ * What the session-reference passes build together. Each pass skips the positions an earlier one
+ * took and names its refs against the values already found, so they run in order over one state.
+ */
+interface Refs {
+  /** the param slots, then each ref in the order found */
+  slots: Slot[];
+  /** positions that have a slot */
+  taken: Set<string>;
+  /** live values by their text; a credential a pass finds by name or issue joins them */
+  live: Map<string, Live>;
+  /** literal values of session: refs by name, for the session store */
+  sessionValues: Record<string, string>;
+}
+
+/** Give a position its ref. A session: value is recorded, under a per-position name when the name holds another value. */
+function addRef(refs: Refs, at: Step[], slot: Omit<Slot, "at">, value?: string): void {
+  if (value !== undefined && slot.ref?.startsWith("session:")) {
+    let name = slot.ref.slice(8);
+    if (refs.sessionValues[name] !== undefined && refs.sessionValues[name] !== value)
+      name += `@${encodeURIComponent(key(at))}`;
+    slot = { ...slot, ref: `session:${name}` };
+    refs.sessionValues[name] = value;
+    // Newly discovered credentials need the same compound-copy cleanup as cookies/storage.
+    if (!refs.live.get(value)?.ref.startsWith("cookie:")) refs.live.set(value, { ref: slot.ref!, value });
+  }
+  refs.slots.push({ ...slot, at });
+  refs.taken.add(key(at));
+}
+
+/** Pass 1: a leaf equal to a live cookie or storage value. */
+function liveRefs(refs: Refs, leaves: Leaf[]): void {
+  for (const leaf of leaves) {
+    const l = refs.live.get(leaf.value);
+    // string leaves only: a ref is filled with a string, which would retype a JSON number
+    if (!l || leaf.type !== "string" || refs.taken.has(key(leaf.at))) continue;
+    // an app caching a persisted-query hash in storage does not make the hash a credential
+    if (l.value !== undefined && VOLATILE_KEY.test(lastToken(leaf.at))) continue;
+    addRef(refs, leaf.at, { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}) }, l.value);
+  }
+}
+
+type SecretNamed = (name: string, value: string) => boolean;
+
+/**
+ * A key the site ships in its own JS to every visitor (a public API key) is a constant, not a credential.
+ * `secretNamed` tells the two apart for a credential-named random value: asked about a shipped one,
+ * it says no and notes the name in `shipped`, for the op's public list.
+ */
+function secretTest(
+  exchanges: Exchange[],
+  publicNames: Set<string>,
+): { secretNamed: SecretNamed; shipped: Set<string> } {
+  const scripts = exchanges.flatMap((e) => (staticBundle(e) && e.response?.body ? [e.response.body] : []));
+  const shipped = new Set<string>();
+  const secretNamed = (name: string, value: string) => {
+    if (publicNames.has(name.toLowerCase()) || !credentialName(name) || !highEntropy(value)) return false;
+    if (!scripts.some((b) => b.includes(value))) return true;
+    shipped.add(name.toLowerCase());
+    return false;
+  };
+  return { secretNamed, shipped };
+}
+
+/** Pass 2: per-session fields and credential-named random values in the path, query, form and JSON. */
+function fieldRefs(refs: Refs, leaves: Leaf[], secretNamed: SecretNamed): void {
+  for (const leaf of leaves) {
+    if (leaf.container || leaf.type !== "string" || leaf.at[0]!.startsWith("header:") || refs.taken.has(key(leaf.at)))
+      continue;
+    const name = lastToken(leaf.at);
+    if ((SESSION_FIELD.test(name) && leaf.value.length >= 8) || secretNamed(name, leaf.value))
+      addRef(refs, leaf.at, { ref: `session:${name}` }, leaf.value);
+  }
+}
+
+/** Pass 3: auth and anti-bot headers, credential-named ones, and a header repeating a value the earlier passes found. */
+function headerRefs(
+  refs: Refs,
+  headers: Record<string, string>,
+  publicNames: Set<string>,
+  secretNamed: SecretNamed,
+): void {
+  const fieldOf = new Map(Object.entries(refs.sessionValues).map(([k, v]) => [v, k]));
+  for (const [name, value] of Object.entries(headers)) {
+    const at = [`header:${name}`];
+    if (publicNames.has(name) || refs.taken.has(key(at))) continue;
+    // Meta's x-fb-lsd repeats the lsd field: one credential, one ref.
+    const same = value.length >= 8 ? fieldOf.get(value) : undefined;
+    if (!same && !SESSION_HEADER.test(name) && (BROWSER_HEADER.test(name) || !secretNamed(name, value))) continue;
+    addRef(refs, at, { ref: `session:${same ?? name}` }, same ? undefined : value);
+  }
+}
+
+/**
+ * Pass 4: server-issued values. `issued` holds the answers the page had before this request.
+ * A random value an earlier answer of this capture handed the page (a bootstrap JSON, a per-user
+ * config script, a token in the document) is server-issued: a session: ref under any name,
+ * refreshed by every trigger run. Static bundles are public (above); hash-like path segments and
+ * persisted-query ids are volatile anchors, healed by rescan.
+ */
+function issuedRefs(refs: Refs, leaves: Leaf[], issued: string[], publicNames: Set<string>): void {
+  for (const leaf of leaves) {
+    if (leaf.container || leaf.type !== "string" || refs.taken.has(key(leaf.at)) || !highEntropy(leaf.value)) continue;
+    const header = headerName(leaf.at);
+    const name = leafName(leaf.at);
+    if (leaf.at[0]!.startsWith("path:") || VOLATILE_KEY.test(name) || publicNames.has(name.toLowerCase())) continue;
+    if (header && (URL_HEADER.has(leaf.at[0]!) || BROWSER_HEADER.test(header))) continue;
+    const escaped = JSON.stringify(leaf.value).slice(1, -1);
+    if (!issued.some((b) => b.includes(leaf.value) || b.includes(escaped))) continue;
+    // A bootstrap token belongs to this operation and request position, not every field named t.
+    const ref = refs.live.get(leaf.value)?.ref ?? `session:${name}@${encodeURIComponent(key(leaf.at))}`;
+    addRef(refs, leaf.at, { ref }, leaf.value);
+  }
+}
+
+/**
+ * Pass 5, in a param's templated leaf: each live value it holds becomes a `{cookie:x}`/`{session:x}`
+ * hole in the param's own template. Returns the request with those values taken out of the leaf,
+ * since a param's leaf is not blanked like a ref's.
+ */
+function holeRefs(refs: Refs, own: Slot, long: [string, Live][], request: Request): Request {
+  for (const [v, l] of long) {
+    if (l.transform) continue;
+    // With no escape of its own, the leaf may still hold the value encoded (x-ctx: user={q};auth=<%-encoded>):
+    // the slot then takes that escape, so the hole is refilled the same way.
+    const tries: (Escape | undefined)[] = own.escape ? [own.escape] : [undefined, "url", "json"];
+    const i = tries.findIndex((e) => own.template!.includes(escapeTemplate(escapeValue(v, e))));
+    if (i < 0) continue;
+    const esc = tries[i];
+    const form = escapeValue(v, esc);
+    if (esc && !own.escape) own.escape = esc;
+    own.template = own.template!.split(escapeTemplate(form)).join(`{${l.ref}}`);
+    if (l.ref.startsWith("session:") && l.value !== undefined) refs.sessionValues[l.ref.slice(8)] = l.value;
+    request = setAt(request, own.at, (getAt(request, own.at) as string).split(form).join(""));
+  }
+  return request;
+}
+
+/** Pass 5, in a leaf no slot has: the live values it holds become holes of one templated ref, named after the first found. */
+function templatedRef(refs: Refs, leaf: Leaf, long: [string, Live][]): void {
+  let template = escapeTemplate(leaf.value);
+  let primary: { live: Live; escape: Escape | undefined } | undefined;
+  for (const [v, l] of long) {
+    const forms: [string, Escape | undefined][] = [
+      [v, undefined],
+      [encodeURIComponent(v), "url"],
+      [JSON.stringify(v).slice(1, -1), "json"],
+    ];
+    const form = forms.find(([f, esc]) => template.includes(escapeTemplate(f)) && (!primary || primary.escape === esc));
+    if (!form) continue;
+    template = template.split(escapeTemplate(form[0])).join(`{${l.ref}}`);
+    if (l.ref.startsWith("session:") && l.value !== undefined) refs.sessionValues[l.ref.slice(8)] = l.value;
+    primary ??= { live: l, escape: form[1] };
+  }
+  if (!primary) return;
+  const { live: l, escape } = primary;
+  addRef(
+    refs,
+    leaf.at,
+    { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}), template, ...(escape ? { escape } : {}) },
+    l.value,
+  );
+}
+
+/**
+ * Pass 5: live values embedded in longer leaves.
+ * A live value inside a longer leaf ("v1:<cookie>", a next= URL holding it percent-encoded, a
+ * JSON-escaped copy) is a templated ref, re-encoded like the leaf had it.
+ */
+function embeddedRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
+  const long = [...refs.live].filter(([v]) => v.length >= 16);
+  for (const leaf of leaves) {
+    if (leaf.container || leaf.type !== "string") continue;
+    // A param's templated leaf can carry one too (next=/search?q={q}&auth=<cookie>): its template gets a ref hole.
+    const own = refs.taken.has(key(leaf.at))
+      ? refs.slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(leaf.at))
+      : undefined;
+    if (own) request = holeRefs(refs, own, long, request);
+    else if (!refs.taken.has(key(leaf.at))) templatedRef(refs, leaf, long);
+  }
+  return request;
+}
+
+/**
+ * Step 4: session refs: live cookie/storage values anywhere, per-session fields, credential-named
+ * values, auth headers. Takes the captured template and the param slots; returns the template with
+ * every ref'd leaf blanked and the live values the passes found inside longer leaves cut out, the
+ * slots with the refs appended, the session: values for the session store, and the names the op
+ * lists as public (marked so by the caller, or shipped to every visitor).
+ */
+function sessionRefs(
+  input: LearnInput,
+  ex: Exchange,
+  captured: Request,
+  leaves: Leaf[],
+  params: Slot[],
+): { request: Request; slots: Slot[]; sessionValues: Record<string, string>; publicNames: string[] } {
+  const refs: Refs = {
+    // copies: pass 5 writes ref holes into a param's template
+    slots: params.map((s) => ({ ...s })),
+    taken: new Set(params.map((s) => key(s.at))),
+    live: liveValues(input.cookies, ex.request.headers.cookie, input.storage),
+    sessionValues: {},
+  };
+  liveRefs(refs, leaves);
+  const publicNames = new Set((input.public ?? []).map((h) => h.toLowerCase()));
+  const { secretNamed, shipped } = secretTest(input.exchanges, publicNames);
+  fieldRefs(refs, leaves, secretNamed);
+  headerRefs(refs, captured.headers, publicNames, secretNamed);
+  const issued = input.exchanges.flatMap((e) =>
+    e.id < ex.id && e.response?.body && !staticBundle(e) ? [e.response.body] : [],
+  );
+  issuedRefs(refs, leaves, issued, publicNames);
+  let request = embeddedRefs(refs, leaves, captured);
+  // The spec never holds a credential: blank every ref'd leaf.
+  for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
+  return {
+    request,
+    slots: refs.slots,
+    sessionValues: refs.sessionValues,
+    publicNames: [...new Set([...publicNames, ...shipped])],
+  };
+}
+
+/**
+ * Session values are stored per site. Two operations may use different tokens under the same
+ * field/header name, so newly learned references include the operation name. Old specs still work.
+ */
+function scopeRefs(slots: Slot[], opName: string): Slot[] {
+  const scope = (ref: string) =>
+    ref.startsWith("session:") ? `session:${encodeURIComponent(opName)}/${ref.slice(8)}` : ref;
+  return slots.map((s) => {
+    const slot = { ...s };
+    if (slot.ref) slot.ref = scope(slot.ref);
+    if (slot.template)
+      for (const ref of templateRefs(slot.template))
+        slot.template = slot.template.split(`{${ref}}`).join(`{${scope(ref)}}`);
+    return slot;
+  });
+}
+
 function shapeOf(s: string): Volatile["shape"] {
   const charset = /^\d+$/.test(s)
     ? "digits"
@@ -686,7 +988,10 @@ function shapeOf(s: string): Volatile["shape"] {
   return { charset, length: s.length };
 }
 
-function volatileAnchors(req: Request, leaves: Leaf[], taken: Set<string>, opName: string | undefined): Volatile[] {
+/** Step 5: hash-like literals no slot has, each with its shape and a stable anchor next to it. */
+function volatileAnchors(req: Request, leaves: Leaf[], slots: Slot[]): Volatile[] {
+  const opName = operationNameOf(req);
+  const taken = new Set(slots.map((s) => key(s.at)));
   const out: Volatile[] = [];
   // A body queryId repeating the path id shares the path's anchor; "queryId" itself is too generic to rescan by.
   const anchorOf = new Map<string, string>();
@@ -839,248 +1144,102 @@ function diffRuns(req1: Request, req2: Request, slots: Slot[], args2: Args, warn
   return nonces;
 }
 
+/**
+ * Step 3: the tier a nonce forces. 3 when a position changes between the runs without an arg
+ * change (a nonce or signature), else 1. `request` and `slots` are run 1's, refs included.
+ */
+function twoRunDiff(
+  request: Request,
+  slots: Slot[],
+  match: Match,
+  exchanges2: Exchange[] | undefined,
+  args2: Args | undefined,
+  warnings: string[],
+): 1 | 3 {
+  if (!exchanges2 || !args2) {
+    warnings.push("learned from one example; a second example set separates params from nonces");
+    return 1;
+  }
+  const pool = exchanges2.filter((e) => matches(match, e.request));
+  const top = rankCandidates(pool, args2, { all: true })[0];
+  const ex2 = top && pool.find((e) => e.id === top.id);
+  if (!ex2) {
+    warnings.push("run 2 produced no matching request; skipped the two-run diff");
+    return 1;
+  }
+  const nonces = diffRuns(request, { ...ex2.request, headers: headersOf(ex2) }, slots, args2, warnings);
+  if (!nonces.length) return 1;
+  warnings.push(`changes between runs without an arg change (nonce/signature), so minTier 3: ${nonces.join("; ")}`);
+  return 3;
+}
+
+/**
+ * DESIGN.md "Learning", step by step. The numbers are the design's; the order is the one the data
+ * allows. The two-run diff (3) comes after the session refs (4), because a session value that
+ * differs between the runs is not a nonce, and after the match, which finds run 2's request and is
+ * built from the template once its credentials are blanked.
+ */
 export function learnOperation(input: LearnInput): Learned {
   const warnings: string[] = [];
-  const [args1, args2] = input.examples;
-  checkExamples(args1, "example");
-  if (args2) {
-    checkExamples(args2, "example 2");
-    const k1 = Object.keys(args1).sort().join();
-    if (Object.keys(args2).sort().join() !== k1) warnings.push("example 2 names different params than example 1");
-  }
+  const { examples } = input;
+  const [args1, args2] = examples;
+  checkExampleSets(examples, warnings);
 
-  // 1. pick the request
-  const enc = Object.fromEntries(Object.entries(args1).map(([k, v]) => [k, encodeURIComponent(asText(v))]));
-  const pages = pageUrls(input.exchanges, [fillTemplate(input.trigger.url, enc), ...(input.pages ?? [])]);
-  const ex = pickExchange(input, input.exchanges, args1, pages, warnings);
-  // A read's answer is data. Picked by rank alone, a data-less 2xx is a beacon's ack whose echo of the
-  // page went unrecognized; learning it would answer every call with {"success":true}.
-  const answer = (ex.response?.body ?? "").toLowerCase();
-  const echoesArgs = exampleValues(args1).some(([, v]) => v.length >= 3 && answer.includes(v));
-  if (input.readOnly && isAck(ex) && !echoesArgs && input.id === undefined && !input.match) {
-    throw new Error(
-      `the request that carries the example values (#${ex.id} ${ex.request.method} ${ex.request.url.slice(0, 120)}) answers without data ` +
-        `(${JSON.stringify((ex.response?.body ?? "").trim().slice(0, 60))}): an analytics beacon's ack, not the op's answer. ` +
-        "Pick the data request (capture, then add --from <id> --pick-request <n>), or learn the page itself with --html or --embedded",
-    );
-  }
-  let request: Request = {
-    method: ex.request.method.toUpperCase(),
-    url: ex.request.url,
-    headers: headersOf(ex),
-    ...(ex.request.body !== undefined ? { body: ex.request.body } : {}),
-  };
-  const leaves = walk(request);
+  // 1. pick the request (6: its headers are kept, minus the ones a replay must not send)
+  const { exchange, pages } = pickRequest(input, args1, warnings);
+  const captured = templateOf(exchange);
+  const leaves = walk(captured);
 
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
-  const { slots, types } = paramSlots(
-    leaves,
-    args1,
-    input.id !== undefined ? { abs: [], rel: [] } : locations(pages),
-    warnings,
-  );
-  const taken = new Set(slots.map((s) => key(s.at)));
+  const locs = input.id !== undefined ? { abs: [], rel: [] } : locations(pages);
+  const param = paramSlots(leaves, args1, locs, warnings);
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
-  const sessionValues: Record<string, string> = {};
-  const live = liveValues(input.cookies, ex.request.headers.cookie, input.storage);
-  const addRef = (at: Step[], slot: Omit<Slot, "at">, value?: string) => {
-    if (value !== undefined && slot.ref?.startsWith("session:")) {
-      let name = slot.ref.slice(8);
-      if (sessionValues[name] !== undefined && sessionValues[name] !== value) name += `@${encodeURIComponent(key(at))}`;
-      slot = { ...slot, ref: `session:${name}` };
-      sessionValues[name] = value;
-      // Newly discovered credentials need the same compound-copy cleanup as cookies/storage.
-      if (!live.get(value)?.ref.startsWith("cookie:")) live.set(value, { ref: slot.ref!, value });
-    }
-    slots.push({ ...slot, at });
-    taken.add(key(at));
-  };
-  for (const leaf of leaves) {
-    const l = live.get(leaf.value);
-    // string leaves only: a ref is filled with a string, which would retype a JSON number
-    if (!l || leaf.type !== "string" || taken.has(key(leaf.at))) continue;
-    // an app caching a persisted-query hash in storage does not make the hash a credential
-    if (l.value !== undefined && VOLATILE_KEY.test(lastToken(leaf.at))) continue;
-    addRef(leaf.at, { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}) }, l.value);
-  }
-  const publicNames = new Set((input.public ?? []).map((h) => h.toLowerCase()));
-  // A key the site ships in its own JS to every visitor (a public API key) is a constant, not a credential.
-  const scripts = input.exchanges.flatMap((e) => (staticBundle(e) && e.response?.body ? [e.response.body] : []));
-  const shipped = new Set<string>();
-  const secretNamed = (name: string, value: string) => {
-    if (publicNames.has(name.toLowerCase()) || !credentialName(name) || !highEntropy(value)) return false;
-    if (!scripts.some((b) => b.includes(value))) return true;
-    shipped.add(name.toLowerCase());
-    return false;
-  };
-  for (const leaf of leaves) {
-    if (leaf.container || leaf.type !== "string" || leaf.at[0]!.startsWith("header:") || taken.has(key(leaf.at)))
-      continue;
-    const name = lastToken(leaf.at);
-    if ((SESSION_FIELD.test(name) && leaf.value.length >= 8) || secretNamed(name, leaf.value))
-      addRef(leaf.at, { ref: `session:${name}` }, leaf.value);
-  }
-  const fieldOf = new Map(Object.entries(sessionValues).map(([k, v]) => [v, k]));
-  for (const [name, value] of Object.entries(request.headers)) {
-    const at = [`header:${name}`];
-    if (publicNames.has(name) || taken.has(key(at))) continue;
-    // Meta's x-fb-lsd repeats the lsd field: one credential, one ref.
-    const same = value.length >= 8 ? fieldOf.get(value) : undefined;
-    if (!same && !SESSION_HEADER.test(name) && (BROWSER_HEADER.test(name) || !secretNamed(name, value))) continue;
-    addRef(at, { ref: `session:${same ?? name}` }, same ? undefined : value);
-  }
-  // A random value an earlier answer of this capture handed the page (a bootstrap JSON, a per-user
-  // config script, a token in the document) is server-issued: a session: ref under any name,
-  // refreshed by every trigger run. Static bundles are public (above); hash-like path segments and
-  // persisted-query ids are volatile anchors, healed by rescan.
-  const issued = input.exchanges.flatMap((e) =>
-    e.id < ex.id && e.response?.body && !staticBundle(e) ? [e.response.body] : [],
-  );
-  for (const leaf of leaves) {
-    if (leaf.container || leaf.type !== "string" || taken.has(key(leaf.at)) || !highEntropy(leaf.value)) continue;
-    const header = headerName(leaf.at);
-    const name = leafName(leaf.at);
-    if (leaf.at[0]!.startsWith("path:") || VOLATILE_KEY.test(name) || publicNames.has(name.toLowerCase())) continue;
-    if (header && (URL_HEADER.has(leaf.at[0]!) || BROWSER_HEADER.test(header))) continue;
-    const escaped = JSON.stringify(leaf.value).slice(1, -1);
-    if (!issued.some((b) => b.includes(leaf.value) || b.includes(escaped))) continue;
-    // A bootstrap token belongs to this operation and request position, not every field named t.
-    const ref = live.get(leaf.value)?.ref ?? `session:${name}@${encodeURIComponent(key(leaf.at))}`;
-    addRef(leaf.at, { ref }, leaf.value);
-  }
-  // A live value inside a longer leaf ("v1:<cookie>", a next= URL holding it percent-encoded, a
-  // JSON-escaped copy) is a templated ref, re-encoded like the leaf had it.
-  const long = [...live].filter(([v]) => v.length >= 16);
-  for (const leaf of leaves) {
-    if (leaf.container || leaf.type !== "string") continue;
-    // A param's templated leaf can carry one too (next=/search?q={q}&auth=<cookie>): its template gets a ref hole.
-    const own = taken.has(key(leaf.at))
-      ? slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(leaf.at))
-      : undefined;
-    if (own) {
-      for (const [v, l] of long) {
-        if (l.transform) continue;
-        // With no escape of its own, the leaf may still hold the value encoded (x-ctx: user={q};auth=<%-encoded>):
-        // the slot then takes that escape, so the hole is refilled the same way.
-        const tries: (Escape | undefined)[] = own.escape ? [own.escape] : [undefined, "url", "json"];
-        const i = tries.findIndex((e) => own.template!.includes(escapeTemplate(escapeValue(v, e))));
-        if (i < 0) continue;
-        const esc = tries[i];
-        const form = escapeValue(v, esc);
-        if (esc && !own.escape) own.escape = esc;
-        own.template = own.template!.split(escapeTemplate(form)).join(`{${l.ref}}`);
-        if (l.ref.startsWith("session:") && l.value !== undefined) sessionValues[l.ref.slice(8)] = l.value;
-        request = setAt(request, leaf.at, (getAt(request, leaf.at) as string).split(form).join(""));
-      }
-      continue;
-    }
-    if (taken.has(key(leaf.at))) continue;
-    let template = escapeTemplate(leaf.value);
-    let primary: { live: Live; escape: Escape | undefined } | undefined;
-    for (const [v, l] of long) {
-      const forms: [string, Escape | undefined][] = [
-        [v, undefined],
-        [encodeURIComponent(v), "url"],
-        [JSON.stringify(v).slice(1, -1), "json"],
-      ];
-      const form = forms.find(
-        ([f, esc]) => template.includes(escapeTemplate(f)) && (!primary || primary.escape === esc),
-      );
-      if (!form) continue;
-      template = template.split(escapeTemplate(form[0])).join(`{${l.ref}}`);
-      if (l.ref.startsWith("session:") && l.value !== undefined) sessionValues[l.ref.slice(8)] = l.value;
-      primary ??= { live: l, escape: form[1] };
-    }
-    if (primary) {
-      const { live: l, escape } = primary;
-      addRef(
-        leaf.at,
-        { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}), template, ...(escape ? { escape } : {}) },
-        l.value,
-      );
-    }
-  }
-  // The spec never holds a credential: blank every ref'd leaf.
-  for (const s of slots) if (s.ref) request = setAt(request, s.at, "");
+  const { request, slots, sessionValues, publicNames } = sessionRefs(input, exchange, captured, leaves, param.slots);
 
   // 5. volatile anchors
-  const opName = operationNameOf(request);
-  const volatile = volatileAnchors(request, leaves, taken, opName);
+  const volatile = volatileAnchors(request, leaves, slots);
 
   // match: stable identity, with param and hash-like path segments wildcarded
-  const paramSegments = new Set(
-    slots
-      .filter((s) => s.param && s.at.length === 1 && s.at[0]!.startsWith("path:"))
-      .map((s) => Number(s.at[0]!.slice(5))),
-  );
-  const match = input.match ?? buildMatch(request, paramSegments);
+  const match = input.match ?? buildMatch(request, slots);
 
   // 3. two-run diff
-  let minTier: 1 | 2 | 3 = 1;
-  if (input.exchanges2 && args2) {
-    const pool = input.exchanges2.filter((e) => matches(match, e.request));
-    const top = rankCandidates(pool, args2, { all: true })[0];
-    const ex2 = top && pool.find((e) => e.id === top.id);
-    if (!ex2) {
-      warnings.push("run 2 produced no matching request; skipped the two-run diff");
-    } else {
-      const nonces = diffRuns(request, { ...ex2.request, headers: headersOf(ex2) }, slots, args2, warnings);
-      if (nonces.length) {
-        minTier = 3;
-        warnings.push(
-          `changes between runs without an arg change (nonce/signature), so minTier 3: ${nonces.join("; ")}`,
-        );
-      }
-    }
-  } else {
-    warnings.push("learned from one example; a second example set separates params from nonces");
-  }
+  const minTier = twoRunDiff(request, slots, match, input.exchanges2, args2, warnings);
 
   // 8. response
   const response = learnResponse(
-    ex,
+    exchange,
     Object.values(args1).map((v) => String(v).toLowerCase()),
     warnings,
   );
 
   const params: Param[] = Object.entries(args1).map(([name, example]) => ({
     name,
-    type: types.get(name) ?? "string",
+    type: param.types.get(name) ?? "string",
     required: true,
     example,
   }));
 
-  // Session values are stored per site. Two operations may use different tokens under the same
-  // field/header name, so newly learned references include the operation name. Old specs still work.
-  const scope = (ref: string) =>
-    ref.startsWith("session:") ? `session:${encodeURIComponent(input.name)}/${ref.slice(8)}` : ref;
-  for (const slot of slots) {
-    if (slot.ref) slot.ref = scope(slot.ref);
-    if (slot.template)
-      for (const ref of templateRefs(slot.template))
-        slot.template = slot.template.split(`{${ref}}`).join(`{${scope(ref)}}`);
-  }
-
   const operation = OperationSchema.parse({
     name: input.name,
     request,
-    slots,
+    slots: scopeRefs(slots, input.name),
     volatile,
     trigger: input.trigger,
     match,
     response,
     params,
     readOnly: input.readOnly,
-    ...(publicNames.size || shipped.size ? { public: [...new Set([...publicNames, ...shipped])] } : {}),
+    ...(publicNames.length ? { public: publicNames } : {}),
     minTier,
+    // 7. whether the session it was learned in was signed in
     learnedLoggedIn: loggedIn(input.cookies, input.loginCookies),
     learnedAt: new Date().toISOString(),
   });
   return {
     operation,
-    exchange: ex,
+    exchange,
     warnings,
     sessionValues: Object.fromEntries(
       Object.entries(sessionValues).map(([k, v]) => [`${encodeURIComponent(input.name)}/${k}`, v]),
