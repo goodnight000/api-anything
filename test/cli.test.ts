@@ -691,6 +691,75 @@ describe("add from a saved capture", () => {
       for (const secret of [FIRST, ROTATED]) assert.doesNotMatch(saved(), new RegExp(secret));
     });
 
+    test("a repair keeps the session its capture shows, as a full add does: the next call sends the new login", async () => {
+      const jar = (session: string) => [...JAR, { ...JAR[0], name: "session", value: session, httpOnly: true }];
+      const signedIn = async (session: string) => ({
+        url: `${fx.url}/private`,
+        cookies: jar(session),
+        exchanges: [await answered(1, "fetch", "/private", { cookie: `session=${session}` })],
+      });
+      const first = fx.mintSession();
+      seed("clogin", await signedIn(first));
+      assert.equal((await add("private", "clogin", "--extract", "data")).code, 0);
+      const call = async () => JSON.parse((await cli("call", "fixture", "private", "--max-tier", "1")).stdout);
+      assert.equal((await call()).ok, true);
+      // the site signs the stored session out, the user signs in again, and the next capture is made with the new one
+      const storedLogin = (): string =>
+        JSON.parse(readFileSync(join(HOME, "sessions", "fixture.json"), "utf8")).cookies.find(
+          (c: { name: string }) => c.name === "session",
+        ).value;
+      for (const flags of [
+        ["--description", "the signed-in page"],
+        ["--extract", "data", "--pick", "secret"],
+      ]) {
+        fx.revoke(storedLogin());
+        assert.equal((await call()).class, "auth", "the stored login is signed out");
+        seed("crelogin", await signedIn(fx.mintSession()));
+        assert.equal((await add("private", "crelogin", ...flags)).code, 0);
+        const after = await call();
+        assert.equal(after.ok, true, JSON.stringify(after));
+      }
+    });
+
+    test("a repair refreshes the kept op's refs from a request of its own, and from no other", async () => {
+      const [FIRST, NEXT, ELSEWHERE] = [
+        "FirstOpaqueValueAbc12345",
+        "NextOpaqueValueBcd23456",
+        "ElsewhereValueCde34567",
+      ];
+      const opaque = (path: string, value: string) => {
+        const e = lookup(path);
+        return { ...e, request: { ...e.request, headers: { "x-opaque": value } } };
+      };
+      const stored = () =>
+        Object.values(JSON.parse(readFileSync(join(HOME, "sessions", "fixture.json"), "utf8")).values);
+      seed("cref", {
+        url: `${fx.url}/page`,
+        cookies: [],
+        storage: { opaque: FIRST },
+        exchanges: [opaque("/api/reffed?name=alice", FIRST)],
+      });
+      assert.equal((await add("reffed", "cref", "--example", "name=alice", "--extract", "data")).code, 0);
+      assert.ok(stored().includes(FIRST));
+      // the op's own request, sending the value the page holds now
+      seed("cref2", {
+        url: `${fx.url}/page`,
+        cookies: [],
+        storage: { opaque: NEXT },
+        exchanges: [opaque("/api/reffed?name=alice", NEXT)],
+      });
+      assert.equal((await add("reffed", "cref2", "--extract", "data", "--pick", "name")).code, 0);
+      assert.ok(stored().includes(NEXT) && !stored().includes(FIRST), "the ref now holds what the request sent");
+      // another endpoint's request, picked for its answer only: what it sends there is not this op's
+      seed("cref3", {
+        url: `${fx.url}/page`,
+        cookies: [],
+        exchanges: [opaque("/api/unrelated?name=alice", ELSEWHERE)],
+      });
+      assert.equal((await add("reffed", "cref3", "--extract", "data")).code, 0);
+      assert.ok(stored().includes(NEXT) && !stored().includes(ELSEWHERE));
+    });
+
     test("a description is not saved from a capture that holds no request of the op: nothing says what is secret in it", async () => {
       const TOKEN = "OtherEndpointTokenAbc12345";
       seed("cbase", { url: `${fx.url}/page`, exchanges: [lookup("/api/base?name=alice")] });

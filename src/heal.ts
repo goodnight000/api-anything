@@ -660,10 +660,18 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
   // pass too: every stored value (one the kept op's ref has since moved on from is still a credential),
   // with what the learner finds secret in the request over them.
   const secret = { ...now.values, ...credentialsIn(old, capture, exchange) };
+  // The capture is also the freshest sight of the session, as it is to a full add: once the repair is saved,
+  // its cookies are kept, and the kept op's refs as this request sent them when the request is one of the
+  // op's own (another request's positions say nothing of them).
+  const refresh = () => {
+    const mine = !own || matches(old.match, exchange.request);
+    mergeCapture(site, capture.cookies, mine ? sessionValuesOf(old, exchange) : {});
+  };
   // A description with no recipe flag is metadata: nothing is learned again, and the recipe stays.
   if (i.description !== undefined && !Object.values(r).some((x) => x !== undefined)) {
     refuseAdded({ description: i.description }, live, secret);
     const saved = saveOperation(site, described(old, i.description), undefined, [], live, undefined);
+    refresh();
     return { ...saved, captures: [], repaired: "description" };
   }
   // the stored examples only steer the suggested extract, as the examples do in a full add
@@ -688,6 +696,7 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
     live,
     capture.id,
   );
+  refresh();
   return { ...saved, captures: [], repaired: "recipe" };
 }
 
