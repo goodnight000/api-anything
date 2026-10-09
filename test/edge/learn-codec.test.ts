@@ -470,7 +470,7 @@ test("a Referer templated with the arg stays a valid, percent-encoded header for
   assert.equal(new URL(r.headers.referer!).searchParams.get("q"), "東京 café");
 });
 
-test("bundled google-flights spec: a non-Latin-1 city fills the referer unencoded, so fetch rejects the header", async () => {
+test("bundled google-flights spec: a non-Latin-1 city goes into the referer percent-encoded", async () => {
   const { parseSite } = await import("../../src/spec.js");
   const { readFileSync } = await import("node:fs");
   const site = parseSite(JSON.parse(readFileSync(new URL("../../sites/google-flights.json", import.meta.url), "utf8")));

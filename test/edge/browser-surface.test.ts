@@ -541,7 +541,7 @@ describe("two processes sharing the Chrome profile; signals and zombies", { skip
     assert.ok(await until(() => chromes(home) === 0, 5000), "Chrome left running");
   });
 
-  test("SIGTERM mid-capture exits promptly (Playwright's handler swallows it; the CLI runs on to its 30 s deadline)", async () => {
+  test("SIGTERM mid-capture exits promptly", async () => {
     let pid = 0;
     // a wait step keeps the capture busy (the SSE page alone no longer holds a capture open)
     const running = cli(home, ["capture", `${fx.url}/sse-page`, "--steps", BUSY], {

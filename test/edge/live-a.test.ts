@@ -180,7 +180,7 @@ describe("bot walls seen live must classify as blocked", () => {
 
 /* ------------------------------------------------------------------ capOutput */
 
-test("inspect/call output whose first item alone exceeds the cap returns data: [] (reads as 'no results')", () => {
+test("inspect/call output whose first item alone exceeds the cap is not returned empty", () => {
   const big = [{ blob: "x".repeat(25_000) }, { blob: "y" }];
   const r = capOutput(big);
   assert.ok(Array.isArray(r.data));
