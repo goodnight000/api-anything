@@ -610,10 +610,12 @@ function paramSlots(
   args: Args,
   locs: Locations,
   warnings: string[],
+  disproved: Disproved,
 ): { slots: Slot[]; types: Map<string, Param["type"]> } {
   const slots: Slot[] = [];
   const types = new Map<string, Param["type"]>();
   const found = new Map<string, { exact: Leaf[]; part: Hit[] }>();
+  const open = (name: string) => (l: Leaf) => !disproved.has(pairKey(name, l.at));
   for (const [name, raw] of Object.entries(args)) {
     if (raw !== null && typeof raw === "object") {
       // an array/object example binds to the JSON container equal to it
@@ -626,7 +628,8 @@ function paramSlots(
       types.set(name, Array.isArray(raw) ? "array" : "object");
       continue;
     }
-    found.set(name, scalarHits(name, raw, leaves));
+    const { exact, part } = scalarHits(name, raw, leaves);
+    found.set(name, { exact: exact.filter(open(name)), part: part.filter((h) => open(name)(h.leaf)) });
   }
   // A leaf that equals one param's value belongs to that param, even if another's value is inside it.
   const exactKeys = new Set([...found.values()].flatMap((f) => f.exact.map((l) => key(l.at))));
@@ -637,7 +640,7 @@ function paramSlots(
     const places = [...f.exact, ...part.map((h) => h.leaf)]
       .filter((l) => !NOT_EVIDENCE.has(l.at[0]!) && !echoes(l.value, v, locs))
       .map((l) => l.at.join(" > "));
-    if (!places.length) throw notFound(name, args[name]);
+    if (!places.length) throw notFound(name, args[name], disprovedFor(disproved, name));
     if (places.length > 1)
       warnings.push(`"${name}" appears in ${places.length} places, all will be filled: ${places.join("; ")}`);
     for (const leaf of f.exact) {
@@ -652,11 +655,23 @@ function paramSlots(
   return { slots, types };
 }
 
-const notFound = (name: string, raw: unknown) =>
+const notFound = (name: string, raw: unknown, disproved: string[] = []) =>
   new Error(
-    `example value for "${name}" (${JSON.stringify(raw)}) is not in the learned request, so the param would change nothing. ` +
+    (disproved.length
+      ? `example 2 disproves "${name}": ${disproved.join("; ")}. Nothing else in the learned request holds it, so the param would change nothing. `
+      : `example value for "${name}" (${JSON.stringify(raw)}) is not in the learned request, so the param would change nothing. `) +
       "Pick the request that carries it (capture, then add --from <id> --pick-request <n>), or drop the param",
   );
+
+/**
+ * The places the second run disproved, by param and position, each with what run 2 showed. A
+ * disproved place is not a slot: learning runs again without it, so every step treats the leaf as
+ * the constant it is (a credential there is found, a path segment is named in the match).
+ */
+type Disproved = Map<string, string>;
+const pairKey = (param: string, at: Step[]) => `${param}\0${key(at)}`;
+const disprovedFor = (d: Disproved, param: string) =>
+  [...d].flatMap(([k, why]) => (k.startsWith(`${param}\0`) ? [why] : []));
 
 /* ------------------------------------------------------------ credentials */
 
@@ -1147,11 +1162,23 @@ function learnResponse(e: Exchange, values: string[], warnings: string[]): Respo
   return { format: "html", contentType: r.contentType };
 }
 
-/** Two-run diff: positions that change without an arg change are nonces (unless they look like counters). */
-function diffRuns(req1: Request, req2: Request, slots: Slot[], args2: Args, warnings: string[]): string[] {
+/**
+ * Two-run diff: positions that change without an arg change are nonces (unless they look like
+ * counters). A param's place that stays as it was although the param changed is noted in `disproved`.
+ */
+function diffRuns(
+  req1: Request,
+  req2: Request,
+  slots: Slot[],
+  [args1, args2]: [Args, Args],
+  warnings: string[],
+  disproved: Disproved,
+): string[] {
   const bySlot = new Map(slots.map((s) => [key(s.at), s]));
   const second = new Map(walk(req2).map((l) => [key(l.at), l]));
   const values2 = exampleValues(args2).map(([, v]) => v);
+  const text = (v: unknown) => asText(v).toLowerCase();
+  const changed = Object.keys(args2).filter((p) => text(args2[p]) !== text(args1[p]));
   const nonces: string[] = [];
   const missing: string[] = [];
   for (const leaf of walk(req1)) {
@@ -1178,6 +1205,17 @@ function diffRuns(req1: Request, req2: Request, slots: Slot[], args2: Args, warn
         "is",
       );
       if (same.test(other.value)) continue;
+      if (other.value === leaf.value) {
+        // The leaf stayed as it was although the arg changed: a constant that only held example 1.
+        const fills = (p: string) =>
+          slot.template === undefined ? p === slot.param : fillTemplate(slot.template, { [p]: "\0" }).includes("\0");
+        for (const p of changed.filter(fills))
+          disproved.set(
+            pairKey(p, leaf.at),
+            `${leaf.at.join(" > ")} is ${JSON.stringify(leaf.value)} in both runs, though ${p} went from ${JSON.stringify(args1[p])} to ${JSON.stringify(args2[p])}`,
+          );
+        continue;
+      }
       // The text around the arg changed too: a signature inside the leaf (a signed URL in a param).
       // a credential hole is run-specific too: a wildcard like the args
       const holes = slot.template !== undefined ? [...Object.keys(args2), ...templateRefs(slot.template)] : [];
@@ -1221,21 +1259,27 @@ function twoRunDiff(
   slots: Slot[],
   match: Match,
   exchanges2: Exchange[] | undefined,
-  args2: Args | undefined,
+  [args1, args2]: LearnInput["examples"],
   warnings: string[],
+  disproved: Disproved,
 ): 1 | 3 {
   if (!exchanges2 || !args2) {
     warnings.push("learned from one example; a second example set separates params from nonces");
     return 1;
   }
   const pool = exchanges2.filter((e) => matches(match, e.request));
-  const top = rankCandidates(pool, args2, { all: true })[0];
+  const ranked = rankCandidates(pool, args2, { all: true });
+  // On run 1's own path when one carries the args: a segment that only looked like a param made the
+  // match a wildcard, which a sibling endpoint (/api/suggest beside /api/search) fits too.
+  const path = new URL(request.url).pathname;
+  const top = ranked.find((c) => c.hits.length && new URL(c.url).pathname === path) ?? ranked[0];
   const ex2 = top && pool.find((e) => e.id === top.id);
   if (!ex2) {
     warnings.push("run 2 produced no matching request; skipped the two-run diff");
     return 1;
   }
-  const nonces = diffRuns(request, { ...ex2.request, headers: headersOf(ex2) }, slots, args2, warnings);
+  const req2 = { ...ex2.request, headers: headersOf(ex2) };
+  const nonces = diffRuns(request, req2, slots, [args1, args2], warnings, disproved);
   if (!nonces.length) return 1;
   warnings.push(`changes between runs without an arg change (nonce/signature), so minTier 3: ${nonces.join("; ")}`);
   return 3;
@@ -1248,9 +1292,13 @@ function twoRunDiff(
  * built from the template once its credentials are blanked.
  */
 export function learnOperation(input: LearnInput): Learned {
-  const warnings: string[] = [];
+  return learn(input, new Map());
+}
+
+function learn(input: LearnInput, disproved: Disproved): Learned {
+  const warnings = [...disproved.values()].map((why) => `${why}: kept constant, not filled`);
   const { examples } = input;
-  const [args1, args2] = examples;
+  const [args1] = examples;
   checkExampleSets(examples, warnings);
 
   // 1. pick the request (6: its headers are kept, minus the ones a replay must not send)
@@ -1262,7 +1310,7 @@ export function learnOperation(input: LearnInput): Learned {
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
   const locs = input.id !== undefined ? { abs: [], rel: [] } : locations(pages);
-  const param = paramSlots(leaves, args1, locs, warnings);
+  const param = paramSlots(leaves, args1, locs, warnings, disproved);
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
   const { request, slots, sessionValues, publicNames } = sessionRefs(input, exchange, captured, leaves, param.slots);
@@ -1273,8 +1321,10 @@ export function learnOperation(input: LearnInput): Learned {
   // match: stable identity, with param and hash-like path segments wildcarded
   const match = input.match ?? buildMatch(request, slots);
 
-  // 3. two-run diff
-  const minTier = twoRunDiff(request, slots, match, input.exchanges2, args2, warnings);
+  // 3. two-run diff. A place run 2 disproved was never the param's: learn again without it.
+  const found: Disproved = new Map(disproved);
+  const minTier = twoRunDiff(request, slots, match, input.exchanges2, examples, warnings, found);
+  if (found.size > disproved.size) return learn(input, found);
 
   // 8. response
   const response = learnResponse(

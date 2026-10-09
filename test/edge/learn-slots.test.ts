@@ -270,3 +270,52 @@ test("learning refuses a request it could not clear of a live value, in any enco
   );
   assert.equal(op.request.headers["x-ctx"], "v1:secret123");
 });
+
+/* ------------------------------------------- 7: what example 2 disproves */
+
+const noSession = { cookies: [] as StoredCookie[], values: {} as Record<string, string> };
+const answer = (q: string) => ({ results: [{ title: `${q} one` }, { title: `${q} two` }] });
+
+test("a place the second example disproves is kept as the constant it is, not filled", () => {
+  // "search" is the endpoint's own path segment and the first query; only the query follows in run 2
+  const run = (q: string, headers: Record<string, string> = {}) => [
+    xhr({ url: `https://site.test/api/search?q=${q}`, headers }, answer(q)),
+  ];
+  const { operation: op, warnings } = learn(run("search"), [{ q: "search" }, { q: "kitten" }], {
+    exchanges2: run("kitten"),
+  });
+  assert.deepEqual(op.slots, [{ param: "q", at: ["query:q"] }]);
+  assert.equal(op.match.path, "/api/search", "the segment is no param, so the match names it");
+  assert.equal(buildRequest(op, { q: "puppy" }, noSession).url, "https://site.test/api/search?q=puppy");
+  assert.ok(
+    warnings.some((w) => /path:1 is "search" in both runs/.test(w)),
+    warnings.join("\n"),
+  );
+
+  // inside a longer leaf too: the header holds "search" by coincidence and never changes
+  const app = { "x-app": "websearch-v2" };
+  const templated = learn(run("search", app), [{ q: "search" }, { q: "kitten" }], { exchanges2: run("kitten", app) });
+  assert.deepEqual(templated.operation.slots, [{ param: "q", at: ["query:q"] }]);
+  assert.equal(buildRequest(templated.operation, { q: "puppy" }, noSession).headers["x-app"], "websearch-v2");
+
+  // a sibling endpoint with the richer answer fits the first match (/api/*) too: run 2 is read on run 1's own path
+  const both = (q: string) => [
+    ...run(q),
+    xhr({ url: `https://site.test/api/suggest?q=${q}` }, { suggestions: Array(40).fill({ text: `${q} and more` }) }),
+  ];
+  const first = both("search");
+  const picked = learn(first, [{ q: "search" }, { q: "kitten" }], { exchanges2: both("kitten"), id: first[0]!.id });
+  assert.deepEqual(picked.operation.slots, [{ param: "q", at: ["query:q"] }]);
+
+  // control: one example cannot tell, so both places are filled, with a warning
+  const one = learn(run("search"), [{ q: "search" }]);
+  assert.equal(one.operation.slots.length, 2);
+});
+
+test("a param whose every place the second example disproves is a failure to learn", () => {
+  const run = () => [xhr({ url: "https://site.test/api/search?sort=new" }, answer("search"))];
+  assert.throws(
+    () => learn(run(), [{ q: "search" }, { q: "kitten" }], { exchanges2: run() }),
+    /example 2 disproves "q": path:1 is "search" in both runs.*would change nothing/,
+  );
+});

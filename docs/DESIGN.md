@@ -116,6 +116,11 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    templated leaf, such as a signed URL; browser-computed headers never count) is a nonce/signature, so the op gets `minTier: 3`,
    unless one tier-1 replay of run 1's template with example 2's args still answers ok: then the value is
    session-scoped (Google's `f.sid`), not a signature, and `minTier` stays 1. Everything else is a constant.
+   That includes a place step 2 gave a param which stays as it was although the param changed (the endpoint's own
+   segment in `/api/search?q=search`, when example 2 is `q=kitten`): run 2 disproves it, so it is no slot, and learning
+   runs again without it, which makes the leaf a constant to every step (the match names the segment, a credential in
+   it is found). A param left with no place is an error, not a warning. Run 2's request is read on run 1's own path
+   when one there carries the args: the wildcard a false path param puts in the match fits sibling endpoints too.
 4. **Session references.** A header, query or JSON leaf whose value equals a cookie value (raw,
    quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Capture also snapshots the
    final page origin's localStorage and sessionStorage; a leaf equal to a stored value (or to a
