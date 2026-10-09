@@ -101,6 +101,9 @@ test("a number past 2^53 goes exactly as plain digits; a form that would be roun
   }
   assert.equal(sent("-9007199254740991"), "-9007199254740991");
   assert.equal(sent("1e-400"), "0");
+  // a mantissa longer than any number is still judged by its value, not its length
+  assert.equal(sent(`0.${"0".repeat(500)}1`), "0");
+  assert.throws(() => sent(`1${"0".repeat(500)}e-401`), /would lose precision/);
 });
 
 test("template slots fill a substring of the leaf", () => {

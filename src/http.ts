@@ -30,12 +30,13 @@ export interface SendOptions {
 /** Whether a decimal or exponent literal's exact value is past the largest safe integer (2^53 - 1) in size. */
 function pastSafeInteger(v: string): boolean {
   const [, int = "", frac = "", exp = "0"] = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(v) ?? [];
+  const digits = (int + frac).replace(/^0+/, "");
   const shift = Number(exp) - frac.length;
-  // 10^400 is past it for any non-zero digits, and 10^-400 brings any plausible digit string under it
-  if (Math.abs(shift) > 400) return shift > 0 && /[1-9]/.test(int + frac);
-  const digits = BigInt(int + frac);
+  // The limit has 16 digits: a value with more is past it, one with fewer is under it, and only 16 needs comparing.
+  const places = digits.length + shift;
+  if (!digits || places !== 16) return !!digits && places > 16;
   const max = BigInt(Number.MAX_SAFE_INTEGER);
-  return shift >= 0 ? digits * 10n ** BigInt(shift) > max : digits > max * 10n ** BigInt(-shift);
+  return shift >= 0 ? BigInt(digits) * 10n ** BigInt(shift) > max : BigInt(digits) > max * 10n ** BigInt(-shift);
 }
 
 /**
