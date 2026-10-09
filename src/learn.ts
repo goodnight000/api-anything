@@ -890,17 +890,16 @@ function addRef(refs: Refs, at: Step[], slot: Omit<Slot, "at">, value?: string):
 }
 
 /**
- * An app caching a persisted-query hash in storage does not make the hash a credential: under a
- * query-id key a stored value is no ref, whole or inside the leaf, and stays a volatile anchor.
+ * Pass 1: a leaf equal to a live cookie or storage value, whatever the leaf is called. A field
+ * named like a query id (queryId, hash) exempts nothing: a token the page stores and sends there
+ * reads exactly like a query id it caches, and only one that is in no cookie and no storage is
+ * left to be a volatile anchor.
  */
-const cachedHash = (leaf: Leaf, l: Live) => l.value !== undefined && VOLATILE_KEY.test(lastToken(leaf.at));
-
-/** Pass 1: a leaf equal to a live cookie or storage value. */
 function liveRefs(refs: Refs, leaves: Leaf[]): void {
   for (const leaf of leaves) {
     const l = refs.live.get(leaf.value);
     // string leaves only: a ref is filled with a string, which would retype a JSON number
-    if (!l || leaf.type !== "string" || refs.taken.has(key(leaf.at)) || cachedHash(leaf, l)) continue;
+    if (!l || leaf.type !== "string" || refs.taken.has(key(leaf.at))) continue;
     // a stored setting is a credential after all where the request sends it under a credential's name
     if (l.value !== undefined && isCredential(leafName(leaf.at), leaf.value)) l.secret = true;
     addRef(refs, leaf.at, { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}) }, l.value);
@@ -1049,9 +1048,8 @@ function embeddedRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
     const own = refs.taken.has(key(leaf.at))
       ? refs.slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(leaf.at))
       : undefined;
-    const held = long.filter(([, l]) => !cachedHash(leaf, l));
-    if (own) request = holeRefs(refs, own, held, request);
-    else if (!refs.taken.has(key(leaf.at))) templatedRef(refs, leaf, held);
+    if (own) request = holeRefs(refs, own, long, request);
+    else if (!refs.taken.has(key(leaf.at))) templatedRef(refs, leaf, long);
   }
   return request;
 }
@@ -1275,12 +1273,11 @@ interface Known {
  * container whose ref yielded. None may be left in the stored request or a slot template, in any
  * encoding the save-time scan reads: a copy no pass could turn into a ref (base64, encoded twice,
  * too short to template) fails closed here. What is exempt is a position, never a value: a name
- * marked public; for stored values the caller's own example and a persisted-query key (see
- * cachedHash); for a yielded container its own position, where every leaf is a slot by now.
+ * marked public; for stored values the caller's own example; for a yielded container its own
+ * position, where every leaf is a slot by now. A field's name exempts nothing.
  */
 function refuseLeftover(request: Request, slots: Slot[], known: Known, publicNames: Set<string>): void {
   const isPublic = (at: Step[]) => publicNames.has(leafName(at).toLowerCase());
-  const cached = (at: Step[]) => isPublic(at) || VOLATILE_KEY.test(lastToken(at));
   const example = (at: Step[]) => slots.some((s) => s.param && (key(s.at) === key(at) || covers(s.at, at)));
   // What the scan finds in the stored request with the exempt leaves blank, and in the templates of
   // the slots that are not exempt.
@@ -1302,7 +1299,7 @@ function refuseLeftover(request: Request, slots: Slot[], known: Known, publicNam
   const values = (v: Record<string, string>): Session => ({ cookies: [], values: v });
   const secrets = [
     ...look(isPublic, isPublic, { cookies: known.cookies, values: known.values }),
-    ...look((at) => cached(at) || example(at), cached, values(known.stored)),
+    ...look((at) => isPublic(at) || example(at), isPublic, values(known.stored)),
     ...look(own, isPublic, values(Object.fromEntries(known.yielded.map((y) => [y.name, y.value])))),
   ];
   if (secrets.length)

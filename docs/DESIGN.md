@@ -139,9 +139,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Capture also snapshots the
    final page origin's localStorage and sessionStorage; a leaf equal to a stored value (or to a
    string inside a JSON entry, as auth SDKs keep tokens; ≥ 8 chars) becomes a `session:` ref named
-   after the storage key. Not under a persisted-query key (`sha256Hash`, `doc_id`, `queryId`): an app
-   that caches its query ids in storage does not make them credentials, whole or inside the leaf, at any
-   length; they stay volatile anchors. A key or header named like a credential (its words: token, secret, key,
+   after the storage key. The leaf's own name changes none of this: under a persisted-query key (`sha256Hash`,
+   `doc_id`, `queryId`, `hash`) a cookie or stored value is a ref as anywhere else, whole or inside the leaf, since a
+   token the page stores and sends as `queryId` reads exactly like a query id it caches there. So a query id the app
+   keeps in storage is a `session:` ref too; only one that is in no cookie and no storage stays a volatile anchor. A key or header named like a credential (its words: token, secret, key,
    auth, sess(ion), sid, signature, password, credential; "author" is not) with a random-looking
    value (≥ 16 chars, two character classes, ≥ 3 bits/char) is a `session:` ref too, unless the site
    ships that value in a static bundle to every visitor (a public API key): then it stays
@@ -150,8 +151,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    a per-user script sent with the session cookie proves nothing. A random value (≥ 16 chars, as
    above) that an earlier response of the same capture holds (a bootstrap JSON, a per-user config
    script, a token in the document; not a static bundle) is server-issued: a `session:` ref named
-   after its leaf, whatever the name. Hash-like path segments and persisted-query keys stay
-   volatile anchors. Like every `session:` ref it is refreshed by each trigger run; when it
+   after its leaf, whatever the name. This rule leaves hash-like path segments and persisted-query keys
+   alone: issued, but in no cookie and no storage, they stay volatile anchors. Like every `session:` ref it is refreshed by each trigger run; when it
    expires, tier 1 answers `auth` or a bare 403, and the ladder's tier-3 run (below) re-derives it
    and answers the call, so it needs no `minTier` of its own. Auth/anti-bot-looking
    headers (authorization, x-*-token, x-csrf*, x-goog-batchexecute-bgr, x-client-transaction-id)
@@ -203,7 +204,7 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    (a theme, a locale) is not looked for, also when a leaf that equals it made it a ref: a ref keeps a value fresh,
    it does not make it secret. A copy no rule could turn into a ref (too short to template, base64, percent-encoded
    twice) fails the learn, closed, and the error names the leaf that holds it. What is exempt is a position, never a
-   value: a name marked public, and for stored values the caller's own example and a persisted-query key. Add and heal
+   value: a name marked public, and for stored values the caller's own example. A field's name exempts nothing. Add and heal
    run the scan again before saving, against the site's whole session (every stored session value, settings too), and refuse to save any spec that still contains one.
    What the scan finds is a copy of a value it is given, 6 characters or longer, as it is or unquoted or URL-decoded:
    in the text; in what the text decodes to, through up to three layers of percent-encoding, JSON escapes and base64

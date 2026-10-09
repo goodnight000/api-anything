@@ -417,31 +417,59 @@ test("a path segment that is a reference is a wildcard in the match, as a param'
   );
 });
 
-/* -------------------------------------------------- cached query hashes */
+/* ------------------------------------------------- query-id field names */
 
-test("a persisted-query hash the app caches in storage stays a volatile anchor at any length", () => {
-  const hash = "e0f2a1b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f";
-  const extensions = JSON.stringify({ persistedQuery: { version: 1, sha256Hash: hash } });
-  const ex = xhr({
-    url: `https://site.test/graphql?operationName=Search&variables=${encodeURIComponent('{"q":"nasa"}')}&extensions=${encodeURIComponent(extensions)}`,
-  });
-  const stores: Record<string, string>[] = [
-    { "pq:Search": hash },
-    { "apollo-cache": JSON.stringify({ Search: { id: hash } }) },
+test("a cookie or stored value is a reference under a persisted-query field name too", () => {
+  const body = (fields: Record<string, unknown>) => [
+    xhr({
+      method: "POST",
+      url: "http://localhost/v1/search",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ q: "kittens", ...fields }),
+    }),
   ];
-  for (const storage of stores) {
-    const { operation: op, sessionValues } = learn([ex], [{ q: "nasa" }], { storage });
-    assert.deepEqual(
-      op.slots.filter((s) => s.ref),
-      [],
+  // A token the page stores and sends as queryId reads exactly like a query id it caches there:
+  // the field's name decides nothing about a value that is known to be live.
+  for (const name of ["queryId", "doc_id", "sha256Hash", "hash"]) {
+    const at = ["body", `json:/${name}`];
+    const inside = learn(body({ [name]: `v1:${A}` }), [{ q: "kittens" }], { storage: { token: A } });
+    assert.ok(!JSON.stringify(inside.operation).includes(A), `${name}: the stored token stayed in the spec`);
+    assert.deepEqual(inside.operation.slots.at(-1), { ref: "session:op/token", at, template: "v1:{session:op/token}" });
+    assert.deepEqual(inside.sessionValues, { "op/token": A });
+    assert.equal(JSON.parse(inside.operation.request.body!)[name], "");
+
+    const whole = learn(body({ [name]: A }), [{ q: "kittens" }], { storage: { token: A } });
+    assert.deepEqual(whole.operation.slots.at(-1), { ref: "session:op/token", at });
+    const jar = learn(body({ [name]: `v1:${A}` }), [{ q: "kittens" }], { cookies: [cookie("sid", A)] });
+    assert.deepEqual(jar.operation.slots.at(-1), { ref: "cookie:sid", at, template: "v1:{cookie:sid}" });
+    // too short to template: the check refuses it there as anywhere else
+    assert.throws(
+      () => learn(body({ [name]: "v1:Ab3dEf9h" }), [{ q: "kittens" }], { storage: { csrf: "Ab3dEf9h" } }),
+      new RegExp(`body > json:/${name} holds the live session value storage:csrf`),
     );
-    assert.deepEqual(sessionValues, {});
-    assert.deepEqual(
-      op.volatile.map((v) => [v.at, v.anchor]),
-      [[["query:extensions", "json:/persistedQuery/sha256Hash"], "Search"]],
-    );
-    assert.ok(op.request.url.includes(hash), "the hash stays in the template for the cheap heal to swap");
   }
+
+  // so a hash the app keeps in storage is a reference as well, whatever it is kept as
+  const hash = "e0f2a1b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f";
+  const persisted = { extensions: { persistedQuery: { version: 1, sha256Hash: hash } } };
+  const stores: [Record<string, string>, string][] = [
+    [{ "pq:Search": hash }, "session:op/pq:Search"],
+    [{ "apollo-cache": JSON.stringify({ Search: { id: hash } }) }, "session:op/apollo-cache/Search/id"],
+  ];
+  for (const [storage, ref] of stores) {
+    const { operation: op } = learn(body(persisted), [{ q: "kittens" }], { storage });
+    assert.deepEqual(op.slots.at(-1), { ref, at: ["body", "json:/extensions/persistedQuery/sha256Hash"] });
+    assert.deepEqual(op.volatile, []);
+    assert.ok(!JSON.stringify(op).includes(hash));
+  }
+  // control: a query id that is in no cookie and no storage stays a volatile anchor
+  const { operation: plain } = learn(body(persisted), [{ q: "kittens" }], { storage: { theme: "dark-mode" } });
+  assert.deepEqual(plain.slots, [{ param: "q", at: ["body", "json:/q"] }]);
+  assert.deepEqual(
+    plain.volatile.map((v) => v.at),
+    [["body", "json:/extensions/persistedQuery/sha256Hash"]],
+  );
+  assert.ok(plain.request.body!.includes(hash), "the hash stays in the template for the cheap heal to swap");
 });
 
 /* ------------------------------------------- the check behind every pass */
@@ -597,7 +625,7 @@ test("the check knows a stored credential that no pass made a reference, and no 
     /holds the live session value locale/,
   );
 
-  // exempt by position: a name the caller marked public, the caller's own example, a cached query hash
+  // exempt by position: a name the caller marked public, and the caller's own example
   assert.equal(
     JSON.parse(run({ state: b64(T) }, { storage: { token: T }, public: ["state"] }).operation.request.body!).state,
     b64(T),
@@ -607,17 +635,15 @@ test("the check knows a stored credential that no pass made a reference, and no 
     storage: { lastViewed: ID },
   });
   assert.deepEqual(viewed.operation.slots, [{ param: "id", at: ["path:2"] }]);
+  // a query-id field name exempts nothing: a stored hash sent there is a ref, and a copy of it elsewhere is found
   const hash = "e0f2a1b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f";
-  const cached = run({ extensions: { persistedQuery: { sha256Hash: hash } } }, { storage: { "pq:Search": hash } });
-  assert.equal(cached.operation.volatile.length, 1);
-  // ...which waives the position, not the value: the same hash elsewhere is still looked for
   assert.throws(
     () =>
       run(
         { extensions: { persistedQuery: { sha256Hash: hash } }, state: b64(hash) },
         { storage: { "pq:Search": hash } },
       ),
-    /storage:pq:Search/,
+    /body > json:\/state holds the live session value .*pq:Search/,
   );
 
   // a credential container whose ref yielded to a param inside it is still looked for whole
