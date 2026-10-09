@@ -361,7 +361,10 @@ function pageSays(
   const form = signIn({ status, headers, body });
   const asked = values.filter((x) => x.length >= 3).map((x) => x.toLowerCase());
   const answers = () => c.exchanges.map((e) => (e.response?.body ?? "").toLowerCase());
-  if (form && asked.length && !answers().some((a) => asked.some((x) => a.includes(x)))) return { stop: wall };
+  // The values may simply be wrong, so say what was seen and let the agent rule that out before asking for a login.
+  const missing =
+    "none of the example values is in what the page loaded, and the page shows a sign-in form: check the example values; if they are right the data needs an account, so ask the user to run api-anything login <site>, then capture again";
+  if (form && asked.length && !answers().some((a) => asked.some((x) => a.includes(x)))) return { stop: missing };
   const also =
     "the page also shows a sign-in form: if the data you want is missing, ask the user to run api-anything login <site> first";
   // An error is a dead end when the erroring page is itself what would be recommended, not when a

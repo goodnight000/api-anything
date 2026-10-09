@@ -542,15 +542,14 @@ describe("capture's next hint", { skip: noChrome }, () => {
   const alsoForm = /sign-in form.*api-anything login/;
 
   test("'sign-in page' takes direct evidence: a login path, or example values that no answer holds", async () => {
-    const walls = [
-      ["/account"], // the navigation landed on /signin
-      ["/private", "--example", "name=alice"], // a sign-in form, and alice is in no response of the capture
-    ];
-    for (const [path, ...flags] of walls) {
-      const { next } = await capture(path!, ...flags);
-      assert.match(next, signInPage, path);
-      assert.doesNotMatch(next, learn, path);
-    }
+    // the navigation landed on /signin
+    const landed = (await capture("/account")).next;
+    assert.match(landed, signInPage);
+    assert.doesNotMatch(landed, learn);
+    // a sign-in form, and alice is in no response of the capture: the values may be wrong, so that is said first
+    const missing = (await capture("/private", "--example", "name=alice")).next;
+    assert.match(missing, /example values.*sign-in form.*check the example values.*api-anything login/);
+    assert.doesNotMatch(missing, learn);
   });
 
   test("a sign-in form with nothing to say the data is missing is said beside the recommendation", async () => {
