@@ -101,7 +101,9 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    request, `size: 2` beside `page: 2`) is no slot. The same both-runs match says which request carries it, endpoint by endpoint:
    run 2's evidence counts for the request with the same method, host and path (a path segment may differ the way the
    examples do), so another endpoint's `country=CA` does not vouch for a feed that always asks for `US`.
-   Without that evidence the example is refused, with a hint to pass a second one. If a value appears in several unrelated places,
+   Without that evidence the example is refused, with a hint to pass a second one. A known limit: two leaves that both
+   follow the examples (`{"page":1,"counter":1}`, then `{"page":2,"counter":2}`) both become slots for the param, with
+   the warning below; two runs cannot tell them apart. If a value appears in several unrelated places,
    record all of them but warn. (Google Flights reuses the destination as the return-leg origin.)
    A short example (4 chars or fewer, "SFO") inside a random-looking leaf counts only where it
    stands alone between non-alphanumerics: inside a base64 blob it is chance.
@@ -178,7 +180,14 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    template, base64, percent-encoded twice) fails the learn, closed. What is exempt is a position, never a value: a
    name marked public, and for stored values the caller's own example and a persisted-query key. Add and heal run the
    same scan again before saving, against the site's whole session, and refuse to save any spec that still contains a detected live credential.
-   The spec never holds a credential. At call time a `cookie:` ref takes the
+   What this covers is a copy of a value the learner knows: a cookie, a value a rule made a ref, a stored credential,
+   6 characters or longer, as it is or unquoted or URL-decoded, under up to three layers of percent-encoding, JSON
+   escaping and base64. It does not prove a spec holds no credential. These can still reach one: a cookie or value under
+   6 characters; a credential that is a number (a number leaf is never a ref, and digits alone are not random-looking, so
+   one is caught only as a copy of a known value); a credential split across two leaves; a copy under four or more
+   layers of encoding; a cookie that only the second run's request carried and the jar does not hold; and a credential no
+   rule recognizes (not a cookie, not stored, not named like one, not issued by an earlier answer). Export scans a
+   spec again, by name and by shape, before it is shared. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.
    The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header or field name a human marks public

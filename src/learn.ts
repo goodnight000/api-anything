@@ -1124,7 +1124,7 @@ function sessionRefs(
   issuedRefs(refs, open, issued);
   let request = embeddedRefs(refs, open, captured);
   innerWins(refs, open);
-  // The spec never holds a credential: blank every ref'd leaf.
+  // A ref'd leaf's value lives in the session, not the spec: blank it.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
   const listed = new Set([...publicNames, ...shipped]);
   const found = { cookies, values: { ...refs.yielded, ...refs.sessionValues } };

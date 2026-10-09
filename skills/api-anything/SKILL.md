@@ -114,9 +114,9 @@ don't capture pages the user didn't ask for.
    ```
    - Give two different example sets whenever you can. The second run separates params from
      nonces and signatures.
-   - Example values must be at least 3 characters and distinct from each other, and they must
-     appear in the request. `add` fails if an example is not in the chosen request: pick another
-     request rather than dropping the param.
+   - Example values must be at least 3 characters (a second example lifts this, see the next
+     point) and distinct from each other, and they must appear in the request. `add` fails if an
+     example is not in the chosen request: pick another request rather than dropping the param.
    - A shorter value (a country code, a page number, a small enum) needs both examples, with
      different values: `--example country=US --example2 country=CA`. It is placed only where a
      whole value in the request equals it and becomes the other one in the second run, so a
