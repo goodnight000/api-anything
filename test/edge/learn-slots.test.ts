@@ -286,6 +286,42 @@ test("a credential container that yields to a slot inside it keeps nothing else 
   );
 });
 
+test("an empty string beside a slot in a credential container is a reference too", () => {
+  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
+  const U = "Zx9Qw8vLm7Kj6HgF5dS4aP3oI2uY1tRe";
+  const run = (value: unknown) =>
+    learn(
+      [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-csrf-token": JSON.stringify(value) } })],
+      [{ q: "kittens" }],
+    );
+  // the page may fill it on a later load: only a reference there lets a refresh record what it sends
+  const { operation: op, sessionValues } = run({ q: "kittens", opaque: "", other: T });
+  const refs = op.slots.filter((s) => s.ref);
+  assert.deepEqual(
+    refs.map((s) => s.at.join(" > ")),
+    ["header:x-csrf-token > json:/opaque", "header:x-csrf-token > json:/other"],
+  );
+  assert.deepEqual(Object.values(sessionValues), ["", T]);
+  const later = { ...sessionValues, [refs[0]!.ref!.slice(8)]: U };
+  assert.deepEqual(
+    JSON.parse(buildRequest(op, { q: "puppies" }, { cookies: [], values: later }).headers["x-csrf-token"]!),
+    { q: "puppies", opaque: U, other: T },
+  );
+
+  // nothing else in it: every leaf is accounted for, so the container's own unchanged text is no leftover
+  const small = run({ q: "kittens", opaque: "" });
+  assert.deepEqual(
+    small.operation.slots.map((s) => s.at.join(" > ")),
+    ["query:q", "header:x-csrf-token > json:/q", "header:x-csrf-token > json:/opaque"],
+  );
+  assert.equal(
+    buildRequest(small.operation, { q: "puppies" }, { cookies: [], values: small.sessionValues }).headers[
+      "x-csrf-token"
+    ],
+    '{"q":"puppies","opaque":""}',
+  );
+});
+
 test("a path segment that is a reference is a wildcard in the match, as a param's is", () => {
   // the session id rides in the path, with a dot so it does not look like a hash on its own
   const first = "u1.q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
