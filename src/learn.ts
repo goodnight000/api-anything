@@ -221,6 +221,12 @@ function isAck(e: Exchange): boolean {
   return flags(data === undefined ? body : data);
 }
 
+/** An answer without data that does not carry an example value either: however small, an answer with one is data. */
+function dataless(e: Exchange, args: Args): boolean {
+  const answer = (e.response?.body ?? "").toLowerCase();
+  return isAck(e) && !exampleValues(args).some(([, v]) => v.length >= 3 && answer.includes(v));
+}
+
 /** The text an example is searched by; an array example by its first element. */
 function exampleText(v: unknown): string {
   if (Array.isArray(v)) return asText(v.find((x) => asText(x).length >= 3) ?? v[0]).toLowerCase();
@@ -520,9 +526,7 @@ function pickRequest(input: LearnInput, args: Args, warnings: string[]): { excha
   const ex = pickExchange(input, input.exchanges, args, pages, warnings);
   // A read's answer is data. Picked by rank alone, a data-less 2xx is a beacon's ack whose echo of the
   // page went unrecognized; learning it would answer every call with {"success":true}.
-  const answer = (ex.response?.body ?? "").toLowerCase();
-  const echoesArgs = exampleValues(args).some(([, v]) => v.length >= 3 && answer.includes(v));
-  if (input.readOnly && isAck(ex) && !echoesArgs && input.id === undefined && !input.match) {
+  if (input.readOnly && dataless(ex, args) && input.id === undefined && !input.match) {
     throw new Error(
       `the request that carries the example values (#${ex.id} ${ex.request.method} ${ex.request.url.slice(0, 120)}) answers without data ` +
         `(${JSON.stringify((ex.response?.body ?? "").trim().slice(0, 60))}): an analytics beacon's ack, not the op's answer. ` +
@@ -1363,37 +1367,53 @@ function diffRuns(
  * change (a nonce or signature), else 1. `request` and `slots` are run 1's, refs included.
  */
 function twoRunDiff(
+  input: LearnInput,
   request: Request,
   slots: Slot[],
   match: Match,
-  exchanges2: Exchange[] | undefined,
-  [args1, args2]: LearnInput["examples"],
   warnings: string[],
   disproved: Disproved,
 ): 1 | 3 {
-  if (!exchanges2 || !args2) {
+  const [args1, args2] = input.examples;
+  if (!input.exchanges2 || !args2) {
     warnings.push("learned from one example; a second example set separates params from nonces");
     return 1;
   }
-  const pool = exchanges2.filter((e) => matches(match, e.request));
+  const pool = input.exchanges2.filter((e) => matches(match, e.request));
+  const byId = (c: Candidate) => pool.find((e) => e.id === c.id)!;
   const ranked = rankCandidates(pool, args2, { all: true });
-  // On run 1's own path when one carries the args: a segment that only looked like a param made the
-  // match a wildcard, which a sibling endpoint (/api/suggest beside /api/search) fits too.
+  // Run 2's request is chosen on the evidence run 1's was: what the recipe reads, when there is a
+  // recipe, and for a read an answer that is data. Among those, the one on run 1's own path when it
+  // carries the args: a segment that only looked like a param made the match a wildcard, which a
+  // sibling endpoint (/api/suggest beside /api/search) fits too.
+  const answers = ranked.filter(
+    (c) => (!input.accepts || input.accepts(byId(c))) && !(input.readOnly && dataless(byId(c), args2)),
+  );
   const path = new URL(request.url).pathname;
-  const top = ranked.find((c) => c.hits.length && new URL(c.url).pathname === path) ?? ranked[0];
-  const ex2 = top && pool.find((e) => e.id === top.id);
-  if (!ex2) {
+  const top = answers.find((c) => c.hits.length && new URL(c.url).pathname === path) ?? answers[0] ?? ranked[0];
+  // A short example is placed only where run 2 proves it, so a run 2 that proves nothing fails it.
+  const unproven = (why: string) => {
     const short = Object.keys(args1).filter((p) => isShort(args1[p]));
     if (short.length)
       throw new Error(
-        `run 2 produced no request matching ${JSON.stringify(match)}, so nothing confirms where the short example of ${short.join(", ")} goes. ` +
+        `${why}, so nothing confirms where the short example of ${short.join(", ")} goes. ` +
           "Check that the second example loads the same kind of page, or pass --match",
       );
+  };
+  if (!top) {
+    unproven(`run 2 produced no request matching ${JSON.stringify(match)}`);
     warnings.push("run 2 produced no matching request; skipped the two-run diff");
     return 1;
   }
-  const req2 = { ...ex2.request, headers: headersOf(ex2) };
-  const nonces = diffRuns(request, req2, slots, [args1, args2], warnings, disproved);
+  if (!answers.length) {
+    unproven("run 2's matching request does not answer like run 1's");
+    warnings.push(
+      "run 2's matching request does not answer like run 1's (no data, or not what the recipe reads): it disproves nothing",
+    );
+  }
+  const req2 = { ...byId(top).request, headers: headersOf(byId(top)) };
+  // a request that is not run 1's counterpart still shows nonces, but is no evidence against a slot
+  const nonces = diffRuns(request, req2, slots, [args1, args2], warnings, answers.length ? disproved : new Map());
   if (!nonces.length) return 1;
   warnings.push(`changes between runs without an arg change (nonce/signature), so minTier 3: ${nonces.join("; ")}`);
   return 3;
@@ -1441,7 +1461,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
 
   // 3. two-run diff. A place run 2 disproved was never the param's: learn again without it.
   const found: Disproved = new Map(disproved);
-  const minTier = twoRunDiff(request, slots, match, input.exchanges2, examples, warnings, found);
+  const minTier = twoRunDiff(input, request, slots, match, warnings, found);
   if (found.size > disproved.size) return learn(input, found);
 
   // 8. response

@@ -416,6 +416,38 @@ test("a param whose every place the second example disproves is a failure to lea
   );
 });
 
+test("run 2's request is chosen on run 1's evidence: a request that does not answer like it disproves nothing", () => {
+  // the path segment is the param; in run 2 the page also pings the first path, which only acknowledges
+  const run1 = [xhr({ url: "https://site.test/api/alpha?q=alpha" }, answer("alpha"))];
+  const second = (stale: unknown) => [
+    xhr({ url: "https://site.test/api/alpha?q=bravo" }, stale),
+    xhr({ url: "https://site.test/api/bravo?q=bravo" }, answer("bravo")),
+  ];
+  const recipe = (e: Exchange) => (e.response?.body ?? "").includes('"results"');
+  const cases: [unknown, ((e: Exchange) => boolean) | undefined][] = [
+    [{ success: true }, undefined],
+    [{ success: true }, recipe],
+    // data, but not what the recipe reads
+    [{ related: [{ name: "bravo and friends" }, { name: "bravo again" }] }, recipe],
+  ];
+  for (const [stale, accepts] of cases) {
+    const { operation: op } = learn(run1, [{ q: "alpha" }, { q: "bravo" }], { exchanges2: second(stale), accepts });
+    assert.deepEqual(op.slots, [
+      { param: "q", at: ["path:1"] },
+      { param: "q", at: ["query:q"] },
+    ]);
+    assert.equal(op.match.path, "/api/*");
+    assert.equal(buildRequest(op, { q: "charlie" }, noSession).url, "https://site.test/api/charlie?q=charlie");
+  }
+  // a run 2 with nothing that answers like run 1 is no grounds for dropping a slot
+  const alone = learn(run1, [{ q: "alpha" }, { q: "bravo" }], { exchanges2: second({ success: true }).slice(0, 1) });
+  assert.equal(alone.operation.slots.length, 2);
+  assert.ok(
+    alone.warnings.some((w) => /run 2's matching request .* disproves nothing/.test(w)),
+    alone.warnings.join("\n"),
+  );
+});
+
 /* ------------------------------------------------------ short examples */
 
 // The visitor's own country rides along as gl=US on every request, whatever country is asked for.

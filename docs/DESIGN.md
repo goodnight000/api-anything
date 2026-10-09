@@ -124,8 +124,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    That includes a place step 2 gave a param which stays as it was although the param changed (the endpoint's own
    segment in `/api/search?q=search`, when example 2 is `q=kitten`): run 2 disproves it, so it is no slot, and learning
    runs again without it, which makes the leaf a constant to every step (the match names the segment, a credential in
-   it is found). A param left with no place is an error, not a warning. Run 2's request is read on run 1's own path
-   when one there carries the args: the wildcard a false path param puts in the match fits sibling endpoints too.
+   it is found). A param left with no place is an error, not a warning. Run 2's request is chosen on the evidence
+   run 1's was: what the response recipe reads, when there is one, and for a read an answer that is data, not a bare
+   acknowledgement. Among the requests that pass, the one on run 1's own path that carries the args comes first (the
+   wildcard a false path param puts in the match fits sibling endpoints too). When none passes, run 2 disproves nothing.
 4. **Session references.** A header, query or JSON leaf whose value equals a cookie value (raw,
    quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Capture also snapshots the
    final page origin's localStorage and sessionStorage; a leaf equal to a stored value (or to a
