@@ -128,6 +128,13 @@ export function openBrowser({
       // Playwright's own SIGTERM handler keeps the process alive; Chrome exits with its pipe anyway.
       handleSIGTERM: false,
     });
+    // A shared worker's requests reach no route and no capture either. Pages get no constructor
+    // for one (Chrome for Android has none, so sites cope). For the whole profile, like service
+    // workers: a new tab's first document runs before a script could be set for that page alone,
+    // and a worker that an unguarded page of the same site started is joined without a request.
+    await c.addInitScript(() => {
+      delete (globalThis as { SharedWorker?: unknown }).SharedWorker;
+    });
     c.on("close", () => {
       if (current?.ctx === ctx) current = undefined;
     });

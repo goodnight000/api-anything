@@ -211,8 +211,9 @@ timeout of its own), and the guards are lifted only when every page of the run a
 is known to be closed. If one is not, the browser is still released, and both guards stay until the
 last of them is gone: the route, which acts on the run's pages only, and the socket guard, although
 it drops every run's sends. A page that is still open can still write, and time passing is no sign
-that it cannot. Service workers are
-blocked in the profile, since their fetches bypass routing. The op is learned from the intercepted
+that it cannot. Service workers
+and shared workers are blocked in the profile, since their fetches bypass routing (a dedicated
+worker's are routed). The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
 run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the
 steps are not running yet: its own verify POSTs (AWS WAF's `mp_verify`, Cloudflare's
@@ -335,7 +336,11 @@ send a request again (its own scripts, a retry after a navigation or a connectio
   (its router handles it); otherwise `history.pushState` + `popstate`, which client routers listen
   to. Only if nothing fired does it load the URL. An injected `<a>` is not routed by React Router,
   TanStack or Comet, so it would be a second full page load that fires no data XHR.
-- Service workers are blocked in the profile: their fetches bypass routing and capture.
+- Service workers are blocked in the profile: their fetches bypass routing and capture. So do a
+  shared worker's, so pages get no `SharedWorker` constructor (Chrome for Android has none either).
+  That is for the whole profile and not per guarded run: a new tab's first document runs before a
+  script could be set for that page alone, and a worker started by an unguarded page of the same
+  site (a tier-2 origin page) would be joined without a request.
 - A per-site minimum interval between network requests (default 1 s) keeps usage at human scale.
 
 ## Response extraction and token efficiency

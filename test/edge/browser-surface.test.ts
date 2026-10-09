@@ -622,6 +622,28 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     }
   });
 
+  for (const [how, by] of [
+    ["page", "the page"],
+    ["frame", "a frame the page makes"],
+  ] as const) {
+    test(`a shared worker cannot be started by ${by}: what it sends would reach no route and no capture`, async () => {
+      process.env.API_ANYTHING_HOME = home;
+      const before = votes().length;
+      const seen = fx.calls.length;
+      // guarded like a tier-3 read: the worker's script (a GET) would load, and its POST is what must not leave
+      await runTrigger({
+        url: `${fx.url}/shared-worker-page?how=${how}&name=worker`,
+        profileDir: profileDir(),
+        intercept: (e, acting) => acting && e.request.method !== "GET",
+      });
+      await sleep(300);
+      const calls = fx.calls.slice(seen);
+      assert.ok(calls.includes("/api/data?name=worker"), "the page ran");
+      assert.deepEqual(votes().slice(before), [], "a shared worker wrote");
+      assert.ok(!calls.includes("/shared-worker.js"), "a shared worker was started");
+    });
+  }
+
   test("a tab the run's page opened that has no page yet when the run ends is closed with it, and never writes", async () => {
     process.env.API_ANYTHING_HOME = home;
     const before = votes().length;
