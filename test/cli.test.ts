@@ -3,14 +3,14 @@
  * takes, and what it says when the page, the recipe or the examples are not ones it can work with.
  */
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromeAvailable } from "../src/browser.js";
-import { type Fixture, startFixture } from "./fixture/server.js";
+import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-cli-"));
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -34,6 +34,45 @@ after(async () => {
   await fx.close();
   rmSync(HOME, { recursive: true, force: true });
 });
+
+/* A capture file as `capture` saves one, made without a browser: what is done with a saved capture needs none. */
+
+const CSRF = "seeded-csrf-token-0123456789";
+const JAR = [{ name: "ct0", value: CSRF, domain: "127.0.0.1", path: "/", expires: -1, httpOnly: false, secure: false }];
+
+function seed(id: string, capture: { url: string; exchanges: unknown[]; [k: string]: unknown }): void {
+  mkdirSync(join(HOME, "captures"), { recursive: true });
+  const file = { id, at: new Date().toISOString(), finalUrl: capture.url, cookies: JAR, ...capture };
+  writeFileSync(join(HOME, "captures", `${id}.json`), JSON.stringify(file));
+}
+
+/** One request as the fixture's pages send it, and the fixture's answer to it. */
+async function answered(id: number, resourceType: string, path: string) {
+  const headers: Record<string, string> =
+    resourceType === "document"
+      ? {}
+      : { "x-csrf-token": CSRF, authorization: PUBLIC_BEARER, cookie: `ct0=${CSRF}`, referer: `${fx.url}/` };
+  const res = await fetch(`${fx.url}${path}`, { headers });
+  return {
+    id,
+    resourceType,
+    request: { method: "GET", url: `${fx.url}${path}`, headers },
+    response: {
+      status: res.status,
+      headers: {},
+      contentType: res.headers.get("content-type") ?? "",
+      body: await res.text(),
+    },
+  };
+}
+
+/** The argv a shell hands the `api-anything ...` command a hint spells out. */
+function shellArgv(hint: string): string[] {
+  const command = /api-anything (\S.*); then /.exec(hint)?.[1];
+  assert.ok(command, `no command in: ${hint}`);
+  const print = "console.log(JSON.stringify(process.argv.slice(1)))";
+  return JSON.parse(execFileSync("sh", ["-c", `"$0" -e '${print}' -- ${command}`, process.execPath]).toString());
+}
 
 describe("flags and command names", () => {
   before(() => {
@@ -182,34 +221,81 @@ describe("inspect", () => {
   });
 });
 
-const noChrome = !chromeAvailable() && "Google Chrome not installed";
-
-describe("add from a saved capture", { skip: noChrome }, () => {
-  // Captures of /u/alice and /u/bob, each with the id of the request for the user's data.
-  const saved: Record<string, { capture: string; request: string }> = {};
+describe("add from a saved capture", () => {
+  // Captures of /u/alice and /u/bob: request 1 is the page, 2 the user's JSON.
   before(async () => {
     for (const name of ["alice", "bob"]) {
-      const out = JSON.parse((await cli("capture", `${fx.url}/u/${name}`, "--example", `name=${name}`)).stdout);
-      saved[name] = { capture: out.capture, request: String(out.candidates[0].id) };
+      const variables = encodeURIComponent(JSON.stringify({ name, withExtras: true }));
+      seed(`c${name}`, {
+        url: `${fx.url}/u/${name}`,
+        exchanges: [
+          await answered(1, "document", `/u/${name}`),
+          await answered(2, "fetch", `/api/graphql/${fx.state.userQueryId}/UserByName?variables=${variables}`),
+        ],
+      });
     }
   });
   /** add fixture <op> from the capture of that user's page; `flags` are split on spaces. */
   const add = async (op: string, from: string, flags: string) => {
-    const { capture, request } = saved[from]!;
-    const r = await cli("add", "fixture", op, "--from", capture, "--pick-request", request, ...flags.split(" "));
+    const r = await cli("add", "fixture", op, "--from", `c${from}`, "--pick-request", "2", ...flags.split(" "));
     return { ...r, out: JSON.parse(r.stdout) };
   };
 
   test("--example2 with --from and no --from2 is refused, and the way it says to go works", async () => {
     const r = await add("twice", "alice", "--example name=alice --example2 name=bob");
     assert.equal(r.code, 1, r.stdout);
-    assert.deepEqual(r.out, { ok: false, error: "--example2 with --from needs --from2: a capture holds one run" });
-    assert.match(r.stderr, /^next: capture the page again .*api-anything capture .* --example name=bob.* --from2 /m);
+    assert.match(r.out.error, /--example2 .*--from2/);
+    assert.deepEqual(shellArgv(r.stderr), ["capture", `${fx.url}/u/bob`, "--example", "name=bob"]);
+    assert.match(r.stderr, /--from2/);
     assert.equal((await cli("ops", "fixture")).code, 1, "nothing was saved");
 
-    const both = await add("twice", "alice", `--example name=alice --from2 ${saved.bob!.capture} --example2 name=bob`);
+    const both = await add("twice", "alice", "--example name=alice --from2 cbob --example2 name=bob");
     assert.equal(both.code, 0, both.stdout);
     assert.deepEqual(both.out.warnings, [], "the two captures were diffed: no 'learned from one example'");
+  });
+
+  test("the capture that refusal asks for repeats how the first was made: --write, steps, quoting", async () => {
+    const refused = async (capture: string, ...flags: string[]) => {
+      const r = await cli("add", "demo", "send", "--from", capture, ...flags);
+      assert.equal(r.code, 1, r.stdout);
+      return r.stderr;
+    };
+    // a write captured with --write: type the text, click Post
+    const steps = (text: string) => [
+      { action: "fill", selector: "#text", value: text },
+      { action: "click", selector: "#post" },
+    ];
+    seed("cwrite", { url: `${fx.url}/compose`, write: true, steps: steps("hello alice"), exchanges: [] });
+    assert.deepEqual(
+      shellArgv(await refused("cwrite", "--write", "--example", "text=hello alice", "--example2", "text=hello bob")),
+      [
+        "capture",
+        `${fx.url}/compose`,
+        "--steps",
+        JSON.stringify(steps("hello bob")),
+        "--write",
+        "--example",
+        "text=hello bob",
+      ],
+    );
+
+    // the value in the URL, a soft navigation, and a quote for the shell to trip on
+    seed("csoft", { url: `${fx.url}/spa/alice?tab=posts`, softFrom: `${fx.url}/spa/home`, exchanges: [] });
+    assert.deepEqual(shellArgv(await refused("csoft", "--example", "name=alice", "--example2", "name=bob o'neil")), [
+      "capture",
+      `${fx.url}/spa/bob%20o'neil?tab=posts`,
+      "--soft-from",
+      `${fx.url}/spa/home`,
+      "--example",
+      "name=bob o'neil",
+    ]);
+
+    // the first example is nowhere in the capture's url or steps: no command, rather than a wrong one
+    seed("cfeed", { url: `${fx.url}/feed`, write: true, exchanges: [] });
+    const words = await refused("cfeed", "--example", "name=alice", "--example2", "name=bob");
+    assert.doesNotMatch(words, /api-anything capture/);
+    assert.match(words, /--write/);
+    assert.match(words, /--from2/);
   });
 
   test("repairing a recipe from a capture keeps the op's params: its stored examples stand in", async () => {
@@ -241,6 +327,8 @@ describe("add from a saved capture", { skip: noChrome }, () => {
     );
   });
 });
+
+const noChrome = !chromeAvailable() && "Google Chrome not installed";
 
 describe("capture's next hint", { skip: noChrome }, () => {
   const next = async (path: string, ...flags: string[]) =>

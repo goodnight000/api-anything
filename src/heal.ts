@@ -441,6 +441,29 @@ export function templatizeUrl(url: string, args: Args): string {
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** How a capture was made, as a trigger: `{name}` where the example values sit in its URL and steps. */
+export function captureTrigger(c: CaptureFile, args: Args): Trigger {
+  const step = (s: TriggerStep): TriggerStep => ({
+    ...s,
+    ...(s.selector ? { selector: templatize(s.selector, args) } : {}),
+    ...(s.value ? { value: s.action === "goto" ? templatizeUrl(s.value, args) : templatize(s.value, args) } : {}),
+  });
+  return {
+    url: templatizeUrl(c.url, args),
+    ...(c.softFrom ? { softFrom: c.softFrom } : {}),
+    ...(c.steps ? { steps: c.steps.map(step) } : {}),
+  };
+}
+
+/** The args a trigger has no `{name}` for, in its URL, its soft-navigation page or its steps. */
+export const unplaced = (t: Trigger, args: Args): string[] =>
+  Object.keys(args).filter(
+    (k) =>
+      ![t.url, t.softFrom ?? "", ...(t.steps ?? []).flatMap((s) => [s.selector ?? "", s.value ?? ""])].some((x) =>
+        x.includes(`{${k}}`),
+      ),
+  );
+
 export function putOperation(site: Site, op: Operation): Site {
   const rest = site.operations.filter((o) => o.name !== op.name);
   return { ...site, operations: [...rest, op] };
@@ -511,32 +534,13 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
         `capture ${c.id} ran without --write, so any write in it was already sent; capture again with --write`,
       );
   }
-  let trigger = i.trigger;
-  if (!trigger && i.from) {
-    const c = i.from.capture;
-    const step = (s: TriggerStep): TriggerStep => ({
-      ...s,
-      ...(s.selector ? { selector: templatize(s.selector, ex1) } : {}),
-      ...(s.value ? { value: s.action === "goto" ? templatizeUrl(s.value, ex1) : templatize(s.value, ex1) } : {}),
-    });
-    trigger = {
-      url: templatizeUrl(c.url, ex1),
-      ...(c.softFrom ? { softFrom: c.softFrom } : {}),
-      ...(c.steps ? { steps: c.steps.map(step) } : {}),
-    };
-  }
+  let trigger = i.trigger ?? (i.from && captureTrigger(i.from.capture, ex1));
   if (!trigger) throw new Error("a trigger url is needed (or --from a capture)");
   if (trigger.url.startsWith("/")) {
     if (!existing) throw new Error(`relative trigger ${trigger.url} needs an existing site; use a full URL`);
     trigger = { ...trigger, url: existing.baseUrl.replace(/\/$/, "") + trigger.url };
   }
-  const t0 = trigger;
-  const unplaced = Object.keys(ex1).filter(
-    (k) =>
-      ![t0.url, t0.softFrom ?? "", ...(t0.steps ?? []).flatMap((st) => [st.selector ?? "", st.value ?? ""])].some((x) =>
-        x.includes(`{${k}}`),
-      ),
-  );
+  const missing = unplaced(trigger, ex1);
 
   let run1: CaptureResult;
   let run2: CaptureResult | undefined;
@@ -592,9 +596,9 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   const recipe = r.html ?? r.embedded;
   const warnings = learned.warnings.filter((w) => !(recipe && w.startsWith("response is HTML")));
   if (reused) warnings.push(reused);
-  if (unplaced.length)
+  if (missing.length)
     warnings.push(
-      `the trigger has no {${unplaced.join("}, {")}}: tier-3 runs and heals would load the example's page; put the param in --trigger`,
+      `the trigger has no {${missing.join("}, {")}}: tier-3 runs and heals would load the example's page; put the param in --trigger`,
     );
   let operation: Operation = {
     ...learned.operation,

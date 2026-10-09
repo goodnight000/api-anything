@@ -11,10 +11,13 @@ import {
   addOperation,
   type CaptureFile,
   capturePage,
+  captureTrigger,
+  fillTrigger,
   loadCapture,
   loginWall,
   PROFILE_HINT,
   profileDir,
+  unplaced,
 } from "./heal.js";
 import { buildRequest } from "./http.js";
 import { AmbiguousProfile } from "./import.js";
@@ -491,6 +494,32 @@ function cmdInspect({ v, pos }: Parsed): number {
   return 0;
 }
 
+/** One shell word, quoted: a space, a quote or JSON in a hint's command pastes as a single argument. */
+const sh = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
+
+/**
+ * The command that repeats how capture `c` was made, with the second example's values where the
+ * first's sit in its URL and steps. Undefined when they sit in neither: there is nothing to swap.
+ */
+function captureAgain(
+  c: CaptureFile,
+  ex1: Record<string, string>,
+  ex2: Record<string, string>,
+  write: boolean,
+): string | undefined {
+  const made = captureTrigger(c, ex1);
+  if (!Object.keys(ex2).length || Object.keys(ex1).some((k) => !(k in ex2)) || unplaced(made, ex2).length)
+    return undefined;
+  const t = fillTrigger(made, ex2);
+  return [
+    `api-anything capture ${sh(t.url)}`,
+    ...(t.softFrom ? [`--soft-from ${sh(t.softFrom)}`] : []),
+    ...(t.steps ? [`--steps ${sh(JSON.stringify(t.steps))}`] : []),
+    ...(write ? ["--write"] : []),
+    ...Object.entries(ex2).map(([k, x]) => `--example ${sh(`${k}=${x}`)}`),
+  ].join(" ");
+}
+
 async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   const [site, name] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything add --help");
@@ -508,11 +537,19 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   if (!v.from) needChrome();
   if (v.from2 && !ex2)
     throw new Fail("--from2 needs --example2 (the values that capture was made with)", "api-anything add --help");
-  if (v.from && v.example2 && !v.from2)
+  if (v.from && ex2 && !v.from2) {
+    const c = loadCapture(v.from);
+    const write = !!(c.write || v.write);
+    const command = captureAgain(c, ex1, ex2, write);
     throw new Fail(
       "--example2 with --from needs --from2: a capture holds one run",
-      `capture the page again with the second example's values (api-anything capture <that page's url> --example ${v.example2.join(" --example ")}), then run this add again with --from2 <the new capture's id>`,
+      `${
+        command
+          ? `capture the page again with the second example's values: ${command}`
+          : `the first example's values are not in capture ${c.id}'s url or steps, so the command cannot be written out: capture that page again the way ${c.id} was made (${["its url", c.softFrom && "--soft-from", c.steps && "--steps", write && "--write"].filter(Boolean).join(", ")}), with the second example's values`
+      }; then run this add again with --from2 <the new capture's id>`,
     );
+  }
   const r = await addOperation({
     site,
     op: name,
