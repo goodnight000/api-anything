@@ -16,10 +16,19 @@ sites, so a missing Chrome isn't a reason to stop.
 
 ## 2. Install the command
 
-The package isn't on npm yet, so build it from a temporary clone. Run this as one command:
+The package isn't on npm yet, so build it from a temporary clone. Run this whole block as one
+command (it works in sh, bash and zsh, and removes the clone whether or not it succeeds):
 
 ```sh
-dir="$(mktemp -d)" && git clone -q --depth 1 https://github.com/goodnight000/api-anything.git "$dir" && (cd "$dir" && npm ci --no-audit --no-fund && npm install -g "$(npm pack --silent)"); status=$?; rm -rf "$dir"; (exit $status)
+(
+  dir="$(mktemp -d)" || exit
+  trap 'rm -rf "$dir"' 0
+  git clone -q --depth 1 https://github.com/goodnight000/api-anything.git "$dir" &&
+    cd "$dir" &&
+    npm ci --no-audit --no-fund &&
+    archive="$(npm pack --silent)" &&
+    npm install -g "$archive"
+)
 ```
 
 A non-zero exit status means the clone, the build or the install failed: stop and show the user

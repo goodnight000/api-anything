@@ -34,7 +34,7 @@ export function mcpNext(next: string): string {
     )
     .replace(/api-anything add creates one/, "a new site is added with the CLI");
   return /\bapi-anything (heal|add|capture|verify|export)\b/.test(out)
-    ? `${out} (api-anything commands are CLI: run them in your shell; with no shell, ask the user to run them in a terminal)`
+    ? `${out} (api-anything is a CLI: run it in your shell, as npx -y github:goodnight000/api-anything when the command is not installed; with no shell, ask the user)`
     : out;
 }
 
@@ -146,7 +146,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     "call_operation",
     {
       description:
-        "Call a site operation. Returns {ok, class, data, tier, healed?, ms, reason?, next?}; a list of two or more records comes back as data {columns, rows} (one row per item, null for a missing field); a single record stays a one-item list. `reason` also explains a slow success. On failure follow `next` at most once, then stop and report." +
+        "Call a site operation. Returns {ok, class, data, tier, healed?, ms, reason?, next?}; a list of two or more records comes back as data {columns, rows} (one row per item, null for a missing field); a one-item list stays a list. `reason` also explains a slow success. On failure follow `next` at most once, then stop and report." +
         (allowWrites
           ? " Write operations change the user's account: only call them when the user asked for that exact action."
           : " Writes are disabled on this server."),

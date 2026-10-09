@@ -493,7 +493,7 @@ describe("agent surface", () => {
     );
     assert.match(
       mcpNext("api-anything heal x getUser; if that fails, re-learn it with api-anything add x getUser ..."),
-      /CLI: run them in your shell; with no shell, ask the user to run them in a terminal\)$/,
+      /is a CLI: run it in your shell, as npx -y github:goodnight000\/api-anything when the command is not installed; with no shell, ask the user\)$/,
     );
     assert.equal(mcpNext("api-anything sites lists what exists"), "list_sites lists what exists");
     assert.doesNotMatch(
