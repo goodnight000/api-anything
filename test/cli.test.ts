@@ -620,6 +620,56 @@ describe("add from a saved capture", () => {
       assert.doesNotMatch(saved(), new RegExp(SHORT));
     });
 
+    test("what the op holds public was said of the value it was learned with, not of another sent in its place", async () => {
+      const [SHIPPED, PRIVATE] = ["PublicStaticApiKeyAbc12345", "PrivateRuntimeApiKeyZyx98765"];
+      const keyed = (key: string) => {
+        const e = lookup("/api/shipped?name=alice");
+        return { ...e, id: 2, request: { ...e.request, headers: { "x-api-key": key } } };
+      };
+      // the site's own script ships the first key to every visitor, so the learner leaves it in the request
+      const script = {
+        id: 1,
+        resourceType: "script",
+        request: { method: "GET", url: `${fx.url}/app.js`, headers: {} },
+        response: {
+          status: 200,
+          headers: { "cache-control": "public" },
+          contentType: "application/javascript",
+          body: `const key="${SHIPPED}";`,
+        },
+      };
+      seed("cshipped", { url: `${fx.url}/page`, cookies: [], exchanges: [script, keyed(SHIPPED)] });
+      const first = await cli(
+        ...["add", "fixture", "shipped", "--from", "cshipped", "--pick-request", "2"],
+        ...["--example", "name=alice", "--extract", "data"],
+      );
+      assert.equal(first.code, 0, first.stdout);
+      const op = () => JSON.parse(saved()).operations.find((o: { name: string }) => o.name === "shipped");
+      assert.deepEqual(op().public, ["x-api-key"]);
+      // a later capture sends another key there, and no script ships it
+      seed("cprivate", { url: `${fx.url}/page`, cookies: [], exchanges: [keyed(PRIVATE)] });
+      for (const flags of [
+        ["--description", PRIVATE],
+        ["--extract", "data", "--pick", PRIVATE],
+      ]) {
+        const r = await cli("add", "fixture", "shipped", "--from", "cprivate", "--pick-request", "2", ...flags);
+        assert.equal(r.code, 1, r.stdout);
+        assert.match(JSON.parse(r.stdout).error, /credential/);
+      }
+      assert.doesNotMatch(saved(), new RegExp(PRIVATE));
+    });
+
+    test("a description is not saved from a capture that holds no request of the op: nothing says what is secret in it", async () => {
+      const TOKEN = "OtherEndpointTokenAbc12345";
+      seed("cbase", { url: `${fx.url}/page`, exchanges: [lookup("/api/base?name=alice")] });
+      assert.equal((await add("base", "cbase", "--example", "name=alice", "--extract", "data")).code, 0);
+      seed("celse", { url: `${fx.url}/page`, exchanges: [lookup(`/api/other?token=${TOKEN}`)] });
+      const r = await cli("add", "fixture", "base", "--from", "celse", "--description", TOKEN);
+      assert.equal(r.code, 1, r.stdout);
+      assert.match(JSON.parse(r.stdout).error, /no request that base's match finds.*--pick-request/);
+      assert.doesNotMatch(saved(), new RegExp(TOKEN));
+    });
+
     test("the kept request is not checked again by rules it already passed: a param under a credential's name stays", async () => {
       const KEY = "PublicObjectAbc12345";
       seed("ckeyed", { url: `${fx.url}/page`, exchanges: [lookup(`/api/keyed?api_key=${KEY}`)] });

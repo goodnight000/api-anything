@@ -590,7 +590,9 @@ function saveOperation(
 /**
  * What is secret in the request a repair reads, by the learner's own rules: a cookie or stored value
  * it repeats, a per-session field, a token an earlier answer issued. The request is not learned from
- * this, only asked; a request the learner refuses is one a repair is refused from too.
+ * this, only asked; a request the learner refuses is one a repair is refused from too. What the kept
+ * op holds public is not passed on: that was said of the value it was learned with, and this request
+ * may send another there.
  */
 function credentialsIn(old: Operation, capture: CaptureFile, exchange: Exchange): Record<string, string> {
   return learnOperation({
@@ -603,7 +605,6 @@ function credentialsIn(old: Operation, capture: CaptureFile, exchange: Exchange)
     name: old.name,
     trigger: old.trigger,
     readOnly: old.readOnly,
-    public: old.public,
   }).sessionValues;
 }
 
@@ -640,6 +641,13 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
   const answers = pool.filter((e) => e.response);
   // The answer the recipe finds data in (a challenge page, or a soft navigation's first page, may match too).
   const exchange = answers.findLast((e) => resolves(spec, e.response?.body)) ?? answers.at(-1) ?? pool.at(-1);
+  // No request, nothing to check the added text against: a description is refused then too.
+  if (!exchange)
+    throw new Error(
+      id !== undefined
+        ? `no captured request with id ${id}`
+        : `capture ${capture.id} has no request that ${old.name}'s match finds (${JSON.stringify(old.match)}): name it with --pick-request <id>; api-anything inspect ${capture.id} lists them`,
+    );
   // What the kept spec is checked against, as it was when it was saved: the jar with this capture's cookies,
   // and its own session refs as this request sent them. The text a repair adds is also checked against
   // everything the learner finds secret in the request (a value there may sit where the kept spec has a param).
@@ -647,21 +655,15 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
   const live: Session = {
     ...now,
     cookies: mergeCookies(now.cookies, capture.cookies),
-    values: { ...now.values, ...(exchange ? sessionValuesOf(old, exchange) : {}) },
+    values: { ...now.values, ...sessionValuesOf(old, exchange) },
   };
-  const secret = exchange ? credentialsIn(old, capture, exchange) : {};
+  const secret = credentialsIn(old, capture, exchange);
   // A description with no recipe flag is metadata: nothing is learned again, and the recipe stays.
   if (i.description !== undefined && !Object.values(r).some((x) => x !== undefined)) {
     refuseAdded({ description: i.description }, live, secret);
     const saved = saveOperation(site, described(old, i.description), undefined, [], live, undefined);
     return { ...saved, captures: [], repaired: "description" };
   }
-  if (!exchange)
-    throw new Error(
-      id !== undefined
-        ? `no captured request with id ${id}`
-        : `capture ${capture.id} has no request that ${old.name}'s match finds (${JSON.stringify(old.match)}): name it with --pick-request <id>; api-anything inspect ${capture.id} lists them`,
-    );
   // the stored examples only steer the suggested extract, as the examples do in a full add
   const values = old.params.flatMap((p) => (p.example === undefined ? [] : [String(p.example).toLowerCase()]));
   const learned: string[] = [];
