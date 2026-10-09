@@ -157,6 +157,13 @@ export async function startFixture(): Promise<Fixture> {
       }
       case "/api/items":
         return json(res, { items: [{ page: u.searchParams.get("page") }] });
+      // a page whose script asks the API for its own ?page=
+      case "/paged":
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end(
+            '<!doctype html><title>paged</title><script>fetch("/api/items?page="+encodeURIComponent(new URLSearchParams(location.search).get("page")))</script>',
+          );
       case "/":
         return void res.writeHead(200, { "content-type": "text/html" }).end("<!doctype html><title>home</title>");
       default:

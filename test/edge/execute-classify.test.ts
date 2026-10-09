@@ -658,6 +658,21 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     assert.equal(posts, 1, `POST sent ${posts} times; result ${JSON.stringify(r)}`);
   });
 
+  test("a param's default reaches the tier-3 trigger: the page opens with it, not with a literal {page}", async () => {
+    site("deftrig", {
+      ...rd("items", "/api/items?page=1", { minTier: 3 }),
+      slots: [{ param: "page", at: ["query:page"] }],
+      params: [{ name: "page", default: "7", required: false }],
+      trigger: { url: `${fx.base}/paged?page={page}` },
+      match: { path: "/api/items" },
+    });
+    const r = await call("deftrig", "items", {}, { minIntervalMs: 0, timeoutMs: 5000 });
+    const pages = fx.hits.filter((h) => h.url.startsWith("/paged")).map((h) => h.url);
+    assert.deepEqual(pages, ["/paged?page=7"], JSON.stringify(r));
+    assert.equal(r.tier, 3, JSON.stringify(r));
+    assert.deepEqual(r.data, [{ page: "7" }]);
+  });
+
   test("tier 2 honours timeoutMs", async () => {
     site("t2slow", rd("n", "/never", { minTier: 2 }));
     const t0 = Date.now();

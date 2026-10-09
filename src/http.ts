@@ -81,11 +81,22 @@ function transform(v: string, t: "strip-quotes" | "url-decode" | undefined): str
   return v;
 }
 
-/** The fully materialized request: params, cookie/session refs, and the jar's Cookie header. */
-export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session): Request {
-  const vals: Record<string, unknown> = {};
+/** The args a call runs with at every tier: a param the caller left out takes its default. */
+export function withDefaults(op: Operation, args: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
   for (const p of op.params) {
     const v = args[p.name] ?? p.default;
+    if (v !== undefined) out[p.name] = v;
+  }
+  return out;
+}
+
+/** The fully materialized request: params, cookie/session refs, and the jar's Cookie header. */
+export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session): Request {
+  const given = withDefaults(op, args);
+  const vals: Record<string, unknown> = {};
+  for (const p of op.params) {
+    const v = given[p.name];
     if (v === undefined) {
       if (p.required) throw new Error(`missing required param "${p.name}"`);
       continue;

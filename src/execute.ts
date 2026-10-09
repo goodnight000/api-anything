@@ -15,7 +15,7 @@ import {
   profileDir,
   runOpTrigger,
 } from "./heal.js";
-import { buildRequest, type Sent, send } from "./http.js";
+import { buildRequest, type Sent, send, withDefaults } from "./http.js";
 import { reimportIfBrowser } from "./login.js";
 import {
   cookieHeaderFor,
@@ -372,6 +372,8 @@ export async function call(
       next: nextFor("input", siteName, op),
     });
   }
+  // Resolved once: the tier-3 trigger and its answer's match take a default just as the request does.
+  args = withDefaults(op, args);
   let session: Session;
   try {
     session = loadSession(siteName);

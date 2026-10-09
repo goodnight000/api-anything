@@ -254,6 +254,8 @@ blank stand-in page on the request's origin. When the origin page navigates mid-
 challenge or redirect destroys the context), a read waits for the new document and fetches once
 more; a write is never resent. The tier-3 answer is the matching request whose declared parameter positions equal the
 materialized call, including short and structured values, and whose response judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
+A param's default is filled into the args once, before the first tier, so every tier runs with the
+same values: the tier-3 trigger opens `?count=20`, never a literal `{count}`.
 
 ## Browser
 
