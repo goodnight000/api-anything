@@ -649,15 +649,17 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
         : `capture ${capture.id} has no request that ${old.name}'s match finds (${JSON.stringify(old.match)}): name it with --pick-request <id>; api-anything inspect ${capture.id} lists them`,
     );
   // What the kept spec is checked against, as it was when it was saved: the jar with this capture's cookies,
-  // and its own session refs as this request sent them. The text a repair adds is also checked against
-  // everything the learner finds secret in the request (a value there may sit where the kept spec has a param).
+  // and its own session refs as this request sent them.
   const now = loadSession(site);
   const live: Session = {
     ...now,
     cookies: mergeCookies(now.cookies, capture.cookies),
     values: { ...now.values, ...sessionValuesOf(old, exchange) },
   };
-  const secret = credentialsIn(old, capture, exchange);
+  // What a full add from this request would check the spec against, which the text a repair adds must
+  // pass too: every stored value (one the kept op's ref has since moved on from is still a credential),
+  // with what the learner finds secret in the request over them.
+  const secret = { ...now.values, ...credentialsIn(old, capture, exchange) };
   // A description with no recipe flag is metadata: nothing is learned again, and the recipe stays.
   if (i.description !== undefined && !Object.values(r).some((x) => x !== undefined)) {
     refuseAdded({ description: i.description }, live, secret);

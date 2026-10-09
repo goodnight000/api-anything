@@ -659,6 +659,38 @@ describe("add from a saved capture", () => {
       assert.doesNotMatch(saved(), new RegExp(PRIVATE));
     });
 
+    test("a value the session store still holds is a credential, though the op's ref has moved on to another", async () => {
+      const [FIRST, ROTATED] = ["OriginalStoredSecretAbc12345", "RotatedStoredSecretZyx98765"];
+      const opaque = (value: string) => {
+        const e = lookup("/api/rotated?name=alice");
+        return { ...e, request: { ...e.request, headers: { "x-opaque": value } } };
+      };
+      seed("cfirst", {
+        url: `${fx.url}/page`,
+        cookies: [],
+        storage: { oldStorage: FIRST },
+        exchanges: [opaque(FIRST)],
+      });
+      assert.equal((await add("rotated", "cfirst", "--example", "name=alice", "--extract", "data")).code, 0);
+      // the page now keeps another value under another key, and sends that one
+      seed("csecond", {
+        url: `${fx.url}/page`,
+        cookies: [],
+        storage: { newStorage: ROTATED },
+        exchanges: [opaque(ROTATED)],
+      });
+      for (const secret of [FIRST, ROTATED])
+        for (const flags of [
+          ["--description", secret],
+          ["--extract", "data", "--pick", secret],
+        ]) {
+          const r = await add("rotated", "csecond", ...flags);
+          assert.equal(r.code, 1, r.stdout);
+          assert.match(r.out.error, /credential/);
+        }
+      for (const secret of [FIRST, ROTATED]) assert.doesNotMatch(saved(), new RegExp(secret));
+    });
+
     test("a description is not saved from a capture that holds no request of the op: nothing says what is secret in it", async () => {
       const TOKEN = "OtherEndpointTokenAbc12345";
       seed("cbase", { url: `${fx.url}/page`, exchanges: [lookup("/api/base?name=alice")] });
