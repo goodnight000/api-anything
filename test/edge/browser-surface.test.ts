@@ -425,6 +425,9 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     ["#submit", "a GET form submission"],
     ["#script", "an injected script (JSONP)"],
     ["#iframe", "an injected iframe"],
+    // routed before Playwright has the new tab's page, so the guard cannot ask whose it is
+    ["#newtab", "a link that opens in a new tab"],
+    ["#open", "window.open"],
     // still retrying while the run ends: the guard has to outlive the page
     ["#retry", "a fetch the page sends again after every failure"],
   ] as const) {
@@ -435,6 +438,40 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
       assert.deepEqual(votes().slice(before), [], "the write was performed while learning it");
     });
   }
+
+  test("capture --write: a write that is a new tab's first navigation is recorded as aborted, so it can be learned", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const r = await capturePage({
+      url: `${fx.url}/vote-page`,
+      steps: [{ action: "click", selector: "#newtab" }],
+      write: true,
+    });
+    const vote = r.exchanges.find((e) => e.request.url.endsWith("/api/vote?how=newtab"));
+    assert.deepEqual([vote?.aborted, vote?.resourceType], [true, "document"]);
+  });
+
+  test("capture --write: a new tab that another run's page opens meanwhile is not stopped by this run's guard", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const loads = () => fx.calls.filter((c) => c === "/vote-page").length;
+    const loaded = loads();
+    // the guarded run sits in its steps, where every GET of its own pages is aborted
+    const run = capturePage({ url: `${fx.url}/vote-page`, steps: [{ action: "wait", ms: 2500 }], write: true });
+    const ctx = await openBrowser({ profileDir: profileDir() });
+    const other = await ctx.newPage();
+    try {
+      await other.goto(`${fx.url}/vote-page?name=other`);
+      assert.ok(await until(() => loads() > loaded, 5000), "the run's page loaded");
+      await sleep(300);
+      const [tab] = await Promise.all([ctx.waitForEvent("page"), other.click("#newtab")]);
+      await tab.waitForLoadState();
+      await tab.close();
+      assert.deepEqual(votes().slice(before), ["/api/vote?how=newtab"], "this run's guard stopped another run's tab");
+    } finally {
+      await other.close();
+      await run;
+    }
+  });
 
   for (const [how, what] of [
     ["beacon", "a pagehide beacon"],

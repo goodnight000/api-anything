@@ -172,7 +172,13 @@ an upvote may be `new Image().src`, a link, a GET form, JSONP or an iframe), tho
 the site's own endpoint in disguise (same site, and no asset extension or a query carrying an
 example value: `<link rel=stylesheet href=/api/vote?id=..>`), and anything matching a
 known write's `match`; WebSocket messages any of the run's pages sends (a popup's too: the socket
-route is context-wide) are dropped too. The guards are lifted only after the run's pages are closed:
+route is context-wide) are dropped too. A new tab's first navigation (a `target=_blank` link,
+`window.open`) is routed before Playwright has the tab's page, which it reports only once that
+navigation commits, so the guard cannot ask whose request it is. The browser's target list names
+each tab's opener: the request is judged as the run's own unless the run has no unreported tab, and
+an aborted one joins the capture once its page shows the tab was the run's. Two runs that open a
+tab at the same moment cannot be told apart, and the guard then applies to both tabs: one run's
+tab fails to load rather than a write going out. The guards are lifted only after the run's pages are closed:
 an open page still sends (a client's retry; Chrome reloads an aborted navigation's error page after
 about a second), and removing a route releases the requests paused in it. A route is not asked about
 every request: Playwright continues by itself any paused request that has no network id, which is
