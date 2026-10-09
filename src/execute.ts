@@ -122,14 +122,29 @@ const sameArgs = (a: Record<string, unknown>, b: Record<string, unknown>, op: Op
 const safeHeal = (p: Promise<HealResult>): Promise<HealResult> =>
   p.catch((e: Error) => ({ outcome: "failed" as const, reason: `heal crashed: ${e.message.split("\n")[0]}` }));
 
+/** What to do about a write whose redirect was not followed, since that would have sent it again. */
+const sentOnce = (site: string, op: Operation) =>
+  `the write was sent once and may have run: check the site first. Do not retry: the site answered it with a redirect that would send it a second time, which was not followed; if the operation moved, learn it at its new address: api-anything add ${site} ${op.name} ... --write`;
+
 async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   try {
     if (tier === 3) {
       // For a write this is the UI sending it: the one attempt.
       const run = await runOpTrigger(ctx.site, op, ctx.args);
       const judged = run.matched && judgeExchange(op, run.matched);
+      // The page is told nothing of a redirect that was stopped, its status included: this is the answer.
+      const resent: Attempt | undefined = run.resends
+        ? {
+            tier,
+            class: "error",
+            reason: "the site answered this write with a redirect that would send it again: stopped in the browser",
+            ambiguous: true,
+            hint: sentOnce(ctx.site, op),
+          }
+        : undefined;
       const a: Attempt =
         judged ||
+        resent ||
         (run.loginWall
           ? { tier, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` }
           : { tier, class: "drift", reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` });
@@ -179,13 +194,7 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       // The redirect is the site's answer, so a retry meets it again; the request it answered was sent.
       const add = `api-anything add ${ctx.site} ${op.name} ...${op.readOnly ? "" : " --write"}`;
       if (e.kind === "again")
-        return {
-          tier,
-          class: "error",
-          reason: e.message,
-          ambiguous: true,
-          hint: `the write was sent once and may have run: check the site first. Do not retry: the site answered it with a redirect that would send it a second time, which was not followed; if the operation moved, learn it at its new address: ${add}`,
-        };
+        return { tier, class: "error", reason: e.message, ambiguous: true, hint: sentOnce(ctx.site, op) };
       const why = e.kind
         ? `the site's redirects for this request do not end (a loop, or a chain past the limit); learn the operation again from the page that uses it, at the address the site now answers from: ${add}`
         : op.readOnly

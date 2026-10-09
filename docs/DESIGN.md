@@ -335,7 +335,9 @@ site and, if the operation moved, to learn it at its new address. A 301/302/303 
 GET (Post/Redirect/Get) is followed: nothing is sent again. At tier 3 the page can also send it twice by itself (a handler
 bound twice, a client that sends again), so the run has a budget: the op's own request, by its
 `match`, leaves once, every further request matching it is aborted, and the result's `reason` says
-a repeat was stopped. The server's redirect of the one that left is still that one. What else the
+a repeat was stopped. The server's redirect of the one that left is held to the same rule as at
+tiers 1 and 2: a hop that would send the write on (an unsafe method kept, or the op's own request
+again) is aborted in the browser, and the result says so; a hop that became a GET passes. What else the
 trigger sends passes (a real write often needs companion requests, and what a trigger does besides
 is its author's choice) until the run ends, when, as in every guarded run, its pages send nothing
 more. An op with no `match` has no request to count. Writes need `allowWrites` at every entry point (CLI flag, MCP

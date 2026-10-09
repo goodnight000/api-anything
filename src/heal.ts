@@ -134,19 +134,30 @@ const readGuard = (m: Match) => {
 /**
  * A write's tier-3 run is the page sending it for real, so its own request may leave once: a
  * handler bound twice, or a client that sends again, would perform the write again, and every
- * further request matching the op is aborted. The server's redirect of the one that left is still
- * that one (`via`: what a hop was redirected from). What else the trigger sends is the op author's
- * choice and passes. An op with no `match` has no request to count.
+ * further request matching the op is aborted. So is the server's redirect of the one that left
+ * (`via`: what a hop was redirected from) when it would send the write on: a hop that keeps an
+ * unsafe method (307, 308), or leads back to the op's own request. A hop that became a GET of
+ * another address (Post/Redirect/Get) passes. What else the trigger sends is the op author's choice
+ * and passes. An op with no `match` has no request to count. `stopped`: what was aborted.
  */
 const sendOnce = (m: Match) => {
   let sent = false;
-  return (e: Exchange, _acting: boolean, via?: Exchange): boolean => {
-    if (e.resourceType === "websocket" || !Object.keys(m).length || !matches(m, e.request)) return false;
-    if (via && matches(m, via.request)) return false;
+  const stopped = { repeats: 0, resends: 0 };
+  const guard = (e: Exchange, _acting: boolean, via?: Exchange): boolean => {
+    if (e.resourceType === "websocket" || !Object.keys(m).length) return false;
+    const own = matches(m, e.request);
+    if (via && matches(m, via.request)) {
+      if (!own && SAFE_METHODS.has(e.request.method.toUpperCase())) return false;
+      stopped.resends++;
+      return true;
+    }
+    if (!own) return false;
+    if (sent) stopped.repeats++;
     const repeat = sent;
     sent = true;
     return repeat;
   };
+  return Object.assign(guard, { stopped });
 };
 
 /** Values of the op's session: refs as the browser just sent them. */
@@ -213,6 +224,8 @@ export interface TriggerRun {
   loginWall?: string;
   /** a write's own request was sent again by the page this many times, and stopped each time */
   repeats?: number;
+  /** a write's own request was answered with a redirect that would have sent it again, and was stopped */
+  resends?: number;
 }
 
 /**
@@ -285,11 +298,8 @@ export async function runOpTrigger(
   const t = fillTrigger(op.trigger, args);
   const isHit = (e: Exchange) => matches(op.match, e.request);
   // A write's tier-3 run is the UI sending it for real, once; learning or healing one intercepts it.
-  const intercept = o.intercept
-    ? writeGuard(op.match, { url: t.url, args })
-    : op.readOnly
-      ? readGuard(op.match)
-      : sendOnce(op.match);
+  const once = !o.intercept && !op.readOnly ? sendOnce(op.match) : undefined;
+  const intercept = once ?? (o.intercept ? writeGuard(op.match, { url: t.url, args }) : readGuard(op.match));
   const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit });
   const hits = capture.exchanges.filter(isHit);
   // a real write's answer is a request that left: a repeat that was stopped answers nothing
@@ -300,8 +310,14 @@ export async function runOpTrigger(
   const source = matched ?? hits.find((e) => e.response && e.response.status < 400);
   mergeCapture(site, capture.cookies, source ? sessionValuesOf(op, source) : {});
   const wall = matched?.response ? undefined : loginWall(capture, t.url);
-  const repeats = hits.length - sent.length;
-  return { capture, matched, ...(wall ? { loginWall: wall } : {}), ...(repeats ? { repeats } : {}) };
+  const { repeats, resends } = once?.stopped ?? {};
+  return {
+    capture,
+    matched,
+    ...(wall ? { loginWall: wall } : {}),
+    ...(repeats ? { repeats } : {}),
+    ...(resends ? { resends } : {}),
+  };
 }
 
 /** A tier-3 result: the site's own request, answered. */

@@ -1112,11 +1112,15 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
       assert.equal(r.ok, false);
       assert.match(r.next ?? "", /check the site/);
       assert.doesNotMatch(r.next ?? "", /retry once/);
-      // the server's own 307 is the one send going on, not a second one: it is not stopped
-      assert.ok(
-        fx.hits.some((h) => h.method === "POST" && h.url === "/api/save?login=1"),
-        "the redirect of the write was aborted",
+      // the server's 307 would have the page send the write a second time: stopped, and said
+      assert.deepEqual(
+        fx.hits.filter((h) => h.url === "/api/save?login=1").map((h) => h.method),
+        [],
+        "the redirect sent the write on",
       );
+      assert.equal(r.class, "error", JSON.stringify(r));
+      assert.match(r.reason ?? "", /^the site answered this write with a redirect that would send it again: stopped/);
+      assert.match(r.next ?? "", /api-anything add t3write save \.\.\. --write/);
     } finally {
       delete process.env.API_ANYTHING_BROWSER_ROOTS;
     }
