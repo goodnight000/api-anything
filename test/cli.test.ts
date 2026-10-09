@@ -568,6 +568,76 @@ describe("add from a saved capture", () => {
     assert.match(repaired.out.repaired, /returns changed/);
   });
 
+  describe("what a repair is checked against", () => {
+    /** A request no page of the fixture sends, and an answer for it: only what add does with the capture is under test. */
+    const lookup = (path: string, body?: string) => ({
+      id: 1,
+      resourceType: "fetch",
+      request: {
+        method: body ? "POST" : "GET",
+        url: `${fx.url}${path}`,
+        headers: body ? { "content-type": "application/json" } : {},
+        ...(body ? { body } : {}),
+      },
+      response: { status: 200, headers: {}, contentType: "application/json", body: '{"data":[{"name":"alice"}]}' },
+    });
+    const add = async (op: string, from: string, ...flags: string[]) => {
+      const r = await cli("add", "fixture", op, "--from", from, "--pick-request", "1", ...flags);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    const saved = () => readFileSync(join(HOME, "sites", "fixture.json"), "utf8");
+
+    test("every credential in the request counts, two that would take one ref's name included", async () => {
+      const [OLD, QUERY, BODY] = ["OldPrivateTokenAbc12345", "QueryPrivateTokenBcd23456", "BodyPrivateTokenCde34567"];
+      seed("ctoken", {
+        url: `${fx.url}/page`,
+        exchanges: [lookup("/api/lookup?name=alice", JSON.stringify({ token: OLD }))],
+      });
+      assert.equal((await add("lookup", "ctoken", "--example", "name=alice", "--extract", "data")).code, 0);
+      // the same op's request, now with a second token in the query: the body's is the ref the op already has
+      const path = `/api/lookup?name=alice&token=${QUERY}`;
+      seed("ctokens", { url: `${fx.url}/page`, exchanges: [lookup(path, JSON.stringify({ token: BODY }))] });
+      for (const token of [QUERY, BODY]) {
+        const named = await add("lookup", "ctokens", "--description", `session ${token}`);
+        assert.equal(named.code, 1, named.stdout);
+        assert.match(named.out.error, /credential/);
+      }
+      for (const token of [OLD, QUERY, BODY]) assert.doesNotMatch(saved(), new RegExp(token));
+    });
+
+    test("a request the learner refuses is one a repair is refused from: what it holds was never listed", async () => {
+      const SHORT = "abcd1234";
+      seed("cnamed", { url: `${fx.url}/page`, exchanges: [lookup("/api/named?name=alice")] });
+      assert.equal((await add("named", "cnamed", "--example", "name=alice", "--extract", "data")).code, 0);
+      // an empty query key is a position no slot can name, and its value is a token the page stores
+      seed("cnokey", {
+        url: `${fx.url}/page`,
+        storage: { auth: JSON.stringify({ access_token: SHORT }) },
+        exchanges: [lookup(`/api/named?=${SHORT}`)],
+      });
+      const named = await add("named", "cnokey", "--description", `session ${SHORT}`);
+      assert.equal(named.code, 1, named.stdout);
+      assert.doesNotMatch(saved(), new RegExp(SHORT));
+    });
+
+    test("the kept request is not checked again by rules it already passed: a param under a credential's name stays", async () => {
+      const KEY = "PublicObjectAbc12345";
+      seed("ckeyed", { url: `${fx.url}/page`, exchanges: [lookup(`/api/keyed?api_key=${KEY}`)] });
+      const learned = await add("keyed", "ckeyed", "--example", `key=${KEY}`, "--extract", "data");
+      assert.equal(learned.code, 0, learned.stdout);
+      // with no example the learner would call that value a credential; the repair keeps the request as learned
+      const repaired = await add("keyed", "ckeyed", "--extract", "data", "--pick", "name");
+      assert.equal(repaired.code, 0, repaired.stdout);
+      assert.match(repaired.out.repaired, /returns changed/);
+      assert.deepEqual(
+        JSON.parse(saved())
+          .operations.find((o: { name: string }) => o.name === "keyed")
+          .params.map((p: { name: string }) => p.name),
+        ["key"],
+      );
+    });
+  });
+
   test("a request a --write capture aborted is learned as a write or not at all, whatever its name", async () => {
     const add = async (op: string, request: string, example: string) => {
       const r = await cli("add", "demo", op, "--from", "cpost", "--pick-request", request, "--example", example);
@@ -611,6 +681,27 @@ describe("add from a saved capture", () => {
     );
     assert.equal(held.code, 1, held.stdout);
     assert.match(JSON.parse(held.stdout).error, /cpost .*intercepted request 2 as a write.*--write/);
+    // and one it intercepted that the diff does not read decides nothing: the answered search is read,
+    // a search with other args that was held back is beside the point
+    const form = (q: string) =>
+      `f.req=${encodeURIComponent(JSON.stringify([[["search", JSON.stringify([q, 10]), null, "generic"]]]))}`;
+    const { response: _held, ...other } = await answered(2, "xhr", "/api/rpc?rpcids=search", {
+      form: form("unrelated"),
+    });
+    seed("cpups", {
+      url: `${fx.url}/compose`,
+      write: true,
+      exchanges: [
+        await answered(1, "xhr", "/api/rpc?rpcids=search", { form: form("puppies") }),
+        { ...other, aborted: true },
+      ],
+    });
+    const beside = await cli(
+      ...["add", "demo", "search3", "--from", "cpost", "--pick-request", "3", "--example", "q=kittens"],
+      ...["--from2", "cpups", "--example2", "q=puppies"],
+    );
+    assert.equal(beside.code, 0, beside.stdout);
+    assert.equal(JSON.parse(beside.stdout).readOnly, true);
     assert.equal(posts(), 0, "no POST reached the site");
   });
 

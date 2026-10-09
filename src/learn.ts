@@ -60,6 +60,8 @@ export interface Learned {
   operation: Operation;
   /** the captured request it was learned from */
   exchange: Exchange;
+  /** run 2's request the two-run diff read, when it found one */
+  exchange2?: Exchange;
   warnings: string[];
   /** literal values of session: refs, for the session store; never written to the spec */
   sessionValues: Record<string, string>;
@@ -1155,22 +1157,22 @@ function twoRunDiff(
   exchanges2: Exchange[] | undefined,
   args2: Args | undefined,
   warnings: string[],
-): 1 | 3 {
+): { minTier: 1 | 3; exchange2?: Exchange } {
   if (!exchanges2 || !args2) {
     warnings.push("learned from one example; a second example set separates params from nonces");
-    return 1;
+    return { minTier: 1 };
   }
   const pool = exchanges2.filter((e) => matches(match, e.request));
   const top = rankCandidates(pool, args2, { all: true })[0];
   const ex2 = top && pool.find((e) => e.id === top.id);
   if (!ex2) {
     warnings.push("run 2 produced no matching request; skipped the two-run diff");
-    return 1;
+    return { minTier: 1 };
   }
   const nonces = diffRuns(request, { ...ex2.request, headers: headersOf(ex2) }, slots, args2, warnings);
-  if (!nonces.length) return 1;
+  if (!nonces.length) return { minTier: 1, exchange2: ex2 };
   warnings.push(`changes between runs without an arg change (nonce/signature), so minTier 3: ${nonces.join("; ")}`);
-  return 3;
+  return { minTier: 3, exchange2: ex2 };
 }
 
 /**
@@ -1205,7 +1207,7 @@ export function learnOperation(input: LearnInput): Learned {
   const match = input.match ?? buildMatch(request, slots);
 
   // 3. two-run diff
-  const minTier = twoRunDiff(request, slots, match, input.exchanges2, args2, warnings);
+  const { minTier, exchange2 } = twoRunDiff(request, slots, match, input.exchanges2, args2, warnings);
 
   // 8. response
   const response = learnResponse(
@@ -1240,6 +1242,7 @@ export function learnOperation(input: LearnInput): Learned {
   return {
     operation,
     exchange,
+    ...(exchange2 ? { exchange2 } : {}),
     warnings,
     sessionValues: Object.fromEntries(
       Object.entries(sessionValues).map(([k, v]) => [`${encodeURIComponent(input.name)}/${k}`, v]),
