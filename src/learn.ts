@@ -764,17 +764,29 @@ interface Refs {
   sessionValues: Record<string, string>;
 }
 
-/** Give a position its ref. A session: value is recorded, under a per-position name when the name holds another value. */
+/**
+ * The ref a session: value goes by, recorded for the session store: the name asked for, or a
+ * per-position one when that name already holds another value. One name never means two values.
+ */
+function sessionRef(refs: Refs, ref: string, value: string, at: Step[]): string {
+  const base = ref.slice(8);
+  let name = base;
+  for (let n = 1; refs.sessionValues[name] !== undefined && refs.sessionValues[name] !== value; n++)
+    name = `${base}@${encodeURIComponent(key(at))}${n > 1 ? `.${n}` : ""}`;
+  refs.sessionValues[name] = value;
+  // Newly discovered credentials need the same compound-copy cleanup as cookies/storage.
+  if (!refs.live.get(value)?.ref.startsWith("cookie:")) refs.live.set(value, { ref: `session:${name}`, value });
+  return `session:${name}`;
+}
+
+/** The ref a live value's hole in a template takes: the name it has by now, which a collision may have changed. */
+const holeRef = (refs: Refs, l: Live, at: Step[]) =>
+  l.value === undefined ? l.ref : sessionRef(refs, (refs.live.get(l.value) ?? l).ref, l.value, at);
+
+/** Give a position its ref; a session: value is recorded under the ref's final name. */
 function addRef(refs: Refs, at: Step[], slot: Omit<Slot, "at">, value?: string): void {
-  if (value !== undefined && slot.ref?.startsWith("session:")) {
-    let name = slot.ref.slice(8);
-    if (refs.sessionValues[name] !== undefined && refs.sessionValues[name] !== value)
-      name += `@${encodeURIComponent(key(at))}`;
-    slot = { ...slot, ref: `session:${name}` };
-    refs.sessionValues[name] = value;
-    // Newly discovered credentials need the same compound-copy cleanup as cookies/storage.
-    if (!refs.live.get(value)?.ref.startsWith("cookie:")) refs.live.set(value, { ref: slot.ref!, value });
-  }
+  if (value !== undefined && slot.ref?.startsWith("session:"))
+    slot = { ...slot, ref: sessionRef(refs, slot.ref, value, at) };
   refs.slots.push({ ...slot, at });
   refs.taken.add(key(at));
 }
@@ -876,8 +888,7 @@ function holeRefs(refs: Refs, own: Slot, long: [string, Live][], request: Reques
     const esc = tries[i];
     const form = escapeValue(v, esc);
     if (esc && !own.escape) own.escape = esc;
-    own.template = own.template!.split(escapeTemplate(form)).join(`{${l.ref}}`);
-    if (l.ref.startsWith("session:") && l.value !== undefined) refs.sessionValues[l.ref.slice(8)] = l.value;
+    own.template = own.template!.split(escapeTemplate(form)).join(`{${holeRef(refs, l, own.at)}}`);
     request = setAt(request, own.at, (getAt(request, own.at) as string).split(form).join(""));
   }
   return request;
@@ -886,7 +897,7 @@ function holeRefs(refs: Refs, own: Slot, long: [string, Live][], request: Reques
 /** Pass 5, in a leaf no slot has: the live values it holds become holes of one templated ref, named after the first found. */
 function templatedRef(refs: Refs, leaf: Leaf, long: [string, Live][]): void {
   let template = escapeTemplate(leaf.value);
-  let primary: { live: Live; escape: Escape | undefined } | undefined;
+  let primary: { ref: string; live: Live; escape: Escape | undefined } | undefined;
   for (const [v, l] of long) {
     const forms: [string, Escape | undefined][] = [
       [v, undefined],
@@ -895,18 +906,18 @@ function templatedRef(refs: Refs, leaf: Leaf, long: [string, Live][]): void {
     ];
     const form = forms.find(([f, esc]) => template.includes(escapeTemplate(f)) && (!primary || primary.escape === esc));
     if (!form) continue;
-    template = template.split(escapeTemplate(form[0])).join(`{${l.ref}}`);
-    if (l.ref.startsWith("session:") && l.value !== undefined) refs.sessionValues[l.ref.slice(8)] = l.value;
-    primary ??= { live: l, escape: form[1] };
+    const ref = holeRef(refs, l, leaf.at);
+    template = template.split(escapeTemplate(form[0])).join(`{${ref}}`);
+    primary ??= { ref, live: l, escape: form[1] };
   }
   if (!primary) return;
-  const { live: l, escape } = primary;
-  addRef(
-    refs,
-    leaf.at,
-    { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}), template, ...(escape ? { escape } : {}) },
-    l.value,
-  );
+  const { ref, live: l, escape } = primary;
+  addRef(refs, leaf.at, {
+    ref,
+    ...(l.transform ? { transform: l.transform } : {}),
+    template,
+    ...(escape ? { escape } : {}),
+  });
 }
 
 /**

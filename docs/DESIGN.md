@@ -145,7 +145,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    it is a `{cookie:x}` hole in the param's template, filled at call time. When that slot has no
    escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. A capture refreshes a
    templated `session:` value from its place in the leaf. Newly learned session references are scoped by operation, with distinct request positions
-   for different tokens that share a name. All discovered credentials participate in compound-copy
+   for different tokens that share a name: one name never means two values, wherever the second was
+   found (a storage entry called `token` inside `v1:<value>`, next to a `token` field holding another). All discovered credentials participate in compound-copy
    removal. Add and heal refuse to save any spec that still contains a detected live credential.
    The spec never holds a credential. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix

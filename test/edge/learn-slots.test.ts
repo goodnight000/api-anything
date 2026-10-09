@@ -109,6 +109,25 @@ test("a name the caller marked public is a constant in every pass", () => {
   assert.deepEqual([r.headers["x-app"], r.headers["x-ctx"]], [SID, `v1:${SID}`]);
 });
 
+/* --------------------------------------------------- 3: one name, one value */
+
+test("a stored value found inside a longer leaf never takes over another credential's name", () => {
+  // storage calls A "token"; the request's own token field holds B, and A rides inside other leaves
+  const bodies = [
+    { q: "kittens", token: B, ctx: `v1:${A}`, again: `v2:${A}` },
+    { q: "kittens", token: B, next: `/search?q=kittens&t=${A}` },
+  ];
+  for (const body of bodies) {
+    const { operation: op, sessionValues } = learn([post(JSON.stringify(body))], [{ q: "kittens" }], {
+      storage: { token: A },
+    });
+    assert.ok(!JSON.stringify(op).includes(A) && !JSON.stringify(op).includes(B));
+    assert.deepEqual(Object.values(sessionValues).sort(), [B, A], "each value is stored once, under its own name");
+    const r = buildRequest(op, { q: "kittens" }, { cookies: [], values: sessionValues });
+    assert.deepEqual(JSON.parse(r.body!), body);
+  }
+});
+
 /* -------------------------------------------------- 4: cached query hashes */
 
 test("a persisted-query hash the app caches in storage stays a volatile anchor at any length", () => {
