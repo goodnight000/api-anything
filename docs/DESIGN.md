@@ -363,8 +363,9 @@ independent alternative.
     requests with ids
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--write]`
   - `call <site> <op> [k=v ...] [--allow-writes]`
-  - `inspect <captureId> [requestId]` reads a saved capture with no browser: a response at a path, or
-    the items an `--html`/`--embedded` recipe would return; JSON inside strings (batchexecute
+  - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
+    flags (`--extract`, `--pick`, `--html`, `--embedded`): what the recipe would return, or a failure
+    when a path or selector finds nothing (an empty list at a path is a result); JSON inside strings (batchexecute
     payloads, a form's `f.req`) is shown decoded, in the response and the request body. Every `add` saves its trigger runs as
     captures, so `add --from <id>` re-learns (a fixed `--extract`) without Chrome. Captures hold
     full responses and the run's cookie values (one page can be tens of MB), so each new one prunes

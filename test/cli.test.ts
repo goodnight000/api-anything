@@ -113,6 +113,75 @@ describe("flags and command names", () => {
   });
 });
 
+describe("inspect", () => {
+  // A capture as `capture` saves one: the fixture's list page, a user's JSON, and a user with no posts.
+  before(async () => {
+    const answer = (id: number, resourceType: string, contentType: string, body: string) => ({
+      id,
+      resourceType,
+      request: { method: "GET", url: `${fx.url}/`, headers: {} },
+      response: { status: 200, headers: {}, contentType, body },
+    });
+    const user = (name: string, posts: string[]) =>
+      JSON.stringify({ data: { user: { name, followers: 500, posts: posts.map((text) => ({ text })) } } });
+    mkdirSync(join(HOME, "captures"), { recursive: true });
+    writeFileSync(
+      join(HOME, "captures", "csaved.json"),
+      JSON.stringify({
+        id: "csaved",
+        at: new Date().toISOString(),
+        url: `${fx.url}/`,
+        finalUrl: `${fx.url}/`,
+        cookies: [],
+        exchanges: [
+          answer(1, "document", "text/html; charset=utf-8", await (await fetch(`${fx.url}/list`)).text()),
+          answer(2, "fetch", "application/json", user("alice", ["hello from alice"])),
+          answer(3, "fetch", "application/json", user("dora", [])),
+        ],
+      }),
+    );
+  });
+  const inspect = async (request: number, ...flags: string[]) => {
+    const r = await cli("inspect", "csaved", String(request), ...flags);
+    return { ...r, out: JSON.parse(r.stdout) };
+  };
+
+  test("it takes add's recipe flags: --extract (or --path) and --pick, after --html too", async () => {
+    assert.deepEqual((await inspect(2, "--extract", "data.user", "--pick", "name")).out.data, { name: "alice" });
+    assert.equal((await inspect(2, "--path", "data.user.posts[0].text")).out.data, "hello from alice");
+    const recipe = '{"items":"li.user","fields":{"name":"a.name","followers":"span.followers"}}';
+    assert.deepEqual((await inspect(1, "--html", recipe, "--pick", "name")).out.data, [
+      { name: "alice" },
+      { name: "bob" },
+      { name: "carol" },
+    ]);
+  });
+
+  test("a path or selector that finds nothing fails and says so; an empty list at a path is a result", async () => {
+    const next = /^next: api-anything inspect csaved \d --outline/m;
+    const path = await inspect(2, "--path", "data.wrong");
+    assert.equal(path.code, 1);
+    assert.deepEqual(path.out, { ok: false, error: 'nothing at "data.wrong" in request 2\'s response' });
+    assert.match(path.stderr, next);
+
+    const selector = await inspect(1, "--html", '{"items":"li.nope","fields":{"name":"a"}}');
+    assert.equal(selector.code, 1);
+    assert.match(selector.out.error, /^the --html items selector "li\.nope" matched nothing in request 1/);
+    assert.match(selector.stderr, next);
+
+    const regex = await inspect(1, "--embedded", "window\\.state = (\\{)");
+    assert.equal(regex.code, 1);
+    assert.match(regex.out.error, /^the --embedded regex found no JSON in request 1/);
+
+    // the page is not JSON: a path into it finds nothing, rather than printing the page
+    assert.equal((await inspect(1, "--extract", "data.user")).code, 1);
+
+    const empty = await inspect(3, "--extract", "data.user.posts");
+    assert.equal(empty.code, 0, empty.stdout);
+    assert.deepEqual(empty.out.data, []);
+  });
+});
+
 describe("capture's next hint", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
   const next = async (path: string, ...flags: string[]) =>
     JSON.parse((await cli("capture", `${fx.url}${path}`, ...flags)).stdout).next as string;

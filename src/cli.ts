@@ -6,7 +6,7 @@ import { z } from "zod";
 import { chromeAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
 import { botWall, judge } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
-import { capOutput, extract, innerJson, returnedFields, splitPick } from "./extract.js";
+import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
 import {
   addOperation,
   type CaptureFile,
@@ -67,9 +67,11 @@ const HELP: Record<string, string> = {
   --outline    for the top 3 candidates, summarize the response instead of making you inspect it: where the
                example values are, a suggested --extract and --pick fields with samples, JSON the page
                embeds (a ready --embedded regex), and a repeated HTML list as a ready --html recipe`,
-  inspect: `api-anything inspect <captureId> [<requestId>] [--path <p>] [--html <json>] [--embedded <regex>] [--outline --example k=v]
+  inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline --example k=v]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
-  response: JSON at --path, or items from an --html / --embedded recipe (try selectors before add).
+  response through add's recipe flags, so a recipe is tried here first: --extract (also spelled --path),
+  --pick, --html, --embedded. A path, selector or regex that finds nothing fails (exit 1); an empty
+  list at a path is a result.
   --outline summarizes the response (as capture --outline does) instead of printing it.`,
   add: `api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
   Runs the trigger twice in Chrome (with --example, then --example2 or --example again), picks the request
@@ -439,21 +441,34 @@ function cmdInspect({ v, pos }: Parsed): number {
     return 0;
   }
   const html = json(v.html, HtmlRecipeSchema, "html");
+  const path = v.extract ?? v.path;
   const body = e.response?.body ?? "";
-  const response = {
-    format: html ? "html" : v.embedded ? "embedded" : "json",
-    ...(html ? { html } : {}),
-    ...(v.embedded ? { embedded: { regex: v.embedded } } : {}),
-  } as const;
-  let data: unknown;
-  try {
-    data =
-      html || v.embedded || !/html/i.test(e.response?.contentType ?? "")
-        ? unlayer(extract({ ...response, extract: v.path }, body))
-        : body;
-  } catch {
-    data = body; // not JSON: show the text
+  // A recipe that finds nothing says so: no data field, or [] from a selector, reads as "no results".
+  const nothing = (what: string) =>
+    new Fail(
+      `${what} in request ${e.id}'s response`,
+      `api-anything inspect ${id} ${e.id} --outline --example k=v suggests a recipe; with no recipe flag it prints the whole response`,
+    );
+  let data: unknown = body;
+  if (html) {
+    data = extract({ format: "html", html }, body);
+    if (!(data as unknown[]).length) throw nothing(`the --html items selector "${html.items}" matched nothing`);
+  } else if (v.embedded) {
+    data = extract({ format: "embedded", embedded: { regex: v.embedded } }, body);
+    if (data === undefined) throw nothing("the --embedded regex found no JSON");
+  } else if (!/html/i.test(e.response?.contentType ?? "")) {
+    try {
+      data = extract({ format: "json" }, body);
+    } catch {
+      // not JSON: show the text
+    }
   }
+  if (path) {
+    data = getPath(data, path);
+    // an empty list at the path is a result; a path that is not there is not
+    if (data === undefined) throw nothing(`nothing at "${path}"`);
+  }
+  if (v.pick) data = pick(data, splitPick(v.pick));
   const sent = e.request.body;
   const form =
     sent !== undefined &&
@@ -469,7 +484,7 @@ function cmdInspect({ v, pos }: Parsed): number {
       ...(shownBody !== undefined ? { body: capOutput(shownBody, 4000).data } : {}),
     },
     ...(e.response ? { status: e.response.status, type: e.response.contentType } : { aborted: !!e.aborted }),
-    ...capOutput(data),
+    ...capOutput(unlayer(data)),
   });
   return 0;
 }
@@ -690,7 +705,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   login: { run: cmdLogin, flags: ["profile", "window", "cookies"] },
   logout: { run: cmdLogout, flags: [] },
   capture: { run: cmdCapture, flags: ["steps", "soft-from", "example", "write", "limit", "outline"] },
-  inspect: { run: cmdInspect, flags: ["path", "html", "embedded", "outline", "example"] },
+  inspect: { run: cmdInspect, flags: ["path", "extract", "pick", "html", "embedded", "outline", "example"] },
   add: {
     run: cmdAdd,
     flags: [
