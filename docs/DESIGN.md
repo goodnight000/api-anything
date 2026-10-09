@@ -375,7 +375,8 @@ the browser profile) stops at once and marks nothing stale.
 | 3 | run the trigger in the browser, capture the matched response | op `minTier: 3`, or after a heal fails for reads |
 
 One redirect policy, for tiers 1 and 2 (`nextHop`), at most 5 hops: 303, and 301/302 after a POST,
-make a bodiless GET; 307/308 keep method and body. On an origin change the credential headers are
+make a bodiless GET, without the headers that described the body (Content-Type, -Language,
+-Encoding, -Location, -Length), as a browser's own redirect does; 307/308 keep method and body. On an origin change the credential headers are
 dropped: authorization, cookie, and every header a `cookie:`/`session:` ref fills, at any depth
 (a ref inside a header's JSON too). A hop to another origin is not taken when it would re-send a
 body in which any ref slot lives, which is decided from the slots and not by searching the bytes

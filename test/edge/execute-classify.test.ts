@@ -836,6 +836,22 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
       assert.equal(r.ok, false, JSON.stringify(r));
       assert.match(r.reason ?? "", /not following the HTTP 302 redirect/);
     });
+
+    test(`tier ${tier}: a POST redirected to a GET loses every body header with its body`, async () => {
+      for (const s of [301, 302, 303]) {
+        site(`strict${tier}s${s}`, {
+          ...rd("q", `/hop-strict?s=${s}`, { minTier: tier }),
+          request: {
+            method: "POST",
+            url: `${fx.base}/hop-strict?s=${s}`,
+            headers: { "content-type": "text/plain", "content-language": "en", "content-location": "/x" },
+            body: "q",
+          },
+        });
+        const r = await call(`strict${tier}s${s}`, "q", {}, o);
+        assert.equal(r.ok, true, `HTTP ${s}: ${JSON.stringify(r)}`);
+      }
+    });
   }
 
   test("tier 2 refuses a redirect it cannot tell from another's: the origin page sent the same request at the same time", async () => {

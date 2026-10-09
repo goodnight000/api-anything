@@ -179,6 +179,15 @@ async function pace(site: string, minIntervalMs: number): Promise<void> {
 }
 
 export const REDIRECT = new Set([301, 302, 303, 307, 308]);
+// What describes a body, and goes with it when a redirect makes the request a GET: the Fetch
+// standard's request-body header names, and the length.
+const BODY_HEADERS = new Set([
+  "content-encoding",
+  "content-language",
+  "content-length",
+  "content-location",
+  "content-type",
+]);
 
 /** A redirect the policy does not take: nothing was sent to its target. */
 export class RedirectRefused extends Error {}
@@ -207,7 +216,7 @@ export function nextHop(op: Operation, session: Session, from: Request, status: 
   }));
   const secret = new Set(["authorization", "cookie"]);
   for (const h of held) if (h.layer === "header") secret.add(h.s.at[0]!.slice(7).toLowerCase());
-  const drop = (name: string) => (toGet && name === "content-type") || (cross && secret.has(name));
+  const drop = (name: string) => (toGet && BODY_HEADERS.has(name)) || (cross && secret.has(name));
   const headers = Object.fromEntries(Object.entries(from.headers).filter(([k]) => !drop(k.toLowerCase())));
   const body = toGet ? undefined : from.body;
   if (cross) {
