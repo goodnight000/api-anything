@@ -125,6 +125,8 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
             `<button id="script" onclick="const s=document.createElement('script');s.src='/api/vote?how=script';document.body.appendChild(s)">jsonp</button>` +
             `<button id="iframe" onclick="const f=document.createElement('iframe');f.src='/api/vote?how=iframe';document.body.appendChild(f)">frame</button>` +
             `<button id="post" onclick="fetch('/api/vote?how=post',{method:'POST',body:'up'})">post</button>` +
+            // a client that sends a failed request again (axios-retry, Apollo's RetryLink), here with no backoff
+            `<button id="retry" onclick="const go=()=>fetch('/api/vote?how=retry').catch(go);go()">retry</button>` +
             dataFetch(name),
         );
       case "/api/vote":

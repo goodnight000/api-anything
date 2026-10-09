@@ -850,7 +850,10 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
   });
 
   test("tier 2 honours timeoutMs", async () => {
-    site("t2slow", rd("n", "/never", { minTier: 2 }));
+    site("t2slow", rd("n", "/never", { minTier: 2 }), rd("up", "/plain", { minTier: 2 }));
+    // timeoutMs bounds the wait for the site's answer, not Chrome's first start in this process
+    // (many seconds on a busy machine): have the browser up on the origin before the clock starts.
+    assert.equal((await call("t2slow", "up", {}, { maxTier: 2, minIntervalMs: 0 })).ok, true);
     const t0 = Date.now();
     const r = await Promise.race([
       call("t2slow", "n", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 1000 }),

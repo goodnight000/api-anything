@@ -618,9 +618,11 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     ctx.off("requestfinished", onDone);
     ctx.off("requestfailed", onDone);
     ctx.off("response", onResponse);
+    // Close the pages before lifting the guards: an open page still sends (a client's retry; Chrome
+    // reloads an aborted navigation's error page after a second), and unrouting releases what is paused.
+    for (const p of own) await p.close().catch(() => {});
     if (guard) await ctx.unroute("**/*", guard).catch(() => {});
     dropSocketSends?.();
-    for (const p of own) await p.close().catch(() => {});
     release();
   }
 }
