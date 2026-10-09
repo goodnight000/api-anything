@@ -145,6 +145,21 @@ caveats.
 
 [Details](docs/REFERENCE.md#replay-fallback-and-repair) · [design](docs/DESIGN.md)
 
+## Sessions and logins
+
+For a site that needs an account, `api-anything login <site>` copies that site's cookies from
+the browser you are already signed in to, so there is no password to type. A saved operation
+holds references to cookies and tokens, never their values, so a refreshed session works without
+re-learning anything.
+
+Sessions keep themselves current. Cookies a site rotates are saved after each call. When a call
+comes back unauthorized, API Anything re-imports from the same browser profile, then tries its
+own Chrome profile, then (for reads) reloads the page so the site issues fresh tokens. You run
+`login` again only when the session is really gone: a forced re-login, 2FA, or a revoked session.
+
+Automatic import works on macOS and Linux. On Windows, `login` opens a Chrome window to sign in.
+[Details](docs/REFERENCE.md#logging-in)
+
 ## Limits
 
 - It is a local tool, not a hosted API. It uses your machine, your network and your sessions.

@@ -19,10 +19,11 @@ sites, so a missing Chrome isn't a reason to stop.
 The package isn't on npm yet, so build it from a temporary clone. Run this as one command:
 
 ```sh
-dir="$(mktemp -d)" && git clone -q --depth 1 https://github.com/goodnight000/api-anything.git "$dir" && (cd "$dir" && npm ci --no-audit --no-fund && npm install -g "$(npm pack --silent)"); rm -rf "$dir"
+dir="$(mktemp -d)" && git clone -q --depth 1 https://github.com/goodnight000/api-anything.git "$dir" && (cd "$dir" && npm ci --no-audit --no-fund && npm install -g "$(npm pack --silent)"); status=$?; rm -rf "$dir"; (exit $status)
 ```
 
-Don't use `npm install -g github:goodnight000/api-anything`, because it fails under npm 11. If
+A non-zero exit status means the clone, the build or the install failed: stop and show the user
+the output. Don't use `npm install -g github:goodnight000/api-anything`, because it fails under npm 11. If
 the global install fails with a permission error (EACCES), don't use sudo. Tell the user and stop.
 
 ## 3. Check that it works
