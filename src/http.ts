@@ -1,4 +1,5 @@
 /** Tier 1: fill the stored template and send it with Node fetch. */
+import * as zlib from "node:zlib";
 import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
 import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
 import type { Operation, Param, Request } from "./spec.js";
@@ -230,7 +231,8 @@ export async function send(
         url = next.href;
         continue;
       }
-      const text = decodeBody(new Uint8Array(await res.arrayBuffer()), res.headers.get("content-type") ?? "");
+      const raw = unzstd(new Uint8Array(await res.arrayBuffer()), res.headers.get("content-encoding"));
+      const text = decodeBody(raw, res.headers.get("content-type") ?? "");
       return {
         status: res.status,
         headers: Object.fromEntries(res.headers),
@@ -251,6 +253,16 @@ export async function send(
       );
     throw e;
   }
+}
+
+/**
+ * Node 22's fetch hands back a zstd body still compressed (24 and later decode it). Decode it here
+ * when that happened; zlib has zstd from 22.15, before that the body stays as it came.
+ */
+function unzstd(buf: Uint8Array, encoding: string | null): Uint8Array {
+  const compressed = buf[0] === 0x28 && buf[1] === 0xb5 && buf[2] === 0x2f && buf[3] === 0xfd;
+  if (!compressed || !/\bzstd\b/i.test(encoding ?? "")) return buf;
+  return zlib.zstdDecompressSync?.(buf) ?? buf;
 }
 
 /** Decode with the declared charset (header, else an HTML <meta>), else UTF-8. A BOM is dropped. */

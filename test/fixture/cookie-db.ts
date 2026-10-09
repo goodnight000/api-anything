@@ -32,7 +32,9 @@ export function makeChromiumDb(
   o: { password: string; iterations?: number; metaVersion?: number },
 ): void {
   const metaVersion = o.metaVersion ?? 24;
-  const key = pbkdf2Sync(o.password, "saltysalt", o.iterations ?? 1003, 16, "sha1");
+  // the platform default src/import.ts derives with, so each OS tests its own path
+  const iterations = o.iterations ?? (process.platform === "linux" ? 1 : 1003);
+  const key = pbkdf2Sync(o.password, "saltysalt", iterations, 16, "sha1");
   mkdirSync(join(profileDir, "Network"), { recursive: true });
   const db = new DatabaseSync(join(profileDir, "Network", "Cookies"));
   db.exec("DROP TABLE IF EXISTS meta; DROP TABLE IF EXISTS cookies");
