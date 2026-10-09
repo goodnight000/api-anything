@@ -115,12 +115,14 @@ function pickEntry(p: string): { name: string; path: string; re?: RegExp } {
 }
 
 /**
- * The keys an item of the result carries, when the recipe names them: the pick's, else an HTML
- * recipe's fields. Discovery sends these, so a description never has to repeat (and misstate) them.
+ * The keys an item of the result can carry, when the recipe names them: the pick's, else the fields
+ * of an HTML recipe whose items come back as they are (no extract path reshaping them). Discovery
+ * sends these, so a description never has to repeat (and misstate) them. A key the site leaves out
+ * of an item is absent from it.
  */
-export function returnedFields(r: Pick<ResponseSpec, "pick" | "html">): string[] | undefined {
+export function returnedFields(r: Pick<ResponseSpec, "format" | "pick" | "html" | "extract">): string[] | undefined {
   if (r.pick?.length) return r.pick.map((p) => pickEntry(p).name);
-  return r.html ? Object.keys(r.html.fields) : undefined;
+  return r.format === "html" && r.html && !r.extract ? Object.keys(r.html.fields) : undefined;
 }
 
 /**

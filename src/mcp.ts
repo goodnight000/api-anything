@@ -112,7 +112,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     "list_operations",
     {
       description:
-        "List a site's operations with their params and the keys each result item carries (returns), and the site's notes (caveats, arg formats). Call this before call_operation.",
+        "List a site's operations with their params and the keys a result item can carry (returns; one the site leaves out is absent), and the site's notes (caveats, arg formats). Call this before call_operation.",
       inputSchema: { site: z.string().describe("site name from list_sites") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

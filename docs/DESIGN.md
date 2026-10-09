@@ -377,8 +377,9 @@ independent alternative.
     Deterministic and site-agnostic; the agent reads it instead of inspecting bodies. Paths through
     id-like keys (Apollo's `Book:kca://...`) are flagged, since they don't generalize.
   - `verify [site]` (health-checks every read op with its example, healing as needed)
-  - `sites`, `ops <site>` (params with their description and format, `returns`: the keys a result item
-    carries, read from the op's `pick` or HTML fields so it cannot disagree with them, and the site's notes: `<site>.md` beside its
+  - `sites`, `ops <site>` (params with their description and format, `returns` where the recipe names them: the keys a result item
+    can carry, read from the op's `pick`, else from an HTML recipe's fields when no `extract` reshapes its
+    items, so it cannot disagree with the recipe; a key the site leaves out is absent, and the site's notes: `<site>.md` beside its
     spec, the user's copy first, up to its `## Maintainer notes` heading; the rest of the file is
     for people working on the spec), `heal <site> <op>`, `export <site>`, `mcp`
   - All output is JSON-first, compact, and ends with a `next` hint on failure.

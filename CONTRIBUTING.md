@@ -33,7 +33,8 @@ bundled spec is a starting point that each user's machine keeps healing.
    Everything from a `## Maintainer notes` heading to the end of the file is not sent: put what you
    verified, how the request works and what failed there. That heading line ends the notes wherever
    it appears, a code block included. Don't list result keys: `ops` and `list_operations` send them
-   as `returns`, read from the op's `pick`. Say only what a key means when its name doesn't.
+   as `returns`, read from the op's `pick` (or an HTML recipe's fields when it has no `pick` and no
+   `extract`). Say only what a key means when its name doesn't, and when a key can be missing.
 6. In the PR description, say what you verified, on what date, and whether you were logged in.
 
 Rules for bundled specs:
