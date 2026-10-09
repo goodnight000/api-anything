@@ -54,9 +54,13 @@ verbatim, plus these fields:
 
 ```sh
 npm install
-npm run check   # typecheck
+npm run format  # Biome: format and apply safe lint fixes
+npm run lint    # what CI runs: formatting and lint, no changes
+npm run check   # typecheck src and test
 npm test        # unit + offline e2e (the Chrome parts skip when Chrome is missing)
 ```
+
+CI runs `lint`, `check` and `test` on every pull request.
 
 Tests never touch real websites. `test/fixture/server.ts` imitates the patterns that matter:
 rotating GraphQL ids, layered form encoding, login walls, rate limits, signatures, and HTML
