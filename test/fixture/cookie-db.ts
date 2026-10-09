@@ -18,11 +18,19 @@ export interface CookieRow {
 function encrypt(value: string, key: Buffer, metaVersion: number, hostKey: string): Buffer {
   const cipher = createCipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
   const prefix = metaVersion >= 24 ? createHash("sha256").update(hostKey).digest() : Buffer.alloc(0);
-  return Buffer.concat([Buffer.from("v10"), cipher.update(Buffer.concat([prefix, Buffer.from(value, "utf8")])), cipher.final()]);
+  return Buffer.concat([
+    Buffer.from("v10"),
+    cipher.update(Buffer.concat([prefix, Buffer.from(value, "utf8")])),
+    cipher.final(),
+  ]);
 }
 
 /** Write <profileDir>/Network/Cookies as modern Chrome does, with v10-encrypted values. */
-export function makeChromiumDb(profileDir: string, rows: CookieRow[], o: { password: string; iterations?: number; metaVersion?: number }): void {
+export function makeChromiumDb(
+  profileDir: string,
+  rows: CookieRow[],
+  o: { password: string; iterations?: number; metaVersion?: number },
+): void {
   const metaVersion = o.metaVersion ?? 24;
   const key = pbkdf2Sync(o.password, "saltysalt", o.iterations ?? 1003, 16, "sha1");
   mkdirSync(join(profileDir, "Network"), { recursive: true });
@@ -36,7 +44,17 @@ export function makeChromiumDb(profileDir: string, rows: CookieRow[], o: { passw
   const stmt = db.prepare("INSERT INTO cookies VALUES(?,?,?,?,?,?,?,?,?)");
   for (const r of rows) {
     // expires_utc can exceed JS safe-integer range; bind it as BigInt so it stores exactly.
-    stmt.run(r.host_key, r.name, "", encrypt(r.value, key, metaVersion, r.host_key), r.path ?? "/", BigInt(r.expires_utc ?? 0), r.secure ? 1 : 0, r.httpOnly ? 1 : 0, r.samesite ?? -1);
+    stmt.run(
+      r.host_key,
+      r.name,
+      "",
+      encrypt(r.value, key, metaVersion, r.host_key),
+      r.path ?? "/",
+      BigInt(r.expires_utc ?? 0),
+      r.secure ? 1 : 0,
+      r.httpOnly ? 1 : 0,
+      r.samesite ?? -1,
+    );
   }
   db.close();
 }
@@ -45,8 +63,20 @@ export function makeChromiumDb(profileDir: string, rows: CookieRow[], o: { passw
 export function makeFirefoxDb(profileDir: string, rows: CookieRow[]): void {
   mkdirSync(profileDir, { recursive: true });
   const db = new DatabaseSync(join(profileDir, "cookies.sqlite"));
-  db.exec("CREATE TABLE moz_cookies(host TEXT, name TEXT, value TEXT, path TEXT, expiry INTEGER, isSecure INTEGER, isHttpOnly INTEGER, sameSite INTEGER)");
+  db.exec(
+    "CREATE TABLE moz_cookies(host TEXT, name TEXT, value TEXT, path TEXT, expiry INTEGER, isSecure INTEGER, isHttpOnly INTEGER, sameSite INTEGER)",
+  );
   const stmt = db.prepare("INSERT INTO moz_cookies VALUES(?,?,?,?,?,?,?,?)");
-  for (const r of rows) stmt.run(r.host_key, r.name, r.value, r.path ?? "/", r.expires_utc ?? 0, r.secure ? 1 : 0, r.httpOnly ? 1 : 0, r.samesite ?? 0);
+  for (const r of rows)
+    stmt.run(
+      r.host_key,
+      r.name,
+      r.value,
+      r.path ?? "/",
+      r.expires_utc ?? 0,
+      r.secure ? 1 : 0,
+      r.httpOnly ? 1 : 0,
+      r.samesite ?? 0,
+    );
   db.close();
 }

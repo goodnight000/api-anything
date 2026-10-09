@@ -83,13 +83,17 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
     }
     vals[p.name] = coerce(p, v);
     if (p.pattern !== undefined && !new RegExp(`^(?:${p.pattern})$`).test(asText(vals[p.name]))) {
-      throw new Error(`param "${p.name}" must be ${p.hint ?? `a value matching /${p.pattern}/`}, got ${JSON.stringify(v)}`);
+      throw new Error(
+        `param "${p.name}" must be ${p.hint ?? `a value matching /${p.pattern}/`}, got ${JSON.stringify(v)}`,
+      );
     }
   }
 
   let req: Request = { ...op.request, method: op.request.method.toUpperCase(), headers: { ...op.request.headers } };
   let leafTypes: Map<string, string> | undefined;
-  const stringLeaf = (at: string[]) => (leafTypes ??= new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]))).get(JSON.stringify(at)) === "string";
+  const stringLeaf = (at: string[]) =>
+    (leafTypes ??= new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]))).get(JSON.stringify(at)) ===
+    "string";
   delete req.headers.cookie;
   for (const slot of op.slots) {
     const name = slot.param ?? slot.ref!;
@@ -104,9 +108,16 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
     if (slot.template !== undefined) {
       // A Referer/Origin is a URL: specs learned before `escape` existed still get the arg percent-encoded.
       const escape = slot.escape ?? (slot.param && /^header:(referer|origin)$/i.test(slot.at[0]!) ? "url" : undefined);
-      const refs = Object.fromEntries(templateRefs(slot.template).map((r) => [r, resolveRef(r, session, op.request.url) ?? ""]));
+      const refs = Object.fromEntries(
+        templateRefs(slot.template).map((r) => [r, resolveRef(r, session, op.request.url) ?? ""]),
+      );
       v = fillSlotTemplate(slot.template, { ...refs, ...vals, [name]: v }, escape);
-    } else if (typeof v !== "string" && typeof v !== "object" && slot.at.at(-1)!.startsWith("json:") && stringLeaf(slot.at)) {
+    } else if (
+      typeof v !== "string" &&
+      typeof v !== "object" &&
+      slot.at.at(-1)!.startsWith("json:") &&
+      stringLeaf(slot.at)
+    ) {
       // the same number can sit in a JSON string ("id":"12345") and a JSON number (ids:[12345]); each leaf keeps its type
       v = asText(v);
     }
@@ -114,13 +125,12 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
   }
 
   // Header values must be bytes: a value that is not ASCII goes percent-encoded, as a browser sends a URL.
-  for (const [k, h] of Object.entries(req.headers)) if (/[^\x00-\x7f]/.test(h)) req.headers[k] = h.replace(/[^\x00-\x7f]+/g, encodeURIComponent);
+  for (const [k, h] of Object.entries(req.headers))
+    if (/[^\x00-\x7f]/.test(h)) req.headers[k] = h.replace(/[^\x00-\x7f]+/g, encodeURIComponent);
   const cookie = cookieHeaderFor(session.cookies, req.url);
   if (cookie) req.headers.cookie = cookie;
   return req;
 }
-
-
 
 const lastSend = new Map<string, number>();
 
@@ -139,18 +149,33 @@ const REDIRECT = new Set([301, 302, 303, 307, 308]);
  * credential headers (every ref'd header, authorization, cookie) are dropped, since undici only
  * strips authorization and cookie and would hand a CSRF header to the other origin.
  */
-export async function send(op: Operation, args: Record<string, unknown>, session: Session, opts: SendOptions): Promise<Sent> {
+export async function send(
+  op: Operation,
+  args: Record<string, unknown>,
+  session: Session,
+  opts: SendOptions,
+): Promise<Sent> {
   const req = buildRequest(op, args, session);
   await pace(opts.site, opts.minIntervalMs ?? 1000);
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const signal = AbortSignal.timeout(timeoutMs);
   const inHeader = (s: Operation["slots"][number]) => s.at.length === 1 && s.at[0]!.startsWith("header:");
-  const holdsRef = (s: Operation["slots"][number]) => !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0);
-  const secret = new Set(["authorization", "cookie", ...op.slots.flatMap((s) => (holdsRef(s) && inHeader(s) ? [s.at[0]!.slice(7).toLowerCase()] : []))]);
+  const holdsRef = (s: Operation["slots"][number]) =>
+    !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0);
+  const secret = new Set([
+    "authorization",
+    "cookie",
+    ...op.slots.flatMap((s) => (holdsRef(s) && inHeader(s) ? [s.at[0]!.slice(7).toLowerCase()] : [])),
+  ]);
   // session/cookie values the body or query carry: no other origin may receive them
   const carried = op.slots.flatMap((s) => {
     if (inHeader(s)) return [];
-    const refs = s.template !== undefined ? [...new Set([...(s.ref ? [s.ref] : []), ...templateRefs(s.template)])] : s.ref ? [s.ref] : [];
+    const refs =
+      s.template !== undefined
+        ? [...new Set([...(s.ref ? [s.ref] : []), ...templateRefs(s.template)])]
+        : s.ref
+          ? [s.ref]
+          : [];
     return refs.flatMap((r) => {
       const v = resolveRef(r, session, op.request.url);
       return v && v.length >= 4 ? [s.ref === r ? transform(v, s.transform) : v] : [];
@@ -172,7 +197,12 @@ export async function send(op: Operation, args: Record<string, unknown>, session
         const c = parseSetCookie(line, url);
         if (!c) continue;
         setCookies.push(c);
-        jar = [...jar.filter((x) => !(x.name === c.name && x.domain.toLowerCase() === c.domain.toLowerCase() && x.path === c.path)), c];
+        jar = [
+          ...jar.filter(
+            (x) => !(x.name === c.name && x.domain.toLowerCase() === c.domain.toLowerCase() && x.path === c.path),
+          ),
+          c,
+        ];
       }
       const location = res.headers.get("location");
       redirected ??= REDIRECT.has(res.status) && !!location;
@@ -180,7 +210,9 @@ export async function send(op: Operation, args: Record<string, unknown>, session
         await res.body?.cancel();
         const next = new URL(location, url);
         const cross = next.origin !== new URL(url).origin;
-        headers = Object.fromEntries(Object.entries(headers).filter(([k]) => k !== "cookie" && !(cross && secret.has(k.toLowerCase()))));
+        headers = Object.fromEntries(
+          Object.entries(headers).filter(([k]) => k !== "cookie" && !(cross && secret.has(k.toLowerCase()))),
+        );
         const cookie = cookieHeaderFor(jar, next.href);
         if (cookie) headers.cookie = cookie;
         if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === "POST")) {
@@ -190,7 +222,9 @@ export async function send(op: Operation, args: Record<string, unknown>, session
         }
         // A 307/308 resends the body; a location may copy the query. Neither may carry a credential elsewhere.
         if (cross && leaks(next.href, body)) {
-          throw new Error(`not following the HTTP ${res.status} redirect to ${next.origin}: the request would carry this session's values to another origin`);
+          throw new Error(
+            `not following the HTTP ${res.status} redirect to ${next.origin}: the request would carry this session's values to another origin`,
+          );
         }
         url = next.href;
         continue;
@@ -210,7 +244,10 @@ export async function send(op: Operation, args: Record<string, unknown>, session
     if ((e as Error).name === "TimeoutError") throw new Error(`${op.name}: no response within ${timeoutMs} ms`);
     // "fetch failed" alone can't tell a refused connection from DNS or TLS: name the cause
     const cause = (e as { cause?: { code?: string; message?: string } }).cause;
-    if (cause && (e as Error).message === "fetch failed") throw new Error(`fetch failed: ${cause.code ?? cause.message}${cause.code && cause.message ? ` (${cause.message})` : ""}`);
+    if (cause && (e as Error).message === "fetch failed")
+      throw new Error(
+        `fetch failed: ${cause.code ?? cause.message}${cause.code && cause.message ? ` (${cause.message})` : ""}`,
+      );
     throw e;
   }
 }
@@ -218,7 +255,8 @@ export async function send(op: Operation, args: Record<string, unknown>, session
 /** Decode with the declared charset (header, else an HTML <meta>), else UTF-8. A BOM is dropped. */
 export function decodeBody(buf: Uint8Array, contentType: string): string {
   let charset = /charset=["']?([\w.:-]+)/i.exec(contentType)?.[1];
-  if (!charset && /html/i.test(contentType)) charset = /<meta[^>]+charset=["']?([\w.:-]+)/i.exec(new TextDecoder("latin1").decode(buf.subarray(0, 2048)))?.[1];
+  if (!charset && /html/i.test(contentType))
+    charset = /<meta[^>]+charset=["']?([\w.:-]+)/i.exec(new TextDecoder("latin1").decode(buf.subarray(0, 2048)))?.[1];
   try {
     return new TextDecoder(charset ?? "utf-8").decode(buf);
   } catch {

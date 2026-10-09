@@ -14,13 +14,22 @@ export const DATES = ["2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23", "2
 export async function snapshot(dates = DATES) {
   const out = [];
   for (const date of dates) {
-    const lists = await Promise.all(["top", "search"].map((op) => call("google-flights", op, { origin: "SFO", destination: "JFK", date })));
+    const lists = await Promise.all(
+      ["top", "search"].map((op) => call("google-flights", op, { origin: "SFO", destination: "JFK", date })),
+    );
     const ok = lists.every((l) => l.ok);
     const nonstop = ok ? lists.flatMap((l) => l.data).filter((f) => !f.via?.length) : [];
     const price = nonstop.length ? Math.min(...nonstop.map((f) => f.price)) : null;
-    out.push({ at: new Date().toISOString(), date, ok, price, airlines: [...new Set(nonstop.filter((f) => f.price === price).flatMap((f) => f.airline))] });
+    out.push({
+      at: new Date().toISOString(),
+      date,
+      ok,
+      price,
+      airlines: [...new Set(nonstop.filter((f) => f.price === price).flatMap((f) => f.airline))],
+    });
   }
   return out;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) for (const s of await snapshot()) console.log(JSON.stringify(s));
+if (process.argv[1] === fileURLToPath(import.meta.url))
+  for (const s of await snapshot()) console.log(JSON.stringify(s));

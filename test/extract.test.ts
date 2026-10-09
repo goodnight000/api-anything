@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ResponseSchema } from "../src/spec.ts";
-import { capOutput, extract, extractEmbedded, extractHtml, getPath, inferShape, parseBody, pick, splitPick } from "../src/extract.ts";
+import {
+  capOutput,
+  extract,
+  extractEmbedded,
+  extractHtml,
+  getPath,
+  inferShape,
+  parseBody,
+  pick,
+  splitPick,
+} from "../src/extract.ts";
 
 test("parseBody strips XSSI and keeps big integers exact", () => {
   assert.deepEqual(parseBody(')]}\'\n{"id":2085462611575857621,"n":3}'), { id: "2085462611575857621", n: 3 });
@@ -26,19 +36,38 @@ test("getPath: dots, brackets, index-only paths, dashed keys, quoted keys", () =
 test("getPath [*]: results split across sections (an ad section first) are all collected", () => {
   // YouTube with a visitor cookie: section 0 holds an ad, a shelf and one video, then an ad slot, then the main list
   const v = (id: string) => ({ videoRenderer: { videoId: id } });
-  const page = { contents: [{ itemSectionRenderer: { contents: [{ searchPyvRenderer: {} }, { shelfRenderer: {} }, v("a")] } }, { adSlotRenderer: {} }, { itemSectionRenderer: { contents: [v("b"), v("c")] } }] };
+  const page = {
+    contents: [
+      { itemSectionRenderer: { contents: [{ searchPyvRenderer: {} }, { shelfRenderer: {} }, v("a")] } },
+      { adSlotRenderer: {} },
+      { itemSectionRenderer: { contents: [v("b"), v("c")] } },
+    ],
+  };
   const path = "contents[*].itemSectionRenderer.contents";
   assert.equal((getPath(page, path) as unknown[]).length, 5);
-  assert.deepEqual(extract({ format: "json", extract: path, pick: ["id=videoRenderer.videoId"] }, JSON.stringify(page)), [{ id: "a" }, { id: "b" }, { id: "c" }]);
+  assert.deepEqual(
+    extract({ format: "json", extract: path, pick: ["id=videoRenderer.videoId"] }, JSON.stringify(page)),
+    [{ id: "a" }, { id: "b" }, { id: "c" }],
+  );
   assert.deepEqual(getPath({ contents: [] }, path), [], "no sections: no results");
-  assert.equal(getPath({ contents: [{ adSlotRenderer: {} }] }, path), undefined, "sections, none with the path: moved, not empty");
+  assert.equal(
+    getPath({ contents: [{ adSlotRenderer: {} }] }, path),
+    undefined,
+    "sections, none with the path: moved, not empty",
+  );
   assert.equal(getPath({ contents: {} }, path), undefined);
   assert.deepEqual(getPath({ a: [{ b: 1 }, { c: 2 }, { b: 3 }] }, "a[*].b"), [1, 3]);
 });
 
 test("pick projects per item and per object", () => {
-  const items = [{ id: 1, user: { name: "a", bio: "long" }, x: 1 }, { id: 2, user: { name: "b" } }];
-  assert.deepEqual(pick(items, ["id", "user.name"]), [{ id: 1, "user.name": "a" }, { id: 2, "user.name": "b" }]);
+  const items = [
+    { id: 1, user: { name: "a", bio: "long" }, x: 1 },
+    { id: 2, user: { name: "b" } },
+  ];
+  assert.deepEqual(pick(items, ["id", "user.name"]), [
+    { id: 1, "user.name": "a" },
+    { id: 2, "user.name": "b" },
+  ]);
   assert.deepEqual(pick({ id: 1, y: 2 }, ["id", "nope"]), { id: 1 });
 });
 
@@ -47,7 +76,10 @@ test("html recipe via selectors, text and @attr", () => {
     <tr class="athing" id="1"><td><span class="titleline"><a href="https://a.example">First  story</a></span></td></tr>
     <tr class="athing" id="2"><td><span class="titleline"><a href="item?id=2">Second &amp; more</a></span></td></tr>
   </table>`;
-  const rows = extractHtml(html, { items: "tr.athing", fields: { id: "@id", title: ".titleline > a", url: ".titleline > a@href", none: ".nope" } });
+  const rows = extractHtml(html, {
+    items: "tr.athing",
+    fields: { id: "@id", title: ".titleline > a", url: ".titleline > a@href", none: ".nope" },
+  });
   assert.deepEqual(rows, [
     { id: "1", title: "First story", url: "https://a.example", none: undefined },
     { id: "2", title: "Second & more", url: "item?id=2", none: undefined },
@@ -66,7 +98,9 @@ test("embedded regex: group 1 marks the JSON start, the scanner finds its end", 
 
 test("extract: json + extract + pick; html without recipe returns the raw body", () => {
   const body = ')]}\'{"data":{"items":[{"id":1,"t":"a","junk":1}]}}';
-  assert.deepEqual(extract({ format: "json", xssiPrefix: ")]}'", extract: "data.items", pick: ["id", "t"] }, body), [{ id: 1, t: "a" }]);
+  assert.deepEqual(extract({ format: "json", xssiPrefix: ")]}'", extract: "data.items", pick: ["id", "t"] }, body), [
+    { id: 1, t: "a" },
+  ]);
   assert.equal(extract({ format: "json", extract: "data.nope" }, body), undefined);
   assert.equal(extract({ format: "html" }, "<p>x</p>"), "<p>x</p>");
 });
@@ -97,7 +131,18 @@ test("inferShape records key paths and types, first array item only", () => {
 });
 
 test("getPath steps into JSON-encoded strings (batchexecute payloads)", () => {
-  const body = [["wrb.fr", "search", JSON.stringify([[["a", 1], ["b", 2]]])]];
+  const body = [
+    [
+      "wrb.fr",
+      "search",
+      JSON.stringify([
+        [
+          ["a", 1],
+          ["b", 2],
+        ],
+      ]),
+    ],
+  ];
   assert.deepEqual(getPath(body, "[0][2][0][1]"), ["b", 2]);
   assert.equal(getPath(body, "[0][1][0]"), undefined, "a plain string is not indexed");
 });
@@ -109,15 +154,23 @@ test("parseBody: Meta's for (;;); prefix, repeated before each chunk, gives an a
 });
 
 test("pick: name=path renames the output key", () => {
-  assert.deepEqual(pick([{ node: { code: "A", caption: { text: "hi" } } }], ["code=node.code", "caption=node.caption.text", "node.code"]), [
-    { code: "A", caption: "hi", "node.code": "A" },
-  ]);
+  assert.deepEqual(
+    pick(
+      [{ node: { code: "A", caption: { text: "hi" } } }],
+      ["code=node.code", "caption=node.caption.text", "node.code"],
+    ),
+    [{ code: "A", caption: "hi", "node.code": "A" }],
+  );
   assert.deepEqual(pick({ "[1][0][1]": 1 }, []), {});
   assert.deepEqual(pick([[["UA"], [0, 209]]], ["price=[1][1]"]), [{ price: 209 }]);
 });
 
 test("pick name=path~regex keeps group 1 (or the whole match) of a string; no match drops the field", () => {
-  const items = [{ u: "https://www.linkedin.com/in/satyanadella?miniProfileUrn=x" }, { u: "https://www.linkedin.com/company/openai/" }, { u: 7 }];
+  const items = [
+    { u: "https://www.linkedin.com/in/satyanadella?miniProfileUrn=x" },
+    { u: "https://www.linkedin.com/company/openai/" },
+    { u: 7 },
+  ];
   assert.deepEqual(pick(items, ["id=u~/in/([^/?]+)", "co=u~/company/([^/?]+)", "host=u~linkedin\\.com"]), [
     { id: "satyanadella", host: "linkedin.com" },
     { co: "openai", host: "linkedin.com" },
@@ -128,13 +181,20 @@ test("pick name=path~regex keeps group 1 (or the whole match) of a string; no ma
 
 test("--pick splits on commas, but not inside a regex's [], {} or (), nor an escaped \\,", () => {
   assert.deepEqual(splitPick("bookId,title,author=author.name"), ["bookId", "title", "author=author.name"]);
-  assert.deepEqual(splitPick("count=rating~—\\s([0-9,]+),year=x~(\\d{4})"), ["count=rating~—\\s([0-9,]+)", "year=x~(\\d{4})"]);
+  assert.deepEqual(splitPick("count=rating~—\\s([0-9,]+),year=x~(\\d{4})"), [
+    "count=rating~—\\s([0-9,]+)",
+    "year=x~(\\d{4})",
+  ]);
   assert.deepEqual(splitPick("a~x\\,y, b"), ["a~x,y", "b"]);
 });
 
 test("an html field with all: returns every match as a list, [] when there is none", () => {
   const body = `<main><h1>Circe</h1><ul class="genres"><li><a>Fantasy</a></li><li><a>Mythology</a></li><li><a>Fiction</a></li></ul><a class="tag" href="/t/1">x</a><a class="tag" href="/t/2">y</a></main>`;
-  assert.deepEqual(extractHtml(body, { items: "main", fields: { title: "h1", genres: "all:ul.genres a", tags: "all:a.tag@href", none: "all:.missing" } }), [
-    { title: "Circe", genres: ["Fantasy", "Mythology", "Fiction"], tags: ["/t/1", "/t/2"], none: [] },
-  ]);
+  assert.deepEqual(
+    extractHtml(body, {
+      items: "main",
+      fields: { title: "h1", genres: "all:ul.genres a", tags: "all:a.tag@href", none: "all:.missing" },
+    }),
+    [{ title: "Circe", genres: ["Fantasy", "Mythology", "Fiction"], tags: ["/t/1", "/t/2"], none: [] }],
+  );
 });

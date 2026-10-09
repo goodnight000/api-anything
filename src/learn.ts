@@ -2,10 +2,33 @@
  * Captured exchanges + example args -> an Operation (DESIGN.md "Learning", steps 1-8).
  * Only example-arg values become params; everything else is kept verbatim.
  */
-import { asText, escapeTemplate, escapeValue, fillSlotTemplate, fillTemplate, getAt, setAt, templateRefs, walk, type Escape, type Leaf, type Step } from "./codec.js";
+import {
+  asText,
+  escapeTemplate,
+  escapeValue,
+  fillSlotTemplate,
+  fillTemplate,
+  getAt,
+  setAt,
+  templateRefs,
+  walk,
+  type Escape,
+  type Leaf,
+  type Step,
+} from "./codec.js";
 import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
 import { loggedIn, parseCookieHeader } from "./session.js";
-import { OperationSchema, type Match, type Operation, type Param, type Request, type ResponseSpec, type Slot, type Trigger, type Volatile } from "./spec.js";
+import {
+  OperationSchema,
+  type Match,
+  type Operation,
+  type Param,
+  type Request,
+  type ResponseSpec,
+  type Slot,
+  type Trigger,
+  type Volatile,
+} from "./spec.js";
 import type { CaptureResult, Exchange, StoredCookie } from "./types.js";
 
 export type Args = Record<string, unknown>;
@@ -47,9 +70,21 @@ export interface Learned {
 export const ASSET_EXT =
   /\.(js|mjs|cjs|jsx|ts|css|scss|png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|wasm|map|pdf|zip)$/i;
 const DENY_RESOURCE = new Set([
-  "image", "font", "stylesheet", "script", "media", "manifest", "texttrack", "websocket", "eventsource", "preflight", "ping", "cspviolationreport",
+  "image",
+  "font",
+  "stylesheet",
+  "script",
+  "media",
+  "manifest",
+  "texttrack",
+  "websocket",
+  "eventsource",
+  "preflight",
+  "ping",
+  "cspviolationreport",
 ]);
-const DENY_MIME = /^(image|font|video|audio)\/|^text\/(css|javascript)|^application\/(javascript|x-javascript|font|octet-stream|wasm)/i;
+const DENY_MIME =
+  /^(image|font|video|audio)\/|^text\/(css|javascript)|^application\/(javascript|x-javascript|font|octet-stream|wasm)/i;
 const ANALYTICS =
   /google-analytics\.com|googletagmanager\.com|doubleclick\.net|sentry\.io|\/sentry\/|segment\.(io|com)|mixpanel\.com|amplitude\.com|hotjar\.com|facebook\.com\/tr|clarity\.ms|nr-data\.net|datadoghq|\/(collect|beacon|log_event|telemetry|jot|csp-report|client_event|tracking|logging)(\/|\?|$)/i;
 // Pages and APIs can end in .js (github.com/vercel/next.js, /repos/chart.js): the extension only means an asset for subresources.
@@ -64,7 +99,8 @@ function isNoise(e: Exchange): boolean {
   } catch {
     return true;
   }
-  if ((!DATA_RESOURCE.has(e.resourceType) && ASSET_EXT.test(url.pathname)) || ANALYTICS.test(e.request.url)) return true;
+  if ((!DATA_RESOURCE.has(e.resourceType) && ASSET_EXT.test(url.pathname)) || ANALYTICS.test(e.request.url))
+    return true;
   if (e.aborted) return false;
   if (!e.response) return true;
   if (e.response.status >= 300 && e.response.status < 400) return true;
@@ -166,7 +202,10 @@ function isAck(e: Exchange): boolean {
   const body = (r.body ?? "").trim();
   if (body.length > 100) return false;
   const flags = (v: unknown): boolean =>
-    v === null || typeof v === "boolean" || (typeof v === "string" && /^\w{0,8}$/.test(v)) || (typeof v === "object" && Object.values(v).every(flags));
+    v === null ||
+    typeof v === "boolean" ||
+    (typeof v === "string" && /^\w{0,8}$/.test(v)) ||
+    (typeof v === "object" && Object.values(v).every(flags));
   const data = tryParse(body);
   return flags(data === undefined ? body : data);
 }
@@ -196,7 +235,11 @@ function tryParse(body: string | undefined): unknown {
  * `pages`: the capture's page URLs (default: its documents and Referers); a value found only in an
  * echo of them is no hit. A data-less answer (a beacon's ack) ranks below every real answer.
  */
-export function rankCandidates(exchanges: Exchange[], args: Args = {}, o: { all?: boolean; pages?: string[] } = {}): Candidate[] {
+export function rankCandidates(
+  exchanges: Exchange[],
+  args: Args = {},
+  o: { all?: boolean; pages?: string[] } = {},
+): Candidate[] {
   const values = exampleValues(args).filter(([, v]) => v.length >= 3);
   const locs = locations(o.pages ?? pageUrls(exchanges));
   return exchanges
@@ -257,7 +300,14 @@ const GQL_NAME = /(?:^|\})\s*(?:query|mutation|subscription)\s+([A-Za-z_]\w*)/;
  * friendly-name header; else the name in the query text (`query SearchProducts(...)`).
  */
 export function operationNameOf(req: Request): string | undefined {
-  const fields = [["body", "json:/operationName"], ["body", "json:/0/operationName"], ["form:fb_api_req_friendly_name"], ["form:operationName"], ["query:operationName"], ["header:x-fb-friendly-name"]];
+  const fields = [
+    ["body", "json:/operationName"],
+    ["body", "json:/0/operationName"],
+    ["form:fb_api_req_friendly_name"],
+    ["form:operationName"],
+    ["query:operationName"],
+    ["header:x-fb-friendly-name"],
+  ];
   for (const at of fields) {
     const v = tryGet(req, at);
     if (typeof v === "string" && v) return v;
@@ -271,7 +321,8 @@ export function operationNameOf(req: Request): string | undefined {
 }
 
 /** camelCase/PascalCase/snake/kebab words ("UserByScreenName") are names, not hashes. */
-const wordy = (s: string) => !/\d/.test(s) && s.split(/[_-]|(?=[A-Z])/).every((w) => w === "" || /^[A-Z]?[a-z]+$/.test(w));
+const wordy = (s: string) =>
+  !/\d/.test(s) && s.split(/[_-]|(?=[A-Z])/).every((w) => w === "" || /^[A-Z]?[a-z]+$/.test(w));
 /** Long random-looking token: a queryId/hash, never a word. A digit is not required (~2% of base64url ids lack one). */
 export const hashLike = (s: string) => s.length >= 16 && /^[A-Za-z0-9_-]+$/.test(s) && /[A-Za-z]/.test(s) && !wordy(s);
 
@@ -308,7 +359,8 @@ function buildMatch(req: Request, paramSegments: Set<number>): Match {
 // Conditional headers (a revalidating browser's If-None-Match) would turn every replay into a 304.
 // The body is stored decoded, so its content-encoding goes too.
 const DROP_HEADER = /^(:.*|host|content-length|connection|cookie|accept-encoding|content-encoding|if-[a-z-]+)$/i;
-const SESSION_HEADER = /^(authorization|x-[a-z0-9-]*token|x-csrf[a-z0-9-]*|x-xsrf[a-z0-9-]*|x-goog-batchexecute-bgr|x-client-transaction-id|x-fb-lsd|x-ig-www-claim)$/i;
+const SESSION_HEADER =
+  /^(authorization|x-[a-z0-9-]*token|x-csrf[a-z0-9-]*|x-xsrf[a-z0-9-]*|x-goog-batchexecute-bgr|x-client-transaction-id|x-fb-lsd|x-ig-www-claim)$/i;
 // Per-session credentials sent in forms, queries or JSON bodies: Google's `at`, Meta's fb_dtsg/lsd,
 // Rails', ASP.NET's anti-CSRF fields, and OAuth-style access tokens.
 const SESSION_FIELD =
@@ -335,9 +387,13 @@ export function checkExamples(args: Args, label: string): void {
   const seen = new Map<string, string>();
   for (const [name, v] of Object.entries(args)) {
     const s = asText(v).toLowerCase();
-    if (s.length < 3) throw new Error(`${label} ${name}=${JSON.stringify(v)}: example values need at least 3 characters to be located`);
+    if (s.length < 3)
+      throw new Error(`${label} ${name}=${JSON.stringify(v)}: example values need at least 3 characters to be located`);
     const other = seen.get(s);
-    if (other) throw new Error(`${label}: ${other} and ${name} share the value ${JSON.stringify(v)}; example values must be distinct`);
+    if (other)
+      throw new Error(
+        `${label}: ${other} and ${name} share the value ${JSON.stringify(v)}; example values must be distinct`,
+      );
     seen.set(s, name);
   }
 }
@@ -348,7 +404,13 @@ function headersOf(e: Exchange): Record<string, string> {
   return out;
 }
 
-function pickExchange(input: LearnInput, exchanges: Exchange[], args: Args, pages: string[], warnings: string[]): Exchange {
+function pickExchange(
+  input: LearnInput,
+  exchanges: Exchange[],
+  args: Args,
+  pages: string[],
+  warnings: string[],
+): Exchange {
   if (input.id !== undefined) {
     const e = exchanges.find((x) => x.id === input.id);
     if (!e) throw new Error(`no captured request with id ${input.id}`);
@@ -369,7 +431,9 @@ function pickExchange(input: LearnInput, exchanges: Exchange[], args: Args, page
   if (accepted) return byId(accepted.id);
   const [top, next] = ranked;
   if (next && next.score === top!.score) {
-    warnings.push(`ambiguous: requests #${top!.id} and #${next.id} rank equally; learned #${top!.id}, pass id or match to choose`);
+    warnings.push(
+      `ambiguous: requests #${top!.id} and #${next.id} rank equally; learned #${top!.id}, pass id or match to choose`,
+    );
   }
   return byId(top!.id);
 }
@@ -378,7 +442,9 @@ function pickExchange(input: LearnInput, exchanges: Exchange[], args: Args, page
 function jsonPointers(root: unknown, want: string, ptr = ""): string[] {
   if (JSON.stringify(root) === want) return [ptr];
   if (!root || typeof root !== "object") return [];
-  return Object.entries(root).flatMap(([k, c]) => jsonPointers(c, want, `${ptr}/${k.replace(/~/g, "~0").replace(/\//g, "~1")}`));
+  return Object.entries(root).flatMap(([k, c]) =>
+    jsonPointers(c, want, `${ptr}/${k.replace(/~/g, "~0").replace(/\//g, "~1")}`),
+  );
 }
 
 interface Hit {
@@ -409,7 +475,12 @@ function escapeOf(leaf: Leaf, hits: Hit[]): Escape | undefined {
  * of the page's location follow the args but are not evidence: a value found only there changes
  * nothing the server reads.
  */
-function paramSlots(leaves: Leaf[], args: Args, locs: Locations, warnings: string[]): { slots: Slot[]; types: Map<string, Param["type"]> } {
+function paramSlots(
+  leaves: Leaf[],
+  args: Args,
+  locs: Locations,
+  warnings: string[],
+): { slots: Slot[]; types: Map<string, Param["type"]> } {
   const slots: Slot[] = [];
   const types = new Map<string, Param["type"]>();
   const found = new Map<string, { exact: Leaf[]; part: Hit[] }>();
@@ -417,7 +488,9 @@ function paramSlots(leaves: Leaf[], args: Args, locs: Locations, warnings: strin
     if (raw !== null && typeof raw === "object") {
       // an array/object example binds to the JSON container equal to it
       const want = JSON.stringify(raw);
-      const at = leaves.filter((l) => l.container).flatMap((l) => jsonPointers(JSON.parse(l.value), want).map((p) => [...l.at, `json:${p}`]));
+      const at = leaves
+        .filter((l) => l.container)
+        .flatMap((l) => jsonPointers(JSON.parse(l.value), want).map((p) => [...l.at, `json:${p}`]));
       if (!at.length) throw notFound(name, raw);
       for (const a of at) slots.push({ param: name, at: a });
       types.set(name, Array.isArray(raw) ? "array" : "object");
@@ -429,7 +502,8 @@ function paramSlots(leaves: Leaf[], args: Args, locs: Locations, warnings: strin
     const enc = encodeURIComponent(asText(raw)).toLowerCase();
     const forms = [...new Set([enc, enc.replace(/%20/g, "+")])].filter((f) => f !== v);
     // digits inside a longer number (a timestamp, a cache-buster) are not the arg
-    const inside = (text: string, t: string) => (digits ? new RegExp(`(?<!\\d)${t}(?!\\d)`).test(text) : text.includes(t));
+    const inside = (text: string, t: string) =>
+      digits ? new RegExp(`(?<!\\d)${t}(?!\\d)`).test(text) : text.includes(t);
     let exact: Leaf[] = [];
     const part: Hit[] = [];
     for (const leaf of leaves) {
@@ -443,7 +517,10 @@ function paramSlots(leaves: Leaf[], args: Args, locs: Locations, warnings: strin
       if (leaf.container || leaf.type !== "string" || literal) continue;
       if (header && !URL_HEADER.has(leaf.at[0]!) && !header.startsWith("x-")) continue;
       // a short example ("SFO") turns up by chance inside a random token: there it must stand alone
-      const within = v.length <= 4 && highEntropy(leaf.value) ? (t: string, x: string) => new RegExp(`(?<![a-z0-9])${escapeRe(x)}(?![a-z0-9])`).test(t) : inside;
+      const within =
+        v.length <= 4 && highEntropy(leaf.value)
+          ? (t: string, x: string) => new RegExp(`(?<![a-z0-9])${escapeRe(x)}(?![a-z0-9])`).test(t)
+          : inside;
       if (within(text, v)) part.push({ leaf, text: v, encoded: false });
       else {
         const f = forms.find((x) => within(text, x));
@@ -468,22 +545,33 @@ function paramSlots(leaves: Leaf[], args: Args, locs: Locations, warnings: strin
   for (const [name, f] of found) {
     const part = f.part.filter((h) => !exactKeys.has(key(h.leaf.at)));
     const v = asText(args[name]).toLowerCase();
-    const places = [...f.exact, ...part.map((h) => h.leaf)].filter((l) => !NOT_EVIDENCE.has(l.at[0]!) && !echoes(l.value, v, locs)).map((l) => l.at.join(" > "));
+    const places = [...f.exact, ...part.map((h) => h.leaf)]
+      .filter((l) => !NOT_EVIDENCE.has(l.at[0]!) && !echoes(l.value, v, locs))
+      .map((l) => l.at.join(" > "));
     if (!places.length) throw notFound(name, args[name]);
-    if (places.length > 1) warnings.push(`"${name}" appears in ${places.length} places, all will be filled: ${places.join("; ")}`);
+    if (places.length > 1)
+      warnings.push(`"${name}" appears in ${places.length} places, all will be filled: ${places.join("; ")}`);
     for (const leaf of f.exact) {
       slots.push({ param: name, at: leaf.at });
       if (leaf.type === "number") types.set(name, "number");
       if (leaf.type === "boolean") types.set(name, "boolean");
     }
-    for (const h of part) partial.set(key(h.leaf.at), [...(partial.get(key(h.leaf.at)) ?? []), { ...h, text: `${name}\0${h.text}` }]);
+    for (const h of part)
+      partial.set(key(h.leaf.at), [...(partial.get(key(h.leaf.at)) ?? []), { ...h, text: `${name}\0${h.text}` }]);
   }
   for (const hits of partial.values()) {
     const leaf = hits[0]!.leaf;
-    const byText = new Map(hits.map((h) => [h.text.slice(h.text.indexOf("\0") + 1), h.text.slice(0, h.text.indexOf("\0"))]));
+    const byText = new Map(
+      hits.map((h) => [h.text.slice(h.text.indexOf("\0") + 1), h.text.slice(0, h.text.indexOf("\0"))]),
+    );
     // one alternation, longest first, so "nasa" never splits "nasagov"
-    const alts = [...byText.keys()].sort((a, b) => b.length - a.length).map((t) => (/^\d+$/.test(t) ? `(?<!\\d)${t}(?!\\d)` : escapeRe(escapeTemplate(t))));
-    const template = escapeTemplate(leaf.value).replace(new RegExp(alts.join("|"), "gi"), (m) => `{${byText.get(m.toLowerCase())}}`);
+    const alts = [...byText.keys()]
+      .sort((a, b) => b.length - a.length)
+      .map((t) => (/^\d+$/.test(t) ? `(?<!\\d)${t}(?!\\d)` : escapeRe(escapeTemplate(t))));
+    const template = escapeTemplate(leaf.value).replace(
+      new RegExp(alts.join("|"), "gi"),
+      (m) => `{${byText.get(m.toLowerCase())}}`,
+    );
     const plain = hits.map((h) => ({ ...h, text: h.text.slice(h.text.indexOf("\0") + 1) }));
     const escape = escapeOf(leaf, plain);
     slots.push({ param: byText.values().next().value!, at: leaf.at, template, ...(escape ? { escape } : {}) });
@@ -500,7 +588,8 @@ const notFound = (name: string, raw: unknown) =>
 /* ------------------------------------------------------------ credentials */
 
 // Words that name a credential in a key or header: api_key, authToken, x-session-id, sid, X-Amz-Signature.
-const CREDENTIAL_WORD = /^(?:auth(?!or)[a-z0-9]*|[a-z0-9]*(?:token|secret|key|signature|password|passwd|pwd|credential|bearer)s?|sess(?:ion)?[a-z0-9]*|sid)$/;
+const CREDENTIAL_WORD =
+  /^(?:auth(?!or)[a-z0-9]*|[a-z0-9]*(?:token|secret|key|signature|password|passwd|pwd|credential|bearer)s?|sess(?:ion)?[a-z0-9]*|sid)$/;
 
 /** A key or header named like a credential, judged by its words (authToken -> auth, token; "author" is not). */
 export function credentialName(name: string): boolean {
@@ -524,7 +613,10 @@ export function highEntropy(v: string): boolean {
 
 /** A literal a spec must not hold: a per-session field or header, or a random value under a credential's name. */
 export function isCredential(name: string, value: string): boolean {
-  return ((SESSION_FIELD.test(name) || SESSION_HEADER.test(name)) && value.length >= 8) || (credentialName(name) && highEntropy(value));
+  return (
+    ((SESSION_FIELD.test(name) || SESSION_HEADER.test(name)) && value.length >= 8) ||
+    (credentialName(name) && highEntropy(value))
+  );
 }
 
 /**
@@ -551,10 +643,17 @@ interface Live {
  * page's localStorage/sessionStorage, including string leaves of a JSON entry (auth SDKs keep
  * tokens that way). A cookie is a `cookie:` ref; a storage value a `session:` ref.
  */
-function liveValues(cookies: StoredCookie[], cookieHeader: string | undefined, storage: Record<string, string> = {}): Map<string, Live> {
+function liveValues(
+  cookies: StoredCookie[],
+  cookieHeader: string | undefined,
+  storage: Record<string, string> = {},
+): Map<string, Live> {
   const out = new Map<string, Live>();
   const put = (v: string, live: Live) => v.length >= 8 && !out.has(v) && out.set(v, live);
-  for (const [name, value] of [...cookies.map((c) => [c.name, c.value] as const), ...Object.entries(parseCookieHeader(cookieHeader ?? ""))]) {
+  for (const [name, value] of [
+    ...cookies.map((c) => [c.name, c.value] as const),
+    ...Object.entries(parseCookieHeader(cookieHeader ?? "")),
+  ]) {
     let decoded = value;
     try {
       decoded = decodeURIComponent(value);
@@ -577,7 +676,13 @@ function liveValues(cookies: StoredCookie[], cookieHeader: string | undefined, s
 }
 
 function shapeOf(s: string): Volatile["shape"] {
-  const charset = /^\d+$/.test(s) ? "digits" : /^[0-9a-f]+$/i.test(s) ? "hex" : /^[A-Za-z0-9_-]+$/.test(s) ? "base64url" : "base64";
+  const charset = /^\d+$/.test(s)
+    ? "digits"
+    : /^[0-9a-f]+$/i.test(s)
+      ? "hex"
+      : /^[A-Za-z0-9_-]+$/.test(s)
+        ? "base64url"
+        : "base64";
   return { charset, length: s.length };
 }
 
@@ -596,7 +701,11 @@ function volatileAnchors(req: Request, leaves: Leaf[], taken: Set<string>, opNam
       if (anchor) out.push({ at: leaf.at, shape: shapeOf(leaf.value), anchor });
       if (anchor) anchorOf.set(leaf.value, anchor);
     } else if (VOLATILE_KEY.test(lastToken(leaf.at)) && (hashLike(leaf.value) || /^\d{8,}$/.test(leaf.value))) {
-      out.push({ at: leaf.at, shape: shapeOf(leaf.value), anchor: opName ?? anchorOf.get(leaf.value) ?? lastToken(leaf.at) });
+      out.push({
+        at: leaf.at,
+        shape: shapeOf(leaf.value),
+        anchor: opName ?? anchorOf.get(leaf.value) ?? lastToken(leaf.at),
+      });
     }
   }
   return out;
@@ -618,9 +727,13 @@ export function suggestExtract(root: unknown, values: string[]): string | undefi
     if (depth > 8 || !v || typeof v !== "object") continue;
     const children: [string, unknown][] = Array.isArray(v)
       ? v.slice(0, 50).map((c, i) => [`${path}[${i}]`, c])
-      : Object.entries(v).map(([k, c]) => [/^[\w$-]+$/.test(k) ? (path ? `${path}.${k}` : k) : `${path}[${JSON.stringify(k)}]`, c]);
+      : Object.entries(v).map(([k, c]) => [
+          /^[\w$-]+$/.test(k) ? (path ? `${path}.${k}` : k) : `${path}[${JSON.stringify(k)}]`,
+          c,
+        ]);
     // a top-level list of results is itself the answer: "" (the whole response) beats any item in it
-    if (Array.isArray(v) && !path && v.length > 1 && v.some((x) => x !== null && typeof x === "object") && carries(v)) return "";
+    if (Array.isArray(v) && !path && v.length > 1 && v.some((x) => x !== null && typeof x === "object") && carries(v))
+      return "";
     if (Array.isArray(v) && path) {
       if (!anyArray || v.length > anyArray.len) anyArray = { path, len: v.length };
       const rank = v.length + (v.some((x) => x !== null && typeof x === "object") ? 1e6 : 0);
@@ -630,7 +743,8 @@ export function suggestExtract(root: unknown, values: string[]): string | undefi
       const inner = typeof c === "string" ? innerJson(c) : undefined;
       if (inner && typeof inner === "object") queue.push({ v: inner, path: p, depth: depth + 1 });
       else if (c && typeof c === "object") queue.push({ v: c, path: p, depth: depth + 1 });
-      else if (path && c != null && values.includes(String(c).toLowerCase()) && (!holder || depth > holder.depth)) holder = { path, depth };
+      else if (path && c != null && values.includes(String(c).toLowerCase()) && (!holder || depth > holder.depth))
+        holder = { path, depth };
     }
   }
   return bestArray?.path ?? holder?.path ?? anyArray?.path;
@@ -654,7 +768,7 @@ function learnResponse(e: Exchange, values: string[], warnings: string[]): Respo
   }
   warnings.push(
     /html/i.test(r.contentType)
-      ? "response is HTML: add --html '{\"items\":\"<css>\",\"fields\":{...}}' for a list, or --embedded '<regex>' for JSON inside the page"
+      ? 'response is HTML: add --html \'{"items":"<css>","fields":{...}}\' for a list, or --embedded \'<regex>\' for JSON inside the page'
       : `response is ${r.contentType || "untyped"} text, returned raw`,
   );
   return { format: "html", contentType: r.contentType };
@@ -680,30 +794,48 @@ function diffRuns(req1: Request, req2: Request, slots: Slot[], args2: Args, warn
       continue;
     }
     if (slot?.param) {
-      const want = slot.template !== undefined ? fillSlotTemplate(slot.template, args2, slot.escape) : asText(args2[slot.param]);
+      const want =
+        slot.template !== undefined ? fillSlotTemplate(slot.template, args2, slot.escape) : asText(args2[slot.param]);
       // a credential hole matches whatever run 2's session held
-      const same = new RegExp(`^${want.split(/\{(?:cookie|session):[^{}]+\}/).map(escapeRe).join(".*?")}$`, "is");
+      const same = new RegExp(
+        `^${want
+          .split(/\{(?:cookie|session):[^{}]+\}/)
+          .map(escapeRe)
+          .join(".*?")}$`,
+        "is",
+      );
       if (same.test(other.value)) continue;
       // The text around the arg changed too: a signature inside the leaf (a signed URL in a param).
       // a credential hole is run-specific too: a wildcard like the args
       const holes = slot.template !== undefined ? [...Object.keys(args2), ...templateRefs(slot.template)] : [];
-      const literals = slot.template !== undefined ? fillSlotTemplate(slot.template, Object.fromEntries(holes.map((k) => [k, "\0"]))).split("\0") : [];
-      if (literals.some((l) => l && !other.value.toLowerCase().includes(l.toLowerCase()))) nonces.push(leaf.at.join(" > "));
-      else warnings.push(`run 2 has ${JSON.stringify(other.value)} at ${leaf.at.join(" > ")}, expected ${JSON.stringify(want)}`);
+      const literals =
+        slot.template !== undefined
+          ? fillSlotTemplate(slot.template, Object.fromEntries(holes.map((k) => [k, "\0"]))).split("\0")
+          : [];
+      if (literals.some((l) => l && !other.value.toLowerCase().includes(l.toLowerCase())))
+        nonces.push(leaf.at.join(" > "));
+      else
+        warnings.push(
+          `run 2 has ${JSON.stringify(other.value)} at ${leaf.at.join(" > ")}, expected ${JSON.stringify(want)}`,
+        );
       continue;
     }
     if (other.value === leaf.value) continue;
     const where = leaf.at.join(" > ");
     if (values2.some((v) => other.value.toLowerCase().includes(v))) {
       warnings.push(`${where} follows the args in run 2 but did not match example 1; check its format`);
-    } else if ((/^\d+$/.test(leaf.value) && /^\d+$/.test(other.value)) || Math.max(leaf.value.length, other.value.length) <= 4) {
+    } else if (
+      (/^\d+$/.test(leaf.value) && /^\d+$/.test(other.value)) ||
+      Math.max(leaf.value.length, other.value.length) <= 4
+    ) {
       // ponytail: digits-only or tiny values read as counters/timestamps (_reqid, __req), not signatures; a numeric signature would slip through
       warnings.push(`${where} varies between runs (counter or timestamp?); kept constant`);
     } else {
       nonces.push(where);
     }
   }
-  if (missing.length) warnings.push(`run 2 lacks ${missing.length} position(s) of run 1, e.g. ${missing.slice(0, 3).join("; ")}`);
+  if (missing.length)
+    warnings.push(`run 2 lacks ${missing.length} position(s) of run 1, e.g. ${missing.slice(0, 3).join("; ")}`);
   return nonces;
 }
 
@@ -742,7 +874,12 @@ export function learnOperation(input: LearnInput): Learned {
 
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
-  const { slots, types } = paramSlots(leaves, args1, input.id !== undefined ? { abs: [], rel: [] } : locations(pages), warnings);
+  const { slots, types } = paramSlots(
+    leaves,
+    args1,
+    input.id !== undefined ? { abs: [], rel: [] } : locations(pages),
+    warnings,
+  );
   const taken = new Set(slots.map((s) => key(s.at)));
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
@@ -779,9 +916,11 @@ export function learnOperation(input: LearnInput): Learned {
     return false;
   };
   for (const leaf of leaves) {
-    if (leaf.container || leaf.type !== "string" || leaf.at[0]!.startsWith("header:") || taken.has(key(leaf.at))) continue;
+    if (leaf.container || leaf.type !== "string" || leaf.at[0]!.startsWith("header:") || taken.has(key(leaf.at)))
+      continue;
     const name = lastToken(leaf.at);
-    if ((SESSION_FIELD.test(name) && leaf.value.length >= 8) || secretNamed(name, leaf.value)) addRef(leaf.at, { ref: `session:${name}` }, leaf.value);
+    if ((SESSION_FIELD.test(name) && leaf.value.length >= 8) || secretNamed(name, leaf.value))
+      addRef(leaf.at, { ref: `session:${name}` }, leaf.value);
   }
   const fieldOf = new Map(Object.entries(sessionValues).map(([k, v]) => [v, k]));
   for (const [name, value] of Object.entries(request.headers)) {
@@ -796,7 +935,9 @@ export function learnOperation(input: LearnInput): Learned {
   // config script, a token in the document) is server-issued: a session: ref under any name,
   // refreshed by every trigger run. Static bundles are public (above); hash-like path segments and
   // persisted-query ids are volatile anchors, healed by rescan.
-  const issued = input.exchanges.flatMap((e) => (e.id < ex.id && e.response?.body && !staticBundle(e) ? [e.response.body] : []));
+  const issued = input.exchanges.flatMap((e) =>
+    e.id < ex.id && e.response?.body && !staticBundle(e) ? [e.response.body] : [],
+  );
   for (const leaf of leaves) {
     if (leaf.container || leaf.type !== "string" || taken.has(key(leaf.at)) || !highEntropy(leaf.value)) continue;
     const header = headerName(leaf.at);
@@ -815,7 +956,9 @@ export function learnOperation(input: LearnInput): Learned {
   for (const leaf of leaves) {
     if (leaf.container || leaf.type !== "string") continue;
     // A param's templated leaf can carry one too (next=/search?q={q}&auth=<cookie>): its template gets a ref hole.
-    const own = taken.has(key(leaf.at)) ? slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(leaf.at)) : undefined;
+    const own = taken.has(key(leaf.at))
+      ? slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(leaf.at))
+      : undefined;
     if (own) {
       for (const [v, l] of long) {
         if (l.transform) continue;
@@ -837,8 +980,14 @@ export function learnOperation(input: LearnInput): Learned {
     let template = escapeTemplate(leaf.value);
     let primary: { live: Live; escape: Escape | undefined } | undefined;
     for (const [v, l] of long) {
-      const forms: [string, Escape | undefined][] = [[v, undefined], [encodeURIComponent(v), "url"], [JSON.stringify(v).slice(1, -1), "json"]];
-      const form = forms.find(([f, esc]) => template.includes(escapeTemplate(f)) && (!primary || primary.escape === esc));
+      const forms: [string, Escape | undefined][] = [
+        [v, undefined],
+        [encodeURIComponent(v), "url"],
+        [JSON.stringify(v).slice(1, -1), "json"],
+      ];
+      const form = forms.find(
+        ([f, esc]) => template.includes(escapeTemplate(f)) && (!primary || primary.escape === esc),
+      );
       if (!form) continue;
       template = template.split(escapeTemplate(form[0])).join(`{${l.ref}}`);
       if (l.ref.startsWith("session:") && l.value !== undefined) sessionValues[l.ref.slice(8)] = l.value;
@@ -846,7 +995,11 @@ export function learnOperation(input: LearnInput): Learned {
     }
     if (primary) {
       const { live: l, escape } = primary;
-      addRef(leaf.at, { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}), template, ...(escape ? { escape } : {}) }, l.value);
+      addRef(
+        leaf.at,
+        { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}), template, ...(escape ? { escape } : {}) },
+        l.value,
+      );
     }
   }
   // The spec never holds a credential: blank every ref'd leaf.
@@ -858,7 +1011,9 @@ export function learnOperation(input: LearnInput): Learned {
 
   // match: stable identity, with param and hash-like path segments wildcarded
   const paramSegments = new Set(
-    slots.filter((s) => s.param && s.at.length === 1 && s.at[0]!.startsWith("path:")).map((s) => Number(s.at[0]!.slice(5))),
+    slots
+      .filter((s) => s.param && s.at.length === 1 && s.at[0]!.startsWith("path:"))
+      .map((s) => Number(s.at[0]!.slice(5))),
   );
   const match = input.match ?? buildMatch(request, paramSegments);
 
@@ -874,7 +1029,9 @@ export function learnOperation(input: LearnInput): Learned {
       const nonces = diffRuns(request, { ...ex2.request, headers: headersOf(ex2) }, slots, args2, warnings);
       if (nonces.length) {
         minTier = 3;
-        warnings.push(`changes between runs without an arg change (nonce/signature), so minTier 3: ${nonces.join("; ")}`);
+        warnings.push(
+          `changes between runs without an arg change (nonce/signature), so minTier 3: ${nonces.join("; ")}`,
+        );
       }
     }
   } else {
@@ -882,7 +1039,11 @@ export function learnOperation(input: LearnInput): Learned {
   }
 
   // 8. response
-  const response = learnResponse(ex, Object.values(args1).map((v) => String(v).toLowerCase()), warnings);
+  const response = learnResponse(
+    ex,
+    Object.values(args1).map((v) => String(v).toLowerCase()),
+    warnings,
+  );
 
   const params: Param[] = Object.entries(args1).map(([name, example]) => ({
     name,
@@ -893,10 +1054,13 @@ export function learnOperation(input: LearnInput): Learned {
 
   // Session values are stored per site. Two operations may use different tokens under the same
   // field/header name, so newly learned references include the operation name. Old specs still work.
-  const scope = (ref: string) => ref.startsWith("session:") ? `session:${encodeURIComponent(input.name)}/${ref.slice(8)}` : ref;
+  const scope = (ref: string) =>
+    ref.startsWith("session:") ? `session:${encodeURIComponent(input.name)}/${ref.slice(8)}` : ref;
   for (const slot of slots) {
     if (slot.ref) slot.ref = scope(slot.ref);
-    if (slot.template) for (const ref of templateRefs(slot.template)) slot.template = slot.template.split(`{${ref}}`).join(`{${scope(ref)}}`);
+    if (slot.template)
+      for (const ref of templateRefs(slot.template))
+        slot.template = slot.template.split(`{${ref}}`).join(`{${scope(ref)}}`);
   }
 
   const operation = OperationSchema.parse({
@@ -914,6 +1078,12 @@ export function learnOperation(input: LearnInput): Learned {
     learnedLoggedIn: loggedIn(input.cookies, input.loginCookies),
     learnedAt: new Date().toISOString(),
   });
-  return { operation, exchange: ex, warnings, sessionValues: Object.fromEntries(Object.entries(sessionValues).map(([k, v]) => [`${encodeURIComponent(input.name)}/${k}`, v])) };
+  return {
+    operation,
+    exchange: ex,
+    warnings,
+    sessionValues: Object.fromEntries(
+      Object.entries(sessionValues).map(([k, v]) => [`${encodeURIComponent(input.name)}/${k}`, v]),
+    ),
+  };
 }
-

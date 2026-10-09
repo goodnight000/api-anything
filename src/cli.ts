@@ -27,8 +27,11 @@ function outlineOf(e: Exchange | undefined, values: string[]): { outline?: Outli
 }
 
 /** A multi-line error (a zod report) on one line, so JSON output keeps all of it. */
-const oneLine = (m: string) => m.replace(/\s*\n\s*(✖\s*)?/g, " ").replace(/\s*→\s*/g, " at ").trim();
-
+const oneLine = (m: string) =>
+  m
+    .replace(/\s*\n\s*(✖\s*)?/g, " ")
+    .replace(/\s*→\s*/g, " at ")
+    .trim();
 
 const HELP: Record<string, string> = {
   login: `api-anything login <site|url> [--profile "Chrome/Profile 1"] [--window] [--cookies <file>]
@@ -113,7 +116,11 @@ api-anything <command> --help for details. Data lives in ~/.api-anything (API_AN
 const out = (v: unknown) => process.stdout.write(`${JSON.stringify(v)}\n`);
 
 class Fail extends Error {
-  constructor(message: string, readonly next: string, readonly extra: Record<string, unknown> = {}) {
+  constructor(
+    message: string,
+    readonly next: string,
+    readonly extra: Record<string, unknown> = {},
+  ) {
     super(message);
   }
 }
@@ -139,7 +146,8 @@ function json<T>(text: string | undefined, schema: z.ZodType<T>, flag: string): 
 
 function positive(text: string | undefined, flag: string): number | undefined {
   if (text === undefined) return undefined;
-  if (!/^[1-9]\d*$/.test(text)) throw new Fail(`--${flag} must be a positive integer, got "${text}"`, `api-anything --help`);
+  if (!/^[1-9]\d*$/.test(text))
+    throw new Fail(`--${flag} must be a positive integer, got "${text}"`, `api-anything --help`);
   return Number(text);
 }
 
@@ -168,7 +176,8 @@ function unlayer(v: unknown, layers = 0): unknown {
   return v;
 }
 
-const examplesOf = (op: Operation) => Object.fromEntries(op.params.flatMap((p) => (p.example !== undefined ? [[p.name, p.example]] : [])));
+const examplesOf = (op: Operation) =>
+  Object.fromEntries(op.params.flatMap((p) => (p.example !== undefined ? [[p.name, p.example]] : [])));
 
 async function run(argv: string[]): Promise<number> {
   const { values: v, positionals } = parseArgs({
@@ -225,17 +234,28 @@ async function run(argv: string[]): Promise<number> {
       try {
         t = resolveLoginTarget(target);
       } catch (e) {
-        throw new Fail((e as Error).message, "api-anything sites lists known sites; or pass a domain (linkedin.com) or a full https:// URL");
+        throw new Fail(
+          (e as Error).message,
+          "api-anything sites lists known sites; or pass a domain (linkedin.com) or a full https:// URL",
+        );
       }
       const { site, url, loginCookies } = t;
 
       // The visible-window flow: --window, or the automatic fallback when nothing is importable.
       const runWindow = async (reason?: string) => {
         needChrome();
-        process.stderr.write(`${reason ? reason + " " : ""}Sign in to ${url} in the Chrome window, then close it or press Enter here.\n`);
+        process.stderr.write(
+          `${reason ? reason + " " : ""}Sign in to ${url} in the Chrome window, then close it or press Enter here.\n`,
+        );
         const cookies = await login({ url, profileDir: profileDir() });
         withLock(sessionFile(site), () => saveSession(site, { ...loadSession(site), cookies, source: "window" }));
-        out({ ok: true, site, source: "window", cookies: cookieNames(cookies), loggedIn: loggedIn(cookies, loginCookies) });
+        out({
+          ok: true,
+          site,
+          source: "window",
+          cookies: cookieNames(cookies),
+          loggedIn: loggedIn(cookies, loginCookies),
+        });
         return 0;
       };
 
@@ -246,11 +266,20 @@ async function run(argv: string[]): Promise<number> {
         imported = await importSession(site, url, { loginCookies, profile: v.profile, file: v.cookies });
       } catch (e) {
         if (!(e instanceof AmbiguousProfile)) throw e;
-        throw new Fail(e.message, `ask the user which account to use, then: api-anything login ${site} --profile "<Browser/Profile>" (one of candidates[].profile)`, { candidates: e.candidates });
+        throw new Fail(
+          e.message,
+          `ask the user which account to use, then: api-anything login ${site} --profile "<Browser/Profile>" (one of candidates[].profile)`,
+          { candidates: e.candidates },
+        );
       }
       if (!imported) {
-        if (v.cookies) throw new Fail(`no cookies for ${site} in ${v.cookies}`, "check the export is for the right site");
-        if (v.profile) throw new Fail(`no importable cookies in profile "${v.profile}"`, "run: api-anything login " + site + " (scans every profile), or --window");
+        if (v.cookies)
+          throw new Fail(`no cookies for ${site} in ${v.cookies}`, "check the export is for the right site");
+        if (v.profile)
+          throw new Fail(
+            `no importable cookies in profile "${v.profile}"`,
+            "run: api-anything login " + site + " (scans every profile), or --window",
+          );
         return runWindow("No signed-in session found in your browsers.");
       }
       out({
@@ -293,14 +322,25 @@ async function run(argv: string[]): Promise<number> {
         ...(x.operationName ? { operationName: x.operationName } : {}),
         ...(x.hits.length ? { carries: x.hits } : {}),
         size: x.size,
-        ...(v.outline && i < 3 ? outlineOf(c.exchanges.find((e) => e.id === x.id), values) : {}),
+        ...(v.outline && i < 3
+          ? outlineOf(
+              c.exchanges.find((e) => e.id === x.id),
+              values,
+            )
+          : {}),
       }));
       const top = ranked[0];
       const html = top && /html/i.test(top.contentType ?? "");
       // a bot wall is not fixed by picking another request or writing a recipe
       const doc = c.exchanges.filter((e) => e.resourceType === "document" && e.response).at(-1);
       const topEx = top && c.exchanges.find((e) => e.id === top.id);
-      const wall = [doc, topEx].map((e) => e?.response && botWall({ status: e.response.status, headers: e.response.headers, body: e.response.body ?? "" })).find(Boolean);
+      const wall = [doc, topEx]
+        .map(
+          (e) =>
+            e?.response &&
+            botWall({ status: e.response.status, headers: e.response.headers, body: e.response.body ?? "" }),
+        )
+        .find(Boolean);
       out({
         capture: c.id,
         finalUrl: c.finalUrl,
@@ -310,8 +350,8 @@ async function run(argv: string[]): Promise<number> {
         next: wall
           ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> (clear the challenge in the window), then capture again`
           : html
-          ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
-          : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`,
+            ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
+            : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`,
       });
       return 0;
     }
@@ -329,7 +369,13 @@ async function run(argv: string[]): Promise<number> {
             kind: e.resourceType,
             method: e.request.method,
             url: e.request.url.slice(0, 160),
-            ...(e.response ? { status: e.response.status, type: e.response.contentType.split(";")[0], size: e.response.body?.length ?? 0 } : {}),
+            ...(e.response
+              ? {
+                  status: e.response.status,
+                  type: e.response.contentType.split(";")[0],
+                  size: e.response.body?.length ?? 0,
+                }
+              : {}),
             ...(e.aborted ? { aborted: true } : {}),
           })),
         });
@@ -337,22 +383,45 @@ async function run(argv: string[]): Promise<number> {
       }
       const e = c.exchanges.find((x) => x.id === Number(reqId));
       if (!e) throw new Fail(`no request ${reqId} in capture ${id}`, `api-anything inspect ${id}`);
-      if (v.outline) return out({ id: e.id, request: { method: e.request.method, url: e.request.url }, ...outlineOf(e, Object.values(kv(v.example)).map(String)) }), 0;
+      if (v.outline)
+        return (
+          out({
+            id: e.id,
+            request: { method: e.request.method, url: e.request.url },
+            ...outlineOf(e, Object.values(kv(v.example)).map(String)),
+          }),
+          0
+        );
       const html = json(v.html, z.object({ items: z.string(), fields: z.record(z.string(), z.string()) }), "html");
       const body = e.response?.body ?? "";
-      const response = { format: html ? "html" : v.embedded ? "embedded" : "json", ...(html ? { html } : {}), ...(v.embedded ? { embedded: { regex: v.embedded } } : {}) } as const;
+      const response = {
+        format: html ? "html" : v.embedded ? "embedded" : "json",
+        ...(html ? { html } : {}),
+        ...(v.embedded ? { embedded: { regex: v.embedded } } : {}),
+      } as const;
       let data: unknown;
       try {
-        data = html || v.embedded || !/html/i.test(e.response?.contentType ?? "") ? unlayer(extract({ ...response, extract: v.path }, body)) : body;
+        data =
+          html || v.embedded || !/html/i.test(e.response?.contentType ?? "")
+            ? unlayer(extract({ ...response, extract: v.path }, body))
+            : body;
       } catch {
         data = body; // not JSON: show the text
       }
       const sent = e.request.body;
-      const form = sent !== undefined && /x-www-form-urlencoded/i.test(e.request.headers["content-type"] ?? "") && !/^\s*[[{]/.test(sent);
-      const shownBody = sent === undefined ? undefined : form ? unlayer(Object.fromEntries(new URLSearchParams(sent))) : unlayer(sent);
+      const form =
+        sent !== undefined &&
+        /x-www-form-urlencoded/i.test(e.request.headers["content-type"] ?? "") &&
+        !/^\s*[[{]/.test(sent);
+      const shownBody =
+        sent === undefined ? undefined : form ? unlayer(Object.fromEntries(new URLSearchParams(sent))) : unlayer(sent);
       out({
         id: e.id,
-        request: { method: e.request.method, url: e.request.url, ...(shownBody !== undefined ? { body: capOutput(shownBody, 4000).data } : {}) },
+        request: {
+          method: e.request.method,
+          url: e.request.url,
+          ...(shownBody !== undefined ? { body: capOutput(shownBody, 4000).data } : {}),
+        },
         ...(e.response ? { status: e.response.status, type: e.response.contentType } : { aborted: !!e.aborted }),
         ...capOutput(data),
       });
@@ -365,15 +434,23 @@ async function run(argv: string[]): Promise<number> {
       if (!v.trigger && !v.from) throw new Fail("missing --trigger (or --from <captureId>)", "api-anything add --help");
       const ex1 = kv(v.example);
       const ex2 = v.example2 ? kv(v.example2) : undefined;
-      const matchText = v.match?.length === 1 && v.match[0]!.trim().startsWith("{") ? v.match[0] : v.match ? JSON.stringify(kv(v.match)) : undefined;
+      const matchText =
+        v.match?.length === 1 && v.match[0]!.trim().startsWith("{")
+          ? v.match[0]
+          : v.match
+            ? JSON.stringify(kv(v.match))
+            : undefined;
       const match = json(matchText, MatchSchema, "match");
       const html = json(v.html, z.object({ items: z.string(), fields: z.record(z.string(), z.string()) }), "html");
       if (!v.from) needChrome();
-      if (v.from2 && !ex2) throw new Fail("--from2 needs --example2 (the values that capture was made with)", "api-anything add --help");
+      if (v.from2 && !ex2)
+        throw new Fail("--from2 needs --example2 (the values that capture was made with)", "api-anything add --help");
       const r = await addOperation({
         site,
         op: name,
-        trigger: v.trigger ? { url: v.trigger, ...(steps ? { steps } : {}), ...(v["soft-from"] ? { softFrom: v["soft-from"] } : {}) } : undefined,
+        trigger: v.trigger
+          ? { url: v.trigger, ...(steps ? { steps } : {}), ...(v["soft-from"] ? { softFrom: v["soft-from"] } : {}) }
+          : undefined,
         examples: ex2 ? [ex1, ex2] : [ex1],
         match,
         write: v.write,
@@ -385,7 +462,9 @@ async function run(argv: string[]): Promise<number> {
           ...(v.embedded ? { embedded: { regex: v.embedded } } : {}),
         },
         public: v.public ? v.public.split(",").map((s) => s.trim().toLowerCase()) : undefined,
-        from: v.from ? { capture: loadCapture(v.from), id: v["pick-request"] ? Number(v["pick-request"]) : undefined } : undefined,
+        from: v.from
+          ? { capture: loadCapture(v.from), id: v["pick-request"] ? Number(v["pick-request"]) : undefined }
+          : undefined,
         from2: v.from2 ? loadCapture(v.from2) : undefined,
       });
       const op = r.operation;
@@ -412,7 +491,8 @@ async function run(argv: string[]): Promise<number> {
     case "call": {
       const [site, name, ...rest] = pos;
       if (!site || !name) throw new Fail("missing <site> <op>", "api-anything call --help");
-      if (v["max-tier"] !== undefined && !/^[123]$/.test(v["max-tier"])) throw new Fail(`--max-tier must be 1, 2 or 3, got "${v["max-tier"]}"`, "pass --max-tier 1, 2 or 3");
+      if (v["max-tier"] !== undefined && !/^[123]$/.test(v["max-tier"]))
+        throw new Fail(`--max-tier must be 1, 2 or 3, got "${v["max-tier"]}"`, "pass --max-tier 1, 2 or 3");
       let base: Record<string, unknown> = {};
       if (v.json) {
         base = json(v.json, z.record(z.string(), z.unknown()), "json") ?? {};
@@ -452,18 +532,30 @@ async function run(argv: string[]): Promise<number> {
         for (const op of ops) {
           if (!op.readOnly) continue;
           const args = examplesOf(op);
-          const missing = op.params.filter((p) => p.required && args[p.name] === undefined && p.default === undefined).map((p) => p.name);
+          const missing = op.params
+            .filter((p) => p.required && args[p.name] === undefined && p.default === undefined)
+            .map((p) => p.name);
           if (missing.length) {
             results.push({ site: name, op: op.name, ok: false, skipped: `no example for ${missing.join(", ")}` });
             continue;
           }
           const r = await call(name, op.name, args);
-          results.push({ site: name, op: op.name, ok: r.ok, class: r.class, tier: r.tier, ...(r.healed ? { healed: true } : {}), ...(r.ok ? {} : { reason: r.reason, next: r.next }), ms: r.ms });
+          results.push({
+            site: name,
+            op: op.name,
+            ok: r.ok,
+            class: r.class,
+            tier: r.tier,
+            ...(r.healed ? { healed: true } : {}),
+            ...(r.ok ? {} : { reason: r.reason, next: r.next }),
+            ms: r.ms,
+          });
         }
       }
       const ok = results.every((r) => r.ok);
       out({ ok, results });
-      if (!ok) process.stderr.write("next: follow each failing op's own next hint once, then report what still fails\n");
+      if (!ok)
+        process.stderr.write("next: follow each failing op's own next hint once, then report what still fails\n");
       return ok ? 0 : 1;
     }
 
@@ -472,7 +564,12 @@ async function run(argv: string[]): Promise<number> {
         listSites().map((name) => {
           try {
             const r = loadSite(name)!;
-            return { name, source: r.source, operations: r.site.operations.length, ...(r.site.description ? { description: r.site.description } : {}) };
+            return {
+              name,
+              source: r.source,
+              operations: r.site.operations.length,
+              ...(r.site.description ? { description: r.site.description } : {}),
+            };
           } catch (e) {
             return { name, error: (e as Error).message };
           }
@@ -495,7 +592,9 @@ async function run(argv: string[]): Promise<number> {
           name: o.name,
           ...(o.description ? { description: o.description } : {}),
           readOnly: o.readOnly,
-          params: o.params.map((p) => `${p.name}:${p.type}${p.required ? "" : "?"}${about(p).length ? ` (${about(p).join("; ")})` : ""}`),
+          params: o.params.map(
+            (p) => `${p.name}:${p.type}${p.required ? "" : "?"}${about(p).length ? ` (${about(p).join("; ")})` : ""}`,
+          ),
           ...(o.minTier > 1 ? { minTier: o.minTier } : {}),
           trigger: o.trigger.url,
         })),
@@ -518,7 +617,11 @@ async function run(argv: string[]): Promise<number> {
       requireSite(pos[0]);
       const r = exportSite(pos[0]!, { keepExamples: v["keep-examples"] });
       if (r.secrets.length && !v.force) {
-        throw new Fail(`refusing to export: ${r.secrets.length} live credential(s) in the spec`, "remove them (re-add the op or edit the spec); --force only if a human confirmed they are public", { secrets: r.secrets });
+        throw new Fail(
+          `refusing to export: ${r.secrets.length} live credential(s) in the spec`,
+          "remove them (re-add the op or edit the spec); --force only if a human confirmed they are public",
+          { secrets: r.secrets },
+        );
       }
       for (const w of r.warnings) process.stderr.write(`warning: ${w}\n`);
       const text = `${JSON.stringify(r.spec, null, 2)}\n`;
@@ -547,7 +650,9 @@ try {
   const f = e instanceof Fail ? e : undefined;
   // Playwright errors carry the whole Chrome command line after the first line
   out({ ok: false, error: oneLine((e as Error).message), ...(f?.extra ?? {}) });
-  const next = f?.next ?? (e instanceof ProfileInUse ? PROFILE_HINT : `api-anything ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " "));
+  const next =
+    f?.next ??
+    (e instanceof ProfileInUse ? PROFILE_HINT : `api-anything ${process.argv[2] ?? ""} --help`.replace(/\s+/g, " "));
   process.stderr.write(`next: ${next}\n`);
   process.exitCode = 1;
 }

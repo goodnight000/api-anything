@@ -7,7 +7,14 @@
 import { readFileSync } from "node:fs";
 import { addCookiesToProfile, chromeAvailable, clearProfileCookies } from "./browser.js";
 import { profileDir } from "./heal.js";
-import { belongs, cookiesFromFile, importFromBrowsers, parsePin, type ImportPin, type ImportedSession } from "./import.js";
+import {
+  belongs,
+  cookiesFromFile,
+  importFromBrowsers,
+  parsePin,
+  type ImportPin,
+  type ImportedSession,
+} from "./import.js";
 import { loadSession, loggedIn, safeName, saveSession, sessionFile, siteOf, withLock } from "./session.js";
 import { listSites, loadSite } from "./store.js";
 import type { StoredCookie } from "./types.js";
@@ -34,7 +41,8 @@ export function resolveLoginTarget(target: string): { site: string; url: string;
   if (!/^https?:\/\//i.test(target)) {
     const known = /^[a-z0-9][a-z0-9._-]*$/i.test(target) ? loadSite(target) : undefined;
     if (known) return { site: known.site.name, url: known.site.baseUrl, loginCookies: known.site.loginCookies };
-    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?(\/.*)?$/i.test(target)) throw new Error(`no site "${target}": give a site name from api-anything sites, a domain (example.com) or a URL`);
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?(\/.*)?$/i.test(target))
+      throw new Error(`no site "${target}": give a site name from api-anything sites, a domain (example.com) or a URL`);
     url = `https://${target}`;
   }
   const host = new URL(url).hostname.toLowerCase();
@@ -61,7 +69,11 @@ export interface ImportOptions {
  * Import a session for `site` and save it. Returns the source (e.g. "chrome:Profile 1", "file"),
  * or undefined when nothing was importable (the caller falls back to the visible window).
  */
-export async function importSession(site: string, url: string, o: ImportOptions = {}): Promise<ImportedSession | undefined> {
+export async function importSession(
+  site: string,
+  url: string,
+  o: ImportOptions = {},
+): Promise<ImportedSession | undefined> {
   let imported: ImportedSession | undefined;
   if (o.file) {
     const cookies = cookiesFromFile(readFileSync(o.file, "utf8"), url).filter((c) => forSite(c, url));
@@ -71,7 +83,9 @@ export async function importSession(site: string, url: string, o: ImportOptions 
     imported = importFromBrowsers({ url, loginCookies: o.loginCookies, pin });
   }
   if (!imported || !imported.cookies.length) return undefined;
-  withLock(sessionFile(site), () => saveSession(site, { ...loadSession(site), cookies: imported.cookies, source: imported.source }));
+  withLock(sessionFile(site), () =>
+    saveSession(site, { ...loadSession(site), cookies: imported.cookies, source: imported.source }),
+  );
   if (o.pushProfile !== false && chromeAvailable()) {
     try {
       await addCookiesToProfile(imported.cookies, profileDir());

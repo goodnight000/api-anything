@@ -365,7 +365,10 @@ export function escapeValue(v: unknown, escape: Escape | undefined): string {
 /** fillTemplate with every var escaped for the leaf's encoding layer. */
 export function fillSlotTemplate(template: string, vars: Record<string, unknown>, escape?: Escape): string {
   if (!escape) return fillTemplate(template, vars);
-  return fillTemplate(template, Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, v === undefined ? v : escapeValue(v, escape)])));
+  return fillTemplate(
+    template,
+    Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, v === undefined ? v : escapeValue(v, escape)])),
+  );
 }
 
 function walkJsonString(s: string, at: Step[], out: Leaf[]): boolean {
@@ -399,7 +402,12 @@ function walkInner(s: string, at: Step[], out: Leaf[]): boolean {
   if (!B64.test(s)) return false;
   const text = fromB64(s);
   // only a clean round trip counts: a hash or token decodes to bytes that are not JSON text
-  return /^\s*[[{]/.test(text) && Buffer.from(text, "utf8").toString("base64").replace(/=+$/, "") === s.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "") && walkJsonString(text, [...at, "b64"], out);
+  return (
+    /^\s*[[{]/.test(text) &&
+    Buffer.from(text, "utf8").toString("base64").replace(/=+$/, "") ===
+      s.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "") &&
+    walkJsonString(text, [...at, "b64"], out)
+  );
 }
 
 /** Every decoded leaf of the request with its step path, including JSON inside strings, recursively. */

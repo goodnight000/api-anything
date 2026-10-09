@@ -25,21 +25,48 @@ const SEC_CH_UA = '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="
 const noSession = { cookies: [] as StoredCookie[], values: {} as Record<string, string> };
 
 let nextId = 1;
-function xhr(req: { method?: string; url: string; headers?: Record<string, string>; body?: string }, resBody: unknown = { results: [{ id: 1 }, { id: 2 }] }, contentType = "application/json"): Exchange {
+function xhr(
+  req: { method?: string; url: string; headers?: Record<string, string>; body?: string },
+  resBody: unknown = { results: [{ id: 1 }, { id: 2 }] },
+  contentType = "application/json",
+): Exchange {
   return {
     id: nextId++,
     resourceType: "fetch",
-    request: { method: req.method ?? "GET", url: req.url, headers: req.headers ?? {}, ...(req.body !== undefined ? { body: req.body } : {}) },
-    response: { status: 200, headers: {}, contentType, body: typeof resBody === "string" ? resBody : JSON.stringify(resBody) },
+    request: {
+      method: req.method ?? "GET",
+      url: req.url,
+      headers: req.headers ?? {},
+      ...(req.body !== undefined ? { body: req.body } : {}),
+    },
+    response: {
+      status: 200,
+      headers: {},
+      contentType,
+      body: typeof resBody === "string" ? resBody : JSON.stringify(resBody),
+    },
   };
 }
 
-function learn(exchanges: Exchange[], examples: [Record<string, unknown>] | [Record<string, unknown>, Record<string, unknown>], extra: Partial<Parameters<typeof learnOperation>[0]> = {}) {
-  return learnOperation({ exchanges, examples, cookies: [], name: "op", trigger: { url: "https://site.test/" }, readOnly: true, ...extra });
+function learn(
+  exchanges: Exchange[],
+  examples: [Record<string, unknown>] | [Record<string, unknown>, Record<string, unknown>],
+  extra: Partial<Parameters<typeof learnOperation>[0]> = {},
+) {
+  return learnOperation({
+    exchanges,
+    examples,
+    cookies: [],
+    name: "op",
+    trigger: { url: "https://site.test/" },
+    readOnly: true,
+    ...extra,
+  });
 }
 
 /** Build the request a call with args would send (no session). */
-const built = (op: ReturnType<typeof learn>["operation"], args: Record<string, unknown>) => buildRequest(op, args, noSession);
+const built = (op: ReturnType<typeof learn>["operation"], args: Record<string, unknown>) =>
+  buildRequest(op, args, noSession);
 const q = (req: Request, k: string) => new URL(req.url).searchParams.get(k);
 
 /* ------------------------------------------------------ passing regressions */
@@ -107,7 +134,12 @@ test("text/plain JSON body is walked as JSON; numeric JSON leaf gets type number
 test("multipart/form-data body: the value's part is templated, boundary kept", () => {
   const b = "----WebKitFormBoundaryAbC123";
   const body = `--${b}\r\nContent-Disposition: form-data; name="q"\r\n\r\nnasa\r\n--${b}\r\nContent-Disposition: form-data; name="n"\r\n\r\n10\r\n--${b}--\r\n`;
-  const ex = xhr({ method: "POST", url: "https://site.test/api/upload", headers: { "content-type": `multipart/form-data; boundary=${b}` }, body });
+  const ex = xhr({
+    method: "POST",
+    url: "https://site.test/api/upload",
+    headers: { "content-type": `multipart/form-data; boundary=${b}` },
+    body,
+  });
   const { operation: op } = learn([ex], [{ q: "nasa" }]);
   const r = built(op, { q: "mars {x} rover" });
   assert.equal(r.body, body.replace("nasa", "mars {x} rover"));
@@ -115,18 +147,33 @@ test("multipart/form-data body: the value's part is templated, boundary kept", (
 });
 
 test("Google-Flights style: JSON inside a form field inside JSON; a value in several roles", () => {
-  const inner = JSON.stringify([null, [[[["JFK", 0]], [["LAX", 0]], null, 0, null, null, "2026-10-01"], [[["LAX", 0]], [["JFK", 0]]]]]);
+  const inner = JSON.stringify([
+    null,
+    [
+      [[["JFK", 0]], [["LAX", 0]], null, 0, null, null, "2026-10-01"],
+      [[["LAX", 0]], [["JFK", 0]]],
+    ],
+  ]);
   const freq = JSON.stringify([null, inner]);
-  const ex = xhr({
-    method: "POST",
-    url: "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=-123&_reqid=4&rt=c",
-    headers: { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" },
-    body: `f.req=${encodeURIComponent(freq)}&`,
-  }, ")]}'\n[1]");
+  const ex = xhr(
+    {
+      method: "POST",
+      url: "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=-123&_reqid=4&rt=c",
+      headers: { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: `f.req=${encodeURIComponent(freq)}&`,
+    },
+    ")]}'\n[1]",
+  );
   const { operation: op } = learn([ex], [{ origin: "JFK", dest: "LAX", date: "2026-10-01" }]);
   const r = built(op, { origin: "SFO", dest: "CDG", date: "2026-12-24" });
   const got = JSON.parse(JSON.parse(getAt(r, ["form:f.req"]) as string)[1]);
-  assert.deepEqual(got, [null, [[[["SFO", 0]], [["CDG", 0]], null, 0, null, null, "2026-12-24"], [[["CDG", 0]], [["SFO", 0]]]]]);
+  assert.deepEqual(got, [
+    null,
+    [
+      [[["SFO", 0]], [["CDG", 0]], null, 0, null, null, "2026-12-24"],
+      [[["CDG", 0]], [["SFO", 0]]],
+    ],
+  ]);
   assert.ok(r.body!.endsWith("&"), "trailing empty pair kept byte-identical");
 });
 
@@ -136,20 +183,36 @@ test("persisted-query sha256 in extensions: volatile with the operationName anch
     url: `https://site.test/graphql?operationName=SearchQuery&variables=${encodeURIComponent('{"q":"nasa"}')}&extensions=${encodeURIComponent(JSON.stringify({ persistedQuery: { version: 1, sha256Hash: hash } }))}`,
   });
   const { operation: op } = learn([ex], [{ q: "nasa" }]);
-  assert.deepEqual(op.volatile.map((v) => [v.at, v.anchor]), [[["query:extensions", "json:/persistedQuery/sha256Hash"], "SearchQuery"]]);
+  assert.deepEqual(
+    op.volatile.map((v) => [v.at, v.anchor]),
+    [[["query:extensions", "json:/persistedQuery/sha256Hash"], "SearchQuery"]],
+  );
   assert.deepEqual(op.match, { method: "GET", host: "site.test", path: "/graphql", operationName: "SearchQuery" });
 });
 
 test("Laravel/Angular XSRF: header mirrors the URL-decoded cookie -> cookie ref with url-decode, blanked in the spec", () => {
   const raw = "eyJpdiI6IkFCQ0RFRkdISUpLTE1OT1AiLCJ2YWx1ZSI6Ing9In0%3D";
-  const ex = xhr({ url: "https://site.test/api/search?q=nasa", headers: { "x-xsrf-token": decodeURIComponent(raw), cookie: `XSRF-TOKEN=${raw}` } });
-  const { operation: op } = learn([ex], [{ q: "nasa" }], { cookies: [{ name: "XSRF-TOKEN", value: raw, domain: "site.test", path: "/", expires: -1, httpOnly: false, secure: true }] });
-  assert.deepEqual(op.slots.find((s) => s.ref), { ref: "cookie:XSRF-TOKEN", transform: "url-decode", at: ["header:x-xsrf-token"] });
+  const ex = xhr({
+    url: "https://site.test/api/search?q=nasa",
+    headers: { "x-xsrf-token": decodeURIComponent(raw), cookie: `XSRF-TOKEN=${raw}` },
+  });
+  const { operation: op } = learn([ex], [{ q: "nasa" }], {
+    cookies: [
+      { name: "XSRF-TOKEN", value: raw, domain: "site.test", path: "/", expires: -1, httpOnly: false, secure: true },
+    ],
+  });
+  assert.deepEqual(
+    op.slots.find((s) => s.ref),
+    { ref: "cookie:XSRF-TOKEN", transform: "url-decode", at: ["header:x-xsrf-token"] },
+  );
   assert.equal(op.request.headers["x-xsrf-token"], "");
 });
 
 test("--match picks the right one among near-duplicate requests (autocomplete vs search)", () => {
-  const suggest = xhr({ url: "https://site.test/api/suggest?q=nasa" }, { s: ["nasa", "nasa tv", "nasa live", "nasa jobs"].map((x) => ({ x })) });
+  const suggest = xhr(
+    { url: "https://site.test/api/suggest?q=nasa" },
+    { s: ["nasa", "nasa tv", "nasa live", "nasa jobs"].map((x) => ({ x })) },
+  );
   const search = xhr({ url: "https://site.test/api/search?q=nasa" }, { r: [{ id: 1 }] });
   const { operation: op } = learn([suggest, search], [{ q: "nasa" }], { match: { path: "/api/search" } });
   assert.equal(new URL(op.request.url).pathname, "/api/search");
@@ -157,7 +220,10 @@ test("--match picks the right one among near-duplicate requests (autocomplete vs
 
 test("a trigger URL template percent-encodes every arg, including / & # ? and emoji", () => {
   const t = fillTrigger({ url: "https://site.test/search?q={q}#tab={tab}" }, { q: "a&b=c/d?e", tab: "🚀 x" });
-  assert.equal(t.url, `https://site.test/search?q=${encodeURIComponent("a&b=c/d?e")}#tab=${encodeURIComponent("🚀 x")}`);
+  assert.equal(
+    t.url,
+    `https://site.test/search?q=${encodeURIComponent("a&b=c/d?e")}#tab=${encodeURIComponent("🚀 x")}`,
+  );
 });
 
 /* -------------------------------------------------------------------- bugs */
@@ -192,7 +258,10 @@ test("BUG: an example value inside the User-Agent / sec-ch-ua does not template 
   assert.equal(q(r, "q"), "pear");
   assert.equal(r.headers["user-agent"], MAC_UA);
 
-  const ex2 = xhr({ url: "https://shop.test/api/search?q=google", headers: { "user-agent": MAC_UA, "sec-ch-ua": SEC_CH_UA } });
+  const ex2 = xhr({
+    url: "https://shop.test/api/search?q=google",
+    headers: { "user-agent": MAC_UA, "sec-ch-ua": SEC_CH_UA },
+  });
   const r2 = built(learn([ex2], [{ q: "google" }]).operation, { q: "bing" });
   assert.equal(r2.headers["sec-ch-ua"], SEC_CH_UA);
 });
@@ -226,11 +295,17 @@ test("BUG: a numeric example does not template digits inside unrelated numbers (
 test("BUG: a boolean example 'true' binds to its own leaf, not every true flag in the request", () => {
   const variables = JSON.stringify({ userId: "nasa", includeReplies: true });
   const features = JSON.stringify({ verified_enabled: true, media_enabled: true });
-  const ex = xhr({ url: `https://site.test/graphql/Tweets?variables=${encodeURIComponent(variables)}&features=${encodeURIComponent(features)}` });
+  const ex = xhr({
+    url: `https://site.test/graphql/Tweets?variables=${encodeURIComponent(variables)}&features=${encodeURIComponent(features)}`,
+  });
   const { operation: op } = learn([ex], [{ userId: "nasa", includeReplies: "true" }]);
   const r = built(op, { userId: "nasa", includeReplies: "false" });
   assert.deepEqual(JSON.parse(q(r, "variables")!), { userId: "nasa", includeReplies: false });
-  assert.deepEqual(JSON.parse(q(r, "features")!), { verified_enabled: true, media_enabled: true }, "unrelated feature flags must not follow the arg");
+  assert.deepEqual(
+    JSON.parse(q(r, "features")!),
+    { verified_enabled: true, media_enabled: true },
+    "unrelated feature flags must not follow the arg",
+  );
 });
 
 test("BUG: one example value inside another's leaf: the exact leaf keeps its own param", () => {
@@ -248,7 +323,12 @@ test("BUG: two params sharing a prefix inside one leaf are both templated", () =
 });
 
 test("BUG: the same numeric value as a JSON string and a JSON number keeps each leaf's own type", () => {
-  const ex = xhr({ method: "POST", url: "https://site.test/api/user", headers: { "content-type": "application/json" }, body: '{"id":"12345","ids":[12345]}' });
+  const ex = xhr({
+    method: "POST",
+    url: "https://site.test/api/user",
+    headers: { "content-type": "application/json" },
+    body: '{"id":"12345","ids":[12345]}',
+  });
   const r = built(learn([ex], [{ id: "12345" }]).operation, { id: "777" });
   assert.equal(r.body, '{"id":"777","ids":[777]}');
 });
@@ -289,16 +369,28 @@ test("BUG: base64-encoded JSON in a query param is a decoded layer", () => {
 });
 
 test("BUG: batched GraphQL (array body) gets an operationName in its match, so it does not match other GraphQL ops", () => {
-  const body = (op: string, v: object) => JSON.stringify([{ operationName: op, variables: v, query: `query ${op} { x }` }]);
-  const ex = xhr({ method: "POST", url: "https://site.test/graphql", headers: { "content-type": "application/json" }, body: body("SearchProducts", { q: "nasa" }) });
+  const body = (op: string, v: object) =>
+    JSON.stringify([{ operationName: op, variables: v, query: `query ${op} { x }` }]);
+  const ex = xhr({
+    method: "POST",
+    url: "https://site.test/graphql",
+    headers: { "content-type": "application/json" },
+    body: body("SearchProducts", { q: "nasa" }),
+  });
   const { operation: op } = learn([ex], [{ q: "nasa" }]);
   const other: Request = { method: "POST", url: "https://site.test/graphql", headers: {}, body: body("CartCount", {}) };
   assert.equal(matches(op.match, other), false, `match ${JSON.stringify(op.match)} also accepts CartCount`);
 });
 
 test("BUG: GraphQL POST without operationName field: match uses the query's operation name", () => {
-  const body = (name: string, v: object) => JSON.stringify({ query: `query ${name}($q: String) { search(q: $q) { id } }`, variables: v });
-  const ex = xhr({ method: "POST", url: "https://site.test/graphql", headers: { "content-type": "application/json" }, body: body("SearchProducts", { q: "nasa" }) });
+  const body = (name: string, v: object) =>
+    JSON.stringify({ query: `query ${name}($q: String) { search(q: $q) { id } }`, variables: v });
+  const ex = xhr({
+    method: "POST",
+    url: "https://site.test/graphql",
+    headers: { "content-type": "application/json" },
+    body: body("SearchProducts", { q: "nasa" }),
+  });
   const { operation: op } = learn([ex], [{ q: "nasa" }]);
   const other: Request = { method: "POST", url: "https://site.test/graphql", headers: {}, body: body("CartCount", {}) };
   assert.equal(matches(op.match, other), false, `match ${JSON.stringify(op.match)} also accepts CartCount`);
@@ -313,7 +405,12 @@ function captureFile(url: string, exchanges: Exchange[]) {
 test("BUG: add --from templatizes a capture URL written with + for spaces", async () => {
   const url = "https://site.test/search?q=new+york";
   const ex = xhr({ url: "https://site.test/api/search?q=new+york" });
-  const r = await addOperation({ site: "edge-plus", op: "search", examples: [{ q: "new york" }], from: { capture: captureFile(url, [ex]) } });
+  const r = await addOperation({
+    site: "edge-plus",
+    op: "search",
+    examples: [{ q: "new york" }],
+    from: { capture: captureFile(url, [ex]) },
+  });
   // A literal trigger makes every tier-3 run and recapture load the example's page, whatever the args.
   assert.equal(fillTrigger(r.operation.trigger, { q: "boston" }).url, "https://site.test/search?q=boston");
 });
@@ -321,14 +418,24 @@ test("BUG: add --from templatizes a capture URL written with + for spaces", asyn
 test("BUG: add --from templatizes only the arg's own position, not an equal path segment or host", async () => {
   const url = "https://www.reddit.test/r/python/search?q=python";
   const ex = xhr({ url: "https://www.reddit.test/svc/search?q=python&sr=python" });
-  const r = await addOperation({ site: "edge-host", op: "search", examples: [{ q: "python" }], from: { capture: captureFile(url, [ex]) } });
+  const r = await addOperation({
+    site: "edge-host",
+    op: "search",
+    examples: [{ q: "python" }],
+    from: { capture: captureFile(url, [ex]) },
+  });
   assert.equal(fillTrigger(r.operation.trigger, { q: "rust" }).url, "https://www.reddit.test/r/python/search?q=rust");
 });
 
 test("add --from templatizes a %20-encoded capture URL (passes)", async () => {
   const url = "https://site.test/search?q=new%20york";
   const ex = xhr({ url: "https://site.test/api/search?q=new%20york" });
-  const r = await addOperation({ site: "edge-pct", op: "search", examples: [{ q: "new york" }], from: { capture: captureFile(url, [ex]) } });
+  const r = await addOperation({
+    site: "edge-pct",
+    op: "search",
+    examples: [{ q: "new york" }],
+    from: { capture: captureFile(url, [ex]) },
+  });
   assert.equal(r.operation.trigger.url, "https://site.test/search?q={q}");
 });
 
@@ -344,14 +451,18 @@ test("codec: walk/getAt/setAt agree for every leaf of a mixed request", () => {
   for (const leaf of walk(req)) {
     const got = getAt(req, leaf.at);
     assert.equal(typeof got === "string" ? got : JSON.stringify(got), leaf.value, leaf.at.join(" > "));
-    if (!leaf.container) assert.deepEqual(setAt(req, leaf.at, getAt(req, leaf.at)), req, `identity set at ${leaf.at.join(" > ")}`);
+    if (!leaf.container)
+      assert.deepEqual(setAt(req, leaf.at, getAt(req, leaf.at)), req, `identity set at ${leaf.at.join(" > ")}`);
   }
 });
 
 /* ------------------------------------------------------------------ batch 2 */
 
 test("BUG: a Referer templated with the arg stays a valid, percent-encoded header for non-ASCII args", async () => {
-  const ex = xhr({ url: "https://site.test/api/search?q=nasa", headers: { referer: "https://site.test/search?q=nasa" } });
+  const ex = xhr({
+    url: "https://site.test/api/search?q=nasa",
+    headers: { referer: "https://site.test/search?q=nasa" },
+  });
   const { operation: op } = learn([ex], [{ q: "nasa" }]);
   const r = built(op, { q: "東京 café" });
   assert.equal(q(r, "q"), "東京 café");
@@ -370,7 +481,10 @@ test("BUG: bundled google-flights spec: a non-Latin-1 city fills the referer une
 });
 
 test("BUG: a JSON API whose path ends in .js (GitHub vercel/next.js, npm chart.js) is not dropped as an asset", () => {
-  const ex = xhr({ url: "https://api.github.test/repos/vercel/next.js" }, { full_name: "vercel/next.js", stargazers_count: 1 });
+  const ex = xhr(
+    { url: "https://api.github.test/repos/vercel/next.js" },
+    { full_name: "vercel/next.js", stargazers_count: 1 },
+  );
   const { operation: op } = learn([ex], [{ repo: "next.js" }], { match: { path: "/repos/vercel/*" } });
   assert.equal(op.request.url, "https://api.github.test/repos/vercel/next.js");
 });
@@ -391,7 +505,9 @@ test("a path segment that carries the arg as a substring (@handle) is wildcarded
 });
 
 test("BUG: a nonce inside a templated leaf is still detected by the two-run diff (minTier 3)", () => {
-  const run = (v: string, sig: string) => [xhr({ url: `https://site.test/api/go?u=${encodeURIComponent(`/search?q=${v}&sig=${sig}`)}` })];
+  const run = (v: string, sig: string) => [
+    xhr({ url: `https://site.test/api/go?u=${encodeURIComponent(`/search?q=${v}&sig=${sig}`)}` }),
+  ];
   const { operation: op } = learnOperation({
     exchanges: run("nasa", "Zx81kPq0aB3dF7gH2jK9"),
     exchanges2: run("spacex", "Qm4nR7sT1uV5wX8yZ2aB"),
@@ -419,7 +535,12 @@ test("control: a nonce in its own leaf is detected by the two-run diff (passes)"
 });
 
 test("BUG: an array example (library add) binds to the JSON array leaf with type array", () => {
-  const ex = xhr({ method: "POST", url: "https://site.test/api/search", headers: { "content-type": "application/json" }, body: '{"tags":["nasa","mars"],"n":10}' });
+  const ex = xhr({
+    method: "POST",
+    url: "https://site.test/api/search",
+    headers: { "content-type": "application/json" },
+    body: '{"tags":["nasa","mars"],"n":10}',
+  });
   const { operation: op } = learn([ex], [{ tags: ["nasa", "mars"] }]);
   assert.equal(op.params[0]!.type, "array");
   assert.equal(built(op, { tags: ["esa"] }).body, '{"tags":["esa"],"n":10}');
@@ -444,23 +565,42 @@ test("BUG: Meta's x-fb-lsd header (same token as the lsd form field, which is re
   const ex = xhr({
     method: "POST",
     url: "https://www.site.test/api/graphql/",
-    headers: { "content-type": "application/x-www-form-urlencoded", "x-fb-lsd": lsd, "x-fb-friendly-name": "SearchQuery" },
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      "x-fb-lsd": lsd,
+      "x-fb-friendly-name": "SearchQuery",
+    },
     body: `lsd=${lsd}&fb_api_req_friendly_name=SearchQuery&variables=${encodeURIComponent('{"q":"nasa"}')}`,
   });
   const { operation: op } = learn([ex], [{ q: "nasa" }]);
-  assert.deepEqual(op.slots.find((s) => s.ref === "session:op/lsd")?.at, ["form:lsd"], "control: the form field is a ref");
+  assert.deepEqual(
+    op.slots.find((s) => s.ref === "session:op/lsd")?.at,
+    ["form:lsd"],
+    "control: the form field is a ref",
+  );
   assert.ok(!JSON.stringify(op).includes(lsd), "x-fb-lsd header keeps the lsd token literally");
 });
 
 test("BUG: a URL-valued example (link preview / archive lookup) locates its request", () => {
-  const ex = xhr({ url: `https://tool.test/api/preview?url=${encodeURIComponent("https://example.com/page")}` }, { title: "x", links: [1, 2] });
-  const doc: Exchange = { ...xhr({ url: "https://tool.test/?u=https://example.com/page" }, "<html></html>", "text/html"), resourceType: "document" };
+  const ex = xhr(
+    { url: `https://tool.test/api/preview?url=${encodeURIComponent("https://example.com/page")}` },
+    { title: "x", links: [1, 2] },
+  );
+  const doc: Exchange = {
+    ...xhr({ url: "https://tool.test/?u=https://example.com/page" }, "<html></html>", "text/html"),
+    resourceType: "document",
+  };
   const { operation: op } = learn([doc, ex], [{ url: "https://example.com/page" }]);
   assert.equal(new URL(op.request.url).pathname, "/api/preview");
 });
 
 test("empty-string and very long args at call time (passes)", () => {
-  const ex = xhr({ method: "POST", url: "https://site.test/api/search?q=nasa", headers: { "content-type": "application/json" }, body: '{"q":"nasa"}' });
+  const ex = xhr({
+    method: "POST",
+    url: "https://site.test/api/search?q=nasa",
+    headers: { "content-type": "application/json" },
+    body: '{"q":"nasa"}',
+  });
   const { operation: op } = learn([ex], [{ q: "nasa" }]);
   const r = built(op, { q: "" });
   assert.equal(new URL(r.url).search, "?q=");
@@ -472,7 +612,12 @@ test("empty-string and very long args at call time (passes)", () => {
 test("BUG: add --from templatizes a capture URL whose arg differs only in case from the example", async () => {
   const url = "https://site.test/search?q=NASA";
   const ex = xhr({ url: "https://site.test/api/search?q=nasa" });
-  const r = await addOperation({ site: "edge-case", op: "search", examples: [{ q: "nasa" }], from: { capture: captureFile(url, [ex]) } });
+  const r = await addOperation({
+    site: "edge-case",
+    op: "search",
+    examples: [{ q: "nasa" }],
+    from: { capture: captureFile(url, [ex]) },
+  });
   assert.equal(r.operation.trigger.url, "https://site.test/search?q={q}");
 });
 
@@ -481,12 +626,20 @@ test("BUG: a hand-written spec with mixed-case header names does not send duplic
   const site = parseSite({
     name: "h",
     baseUrl: "https://s.test",
-    operations: [{
-      name: "o", readOnly: true, trigger: { url: "https://s.test/" },
-      request: { method: "GET", url: "https://s.test/api?q=x", headers: { "X-CSRF-Token": "", "X-Search": "x" } },
-      params: [{ name: "q" }],
-      slots: [{ param: "q", at: ["query:q"] }, { param: "q", at: ["header:X-Search"] }, { ref: "session:tok", at: ["header:x-csrf-token"] }],
-    }],
+    operations: [
+      {
+        name: "o",
+        readOnly: true,
+        trigger: { url: "https://s.test/" },
+        request: { method: "GET", url: "https://s.test/api?q=x", headers: { "X-CSRF-Token": "", "X-Search": "x" } },
+        params: [{ name: "q" }],
+        slots: [
+          { param: "q", at: ["query:q"] },
+          { param: "q", at: ["header:X-Search"] },
+          { ref: "session:tok", at: ["header:x-csrf-token"] },
+        ],
+      },
+    ],
   });
   const r = buildRequest(site.operations[0]!, { q: "nasa" }, { cookies: [], values: { tok: "SECRET123" } });
   const h = new Headers(r.headers);

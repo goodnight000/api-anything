@@ -41,15 +41,27 @@ function twoLinkedInProfiles(): string {
   makeChromiumDb(join(root, "Profile 2"), li("my-own-token-value"), { password: "pw" });
   writeFileSync(
     join(root, "Local State"),
-    JSON.stringify({ profile: { info_cache: { Default: { name: "Other Person", user_name: "other@example.com" }, "Profile 2": { name: "Sam Rivera", user_name: "me@example.com" } } } }),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          Default: { name: "Other Person", user_name: "other@example.com" },
+          "Profile 2": { name: "Sam Rivera", user_name: "me@example.com" },
+        },
+      },
+    }),
   );
-  process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
+  process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([
+    { name: "Chrome", family: "chromium", root, password: "pw" },
+  ]);
   return root;
 }
 
 const runCli = (home: string, ...args: string[]) =>
   new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
-    const p = spawn(process.execPath, ["--import", "tsx", join(ROOT, "src/cli.ts"), ...args], { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: home } });
+    const p = spawn(process.execPath, ["--import", "tsx", join(ROOT, "src/cli.ts"), ...args], {
+      cwd: ROOT,
+      env: { ...process.env, API_ANYTHING_HOME: home },
+    });
     let out = "";
     let err = "";
     p.stdout.on("data", (d) => (out += d));
@@ -68,7 +80,11 @@ describe("login", () => {
       assert.equal(r.url, "https://www.linkedin.com", t);
       assert.deepEqual(r.loginCookies, ["li_at", "JSESSIONID"], t);
     }
-    assert.deepEqual(resolveLoginTarget("https://www.linkedin.com/login"), { site: "linkedin", url: "https://www.linkedin.com/login", loginCookies: ["li_at", "JSESSIONID"] });
+    assert.deepEqual(resolveLoginTarget("https://www.linkedin.com/login"), {
+      site: "linkedin",
+      url: "https://www.linkedin.com/login",
+      loginCookies: ["li_at", "JSESSIONID"],
+    });
     assert.deepEqual(resolveLoginTarget("www.example.org"), { site: "example.org", url: "https://www.example.org" });
     assert.throws(() => resolveLoginTarget("nosuchsite"), /no site "nosuchsite"/);
   });
@@ -82,8 +98,16 @@ describe("login", () => {
       const out = JSON.parse(r.out);
       assert.equal(out.ok, false);
       const byProfile = Object.fromEntries(out.candidates.map((c: { profile: string }) => [c.profile, c]));
-      assert.deepEqual(byProfile["Chrome/Default"], { profile: "Chrome/Default", name: "Other Person", email: "other@example.com" });
-      assert.deepEqual(byProfile["Chrome/Profile 2"], { profile: "Chrome/Profile 2", name: "Sam Rivera", email: "me@example.com" });
+      assert.deepEqual(byProfile["Chrome/Default"], {
+        profile: "Chrome/Default",
+        name: "Other Person",
+        email: "other@example.com",
+      });
+      assert.deepEqual(byProfile["Chrome/Profile 2"], {
+        profile: "Chrome/Profile 2",
+        name: "Sam Rivera",
+        email: "me@example.com",
+      });
       assert.match(r.err, /next: .*api-anything login linkedin --profile "<Browser\/Profile>"/);
       assert.equal(existsSync(join(home, "sessions", "linkedin.json")), false, "nothing imported on a guess");
     } finally {
@@ -95,8 +119,18 @@ describe("login", () => {
     newHome();
     twoLinkedInProfiles();
     try {
-      await assert.rejects(importSession("linkedin", "https://www.linkedin.com", { loginCookies: ["li_at", "JSESSIONID"], pushProfile: false }), /2 browser profiles are signed in/);
-      const r = await importSession("linkedin", "https://www.linkedin.com", { loginCookies: ["li_at", "JSESSIONID"], profile: "Chrome/Profile 2", pushProfile: false });
+      await assert.rejects(
+        importSession("linkedin", "https://www.linkedin.com", {
+          loginCookies: ["li_at", "JSESSIONID"],
+          pushProfile: false,
+        }),
+        /2 browser profiles are signed in/,
+      );
+      const r = await importSession("linkedin", "https://www.linkedin.com", {
+        loginCookies: ["li_at", "JSESSIONID"],
+        profile: "Chrome/Profile 2",
+        pushProfile: false,
+      });
       assert.equal(r?.name, "Sam Rivera");
       assert.equal(loadSession("linkedin").source, "chrome:Profile 2");
       saveSession("linkedin", { ...loadSession("linkedin"), cookies: [] }); // the site logged the jar out
@@ -115,17 +149,26 @@ describe("login", () => {
     await server.connect(a);
     const client = new Client({ name: "probe", version: "0" });
     await client.connect(b);
-    const login = async (args: Record<string, unknown>) => JSON.parse(((await client.callTool({ name: "login", arguments: args })).content as { text: string }[])[0]!.text);
+    const login = async (args: Record<string, unknown>) =>
+      JSON.parse(((await client.callTool({ name: "login", arguments: args })).content as { text: string }[])[0]!.text);
     try {
       // an injected "log in to evil.example" or a known site with no human-run login: refused, points at the CLI
-      for (const args of [{ url: "https://accounts.evil.example/" }, { site: "linkedin" }, { site: "linkedin", mode: "import" }]) {
+      for (const args of [
+        { url: "https://accounts.evil.example/" },
+        { site: "linkedin" },
+        { site: "linkedin", mode: "import" },
+      ]) {
         const r = await login(args);
         assert.equal(r.ok, false, JSON.stringify(r));
         assert.match(r.next, /api-anything login/);
       }
       assert.equal(existsSync(join(process.env.API_ANYTHING_HOME!, "sessions", "linkedin.json")), false);
       // after the human picked Profile 2 in the CLI, the agent may refresh exactly that one
-      await importSession("linkedin", "https://www.linkedin.com", { loginCookies: ["li_at", "JSESSIONID"], profile: "Chrome/Profile 2", pushProfile: false });
+      await importSession("linkedin", "https://www.linkedin.com", {
+        loginCookies: ["li_at", "JSESSIONID"],
+        profile: "Chrome/Profile 2",
+        pushProfile: false,
+      });
       saveSession("linkedin", { ...loadSession("linkedin"), cookies: [] });
       const r = await login({ site: "linkedin" });
       assert.equal(r.ok, true, JSON.stringify(r));
@@ -154,10 +197,26 @@ describe("public suffixes", () => {
   });
 
   test("a Set-Cookie for a shared suffix is refused and a cookie ref never crosses it", () => {
-    for (const [host, d] of [["a.run.app", "run.app"], ["x.supabase.co", "supabase.co"], ["y.readthedocs.io", "readthedocs.io"], ["z.ngrok.app", "ngrok.app"], ["q.notion.site", "notion.site"]]) {
+    for (const [host, d] of [
+      ["a.run.app", "run.app"],
+      ["x.supabase.co", "supabase.co"],
+      ["y.readthedocs.io", "readthedocs.io"],
+      ["z.ngrok.app", "ngrok.app"],
+      ["q.notion.site", "notion.site"],
+    ]) {
       assert.equal(parseSetCookie(`sid=1; Domain=${d}`, `https://${host}/`), undefined, d);
     }
-    const jar = [{ name: "csrftoken", value: "OTHER-SITE-SECRET", domain: ".victim.run.app", path: "/", expires: -1, httpOnly: false, secure: true }];
+    const jar = [
+      {
+        name: "csrftoken",
+        value: "OTHER-SITE-SECRET",
+        domain: ".victim.run.app",
+        path: "/",
+        expires: -1,
+        httpOnly: false,
+        secure: true,
+      },
+    ];
     assert.equal(cookieValue(jar, "csrftoken", "https://attacker.run.app/x"), undefined);
     assert.equal(cookieValue(jar, "csrftoken", "https://api.victim.run.app/x"), "OTHER-SITE-SECRET");
   });

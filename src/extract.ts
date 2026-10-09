@@ -81,14 +81,26 @@ export function getPath(obj: unknown, path?: string): unknown {
 /** --pick fields: commas separate them, except inside [], {} or () of a regex, or escaped as \, */
 export function splitPick(s: string): string[] {
   const out: string[] = [];
-  let cur = "", depth = 0;
+  let cur = "",
+    depth = 0;
   for (let i = 0; i < s.length; i++) {
     const c = s[i]!;
-    if (c === "\\" && s[i + 1] === ",") { cur += ","; i++; continue; }
-    if (c === "\\") { cur += c + (s[++i] ?? ""); continue; }
+    if (c === "\\" && s[i + 1] === ",") {
+      cur += ",";
+      i++;
+      continue;
+    }
+    if (c === "\\") {
+      cur += c + (s[++i] ?? "");
+      continue;
+    }
     if ("[{(".includes(c)) depth++;
     if ("]})".includes(c)) depth = Math.max(0, depth - 1);
-    if (c === "," && depth === 0) { out.push(cur.trim()); cur = ""; continue; }
+    if (c === "," && depth === 0) {
+      out.push(cur.trim());
+      cur = "";
+      continue;
+    }
     cur += c;
   }
   if (cur.trim()) out.push(cur.trim());
@@ -129,7 +141,10 @@ export function pick(value: unknown, paths: string[]): unknown {
  * `fields` values are "<css>" (text) or "<css>@attr"; an empty css means the item itself.
  * An "all:" prefix returns every match as a list (a book's genres, a post's tags), [] when none.
  */
-export function extractHtml(body: string, recipe: { items: string; fields: Record<string, string> }): Record<string, string | string[] | undefined>[] {
+export function extractHtml(
+  body: string,
+  recipe: { items: string; fields: Record<string, string> },
+): Record<string, string | string[] | undefined>[] {
   return parseHtml(body)
     .querySelectorAll(recipe.items)
     .map((el) => {
@@ -260,12 +275,17 @@ export function capOutput(value: unknown, maxChars = 20_000): { data: unknown; t
   if (Array.isArray(value)) {
     const n = (data as unknown[]).length;
     const whole = n > 0 && (data as unknown[])[n - 1] === value[n - 1];
-    return { data, truncated: `showing ${n} of ${value.length} items${n && !whole ? " (the last one cut to fit)" : ""} (cap ${maxChars} chars); ${hint}` };
+    return {
+      data,
+      truncated: `showing ${n} of ${value.length} items${n && !whole ? " (the last one cut to fit)" : ""} (cap ${maxChars} chars); ${hint}`,
+    };
   }
   if (value && typeof value === "object" && data && typeof data === "object") {
     const all = Object.keys(value);
     const kept = Object.keys(data);
-    const shortened = kept.filter((k) => (data as Record<string, unknown>)[k] !== (value as Record<string, unknown>)[k]).length;
+    const shortened = kept.filter(
+      (k) => (data as Record<string, unknown>)[k] !== (value as Record<string, unknown>)[k],
+    ).length;
     return {
       data,
       truncated: `cut to ${size(data)} of ${total} chars (cap ${maxChars}): showing ${kept.length} of ${all.length} keys${shortened ? `, ${shortened} of them shortened` : ""}; ${hint}`,

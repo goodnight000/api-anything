@@ -72,10 +72,16 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
       case "/sse-page":
         return html(res, `${dataFetch(name)}<script>new EventSource("/api/sse")</script>`);
       case "/beacon-page":
-        return html(res, `${dataFetch(name)}<script>setInterval(()=>fetch("/api/beacon",{method:"POST",body:"t="+Date.now()}),150)</script>`);
+        return html(
+          res,
+          `${dataFetch(name)}<script>setInterval(()=>fetch("/api/beacon",{method:"POST",body:"t="+Date.now()}),150)</script>`,
+        );
       case "/late":
         // hydration that waits a little before loading its data
-        return html(res, `<div id="out"></div><script>setTimeout(()=>fetch("/api/data?name="+encodeURIComponent(${JSON.stringify(name)})),1200)</script>`);
+        return html(
+          res,
+          `<div id="out"></div><script>setTimeout(()=>fetch("/api/data?name="+encodeURIComponent(${JSON.stringify(name)})),1200)</script>`,
+        );
       case "/debounce":
         // search-as-you-type with a 600 ms debounce, the common typeahead pattern
         return html(
@@ -97,9 +103,16 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
         res.writeHead(302, { location: `/login-page?next=${encodeURIComponent(u.pathname + u.search)}` });
         return res.end();
       case "/login-page":
-        return html(res, `<h1>Sign in</h1><form action="/session" method="post"><input name="username"><input type="password" name="password"><button>Log in</button></form>`);
+        return html(
+          res,
+          `<h1>Sign in</h1><form action="/session" method="post"><input name="username"><input type="password" name="password"><button>Log in</button></form>`,
+        );
       case "/big-page":
-        return html(res, `${"<p>" + "lorem ipsum ".repeat(50) + "</p>"}`.repeat(4000) + `<script>fetch("/api/big?name=${encodeURIComponent(name)}")</script>`);
+        return html(
+          res,
+          `${"<p>" + "lorem ipsum ".repeat(50) + "</p>"}`.repeat(4000) +
+            `<script>fetch("/api/big?name=${encodeURIComponent(name)}")</script>`,
+        );
       case "/huge-page":
         return html(res, `<script>fetch("/api/huge-items?name=${encodeURIComponent(name)}")</script>`);
       case "/vote-page":
@@ -134,7 +147,10 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
         return html(res, "<p>main site</p>");
       case "/tok-page":
         // the page echoes a base64 session cookie, prefixed, inside a query value
-        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "set-cookie": `tok=${TOKEN}; Path=/; SameSite=Lax` });
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "set-cookie": `tok=${TOKEN}; Path=/; SameSite=Lax`,
+        });
         return res.end(
           `<!doctype html><div id="out"></div><script>const t=(document.cookie.match(/(?:^|; )tok=([^;]*)/)||[])[1];fetch("/api/data?name="+encodeURIComponent(${JSON.stringify(name)})+"&auth="+encodeURIComponent("v1:"+t))</script>`,
         );
@@ -147,8 +163,12 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
   const sockets = new Set<import("node:stream").Duplex>();
   server.on("upgrade", (req, socket) => {
     sockets.add(socket);
-    const accept = createHash("sha1").update(`${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
-    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    const accept = createHash("sha1")
+      .update(`${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest("base64");
+    socket.write(
+      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+    );
     // one frame per chunk is enough here: opcode 1 is a text message, 8 is the close frame
     socket.on("data", (d: Buffer) => void ((d[0]! & 0x0f) === 1 && wsMessages++));
     socket.on("error", () => {});

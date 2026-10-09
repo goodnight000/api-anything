@@ -1,5 +1,16 @@
 /** Per-site cookie jar and session values under ~/.api-anything (0700 dirs, 0600 files). */
-import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDomain } from "tldts";
@@ -116,7 +127,8 @@ export const sessionFile = (site: string) => join(home(), "sessions", `${safeNam
 export function loadSession(site: string): Session {
   const file = sessionFile(site);
   const s = readJson<Partial<Session>>(file, {});
-  if (!s || typeof s !== "object" || (s.cookies !== undefined && !Array.isArray(s.cookies))) throw new Error(`${file} is not a session file; delete it and log in again`);
+  if (!s || typeof s !== "object" || (s.cookies !== undefined && !Array.isArray(s.cookies)))
+    throw new Error(`${file} is not a session file; delete it and log in again`);
   return { cookies: s.cookies ?? [], values: s.values ?? {}, source: s.source, updatedAt: s.updatedAt };
 }
 
@@ -127,13 +139,22 @@ export function saveSession(site: string, s: Session): void {
 const expired = (c: StoredCookie, now: number) => c.expires > 0 && c.expires * 1000 <= now;
 
 /** Merge a browser run's cookies and session values into the stored session and save it. */
-export function mergeCapture(site: string, cookies: StoredCookie[], values: Record<string, string> = {}, now = Date.now()): Session {
+export function mergeCapture(
+  site: string,
+  cookies: StoredCookie[],
+  values: Record<string, string> = {},
+  now = Date.now(),
+): Session {
   return withLock(sessionFile(site), () => {
     const s = loadSession(site);
     const key = (c: StoredCookie) => `${c.name}\0${c.domain.toLowerCase()}\0${c.path}`;
     const jar = new Map(s.cookies.map((c) => [key(c), c]));
     for (const c of cookies) jar.set(key(c), c);
-    const merged = { cookies: [...jar.values()].filter((c) => !expired(c, now)), values: { ...s.values, ...values }, source: s.source };
+    const merged = {
+      cookies: [...jar.values()].filter((c) => !expired(c, now)),
+      values: { ...s.values, ...values },
+      source: s.source,
+    };
     saveSession(site, merged);
     return merged;
   });
@@ -202,7 +223,15 @@ export function parseSetCookie(line: string, url: string, now = Date.now()): Sto
   const u = new URL(url);
   const host = u.hostname.toLowerCase();
   const dir = u.pathname.slice(0, u.pathname.lastIndexOf("/"));
-  const c: StoredCookie = { name: pair.slice(0, eq).trim(), value: pair.slice(eq + 1).trim(), domain: host, path: dir.startsWith("/") ? dir : "/", expires: -1, httpOnly: false, secure: false };
+  const c: StoredCookie = {
+    name: pair.slice(0, eq).trim(),
+    value: pair.slice(eq + 1).trim(),
+    domain: host,
+    path: dir.startsWith("/") ? dir : "/",
+    expires: -1,
+    httpOnly: false,
+    secure: false,
+  };
   let maxAge: number | undefined;
   for (const attr of attrs) {
     const i = attr.indexOf("=");
@@ -220,7 +249,8 @@ export function parseSetCookie(line: string, url: string, now = Date.now()): Sto
     else if (k === "expires" && !Number.isNaN(Date.parse(v))) c.expires = Date.parse(v) / 1000;
     else if (k === "secure") c.secure = true;
     else if (k === "httponly") c.httpOnly = true;
-    else if (k === "samesite" && /^(strict|lax|none)$/i.test(v)) c.sameSite = (v[0]!.toUpperCase() + v.slice(1).toLowerCase()) as StoredCookie["sameSite"];
+    else if (k === "samesite" && /^(strict|lax|none)$/i.test(v))
+      c.sameSite = (v[0]!.toUpperCase() + v.slice(1).toLowerCase()) as StoredCookie["sameSite"];
   }
   // max-age wins over expires; 0 or less deletes (an expired cookie drops out of the jar)
   if (maxAge !== undefined) c.expires = maxAge <= 0 ? 1 : now / 1000 + maxAge;
@@ -246,5 +276,7 @@ export const AUTH_COOKIE =
 export function loggedIn(cookies: StoredCookie[], loginCookies?: string[], now = Date.now()): boolean {
   const live = cookies.filter((c) => !expired(c, now) && c.value);
   if (loginCookies?.length) return loginCookies.every((n) => live.some((c) => c.name === n));
-  return live.some((c) => (AUTH_COOKIE.test(c.name) && c.value.length >= 8) || (c.name === "logged_in" && c.value === "yes"));
+  return live.some(
+    (c) => (AUTH_COOKIE.test(c.name) && c.value.length >= 8) || (c.name === "logged_in" && c.value === "yes"),
+  );
 }

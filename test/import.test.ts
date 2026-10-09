@@ -30,17 +30,27 @@ test("decrypts a v10 Chromium cookie (meta version >= 24 strips the host_key has
 
 test("a real-world expires_utc (beyond JS safe-integer range) is read without throwing", () => {
   const root = tmp();
-  makeChromiumDb(join(root, "Default"), [{ host_key: ".linkedin.com", name: "li_at", value: "AQEDtoken12345678", expires_utc: 13399829086694638n }], { password: "pw" });
+  makeChromiumDb(
+    join(root, "Default"),
+    [{ host_key: ".linkedin.com", name: "li_at", value: "AQEDtoken12345678", expires_utc: 13399829086694638n }],
+    { password: "pw" },
+  );
   inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
   const r = importFromBrowsers({ url: "https://linkedin.com" });
   const c = r?.cookies.find((x) => x.name === "li_at");
   assert.equal(c?.value, "AQEDtoken12345678");
-  assert.ok(c && c.expires > 1_700_000_000 && Number.isFinite(c.expires), `expires should be a sane unix time, got ${c?.expires}`);
+  assert.ok(
+    c && c.expires > 1_700_000_000 && Number.isFinite(c.expires),
+    `expires should be a sane unix time, got ${c?.expires}`,
+  );
 });
 
 test("meta version < 24 does not strip a prefix", () => {
   const root = tmp();
-  makeChromiumDb(join(root, "Default"), [{ host_key: ".x.com", name: "auth_token", value: "0123456789abcdef" }], { password: "pw", metaVersion: 18 });
+  makeChromiumDb(join(root, "Default"), [{ host_key: ".x.com", name: "auth_token", value: "0123456789abcdef" }], {
+    password: "pw",
+    metaVersion: 18,
+  });
   inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
   const r = importFromBrowsers({ url: "https://x.com" });
   assert.equal(r?.cookies.find((c) => c.name === "auth_token")?.value, "0123456789abcdef");
@@ -48,11 +58,17 @@ test("meta version < 24 does not strip a prefix", () => {
 
 test("chooses the profile that has all loginCookies, not merely the most recent one", () => {
   const root = tmp();
-  makeChromiumDb(join(root, "Default"), [{ host_key: ".linkedin.com", name: "bcookie", value: "somebrowseridxxxx" }], { password: "pw" });
+  makeChromiumDb(join(root, "Default"), [{ host_key: ".linkedin.com", name: "bcookie", value: "somebrowseridxxxx" }], {
+    password: "pw",
+  });
   makeChromiumDb(join(root, "Profile 2"), [li, js], { password: "pw" });
   // Make Default the most recently used, so only the loginCookies rule picks Profile 2.
   utimesSync(join(root, "Default", "Network", "Cookies"), new Date(), new Date());
-  utimesSync(join(root, "Profile 2", "Network", "Cookies"), new Date(Date.now() - 100000), new Date(Date.now() - 100000));
+  utimesSync(
+    join(root, "Profile 2", "Network", "Cookies"),
+    new Date(Date.now() - 100000),
+    new Date(Date.now() - 100000),
+  );
   inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
 
   const r = importFromBrowsers({ url: "https://www.linkedin.com", loginCookies: ["li_at", "JSESSIONID"] });
@@ -61,13 +77,28 @@ test("chooses the profile that has all loginCookies, not merely the most recent 
 
 test("two signed-in profiles: refuses to guess (not the most recently used), listing each profile's name and Google account", () => {
   const root = tmp();
-  makeChromiumDb(join(root, "Default"), [{ host_key: ".reddit.com", name: "reddit_session", value: "oldsessionvalue1" }], { password: "pw" });
-  makeChromiumDb(join(root, "Profile 1"), [{ host_key: ".reddit.com", name: "reddit_session", value: "newsessionvalue2" }], { password: "pw" });
+  makeChromiumDb(
+    join(root, "Default"),
+    [{ host_key: ".reddit.com", name: "reddit_session", value: "oldsessionvalue1" }],
+    { password: "pw" },
+  );
+  makeChromiumDb(
+    join(root, "Profile 1"),
+    [{ host_key: ".reddit.com", name: "reddit_session", value: "newsessionvalue2" }],
+    { password: "pw" },
+  );
   utimesSync(join(root, "Default", "Network", "Cookies"), new Date(Date.now() - 100000), new Date(Date.now() - 100000));
   utimesSync(join(root, "Profile 1", "Network", "Cookies"), new Date(), new Date());
   writeFileSync(
     join(root, "Local State"),
-    JSON.stringify({ profile: { info_cache: { Default: { name: "Work", user_name: "someone.else@example.com" }, "Profile 1": { name: "Me", user_name: "me@example.com" } } } }),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          Default: { name: "Work", user_name: "someone.else@example.com" },
+          "Profile 1": { name: "Me", user_name: "me@example.com" },
+        },
+      },
+    }),
   );
   inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
 
@@ -86,7 +117,10 @@ test("two signed-in profiles: refuses to guess (not the most recently used), lis
     ],
   );
   // a known site's loginCookies narrow it the same way: both hold them, so still no guess
-  assert.throws(() => importFromBrowsers({ url: "https://reddit.com", loginCookies: ["reddit_session"] }), AmbiguousProfile);
+  assert.throws(
+    () => importFromBrowsers({ url: "https://reddit.com", loginCookies: ["reddit_session"] }),
+    AmbiguousProfile,
+  );
   // the human's pick is honoured, and the chosen profile's name comes back for printing
   const r = importFromBrowsers({ url: "https://reddit.com", pin: { browser: "Chrome", profile: "Profile 1" } });
   assert.equal(r?.source, "chrome:Profile 1");
@@ -97,8 +131,14 @@ test("two signed-in profiles: refuses to guess (not the most recently used), lis
 
 test("one profile signed in, another with only tracking cookies: the signed-in one, no question asked", () => {
   const root = tmp();
-  makeChromiumDb(join(root, "Default"), [{ host_key: ".reddit.com", name: "csv", value: "trackingcookie1" }], { password: "pw" });
-  makeChromiumDb(join(root, "Profile 1"), [{ host_key: ".reddit.com", name: "reddit_session", value: "realsessionvalue" }], { password: "pw" });
+  makeChromiumDb(join(root, "Default"), [{ host_key: ".reddit.com", name: "csv", value: "trackingcookie1" }], {
+    password: "pw",
+  });
+  makeChromiumDb(
+    join(root, "Profile 1"),
+    [{ host_key: ".reddit.com", name: "reddit_session", value: "realsessionvalue" }],
+    { password: "pw" },
+  );
   inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
   assert.equal(importFromBrowsers({ url: "https://www.reddit.com" })?.source, "chrome:Profile 1");
 });
@@ -106,19 +146,32 @@ test("one profile signed in, another with only tracking cookies: the signed-in o
 test("--profile pin overrides selection; a missing pin throws", () => {
   const root = tmp();
   makeChromiumDb(join(root, "Default"), [li, js], { password: "pw" });
-  makeChromiumDb(join(root, "Profile 2"), [{ host_key: ".linkedin.com", name: "li_at", value: "differentprofilexx" }], { password: "pw" });
+  makeChromiumDb(join(root, "Profile 2"), [{ host_key: ".linkedin.com", name: "li_at", value: "differentprofilexx" }], {
+    password: "pw",
+  });
   inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
 
-  assert.equal(importFromBrowsers({ url: "https://linkedin.com", pin: { profile: "Profile 2" } })?.cookies[0]!.value, "differentprofilexx");
-  assert.throws(() => importFromBrowsers({ url: "https://linkedin.com", pin: { browser: "chrome", profile: "Nope" } }), /no browser profile/);
+  assert.equal(
+    importFromBrowsers({ url: "https://linkedin.com", pin: { profile: "Profile 2" } })?.cookies[0]!.value,
+    "differentprofilexx",
+  );
+  assert.throws(
+    () => importFromBrowsers({ url: "https://linkedin.com", pin: { browser: "chrome", profile: "Nope" } }),
+    /no browser profile/,
+  );
 });
 
 test("only the site's own cookies are read", () => {
   const root = tmp();
-  makeChromiumDb(join(root, "Default"), [li, { host_key: ".evil.com", name: "li_at", value: "shouldnotappearxx" }], { password: "pw" });
+  makeChromiumDb(join(root, "Default"), [li, { host_key: ".evil.com", name: "li_at", value: "shouldnotappearxx" }], {
+    password: "pw",
+  });
   inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
   const r = importFromBrowsers({ url: "https://linkedin.com" });
-  assert.deepEqual(r?.cookies.map((c) => c.domain), [".linkedin.com"]);
+  assert.deepEqual(
+    r?.cookies.map((c) => c.domain),
+    [".linkedin.com"],
+  );
 });
 
 test("a wrong Safe Storage password skips cookies rather than failing", () => {
@@ -132,7 +185,9 @@ test("a wrong Safe Storage password skips cookies rather than failing", () => {
 
 test("Firefox plaintext moz_cookies", () => {
   const root = tmp();
-  makeFirefoxDb(join(root, "abc.default-release"), [{ host_key: "www.linkedin.com", name: "li_at", value: "firefoxtokenvalue", expires_utc: 2000000000 }]);
+  makeFirefoxDb(join(root, "abc.default-release"), [
+    { host_key: "www.linkedin.com", name: "li_at", value: "firefoxtokenvalue", expires_utc: 2000000000 },
+  ]);
   inject([{ name: "Firefox", family: "firefox", root }]);
   const r = importFromBrowsers({ url: "https://linkedin.com" });
   assert.equal(r?.source, "firefox:abc.default-release");
@@ -148,10 +203,32 @@ test("cookiesFromFile parses Netscape and JSON exports", () => {
   ].join("\n");
   const parsed = cookiesFromFile(netscape, "https://linkedin.com");
   const liAt = parsed.find((c) => c.name === "li_at")!;
-  assert.deepEqual([liAt.value, liAt.path, liAt.secure, liAt.httpOnly, liAt.expires], ["AQEDtoken", "/", true, true, 2000000000]);
+  assert.deepEqual(
+    [liAt.value, liAt.path, liAt.secure, liAt.httpOnly, liAt.expires],
+    ["AQEDtoken", "/", true, true, 2000000000],
+  );
   assert.equal(parsed.find((c) => c.name === "lang")!.secure, false);
 
-  const json = JSON.stringify([{ name: "li_at", value: "AQEDjson", domain: ".linkedin.com", path: "/", secure: true, httpOnly: true, expirationDate: 1999999999.5 }]);
+  const json = JSON.stringify([
+    {
+      name: "li_at",
+      value: "AQEDjson",
+      domain: ".linkedin.com",
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      expirationDate: 1999999999.5,
+    },
+  ]);
   const fromJson = cookiesFromFile(json, "https://linkedin.com");
-  assert.deepEqual(fromJson[0], { name: "li_at", value: "AQEDjson", domain: ".linkedin.com", path: "/", expires: 1999999999, httpOnly: true, secure: true, sameSite: undefined });
+  assert.deepEqual(fromJson[0], {
+    name: "li_at",
+    value: "AQEDjson",
+    domain: ".linkedin.com",
+    path: "/",
+    expires: 1999999999,
+    httpOnly: true,
+    secure: true,
+    sameSite: undefined,
+  });
 });

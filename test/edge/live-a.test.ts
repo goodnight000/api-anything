@@ -42,7 +42,11 @@ beforeEach(() => {
 
 const heals = (): { op: string; strategy: string; diff: string }[] => {
   try {
-    return readFileSync(join(HOME, "heals.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    return readFileSync(join(HOME, "heals.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
   } catch {
     return [];
   }
@@ -72,7 +76,12 @@ describe("a param templated into a header (Airbnb's referer)", () => {
             url: `${fx.url}/api/find?q=kittens`,
             headers: { accept: "application/json", referer: `${fx.url}/find/kittens` },
           },
-          response: { status: 200, headers: { "content-type": "application/json" }, contentType: "application/json", body: '{"results":["kittens one","kittens two"]}' },
+          response: {
+            status: 200,
+            headers: { "content-type": "application/json" },
+            contentType: "application/json",
+            body: '{"results":["kittens one","kittens two"]}',
+          },
         },
       ],
       examples: [{ q: "kittens" }],
@@ -119,19 +128,26 @@ describe("bot walls seen live must classify as blocked", () => {
       slots: [{ param: "k", at: ["query:k"] }],
       trigger: { url: "https://shop.example/s?k={k}" },
       match: { method: "GET", host: "shop.example", path: "/s" },
-      response: format === "html" ? { format, html: { items: "div.result", fields: { t: "" } } } : { format, extract: "results" },
+      response:
+        format === "html"
+          ? { format, html: { items: "div.result", fields: { t: "" } } }
+          : { format, extract: "results" },
       params: [{ name: "k", type: "string", required: true, example: "kettle" }],
       readOnly: true,
     });
 
   test("a Cloudflare interstitial is blocked (passes today)", () => {
-    const c = classify(op("html"), { status: 403, headers: { "content-type": "text/html" }, body: "<html><title>Just a moment...</title></html>" });
+    const c = classify(op("html"), {
+      status: 403,
+      headers: { "content-type": "text/html" },
+      body: "<html><title>Just a moment...</title></html>",
+    });
     assert.equal(c.class, "blocked");
   });
 
   test("BUG: Booking.com's AWS WAF interstitial (202 + awsWafCookieDomainList + challenge.js) is blocked, not drift", () => {
     const body =
-      '<!DOCTYPE html><html lang="en"><head><title></title><script>window.awsWafCookieDomainList = [\'booking.com\'];</script>' +
+      "<!DOCTYPE html><html lang=\"en\"><head><title></title><script>window.awsWafCookieDomainList = ['booking.com'];</script>" +
       '<script src="https://www.booking.com/__challenge_h78IRKX3kpQxScCExxShBNwRUlb/d8c14d4960ca/a18a4859af9c/challenge.js"></script></head><body></body></html>';
     for (const f of ["html", "json"] as const) {
       const c = classify(op(f), { status: 202, headers: { "content-type": "text/html" }, body });
@@ -182,7 +198,11 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
       examples: [{ q: "kettle" }, { q: "toaster" }],
       response: { html: { items: "li.r", fields: { title: "" } } },
     });
-    assert.equal(new URL(r.operation.request.url).pathname, "/shop", `learned ${r.operation.request.method} ${r.operation.request.url}`);
+    assert.equal(
+      new URL(r.operation.request.url).pathname,
+      "/shop",
+      `learned ${r.operation.request.method} ${r.operation.request.url}`,
+    );
     assert.equal(r.operation.request.method, "GET");
     const c = await call("shop", "search", { q: "blender" }, fast);
     assert.equal(c.ok, true, JSON.stringify(c));
@@ -215,7 +235,10 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
     // Today: the body is captured as lossy UTF-8, q is found only in the referer, and the changing
     // gzip bytes read as a nonce, so minTier 3 (a browser run per call). With a trigger whose URL
     // lacks q (YouTube's search box), add fails outright.
-    assert.ok(r.operation.slots.some((s) => s.param === "q" && s.at[0] === "body"), JSON.stringify(r.operation.slots));
+    assert.ok(
+      r.operation.slots.some((s) => s.param === "q" && s.at[0] === "body"),
+      JSON.stringify(r.operation.slots),
+    );
     assert.equal(r.operation.minTier, 1, r.warnings.join("\n"));
     const c = await call("gz", "search", { q: "otters" }, fast);
     assert.equal(c.ok, true, JSON.stringify(c));
@@ -274,7 +297,11 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
     await forgetBrowserAndJar("hotels2");
     const r = await call("hotels2", "search", { q: "Madrid" }, fast);
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.deepEqual(heals().filter((h) => h.op === "search"), [], "a bot challenge is not drift");
+    assert.deepEqual(
+      heals().filter((h) => h.op === "search"),
+      [],
+      "a bot challenge is not drift",
+    );
     assert.ok(!opOf("hotels2", "search").request.url.includes("chal_t"), opOf("hotels2", "search").request.url);
   });
 
@@ -291,7 +318,11 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
     const withExample = await call("status", "search", { q: "alpha" }, fast);
     assert.notEqual(withExample.class, "input", `the op's own example args got: ${JSON.stringify(withExample)}`);
     const withNew = await call("status", "search", { q: "charlie" }, fast);
-    assert.notEqual(withNew.class, "input", `examples fail too, so the args are not the problem: ${JSON.stringify(withNew)}`);
+    assert.notEqual(
+      withNew.class,
+      "input",
+      `examples fail too, so the args are not the problem: ${JSON.stringify(withNew)}`,
+    );
   });
 
   test("a no-results query while the example still answers is 'input' (passes today)", async () => {

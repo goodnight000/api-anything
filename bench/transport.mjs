@@ -23,7 +23,11 @@ async function browserTrial() {
     let requests = 0;
     page.on("request", () => requests++);
     await page.goto(url, { waitUntil: "domcontentloaded" });
-    await page.waitForFunction(() => [...document.querySelectorAll("li")].filter((li) => /\$\d/.test(li.innerText)).length >= 5, null, { timeout: 60_000 });
+    await page.waitForFunction(
+      () => [...document.querySelectorAll("li")].filter((li) => /\$\d/.test(li.innerText)).length >= 5,
+      null,
+      { timeout: 60_000 },
+    );
     return { ms: Math.round(performance.now() - start), requests };
   } finally {
     await browser.close();
@@ -32,16 +36,23 @@ async function browserTrial() {
 
 function apiTrial() {
   const start = performance.now();
-  const out = execFileSync(process.execPath, [join(repo, "dist/cli.js"), "call", "google-flights", "search", "origin=SFO", "destination=JFK", `date=${date}`], {
-    env: { ...process.env, API_ANYTHING_HOME: mkdtempSync(join(tmpdir(), "aa-transport-")) },
-  });
+  const out = execFileSync(
+    process.execPath,
+    [join(repo, "dist/cli.js"), "call", "google-flights", "search", "origin=SFO", "destination=JFK", `date=${date}`],
+    {
+      env: { ...process.env, API_ANYTHING_HOME: mkdtempSync(join(tmpdir(), "aa-transport-")) },
+    },
+  );
   const r = JSON.parse(out);
   if (!r.ok) throw new Error(`api call failed: ${r.class} ${r.reason}`);
   return { ms: Math.round(performance.now() - start), tier: r.tier, results: r.data.length };
 }
 
 for (let i = 1; i <= Number(v.trials); i++) {
-  for (const [arm, run] of [["browser", browserTrial], ["api", apiTrial]]) {
+  for (const [arm, run] of [
+    ["browser", browserTrial],
+    ["api", apiTrial],
+  ]) {
     console.log(JSON.stringify({ arm, trial: i, at: new Date().toISOString(), ...(await run()) }));
   }
 }

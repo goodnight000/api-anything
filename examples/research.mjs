@@ -17,7 +17,11 @@ try {
   const report = {
     query,
     stories: stories.slice(0, 5).map((s) => ({
-      title: s.title, url: s.url, points: s.points, comments: s.num_comments, date: s.created_at?.slice(0, 10),
+      title: s.title,
+      url: s.url,
+      points: s.points,
+      comments: s.num_comments,
+      date: s.created_at?.slice(0, 10),
     })),
   };
   if (process.argv.includes("--linkedin")) {
@@ -27,8 +31,13 @@ try {
       if (!company.universalName) throw new Error("LinkedIn search result lacks the company ID needed for enrichment");
       const c = await read("linkedin", "getCompany", { universalName: company.universalName });
       report.companies.push({
-        name: c.name, universalName: c.universalName, tagline: c.tagline, industry: c.industry,
-        staff: c.staffCount, hq: [c.headquarters?.city, c.headquarters?.country].filter(Boolean).join(", ") || undefined, website: c.website,
+        name: c.name,
+        universalName: c.universalName,
+        tagline: c.tagline,
+        industry: c.industry,
+        staff: c.staffCount,
+        hq: [c.headquarters?.city, c.headquarters?.country].filter(Boolean).join(", ") || undefined,
+        website: c.website,
       });
     }
   }

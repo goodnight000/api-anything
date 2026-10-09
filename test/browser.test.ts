@@ -33,7 +33,10 @@ describe("fixture site (plain http)", () => {
     const codes = [];
     for (let i = 0; i < 3; i++) codes.push((await fetch(`${fx.url}/api/limited`)).status);
     assert.deepEqual(codes, [200, 200, 429]);
-    assert.match(await (await fetch(`${fx.url}/list`)).text(), /<li class="user"><a class="name" href="\/u\/alice">alice<\/a>/);
+    assert.match(
+      await (await fetch(`${fx.url}/list`)).text(),
+      /<li class="user"><a class="name" href="\/u\/alice">alice<\/a>/,
+    );
   });
 });
 
@@ -87,7 +90,10 @@ describe("browser", { skip: !chromeAvailable() && "Google Chrome not installed" 
       // bob has a link the app rendered; dave has none, so only the history API can route there
       const r = await runTrigger({ url: `${fx.url}/spa/${name}`, softFrom: `${fx.url}/spa/alice`, profileDir });
       assert.equal(r.exchanges.filter((e) => e.resourceType === "document").length, 1, `${name}: no second page load`);
-      assert.ok(r.exchanges.some((e) => e.request.url.endsWith(`/api/spa/user?name=${name}`)), `${name}: the route's XHR fired`);
+      assert.ok(
+        r.exchanges.some((e) => e.request.url.endsWith(`/api/spa/user?name=${name}`)),
+        `${name}: the route's XHR fired`,
+      );
       assert.equal(r.finalUrl, `${fx.url}/spa/${name}`);
     }
   });
@@ -99,7 +105,12 @@ describe("browser", { skip: !chromeAvailable() && "Google Chrome not installed" 
     // A worker installed on an earlier visit would proxy fetches past page routing; api-anything blocks workers.
     await runTrigger({ url: `${fx.url}/sw`, profileDir, intercept: guard });
     const sw = await runTrigger({ url: `${fx.url}/sw`, profileDir, intercept: guard });
-    const follow = await runTrigger({ url: `${fx.url}/follow/alice`, steps: [{ action: "click", selector: "#follow" }], profileDir, intercept: guard });
+    const follow = await runTrigger({
+      url: `${fx.url}/follow/alice`,
+      steps: [{ action: "click", selector: "#follow" }],
+      profileDir,
+      intercept: guard,
+    });
     assert.equal(hits(), 0, "no write reached the server");
     assert.ok(sw.exchanges.some((e) => e.request.url.endsWith("/api/sw-write") && e.aborted));
     assert.ok(follow.exchanges.some((e) => e.request.url.endsWith("/api/follow?user=alice") && e.aborted));
@@ -134,13 +145,25 @@ describe("browser", { skip: !chromeAvailable() && "Google Chrome not installed" 
     const f = await runTrigger({ url: `${fx.url}/feed`, profileDir });
     const feed = f.exchanges.find((e) => e.request.url.endsWith("/api/signed/feed"));
     assert.equal(feed?.response?.status, 200);
-    const replay = await pageFetch({ origin: fx.url, url: feed!.request.url, method: "GET", headers: { "x-sig": feed!.request.headers["x-sig"] }, profileDir });
+    const replay = await pageFetch({
+      origin: fx.url,
+      url: feed!.request.url,
+      method: "GET",
+      headers: { "x-sig": feed!.request.headers["x-sig"] },
+      profileDir,
+    });
     assert.equal(replay.status, 403, "a reused signature is rejected");
     fx.setRequireSignature(false);
   });
 
   test("pageFetch runs fetch() on the site origin with the profile's cookies", async () => {
-    const r = await pageFetch({ origin: fx.url, url: gqlUrl, method: "GET", headers: { "x-csrf-token": csrf, authorization: PUBLIC_BEARER }, profileDir });
+    const r = await pageFetch({
+      origin: fx.url,
+      url: gqlUrl,
+      method: "GET",
+      headers: { "x-csrf-token": csrf, authorization: PUBLIC_BEARER },
+      profileDir,
+    });
     assert.equal(r.status, 200);
     assert.equal(JSON.parse(r.body).data.user.name, "alice");
     assert.match(r.headers["content-type"], /json/);

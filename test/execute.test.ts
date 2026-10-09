@@ -31,7 +31,12 @@ const site = parseSite({
     {
       name: "post",
       readOnly: false,
-      request: { method: "POST", url: "https://t.test/api/post", headers: { "content-type": "application/json" }, body: '{"text":"x"}' },
+      request: {
+        method: "POST",
+        url: "https://t.test/api/post",
+        headers: { "content-type": "application/json" },
+        body: '{"text":"x"}',
+      },
       slots: [{ param: "text", at: ["body", "json:/text"] }],
       trigger: { url: "https://t.test/compose" },
       params: [{ name: "text" }],
@@ -47,11 +52,15 @@ const fake = (h: Handler): typeof fetch =>
     seen.push({ url, method: init?.method ?? "GET" });
     return h(url, init);
   }) as typeof fetch;
-const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
+const json = (v: unknown, status = 200) =>
+  new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
 const opts = (h: Handler) => ({ fetchImpl: fake(h), maxTier: 1 as const, minIntervalMs: 0 });
 const heals = () => {
   try {
-    return readFileSync(join(HOME, "heals.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    return readFileSync(join(HOME, "heals.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
   } catch {
     return [];
   }
@@ -65,7 +74,17 @@ beforeEach(() => {
 });
 
 test("writes: refused without allowWrites; 5xx and network errors are ambiguous and never retried", async () => {
-  assert.equal((await call("t", "post", { text: "hi" }, opts(() => json({})))).class, "refused");
+  assert.equal(
+    (
+      await call(
+        "t",
+        "post",
+        { text: "hi" },
+        opts(() => json({})),
+      )
+    ).class,
+    "refused",
+  );
   assert.equal(seen.length, 0);
 
   const r = await call("t", "post", { text: "hi" }, { ...opts(() => json({ error: "boom" }, 502)), allowWrites: true });
@@ -74,7 +93,12 @@ test("writes: refused without allowWrites; 5xx and network errors are ambiguous 
   assert.match(r.next ?? "", /may have gone through/);
 
   seen = [];
-  const n = await call("t", "post", { text: "hi" }, { ...opts(() => Promise.reject(new TypeError("fetch failed"))), allowWrites: true });
+  const n = await call(
+    "t",
+    "post",
+    { text: "hi" },
+    { ...opts(() => Promise.reject(new TypeError("fetch failed"))), allowWrites: true },
+  );
   assert.equal(n.class, "error");
   assert.equal(seen.length, 1);
   assert.match(n.next ?? "", /may have gone through/);
@@ -83,7 +107,8 @@ test("writes: refused without allowWrites; 5xx and network errors are ambiguous 
 test("drift heals by rescan and retries once; drifting again within 10 min marks it stale instead", async () => {
   let current = QID;
   const h: Handler = (url) => {
-    if (url === "https://t.test/u/bob") return new Response('<script src="/app.js"></script>', { headers: { "content-type": "text/html" } });
+    if (url === "https://t.test/u/bob")
+      return new Response('<script src="/app.js"></script>', { headers: { "content-type": "text/html" } });
     if (url === "https://t.test/app.js") return new Response(`r=[{id:"${current}",name:"User"}]`);
     if (url.includes(`/api/${current}/User`)) return json({ user: { name: new URL(url).searchParams.get("name") } });
     return new Response("", { status: 404 });
@@ -93,7 +118,10 @@ test("drift heals by rescan and retries once; drifting again within 10 min marks
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(r.healed, true);
   assert.deepEqual(r.data, { name: "bob" });
-  assert.deepEqual(heals().map((x) => x.strategy), ["rescan"]);
+  assert.deepEqual(
+    heals().map((x) => x.strategy),
+    ["rescan"],
+  );
 
   current = "Qq1Ww2Ee3Rr4Tt5Yy6Uu7I";
   // the bundle now serves an id the template does not have, but the op was healed seconds ago
@@ -115,7 +143,12 @@ test("a byte-identical rescan is not a heal; rate is reported without heal or re
   assert.equal(heals().length, 0);
 
   seen = [];
-  const rate = await call("t", "user", { name: "bob" }, opts(() => json({ message: "Too many requests" }, 429)));
+  const rate = await call(
+    "t",
+    "user",
+    { name: "bob" },
+    opts(() => json({ message: "Too many requests" }, 429)),
+  );
   assert.equal(rate.class, "rate");
   assert.equal(seen.length, 1);
   assert.match(rate.next ?? "", /do not retry/);
@@ -152,13 +185,22 @@ test("no data for an arg while the example still returns data is input, not drif
 
   // when the example fails too, it is drift and the heal runs
   seen = [];
-  const d = await call("nf", "user", { name: "bob" }, opts(() => json({ data: {} })));
+  const d = await call(
+    "nf",
+    "user",
+    { name: "bob" },
+    opts(() => json({ data: {} })),
+  );
   assert.equal(d.class, "drift");
   assert.ok(seen.length >= 2);
 });
 
 test("a write answered 204, HTML or plain text is ok, sent once", async () => {
-  for (const res of [new Response(null, { status: 204 }), new Response("<html>Posted!</html>", { headers: { "content-type": "text/html" } }), new Response("OK")]) {
+  for (const res of [
+    new Response(null, { status: 204 }),
+    new Response("<html>Posted!</html>", { headers: { "content-type": "text/html" } }),
+    new Response("OK"),
+  ]) {
     seen = [];
     const r = await call("t", "post", { text: "hi" }, { ...opts(() => res), allowWrites: true });
     assert.equal(r.ok, true, JSON.stringify(r));
@@ -179,15 +221,37 @@ test("add --from a capture judges the op on the captured response: a wrong --ext
         id: 7,
         resourceType: "fetch",
         request: { method: "GET", url: "https://t.test/api/User?screen_name=nasa", headers: {} },
-        response: { status: 200, headers: {}, contentType: "application/json", body: '{"data":{"user_result":{"name":"NASA","followers":9}}}' },
+        response: {
+          status: 200,
+          headers: {},
+          contentType: "application/json",
+          body: '{"data":{"user_result":{"name":"NASA","followers":9}}}',
+        },
       },
     ],
   };
-  const bad = await addOperation({ site: "addfrom", op: "u", examples: [{ screen_name: "nasa" }], from: { capture, id: 7 }, response: { extract: "data.user.result" } });
-  assert.ok(bad.warnings.some((w) => /on the captured response this op says drift: extract path "data.user.result" missing.*add --from cfake1/.test(w)), bad.warnings.join("\n"));
+  const bad = await addOperation({
+    site: "addfrom",
+    op: "u",
+    examples: [{ screen_name: "nasa" }],
+    from: { capture, id: 7 },
+    response: { extract: "data.user.result" },
+  });
+  assert.ok(
+    bad.warnings.some((w) =>
+      /on the captured response this op says drift: extract path "data.user.result" missing.*add --from cfake1/.test(w),
+    ),
+    bad.warnings.join("\n"),
+  );
   assert.equal(bad.preview, undefined);
   assert.equal(bad.operation.trigger.url, "https://t.test/u/{screen_name}");
-  const good = await addOperation({ site: "addfrom", op: "u", examples: [{ screen_name: "nasa" }], from: { capture, id: 7 }, response: { extract: "data.user_result", pick: ["name"] } });
+  const good = await addOperation({
+    site: "addfrom",
+    op: "u",
+    examples: [{ screen_name: "nasa" }],
+    from: { capture, id: 7 },
+    response: { extract: "data.user_result", pick: ["name"] },
+  });
   assert.deepEqual(good.preview, { first: { name: "NASA" } });
   assert.equal(good.replaced, true);
 });

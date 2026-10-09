@@ -4,7 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
-  appendHeal, clearStale, lastHealAt, listSites, loadSite, markStale, rememberedTier, rememberTier, saveSite, staleList, staleMark,
+  appendHeal,
+  clearStale,
+  lastHealAt,
+  listSites,
+  loadSite,
+  markStale,
+  rememberedTier,
+  rememberTier,
+  saveSite,
+  staleList,
+  staleMark,
 } from "../src/store.ts";
 import type { Site } from "../src/spec.ts";
 
@@ -63,7 +73,10 @@ test("heal log appends JSONL and records the heal time", () => {
   const { home } = fresh();
   appendHeal({ site: "x", op: "getUser", strategy: "rescan", diff: "queryId A -> B" }, 1000);
   appendHeal({ site: "x", op: "getUser", strategy: "recapture", diff: "header added" }, 2000);
-  const lines = readFileSync(join(home, "heals.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const lines = readFileSync(join(home, "heals.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
   assert.equal(lines.length, 2);
   assert.equal(lines[1].strategy, "recapture");
   assert.equal(lastHealAt("x", "getUser"), 2000);
@@ -75,7 +88,9 @@ test("stale marks expire after their TTL and carry a reason; tiers are remembere
   markStale("x", "getUser", "healed twice in 10 min", 30 * 60_000, 0);
   assert.deepEqual(staleMark("x", "getUser", 1000), { until: 30 * 60_000, reason: "healed twice in 10 min" });
   assert.equal(staleMark("x", "getUser", 30 * 60_000), undefined);
-  assert.deepEqual(staleList(1000), [{ site: "x", op: "getUser", until: 30 * 60_000, reason: "healed twice in 10 min" }]);
+  assert.deepEqual(staleList(1000), [
+    { site: "x", op: "getUser", until: 30 * 60_000, reason: "healed twice in 10 min" },
+  ]);
   clearStale("x", "getUser");
   assert.equal(staleMark("x", "getUser", 1000), undefined);
 
@@ -86,8 +101,16 @@ test("stale marks expire after their TTL and carry a reason; tiers are remembere
 
 test("secret scan: exact live values are secrets; heuristics only warn, and URL paths do not trip them", async () => {
   const { scanSecrets } = await import("../src/store.ts");
-  const session = { cookies: [{ name: "sid", value: '"abc123secret"', domain: "x.test", path: "/", expires: -1, httpOnly: true, secure: true }], values: { authorization: "Bearer zzzzzzzz" } };
-  const spec = { url: "https://x.test/api/graphql/SfvBzVjFV1WLibrBOSdD6w/UserByScreenNameAndMore/extra/segments", h: { a: "abc123secret", b: "eyJhbGciOi.eyJzdWIiOiIx.c2lnbmF0dXJl" } };
+  const session = {
+    cookies: [
+      { name: "sid", value: '"abc123secret"', domain: "x.test", path: "/", expires: -1, httpOnly: true, secure: true },
+    ],
+    values: { authorization: "Bearer zzzzzzzz" },
+  };
+  const spec = {
+    url: "https://x.test/api/graphql/SfvBzVjFV1WLibrBOSdD6w/UserByScreenNameAndMore/extra/segments",
+    h: { a: "abc123secret", b: "eyJhbGciOi.eyJzdWIiOiIx.c2lnbmF0dXJl" },
+  };
   const r = scanSecrets(spec, session);
   assert.deepEqual(r.secrets, ["$.h.a holds the live cookie sid"]);
   assert.deepEqual(r.warnings, ["$.h.b looks like a JWT (eyJhbGciOi.eyJzdWIiOiIx....); check it is public"]);
@@ -113,9 +136,20 @@ test("export: shapes and typed example values stripped, examples kept on request
     operations: [
       {
         ...site("x").operations[0]!,
-        request: { method: "POST", url: "https://demo.test/a", headers: { authorization: "Bearer PUBLICBEARERPUBLICBEARER" }, body: '{"id":1234567,"q":"alpha"}' },
-        slots: [{ param: "id", at: ["body", "json:/id"] }, { param: "q", at: ["body", "json:/q"] }],
-        params: [{ name: "id", type: "number", required: true, example: 1234567 }, { name: "q", type: "string", required: true, example: "alpha" }],
+        request: {
+          method: "POST",
+          url: "https://demo.test/a",
+          headers: { authorization: "Bearer PUBLICBEARERPUBLICBEARER" },
+          body: '{"id":1234567,"q":"alpha"}',
+        },
+        slots: [
+          { param: "id", at: ["body", "json:/id"] },
+          { param: "q", at: ["body", "json:/q"] },
+        ],
+        params: [
+          { name: "id", type: "number", required: true, example: 1234567 },
+          { name: "q", type: "string", required: true, example: "alpha" },
+        ],
         response: { format: "json", shape: { "viewer.accounts.jane.doe@corp.example": "object" } },
         public: ["authorization"],
       },
@@ -131,5 +165,7 @@ test("export: shapes and typed example values stripped, examples kept on request
   assert.deepEqual(r.secrets, [], "the public header is allowed");
   assert.equal(exportSite("demo", { keepExamples: true }).spec.operations[0]!.params[1]!.example, "alpha");
   saveSite({ ...spec, operations: [{ ...spec.operations[0]!, public: undefined }] });
-  assert.deepEqual(exportSite("demo").secrets, ["$.operations[0].request.headers.authorization holds the live session value authorization"]);
+  assert.deepEqual(exportSite("demo").secrets, [
+    "$.operations[0].request.headers.authorization holds the live session value authorization",
+  ]);
 });

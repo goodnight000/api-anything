@@ -19,7 +19,10 @@ export interface Resolved {
 export function loadSite(name: string, bundledDir = BUNDLED_DIR): Resolved | undefined {
   name = safeName(name);
   const file = `${name}.json`;
-  for (const [dir, source] of [[userSitesDir(), "user"], [bundledDir, "bundled"]] as const) {
+  for (const [dir, source] of [
+    [userSitesDir(), "user"],
+    [bundledDir, "bundled"],
+  ] as const) {
     const path = join(dir, file);
     if (!existsSync(path)) continue;
     try {
@@ -128,7 +131,14 @@ export function lastHealAt(site: string, op: string): number | undefined {
   return loadState().healedAt[key(site, op)];
 }
 
-export function markStale(site: string, op: string, reason: string, ttlMs = 30 * 60_000, now = Date.now(), extra: { tier3?: boolean } = {}): void {
+export function markStale(
+  site: string,
+  op: string,
+  reason: string,
+  ttlMs = 30 * 60_000,
+  now = Date.now(),
+  extra: { tier3?: boolean } = {},
+): void {
   updateState((s) => void (s.stale[key(site, op)] = { until: now + ttlMs, reason, ...extra }));
 }
 
@@ -182,7 +192,10 @@ function pctDecode(s: string, plus: boolean): string {
 }
 
 const ESC: Record<string, string> = { b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
-const jsonUnescape = (s: string) => s.replace(/\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g, (_, c: string) => (c.length > 1 ? String.fromCharCode(parseInt(c.slice(1), 16)) : (ESC[c] ?? c)));
+const jsonUnescape = (s: string) =>
+  s.replace(/\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g, (_, c: string) =>
+    c.length > 1 ? String.fromCharCode(parseInt(c.slice(1), 16)) : (ESC[c] ?? c),
+  );
 
 /** Base64 (or base64url) runs that decode to text. */
 function base64Texts(s: string): string[] {
@@ -202,7 +215,7 @@ function decodings(v: string): Set<string> {
     const next: string[] = [];
     for (const f of frontier) {
       for (const d of [pctDecode(f, false), pctDecode(f, true), jsonUnescape(f), ...base64Texts(f)]) {
-        if (!out.has(d)) (out.add(d), next.push(d));
+        if (!out.has(d)) out.add(d), next.push(d);
       }
     }
     frontier = next;
@@ -213,7 +226,9 @@ function decodings(v: string): Set<string> {
 const IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
 const IPV6 = /^[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}$/i;
 /** A literal IP address (a client's remoteHost the page reported): the user's, not the site's. */
-const ipAddress = (v: string) => (IPV4.test(v) && !/^(127\.|0\.)|\.0$/.test(v)) || (IPV6.test(v) && (v.includes("::") || v.split(":").length >= 5) && v !== "::1");
+const ipAddress = (v: string) =>
+  (IPV4.test(v) && !/^(127\.|0\.)|\.0$/.test(v)) ||
+  (IPV6.test(v) && (v.includes("::") || v.split(":").length >= 5) && v !== "::1");
 /**
  * An IP address anywhere in a leaf: the whole value, "ip:port", an x-forwarded-for list, "ip=.."
  * text. A version string is not one: "Chrome/120.0.0.0" follows a letter or "/", and ends in .0.
@@ -235,10 +250,15 @@ function ipIn(v: string): string | undefined {
  * regex heuristics, which do misfire. `allowed`: JSON paths a human marked public (an op's
  * `public` headers); skipped.
  */
-export function scanSecrets(value: unknown, session: Session, allowed: Set<string> = new Set()): { secrets: string[]; warnings: string[] } {
+export function scanSecrets(
+  value: unknown,
+  session: Session,
+  allowed: Set<string> = new Set(),
+): { secrets: string[]; warnings: string[] } {
   const live: [string, string][] = [];
   const add = (label: string, v: string) => {
-    for (const f of new Set([v, v.replace(/^"|"$/g, ""), pctDecode(v, false)])) if (f.length >= 6) live.push([label, f]);
+    for (const f of new Set([v, v.replace(/^"|"$/g, ""), pctDecode(v, false)]))
+      if (f.length >= 6) live.push([label, f]);
   };
   for (const c of session.cookies) add(`cookie ${c.name}`, c.value);
   for (const [k, v] of Object.entries(session.values)) add(`session value ${k}`, v);
@@ -248,10 +268,26 @@ export function scanSecrets(value: unknown, session: Session, allowed: Set<strin
     if (allowed.has(path)) return;
     if (typeof v === "string") {
       const forms = live.length ? [...decodings(v)] : [];
-      for (const [label, s] of live) if (forms.some((f) => f.includes(s))) secrets.push(`${path} holds the live ${label}`);
+      for (const [label, s] of live)
+        if (forms.some((f) => f.includes(s))) secrets.push(`${path} holds the live ${label}`);
       const text = pctDecode(v, false); // percent-encoded bodies hide the blob's shape
-      const hit = ([["a JWT", JWT], ["a bearer token", BEARER], ["a long hex blob", HEX_BLOB], ["a long base64 blob", BASE64_BLOB]] as const)
-        .map(([why, re]) => [why, [...text.matchAll(new RegExp(re, "g"))].map((m) => m[0]).find((m) => why !== "a long base64 blob" || RANDOM(m))] as const)
+      const hit = (
+        [
+          ["a JWT", JWT],
+          ["a bearer token", BEARER],
+          ["a long hex blob", HEX_BLOB],
+          ["a long base64 blob", BASE64_BLOB],
+        ] as const
+      )
+        .map(
+          ([why, re]) =>
+            [
+              why,
+              [...text.matchAll(new RegExp(re, "g"))]
+                .map((m) => m[0])
+                .find((m) => why !== "a long base64 blob" || RANDOM(m)),
+            ] as const,
+        )
         .find(([, m]) => m);
       if (hit) warnings.push(`${path} looks like ${hit[0]} (${hit[1]!.slice(0, 24)}...); check it is public`);
     } else if (Array.isArray(v)) v.forEach((x, i) => visit(x, `${path}[${i}]`));
@@ -267,7 +303,10 @@ export function scanSecrets(value: unknown, session: Session, allowed: Set<strin
  * are public), response shapes dropped (their keys can be user data), then scanned against this
  * machine's live session.
  */
-export function exportSite(name: string, o: { keepExamples?: boolean } = {}): { spec: Site; secrets: string[]; warnings: string[] } {
+export function exportSite(
+  name: string,
+  o: { keepExamples?: boolean } = {},
+): { spec: Site; secrets: string[]; warnings: string[] } {
   const r = loadSite(name);
   if (!r) throw new Error(`no site "${name}"`);
   const spec = structuredClone(r.site);
@@ -296,9 +335,16 @@ export function exportSite(name: string, o: { keepExamples?: boolean } = {}): { 
       const path = `$.operations[${i}].request.${root.startsWith("header:") ? `headers.${root.slice(7)}` : /^(path|query)/.test(root) ? "url" : "body"}`;
       const where = `$.operations[${i}].request ${leaf.at.join(" > ")}`;
       const n = leafName(leaf.at);
-      if (!pub.has(n.toLowerCase()) && isCredential(n, leaf.value)) named.push([path, `${where} holds a literal credential (${n}); make it a session: ref, or list ${n} in the op's public names if the site ships it to everyone`]);
+      if (!pub.has(n.toLowerCase()) && isCredential(n, leaf.value))
+        named.push([
+          path,
+          `${where} holds a literal credential (${n}); make it a session: ref, or list ${n} in the op's public names if the site ships it to everyone`,
+        ]);
       const ip = ipIn(leaf.value);
-      if (ip) ips.push(`${where} holds the IP address ${ip} (likely yours, as the page reported it); blank it if the site does not need it`);
+      if (ip)
+        ips.push(
+          `${where} holds the IP address ${ip} (likely yours, as the page reported it); blank it if the site does not need it`,
+        );
     }
   });
   const scan = scanSecrets(spec, loadSession(name), allowed);

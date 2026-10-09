@@ -137,30 +137,46 @@ export async function startFixture(): Promise<Fixture> {
   let requireSignature = false;
   let limitedHits = 0;
 
-  const send = (res: ServerResponse, status: number, type: string, body: string, headers: Record<string, string | string[]> = {}) => {
+  const send = (
+    res: ServerResponse,
+    status: number,
+    type: string,
+    body: string,
+    headers: Record<string, string | string[]> = {},
+  ) => {
     res.writeHead(status, { "content-type": type, ...headers });
     res.end(body);
   };
-  const json = (res: ServerResponse, status: number, v: unknown) => send(res, status, "application/json; charset=utf-8", JSON.stringify(v));
+  const json = (res: ServerResponse, status: number, v: unknown) =>
+    send(res, status, "application/json; charset=utf-8", JSON.stringify(v));
 
   const server = createServer(async (req, res) => {
     const u = new URL(req.url ?? "/", "http://fixture");
     const p = u.pathname;
     const body = await readBody(req);
     const jar = cookies(req);
-    if (p.startsWith("/api/")) calls.push({ method: req.method ?? "GET", path: u.pathname + u.search, headers: req.headers, body });
+    if (p.startsWith("/api/"))
+      calls.push({ method: req.method ?? "GET", path: u.pathname + u.search, headers: req.headers, body });
 
     // HTML pages hand out the CSRF cookie that page JS echoes in x-csrf-token (X's ct0 pattern).
     const html = (status: number, markup: string) =>
-      send(res, status, "text/html; charset=utf-8", markup, jar.ct0 ? {} : { "set-cookie": `ct0=${randomBytes(16).toString("hex")}; Path=/; SameSite=Lax` });
+      send(
+        res,
+        status,
+        "text/html; charset=utf-8",
+        markup,
+        jar.ct0 ? {} : { "set-cookie": `ct0=${randomBytes(16).toString("hex")}; Path=/; SameSite=Lax` },
+      );
     const csrfOk = () => !!jar.ct0 && req.headers["x-csrf-token"] === jar.ct0;
 
     let m: RegExpMatchArray | null;
     if (p === "/") return html(200, page(state.build, LIST_USERS.map((n) => `<a href="/u/${n}">${n}</a>`).join(" ")));
     if (/^\/u\/[^/]+$/.test(p)) return html(200, page(state.build));
     if (p === "/search") return html(200, page(state.build));
-    if (p === "/compose") return html(200, page(state.build, '<textarea id="text"></textarea><button id="post">Post</button>'));
-    if (p === "/feed" || p === "/scoped" || p === "/walled" || p.startsWith("/spa/")) return html(200, page(state.build));
+    if (p === "/compose")
+      return html(200, page(state.build, '<textarea id="text"></textarea><button id="post">Post</button>'));
+    if (p === "/feed" || p === "/scoped" || p === "/walled" || p.startsWith("/spa/"))
+      return html(200, page(state.build));
     if (/^\/follow\/[^/]+$/.test(p)) return html(200, page(state.build, '<button id="follow">Follow</button>'));
     if (p === "/sw") {
       // registers a service worker that proxies every fetch, then posts once it controls the page
@@ -170,29 +186,43 @@ export async function startFixture(): Promise<Fixture> {
       );
     }
     if (p === "/sw.js") {
-      return send(res, 200, "text/javascript", "self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',e=>e.respondWith(fetch(e.request)));");
+      return send(
+        res,
+        200,
+        "text/javascript",
+        "self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',e=>e.respondWith(fetch(e.request)));",
+      );
     }
     if (p === "/list")
       return html(
         200,
         `<!doctype html><html><body><ul class="users">${LIST_USERS.map(
-          (n) => `<li class="user"><a class="name" href="/u/${n}">${n}</a> <span class="followers">${n.length * 100}</span></li>`,
+          (n) =>
+            `<li class="user"><a class="name" href="/u/${n}">${n}</a> <span class="followers">${n.length * 100}</span></li>`,
         ).join("")}</ul></body></html>`,
       );
     if (p === `/static/app.${state.build}.js`) return send(res, 200, "application/javascript", appJs(state));
 
     if (p === "/login") {
-      return send(res, 302, "text/plain", "", { location: "/private", "set-cookie": `session=${mint()}; Path=/; HttpOnly; SameSite=Lax` });
+      return send(res, 302, "text/plain", "", {
+        location: "/private",
+        "set-cookie": `session=${mint()}; Path=/; HttpOnly; SameSite=Lax`,
+      });
     }
     // Login wall returned as 200 HTML where JSON is expected, as Instagram does. A revoked session
     // (present but no longer valid) is a login wall too, which is how self-heal by re-import is tested.
-    if (p === "/private") return jar.session && !revoked.has(jar.session) ? json(res, 200, { data: { secret: "only for you" } }) : html(200, LOGIN_PAGE);
+    if (p === "/private")
+      return jar.session && !revoked.has(jar.session)
+        ? json(res, 200, { data: { secret: "only for you" } })
+        : html(200, LOGIN_PAGE);
 
     if ((m = p.match(/^\/api\/graphql\/([^/]+)\/(UserByName|CreatePost)$/))) {
       const [, qid, op] = m;
-      if (qid !== (op === "UserByName" ? state.userQueryId : state.createQueryId)) return send(res, 404, "text/plain", "");
+      if (qid !== (op === "UserByName" ? state.userQueryId : state.createQueryId))
+        return send(res, 404, "text/plain", "");
       if (!csrfOk()) return json(res, 403, { errors: [{ message: "csrf token mismatch" }] });
-      if (req.headers.authorization !== PUBLIC_BEARER) return json(res, 400, { errors: [{ message: "Bad Authentication data", code: 215 }] });
+      if (req.headers.authorization !== PUBLIC_BEARER)
+        return json(res, 400, { errors: [{ message: "Bad Authentication data", code: 215 }] });
       if (op === "UserByName" && req.method === "GET") {
         let v: { name?: unknown; withExtras?: unknown };
         try {
@@ -200,7 +230,8 @@ export async function startFixture(): Promise<Fixture> {
         } catch {
           return json(res, 400, { errors: [{ message: "variables must be JSON" }] });
         }
-        if (typeof v.name !== "string") return json(res, 400, { errors: [{ message: "Variable $name must be defined" }] });
+        if (typeof v.name !== "string")
+          return json(res, 400, { errors: [{ message: "Variable $name must be defined" }] });
         // a handle that doesn't exist: 200 with empty data, as X answers
         if (v.name.startsWith("nobody")) return json(res, 200, { data: {} });
         return json(res, 200, user(v.name, v.withExtras === true));
@@ -216,8 +247,16 @@ export async function startFixture(): Promise<Fixture> {
       try {
         const outer = JSON.parse(new URLSearchParams(body).get("f.req") ?? "");
         const [q] = JSON.parse(outer[0][0][1]) as [string, number];
-        const results = [1, 2, 3].map((i) => [`${q} result ${i}`, `https://example.test/${encodeURIComponent(q)}/${i}`]);
-        return send(res, 200, "application/json; charset=utf-8", `)]}'\n${JSON.stringify([["wrb.fr", "search", JSON.stringify([results])]])}`);
+        const results = [1, 2, 3].map((i) => [
+          `${q} result ${i}`,
+          `https://example.test/${encodeURIComponent(q)}/${i}`,
+        ]);
+        return send(
+          res,
+          200,
+          "application/json; charset=utf-8",
+          `)]}'\n${JSON.stringify([["wrb.fr", "search", JSON.stringify([results])]])}`,
+        );
       } catch {
         return send(res, 400, "text/plain", "bad f.req");
       }
@@ -226,26 +265,44 @@ export async function startFixture(): Promise<Fixture> {
     if (p === "/api/signed/feed") {
       const sig = req.headers["x-sig"];
       if (requireSignature) {
-        if (typeof sig !== "string" || seenSigs.has(sig)) return json(res, 403, { errors: [{ message: "invalid signature" }] });
+        if (typeof sig !== "string" || seenSigs.has(sig))
+          return json(res, 403, { errors: [{ message: "invalid signature" }] });
         seenSigs.add(sig);
       }
-      return json(res, 200, { data: { feed: [{ id: "f1", text: "first" }, { id: "f2", text: "second" }] } });
+      return json(res, 200, {
+        data: {
+          feed: [
+            { id: "f1", text: "first" },
+            { id: "f2", text: "second" },
+          ],
+        },
+      });
     }
 
     // A bot wall that only lets real browsers through; Chrome's brotli support stands in for its TLS fingerprint.
     if (p === "/api/walled") {
       if (!/\bbr\b/.test(String(req.headers["accept-encoding"] ?? ""))) {
-        return send(res, 403, "text/html", "<html><head><title>Just a moment...</title></head><body>cf-chl-bypass</body></html>");
+        return send(
+          res,
+          403,
+          "text/html",
+          "<html><head><title>Just a moment...</title></head><body>cf-chl-bypass</body></html>",
+        );
       }
       return json(res, 200, { data: { items: ["behind the wall"] } });
     }
-    if (p === "/api/scoped") return json(res, 200, { data: { results: [`${u.searchParams.get("q")} one`, `${u.searchParams.get("q")} two`] } });
+    if (p === "/api/scoped")
+      return json(res, 200, {
+        data: { results: [`${u.searchParams.get("q")} one`, `${u.searchParams.get("q")} two`] },
+      });
     if (p === "/api/follow" || p === "/api/sw-write") return json(res, 200, { ok: true });
     if (p === "/api/spa/user") return json(res, 200, { name: u.searchParams.get("name") });
 
     if (p === "/api/limited") {
       limitedHits++;
-      return limitedHits > 2 ? json(res, 429, { message: "Rate limit exceeded. Please wait." }) : json(res, 200, { data: { n: limitedHits } });
+      return limitedHits > 2
+        ? json(res, 429, { message: "Rate limit exceeded. Please wait." })
+        : json(res, 200, { data: { n: limitedHits } });
     }
 
     send(res, 404, "text/plain", "not found");

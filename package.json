@@ -33,6 +33,8 @@
     "cli": "tsx src/cli.ts",
     "test": "node --import tsx --test test/*.test.ts test/edge/*.test.ts",
     "check": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome ci .",
+    "format": "biome check --write .",
     "demo": "node examples/research.mjs"
   },
   "keywords": [
@@ -56,6 +58,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.15",
     "@types/node": "^26.6.3",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"

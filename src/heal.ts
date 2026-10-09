@@ -8,8 +8,28 @@ import { botWall, judge, type Class } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
-import { ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches, rankCandidates, type Args } from "./learn.js";
-import { cookieHeaderFor, home, loadSession, mergeCapture, parseCookieHeader, pruneCaptures, readJson, safeName, siteOf, writePrivate } from "./session.js";
+import {
+  ASSET_EXT,
+  capturePages,
+  checkExamples,
+  hashLike,
+  learnOperation,
+  matches,
+  rankCandidates,
+  type Args,
+} from "./learn.js";
+import {
+  cookieHeaderFor,
+  home,
+  loadSession,
+  mergeCapture,
+  parseCookieHeader,
+  pruneCaptures,
+  readJson,
+  safeName,
+  siteOf,
+  writePrivate,
+} from "./session.js";
 import type { Match, Operation, ResponseSpec, Site, Slot, Trigger, Volatile } from "./spec.js";
 import { appendHeal, clearStale, loadSite, rememberTier, scanSecrets, updateSite } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
@@ -103,14 +123,23 @@ export const writeGuard = (m?: Match, o: { url?: string; args?: Args } = {}) => 
 const readGuard =
   (m: Match) =>
   (e: Exchange, acting: boolean): boolean =>
-    acting && e.resourceType !== "websocket" && !SAFE_METHODS.has(e.request.method.toUpperCase()) && !(Object.keys(m).length > 0 && matches(m, e.request));
+    acting &&
+    e.resourceType !== "websocket" &&
+    !SAFE_METHODS.has(e.request.method.toUpperCase()) &&
+    !(Object.keys(m).length > 0 && matches(m, e.request));
 
 /** Values of the op's session: refs as the browser just sent them. */
 function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
   const out: Record<string, string> = {};
   for (const s of op.slots) {
     // a session ref's own leaf, or a session hole in a param's templated leaf
-    const refs = (s.template !== undefined ? [...new Set([...(s.ref ? [s.ref] : []), ...templateRefs(s.template)])] : s.ref ? [s.ref] : []).filter((r) => r.startsWith("session:"));
+    const refs = (
+      s.template !== undefined
+        ? [...new Set([...(s.ref ? [s.ref] : []), ...templateRefs(s.template)])]
+        : s.ref
+          ? [s.ref]
+          : []
+    ).filter((r) => r.startsWith("session:"));
     if (!refs.length) continue;
     let v: unknown;
     try {
@@ -130,12 +159,26 @@ function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
 function refPart(template: string, ref: string, leaf: string, escape?: "url" | "json"): string | undefined {
   const re = template
     .split(/(\{\{|\}\}|\{[^{}]+\})/)
-    .map((p) => (p === "{{" ? "\\{" : p === "}}" ? "\\}" : p === `{${ref}}` ? "(.*?)" : /^\{[^{}]+\}$/.test(p) ? ".*?" : escapeRe(p)))
+    .map((p) =>
+      p === "{{"
+        ? "\\{"
+        : p === "}}"
+          ? "\\}"
+          : p === `{${ref}}`
+            ? "(.*?)"
+            : /^\{[^{}]+\}$/.test(p)
+              ? ".*?"
+              : escapeRe(p),
+    )
     .join("");
   const m = new RegExp(`^${re}$`, "s").exec(leaf);
   if (!m) return undefined;
   try {
-    return escape === "url" ? decodeURIComponent(m[1]!) : escape === "json" ? (JSON.parse(`"${m[1]}"`) as string) : m[1];
+    return escape === "url"
+      ? decodeURIComponent(m[1]!)
+      : escape === "json"
+        ? (JSON.parse(`"${m[1]}"`) as string)
+        : m[1];
   } catch {
     return m[1];
   }
@@ -156,21 +199,32 @@ export interface TriggerRun {
  */
 function carriesArgs(op: Operation, e: Exchange, args: Args): boolean {
   const cookies = Object.entries(parseCookieHeader(e.request.headers.cookie ?? "")).map(([name, value]) => ({
-    name, value, domain: new URL(e.request.url).hostname, path: "/", expires: -1, secure: false, httpOnly: false,
+    name,
+    value,
+    domain: new URL(e.request.url).hostname,
+    path: "/",
+    expires: -1,
+    secure: false,
+    httpOnly: false,
   }));
   const expected = buildRequest(op, args, { cookies, values: sessionValuesOf(op, e) });
   return op.params.every((p) => {
     if (args[p.name] === undefined && p.default === undefined) return !p.required;
-    const slots = op.slots.filter((s) =>
-      (s.param === p.name || s.template?.includes(`{${p.name}}`)) && !/^header:(referer|origin|cookie)$/i.test(s.at[0]!),
+    const slots = op.slots.filter(
+      (s) =>
+        (s.param === p.name || s.template?.includes(`{${p.name}}`)) &&
+        !/^header:(referer|origin|cookie)$/i.test(s.at[0]!),
     );
-    return slots.length > 0 && slots.every((s) => {
-      try {
-        return asText(getAt(e.request, s.at)) === asText(getAt(expected, s.at));
-      } catch {
-        return false;
-      }
-    });
+    return (
+      slots.length > 0 &&
+      slots.every((s) => {
+        try {
+          return asText(getAt(e.request, s.at)) === asText(getAt(expected, s.at));
+        } catch {
+          return false;
+        }
+      })
+    );
   });
 }
 
@@ -178,8 +232,8 @@ function pickHit(op: Operation, hits: Exchange[], args: Args): Exchange | undefi
   // An answer to another query is never a fallback. Compare the declared parameter positions,
   // including short values and structured args; substring ranking is only a discovery aid.
   const answered = hits.filter((e) => (e.response || e.aborted) && carriesArgs(op, e, args));
-  const score = (e: Exchange) => e.aborted || judgeExchange(op, e)?.class === "ok" ? 1 : 0;
-  return answered.reduce<Exchange | undefined>((best, e) => !best || score(e) >= score(best) ? e : best, undefined);
+  const score = (e: Exchange) => (e.aborted || judgeExchange(op, e)?.class === "ok" ? 1 : 0);
+  return answered.reduce<Exchange | undefined>((best, e) => (!best || score(e) >= score(best) ? e : best), undefined);
 }
 
 /** The final page of a run, when it is a sign-in page the trigger was redirected to. */
@@ -199,11 +253,20 @@ export function loginWall(capture: CaptureResult, triggerUrl: string): string | 
 }
 
 /** Run an op's trigger with args in the shared profile and refresh the session from it. */
-export async function runOpTrigger(site: string, op: Operation, args: Args, o: { intercept?: boolean } = {}): Promise<TriggerRun> {
+export async function runOpTrigger(
+  site: string,
+  op: Operation,
+  args: Args,
+  o: { intercept?: boolean } = {},
+): Promise<TriggerRun> {
   const t = fillTrigger(op.trigger, args);
   const isHit = (e: Exchange) => matches(op.match, e.request);
   // A write's tier-3 run is the UI sending it for real; learning or healing one intercepts it.
-  const intercept = o.intercept ? writeGuard(op.match, { url: t.url, args }) : op.readOnly ? readGuard(op.match) : undefined;
+  const intercept = o.intercept
+    ? writeGuard(op.match, { url: t.url, args })
+    : op.readOnly
+      ? readGuard(op.match)
+      : undefined;
   const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit });
   const hits = capture.exchanges.filter(isHit);
   const matched = pickHit(op, hits, args);
@@ -219,7 +282,11 @@ export async function runOpTrigger(site: string, op: Operation, args: Args, o: {
 export function judgeExchange(op: Operation, e: Exchange): Attempt | undefined {
   const r = e.response;
   if (!r) return undefined;
-  return { tier: 3, status: r.status, ...judge(op, { status: r.status, headers: r.headers, body: r.body ?? "", url: e.request.url }) };
+  return {
+    tier: 3,
+    status: r.status,
+    ...judge(op, { status: r.status, headers: r.headers, body: r.body ?? "", url: e.request.url }),
+  };
 }
 
 /* ------------------------------------------------------------ captures */
@@ -237,19 +304,42 @@ export interface CaptureFile extends CaptureResult {
 const captureFile = (id: string) => join(home(), "captures", `${safeName(id)}.json`);
 let lastId = "";
 
-function saveCapture(o: { url: string; steps?: TriggerStep[]; softFrom?: string; write?: boolean }, r: CaptureResult): CaptureFile {
+function saveCapture(
+  o: { url: string; steps?: TriggerStep[]; softFrom?: string; write?: boolean },
+  r: CaptureResult,
+): CaptureFile {
   let id = `c${Date.now().toString(36)}`;
   while (id <= lastId) id = `c${(parseInt(lastId.slice(1), 36) + 1).toString(36)}`;
   lastId = id;
-  const file: CaptureFile = { id, at: new Date().toISOString(), url: o.url, steps: o.steps, softFrom: o.softFrom, ...(o.write ? { write: true } : {}), ...r };
+  const file: CaptureFile = {
+    id,
+    at: new Date().toISOString(),
+    url: o.url,
+    steps: o.steps,
+    softFrom: o.softFrom,
+    ...(o.write ? { write: true } : {}),
+    ...r,
+  };
   writePrivate(captureFile(id), JSON.stringify(file));
   pruneCaptures();
   return file;
 }
 
 /** Run a page, keep everything it sent under ~/.api-anything/captures/<id>.json (0600: it holds cookies). */
-export async function capturePage(o: { url: string; steps?: TriggerStep[]; softFrom?: string; write?: boolean; args?: Args }): Promise<CaptureFile> {
-  const r = await runTrigger({ url: o.url, steps: o.steps, softFrom: o.softFrom, profileDir: profileDir(), intercept: o.write ? writeGuard(undefined, { url: o.url, args: o.args }) : undefined });
+export async function capturePage(o: {
+  url: string;
+  steps?: TriggerStep[];
+  softFrom?: string;
+  write?: boolean;
+  args?: Args;
+}): Promise<CaptureFile> {
+  const r = await runTrigger({
+    url: o.url,
+    steps: o.steps,
+    softFrom: o.softFrom,
+    profileDir: profileDir(),
+    intercept: o.write ? writeGuard(undefined, { url: o.url, args: o.args }) : undefined,
+  });
   return saveCapture(o, r);
 }
 
@@ -340,13 +430,19 @@ export function templatizeUrl(url: string, args: Args): string {
     // path segment and query value are both taken (/u/nasa?tab=nasa): which one is the arg is unknown.
     const named = pairs?.some((p) => inQuery(p) && keyOf(p) === k.toLowerCase());
     if (pairs?.some(inQuery) || segs.some(inPath)) {
-      pairs = pairs?.map((p) => (inQuery(p) && (!named || keyOf(p) === k.toLowerCase()) ? `${p.slice(0, p.indexOf("="))}=${hole}` : p));
+      pairs = pairs?.map((p) =>
+        inQuery(p) && (!named || keyOf(p) === k.toLowerCase()) ? `${p.slice(0, p.indexOf("="))}=${hole}` : p,
+      );
       if (!named) segs = segs.map((seg) => (inPath(seg) ? hole : seg));
     } else {
-      const forms = [...new Set([encodeURIComponent(asText(v)), encodeURIComponent(asText(v)).replace(/%20/g, "+"), asText(v)])].map((f) => escapeRe(lit(f)));
+      const forms = [
+        ...new Set([encodeURIComponent(asText(v)), encodeURIComponent(asText(v)).replace(/%20/g, "+"), asText(v)]),
+      ].map((f) => escapeRe(lit(f)));
       const re = new RegExp(forms.join("|"), "gi");
       segs = segs.map((seg) => seg.replace(re, hole));
-      pairs = pairs?.map((p) => (p.includes("=") ? `${p.slice(0, p.indexOf("=") + 1)}${p.slice(p.indexOf("=") + 1).replace(re, hole)}` : p));
+      pairs = pairs?.map((p) =>
+        p.includes("=") ? `${p.slice(0, p.indexOf("=") + 1)}${p.slice(p.indexOf("=") + 1).replace(re, hole)}` : p,
+      );
     }
   }
   return `${lit(origin)}${segs.join("/")}${pairs ? `?${pairs.join("&")}` : ""}${lit(hash)}`;
@@ -360,7 +456,11 @@ export function putOperation(site: Site, op: Operation): Site {
 }
 
 /** learnOperation, but a failure on a page that was a bot wall says so (the recipe or the pick is not the problem). */
-function learnOrExplain(site: string, run: CaptureResult, input: Parameters<typeof learnOperation>[0]): ReturnType<typeof learnOperation> {
+function learnOrExplain(
+  site: string,
+  run: CaptureResult,
+  input: Parameters<typeof learnOperation>[0],
+): ReturnType<typeof learnOperation> {
   try {
     return learnOperation(input);
   } catch (e) {
@@ -368,8 +468,13 @@ function learnOrExplain(site: string, run: CaptureResult, input: Parameters<type
     const docs = run.exchanges.filter((x) => x.resourceType === "document" && x.response);
     const own = docs.length ? siteOf(new URL(docs[0]!.request.url).hostname) : undefined;
     const doc = docs.filter((x) => siteOf(new URL(x.request.url).hostname) === own).at(-1);
-    const wall = doc?.response && botWall({ status: doc.response.status, headers: doc.response.headers, body: doc.response.body ?? "" });
-    if (wall) throw new Error(`the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} and clear it, then add again (learning said: ${(e as Error).message})`);
+    const wall =
+      doc?.response &&
+      botWall({ status: doc.response.status, headers: doc.response.headers, body: doc.response.body ?? "" });
+    if (wall)
+      throw new Error(
+        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} and clear it, then add again (learning said: ${(e as Error).message})`,
+      );
     throw e;
   }
 }
@@ -403,7 +508,10 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   if (ex1) checkExamples(ex1, "example");
   if (ex2) checkExamples(ex2, "example 2");
   for (const c of [i.from?.capture, i.from2]) {
-    if (i.write && c && !c.write) throw new Error(`capture ${c.id} ran without --write, so any write in it was already sent; capture again with --write`);
+    if (i.write && c && !c.write)
+      throw new Error(
+        `capture ${c.id} ran without --write, so any write in it was already sent; capture again with --write`,
+      );
   }
   let trigger = i.trigger;
   if (!trigger && i.from) {
@@ -413,7 +521,11 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       ...(s.selector ? { selector: templatize(s.selector, ex1) } : {}),
       ...(s.value ? { value: s.action === "goto" ? templatizeUrl(s.value, ex1) : templatize(s.value, ex1) } : {}),
     });
-    trigger = { url: templatizeUrl(c.url, ex1), ...(c.softFrom ? { softFrom: c.softFrom } : {}), ...(c.steps ? { steps: c.steps.map(step) } : {}) };
+    trigger = {
+      url: templatizeUrl(c.url, ex1),
+      ...(c.softFrom ? { softFrom: c.softFrom } : {}),
+      ...(c.steps ? { steps: c.steps.map(step) } : {}),
+    };
   }
   if (!trigger) throw new Error("a trigger url is needed (or --from a capture)");
   if (trigger.url.startsWith("/")) {
@@ -421,7 +533,12 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     trigger = { ...trigger, url: existing.baseUrl.replace(/\/$/, "") + trigger.url };
   }
   const t0 = trigger;
-  const unplaced = Object.keys(ex1).filter((k) => ![t0.url, t0.softFrom ?? "", ...(t0.steps ?? []).flatMap((st) => [st.selector ?? "", st.value ?? ""])].some((x) => x.includes(`{${k}}`)));
+  const unplaced = Object.keys(ex1).filter(
+    (k) =>
+      ![t0.url, t0.softFrom ?? "", ...(t0.steps ?? []).flatMap((st) => [st.selector ?? "", st.value ?? ""])].some((x) =>
+        x.includes(`{${k}}`),
+      ),
+  );
 
   let run1: CaptureResult;
   let run2: CaptureResult | undefined;
@@ -432,14 +549,21 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   } else {
     const run = async (a: Args) => {
       const t = fillTrigger(trigger!, a);
-      const r = await runTrigger({ ...t, profileDir: profileDir(), intercept: i.write ? writeGuard(i.match, { url: t.url, args: a }) : undefined });
+      const r = await runTrigger({
+        ...t,
+        profileDir: profileDir(),
+        intercept: i.write ? writeGuard(i.match, { url: t.url, args: a }) : undefined,
+      });
       const saved = saveCapture({ url: t.url, steps: t.steps, softFrom: t.softFrom, write: i.write }, r);
       captures.push(saved.id);
       return saved;
     };
     run1 = await run(ex1);
     const wall = loginWall(run1, fillTrigger(trigger, ex1).url);
-    if (wall) throw new Error(`the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${i.site}; then add again`);
+    if (wall)
+      throw new Error(
+        `the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${i.site}; then add again`,
+      );
     run2 = await run(ex2 ?? ex1);
   }
   const r = i.response ?? {};
@@ -463,7 +587,10 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   });
   const recipe = r.html ?? r.embedded;
   const warnings = learned.warnings.filter((w) => !(recipe && w.startsWith("response is HTML")));
-  if (unplaced.length) warnings.push(`the trigger has no {${unplaced.join("}, {")}}: tier-3 runs and heals would load the example's page; put the param in --trigger`);
+  if (unplaced.length)
+    warnings.push(
+      `the trigger has no {${unplaced.join("}, {")}}: tier-3 runs and heals would load the example's page; put the param in --trigger`,
+    );
   let operation: Operation = {
     ...learned.operation,
     ...(i.description ? { description: i.description } : {}),
@@ -483,7 +610,9 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       const sent = await send(operation, ex2 ?? ex1, session, { site: i.site, fetchImpl: i.fetchImpl });
       if (judge(operation, sent).class === "ok") {
         operation = { ...operation, minTier: 1 };
-        warnings.push("...but run 1's template replays fine with example 2's args, so those values are session-scoped: minTier 1");
+        warnings.push(
+          "...but run 1's template replays fine with example 2's args, so those values are session-scoped: minTier 1",
+        );
       }
     } catch {
       /* keep minTier 3 */
@@ -493,16 +622,26 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   let preview: AddResult["preview"];
   const res = learned.exchange.response;
   if (res) {
-    const j = judge(operation, { status: res.status, headers: res.headers, body: res.body ?? "", url: learned.exchange.request.url });
+    const j = judge(operation, {
+      status: res.status,
+      headers: res.headers,
+      body: res.body ?? "",
+      url: learned.exchange.request.url,
+    });
     const again = captures[0] ?? i.from?.capture.id;
     if (j.class === "ok") preview = previewOf(j.data);
     else if (j.class === "blocked" || j.class === "auth" || j.class === "rate") {
       // a bot wall or a login page is not fixed by editing the recipe
       warnings.push(
         `the captured response is ${j.class}: ${j.reason}. The op was learned from ${j.class === "rate" ? "a throttled answer" : "a challenge or sign-in page"}: ` +
-          (j.class === "rate" ? "wait a few minutes, then add again" : `ask the user to run api-anything login ${i.site} (and clear any challenge), then add again`),
+          (j.class === "rate"
+            ? "wait a few minutes, then add again"
+            : `ask the user to run api-anything login ${i.site} (and clear any challenge), then add again`),
       );
-    } else warnings.push(`on the captured response this op says ${j.class}: ${j.reason}. Fix --extract/--pick/--html/--embedded and re-run add --from ${again} (no browser needed)`);
+    } else
+      warnings.push(
+        `on the captured response this op says ${j.class}: ${j.reason}. Fix --extract/--pick/--html/--embedded and re-run add --from ${again} (no browser needed)`,
+      );
   }
 
   const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
@@ -588,7 +727,11 @@ function nearestToken(texts: string[], v: Volatile, strict = false): string | un
   return tied.size === 1 ? [...tied][0] : undefined;
 }
 
-async function fetchText(url: string, headers: Record<string, string>, fetchImpl: typeof fetch): Promise<{ text: string; url: string }> {
+async function fetchText(
+  url: string,
+  headers: Record<string, string>,
+  fetchImpl: typeof fetch,
+): Promise<{ text: string; url: string }> {
   try {
     const r = await fetchImpl(url, { headers, redirect: "follow", signal: AbortSignal.timeout(15_000) });
     return { text: r.ok ? await r.text() : "", url: r.url || url };
@@ -601,7 +744,12 @@ async function fetchText(url: string, headers: Record<string, string>, fetchImpl
  * Browserless heal: fetch the trigger document and the scripts it references, and swap in the
  * token of each volatile's shape nearest its anchor. Undefined when nothing new was found.
  */
-export async function rescan(site: string, op: Operation, args: Args, fetchImpl: typeof fetch = fetch): Promise<{ operation: Operation; diff: string } | undefined> {
+export async function rescan(
+  site: string,
+  op: Operation,
+  args: Args,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ operation: Operation; diff: string } | undefined> {
   if (!op.volatile.length) return undefined;
   const session = loadSession(site);
   const url = fillTrigger(op.trigger, args).url;
@@ -621,7 +769,9 @@ export async function rescan(site: string, op: Operation, args: Args, fetchImpl:
     ...doc.matchAll(/<link\b[^>]*\bhref=["']([^"']+\.m?js(?:\?[^"']*)?)["']/gi),
   ].map((m) => new URL(m[1]!, docUrl).href);
   // ponytail: only scripts the document references directly; ids in lazily loaded chunks need recapture.
-  const scripts = await Promise.all([...new Set(refs)].slice(0, 40).map(async (s) => (await fetchText(s, headers(s), fetchImpl)).text));
+  const scripts = await Promise.all(
+    [...new Set(refs)].slice(0, 40).map(async (s) => (await fetchText(s, headers(s), fetchImpl)).text),
+  );
   const texts = [doc, ...scripts];
 
   const types = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]));
@@ -653,7 +803,8 @@ function template(op: Operation, args: Args): string {
 
 function summarize(a: Operation, b: Operation): string {
   const parts: string[] = [];
-  if (a.request.url !== b.request.url) parts.push(`url ${new URL(a.request.url).pathname} -> ${new URL(b.request.url).pathname}`);
+  if (a.request.url !== b.request.url)
+    parts.push(`url ${new URL(a.request.url).pathname} -> ${new URL(b.request.url).pathname}`);
   const names = new Set([...Object.keys(a.request.headers), ...Object.keys(b.request.headers)]);
   const headers = [...names].filter((n) => a.request.headers[n] !== b.request.headers[n]);
   if (headers.length) parts.push(`headers ${headers.join(",")}`);
@@ -681,10 +832,20 @@ export type HealResult =
 // A check answered with these says nothing about the candidate: stop, and don't spend a browser run on it.
 const STOP: ReadonlySet<Class> = new Set(["rate", "blocked", "auth"]);
 
-function saveHealed(site: string, op: Operation, strategy: "rescan" | "recapture", diff: string, attempt: Attempt): HealResult {
+function saveHealed(
+  site: string,
+  op: Operation,
+  strategy: "rescan" | "recapture",
+  diff: string,
+  attempt: Attempt,
+): HealResult {
   const allowed = new Set((op.public ?? []).map((h) => `$.request.headers.${h}`));
   const secrets = scanSecrets(op, loadSession(site), allowed).secrets;
-  if (secrets.length) return { outcome: "failed", reason: `refusing to save a healed spec containing a credential: ${secrets.join("; ")}` };
+  if (secrets.length)
+    return {
+      outcome: "failed",
+      reason: `refusing to save a healed spec containing a credential: ${secrets.join("; ")}`,
+    };
   updateSite(site, (current) => {
     if (!current) throw new Error(`site "${site}" disappeared during heal`);
     return putOperation(current, op);
@@ -724,7 +885,12 @@ export async function healOperation(
   site: string,
   op: Operation,
   args: Args,
-  o: { validate: (candidate: Operation) => Promise<Attempt>; fetchImpl?: typeof fetch; loginCookies?: string[]; browser?: boolean },
+  o: {
+    validate: (candidate: Operation) => Promise<Attempt>;
+    fetchImpl?: typeof fetch;
+    loginCookies?: string[];
+    browser?: boolean;
+  },
 ): Promise<HealResult> {
   let budget = op.readOnly ? 2 : 1;
   let last: Attempt | undefined;
@@ -736,14 +902,20 @@ export async function healOperation(
     budget--;
     last = await o.validate(scanned.operation);
     if (last.class === "ok") return saveHealed(site, scanned.operation, "rescan", scanned.diff, last);
-    if (STOP.has(last.class)) return { outcome: "failed", attempt: last, transient: true, reason: swapped.replace("%s", last.reason) };
+    if (STOP.has(last.class))
+      return { outcome: "failed", attempt: last, transient: true, reason: swapped.replace("%s", last.reason) };
     if (!budget) return { outcome: "failed", attempt: last, reason: swapped.replace("%s", last.reason) };
   }
   const tried = scanned ? swapped.replace("%s", last!.reason) : "rescan found nothing new";
-  if (o.browser === false) return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs the browser (maxTier 1)` };
-  if (!chromeAvailable()) return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs Google Chrome` };
+  if (o.browser === false)
+    return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs the browser (maxTier 1)` };
+  if (!chromeAvailable())
+    return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs Google Chrome` };
 
-  const examples = withDefaults(op, Object.fromEntries(op.params.flatMap((p) => (p.example !== undefined ? [[p.name, p.example]] : []))));
+  const examples = withDefaults(
+    op,
+    Object.fromEntries(op.params.flatMap((p) => (p.example !== undefined ? [[p.name, p.example]] : []))),
+  );
   const learnArgs = learnable(op, callArgs) || !learnable(op, examples) ? callArgs : examples;
   let run: TriggerRun;
   try {
@@ -751,15 +923,37 @@ export async function healOperation(
   } catch (e) {
     const reason = `the browser run failed: ${(e as Error).message.split("\n")[0]}`;
     // another process holds the profile: nothing about the op was learned
-    if (e instanceof ProfileInUse) return { outcome: "failed", attempt: { tier: 3, class: "error", reason, hint: PROFILE_HINT }, transient: true, reason };
+    if (e instanceof ProfileInUse)
+      return {
+        outcome: "failed",
+        attempt: { tier: 3, class: "error", reason, hint: PROFILE_HINT },
+        transient: true,
+        reason,
+      };
     return { outcome: "failed", attempt: last, reason };
   }
   if (!run.matched && run.loginWall) {
-    return { outcome: "failed", transient: true, attempt: { tier: 3, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` }, reason: `the trigger landed on a sign-in page (${run.loginWall})` };
+    return {
+      outcome: "failed",
+      transient: true,
+      attempt: { tier: 3, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` },
+      reason: `the trigger landed on a sign-in page (${run.loginWall})`,
+    };
   }
-  if (!run.capture.exchanges.some((e) => matches(op.match, e.request))) return { outcome: "failed", attempt: last, reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` };
+  if (!run.capture.exchanges.some((e) => matches(op.match, e.request)))
+    return {
+      outcome: "failed",
+      attempt: last,
+      reason: `the trigger fired no request matching ${JSON.stringify(op.match)}`,
+    };
   const seen = run.matched && judgeExchange(op, run.matched);
-  if (seen && STOP.has(seen.class)) return { outcome: "failed", attempt: seen, transient: true, reason: `the site's own request says ${seen.class}: ${seen.reason}` };
+  if (seen && STOP.has(seen.class))
+    return {
+      outcome: "failed",
+      attempt: seen,
+      transient: true,
+      reason: `the site's own request says ${seen.class}: ${seen.reason}`,
+    };
   // The site's own answer is this call's answer only when the trigger ran with this call's args.
   const fallback = op.readOnly && learnArgs === callArgs && run.matched ? judgeExchange(op, run.matched) : undefined;
   let fresh: Operation;
@@ -806,21 +1000,52 @@ export async function healOperation(
     readOnly: op.readOnly,
     ...(op.public ? { public: op.public } : {}),
     minTier: Math.max(op.minTier, fresh.minTier) as Operation["minTier"],
-    response: { ...fresh.response, format: op.response.format, extract: op.response.extract, pick: op.response.pick, html: op.response.html, embedded: op.response.embedded },
+    response: {
+      ...fresh.response,
+      format: op.response.format,
+      extract: op.response.extract,
+      pick: op.response.pick,
+      html: op.response.html,
+      embedded: op.response.embedded,
+    },
   };
-  const lost = [...new Set(op.slots.flatMap((s) => (s.param ? [s.param] : [])))].filter((p) => !candidate.slots.some((s) => s.param === p));
-  if (lost.length) return { outcome: "failed", attempt: last, fallback, reason: `re-learning found no place for ${lost.join(", ")}; not saved` };
+  const lost = [...new Set(op.slots.flatMap((s) => (s.param ? [s.param] : [])))].filter(
+    (p) => !candidate.slots.some((s) => s.param === p),
+  );
+  if (lost.length)
+    return {
+      outcome: "failed",
+      attempt: last,
+      fallback,
+      reason: `re-learning found no place for ${lost.join(", ")}; not saved`,
+    };
   // A moved parameter can heal; an inferred suffix/prefix is not proof of the caller's meaning.
   // Credential names may change during a repair without changing parameter encoding.
-  const encoding = (s: Slot) => JSON.stringify([s.template?.replace(/\{(?:cookie|session):[^{}]+\}/g, "{credential}"), s.escape]);
-  const changedParam = candidate.slots.find((s) => s.param && !/^header:(referer|origin|cookie)$/i.test(s.at[0]!) &&
-    !op.slots.some((old) => old.param === s.param && encoding(old) === encoding(s)),
+  const encoding = (s: Slot) =>
+    JSON.stringify([s.template?.replace(/\{(?:cookie|session):[^{}]+\}/g, "{credential}"), s.escape]);
+  const changedParam = candidate.slots.find(
+    (s) =>
+      s.param &&
+      !/^header:(referer|origin|cookie)$/i.test(s.at[0]!) &&
+      !op.slots.some((old) => old.param === s.param && encoding(old) === encoding(s)),
   );
-  if (changedParam) return { outcome: "failed", attempt: last, fallback, reason: `re-learning changed the encoding of ${changedParam.param}; re-add the operation to confirm it` };
+  if (changedParam)
+    return {
+      outcome: "failed",
+      attempt: last,
+      fallback,
+      reason: `re-learning changed the encoding of ${changedParam.param}; re-add the operation to confirm it`,
+    };
   if (template(candidate, learnArgs) === template(op, learnArgs)) {
     return { outcome: "identical", fallback, reason: "re-learning produced a byte-identical template" };
   }
   last = await o.validate(candidate);
   if (last.class === "ok") return saveHealed(site, candidate, "recapture", summarize(op, candidate), last);
-  return { outcome: "failed", attempt: last, fallback, ...(STOP.has(last.class) ? { transient: true } : {}), reason: `recaptured template failed replay: ${last.reason}` };
+  return {
+    outcome: "failed",
+    attempt: last,
+    fallback,
+    ...(STOP.has(last.class) ? { transient: true } : {}),
+    reason: `recaptured template failed replay: ${last.reason}`,
+  };
 }

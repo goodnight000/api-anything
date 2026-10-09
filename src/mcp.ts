@@ -15,7 +15,9 @@ import { browserSource, cookieNames, importSession, loggedIn, resolveLoginTarget
 import { loadSession, saveSession, sessionFile, withLock } from "./session.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
 
-export const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+export const VERSION = (
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
+).version;
 
 /**
  * A `next` hint in MCP terms: the CLI's `ops`, `sites` and `login` are tools here; commands only the
@@ -26,9 +28,14 @@ export function mcpNext(next: string): string {
     .replace(/rerun with --allow-writes \(MCP: [^)]*\)/, "ask the user to restart this MCP server with --allow-writes")
     .replace(/api-anything ops ([\w.-]+)/g, 'list_operations {"site":"$1"}')
     .replace(/api-anything sites/g, "list_sites")
-    .replace(/(?:ask the user to run:? )?api-anything login ([\w.-]+)/g, 'the login tool {"site":"$1"} (mode "window" when the user must sign in or clear a challenge by hand)')
+    .replace(
+      /(?:ask the user to run:? )?api-anything login ([\w.-]+)/g,
+      'the login tool {"site":"$1"} (mode "window" when the user must sign in or clear a challenge by hand)',
+    )
     .replace(/api-anything add creates one/, "a new site is added with the CLI");
-  return /\bapi-anything (heal|add|capture|verify|export)\b/.test(out) ? `${out} (api-anything commands are CLI only: ask the user to run them in a terminal)` : out;
+  return /\bapi-anything (heal|add|capture|verify|export)\b/.test(out)
+    ? `${out} (api-anything commands are CLI only: ask the user to run them in a terminal)`
+    : out;
 }
 
 /**
@@ -43,7 +50,10 @@ export function asTable(data: unknown): unknown {
   return { columns, rows: data.map((x) => columns.map((c) => (c in x ? x[c] : null))) };
 }
 
-const reply = (v: unknown, isError = false) => ({ content: [{ type: "text" as const, text: JSON.stringify(v) }], isError });
+const reply = (v: unknown, isError = false) => ({
+  content: [{ type: "text" as const, text: JSON.stringify(v) }],
+  isError,
+});
 
 /** Every failure comes back as {error, next} JSON, like call_operation's, never as a bare exception text. */
 const guarded =
@@ -53,7 +63,16 @@ const guarded =
       return await fn(a);
     } catch (e) {
       const msg = (e as Error).message.split("\n")[0]!;
-      return reply({ ok: false, error: msg, next: /invalid site name|no site/.test(msg) ? "list_sites" : "fix or delete the file named in error, then retry once" }, true);
+      return reply(
+        {
+          ok: false,
+          error: msg,
+          next: /invalid site name|no site/.test(msg)
+            ? "list_sites"
+            : "fix or delete the file named in error, then retry once",
+        },
+        true,
+      );
     }
   };
 
@@ -91,7 +110,8 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
   server.registerTool(
     "list_operations",
     {
-      description: "List a site's operations with their params, and the site's notes (caveats, arg formats). Call this before call_operation.",
+      description:
+        "List a site's operations with their params, and the site's notes (caveats, arg formats). Call this before call_operation.",
       inputSchema: { site: z.string().describe("site name from list_sites") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -127,7 +147,9 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     {
       description:
         "Call a site operation. Returns {ok, class, data, tier, healed?, ms, reason?, next?}; a list of records comes back as data {columns, rows} (one row per item, null for a missing field). `reason` also explains a slow success. On failure follow `next` at most once, then stop and report." +
-        (allowWrites ? " Write operations change the user's account: only call them when the user asked for that exact action." : " Writes are disabled on this server."),
+        (allowWrites
+          ? " Write operations change the user's account: only call them when the user asked for that exact action."
+          : " Writes are disabled on this server."),
       inputSchema: {
         site: z.string(),
         op: z.string().describe("operation name from list_operations"),
@@ -137,7 +159,14 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     },
     guarded(async ({ site, op, args }: { site: string; op: string; args?: Record<string, unknown> }) => {
       const r = await call(site, op, args ?? {}, { allowWrites });
-      return reply({ ...r, ...(r.data !== undefined ? { data: asTable(r.data) } : {}), ...(r.next ? { next: mcpNext(r.next) } : {}) }, !r.ok);
+      return reply(
+        {
+          ...r,
+          ...(r.data !== undefined ? { data: asTable(r.data) } : {}),
+          ...(r.next ? { next: mcpNext(r.next) } : {}),
+        },
+        !r.ok,
+      );
     }),
   );
 
@@ -166,14 +195,25 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
         // a human signs in by hand: they see which site and which account
         const cookies = await login({ url: t.url, profileDir: profileDir(), waitForEnter: false });
         withLock(sessionFile(t.site), () => saveSession(t.site, { ...loadSession(t.site), cookies, source: "window" }));
-        return reply({ ok: true, site: t.site, source: "window", cookies: cookieNames(cookies), loggedIn: loggedIn(cookies, t.loginCookies) });
+        return reply({
+          ok: true,
+          site: t.site,
+          source: "window",
+          cookies: cookieNames(cookies),
+          loggedIn: loggedIn(cookies, t.loginCookies),
+        });
       }
       // An agent may be acting on injected page text: it may only refresh a known site's session from
       // the profile a human already picked, never pull another domain's or another account's cookies.
       const source = loadSite(t.site) ? browserSource(t.site) : undefined;
       if (!source) {
         return reply(
-          { ok: false, site: t.site, error: "MCP can only refresh a session the user imported with the CLI", next: `ask the user to run in a terminal: api-anything login ${t.site} (or use mode "window")` },
+          {
+            ok: false,
+            site: t.site,
+            error: "MCP can only refresh a session the user imported with the CLI",
+            next: `ask the user to run in a terminal: api-anything login ${t.site} (or use mode "window")`,
+          },
           true,
         );
       }
@@ -181,9 +221,26 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
       try {
         imported = await importSession(t.site, t.url, { loginCookies: t.loginCookies, profile: source });
       } catch (e) {
-        return reply({ ok: false, site: t.site, error: (e as Error).message, next: `ask the user to run: api-anything login ${t.site}` }, true);
+        return reply(
+          {
+            ok: false,
+            site: t.site,
+            error: (e as Error).message,
+            next: `ask the user to run: api-anything login ${t.site}`,
+          },
+          true,
+        );
       }
-      if (!imported) return reply({ ok: false, site: t.site, error: `no signed-in session in ${source}`, next: `ask the user to run: api-anything login ${t.site}` }, true);
+      if (!imported)
+        return reply(
+          {
+            ok: false,
+            site: t.site,
+            error: `no signed-in session in ${source}`,
+            next: `ask the user to run: api-anything login ${t.site}`,
+          },
+          true,
+        );
       return reply({
         ok: true,
         site: t.site,

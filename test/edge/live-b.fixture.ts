@@ -26,7 +26,9 @@ export async function startFixture(): Promise<Fixture> {
         return res.end();
       }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", etag, "cache-control": "no-cache" });
-      return res.end(`<!doctype html><html><body><ul><li class="r"><a href="/x/${q}">result for ${q}</a></li><li class="r"><a href="/y/${q}">more ${q}</a></li></ul></body></html>`);
+      return res.end(
+        `<!doctype html><html><body><ul><li class="r"><a href="/x/${q}">result for ${q}</a></li><li class="r"><a href="/y/${q}">more ${q}</a></li></ul></body></html>`,
+      );
     }
     res.writeHead(404, { "content-type": "text/plain" });
     res.end("not found");
@@ -36,9 +38,10 @@ export async function startFixture(): Promise<Fixture> {
   return {
     url: `http://127.0.0.1:${port}`,
     conditional,
-    close: () => new Promise((r) => {
-      server.close(() => r());
-      server.closeAllConnections();
-    }),
+    close: () =>
+      new Promise((r) => {
+        server.close(() => r());
+        server.closeAllConnections();
+      }),
   };
 }

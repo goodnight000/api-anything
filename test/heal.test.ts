@@ -29,7 +29,7 @@ describe("heal", { skip: !chromeAvailable() && "Google Chrome not installed" }, 
   const servers: Server[] = [];
   after(async () => {
     await closeBrowser();
-    for (const s of servers) (s.closeAllConnections(), s.close());
+    for (const s of servers) s.closeAllConnections(), s.close();
     rmSync(HOME, { recursive: true, force: true });
   });
 
@@ -41,9 +41,12 @@ describe("heal", { skip: !chromeAvailable() && "Google Chrome not installed" }, 
       const u = new URL(req.url!, "http://x");
       const key = version === "v1" ? "q" : version === "v2" ? "term" : "gone";
       if (u.pathname.startsWith("/api/")) {
-        if (!u.searchParams.has(key)) return void res.writeHead(400, { "content-type": "application/json" }).end('{"error":"unknown argument"}');
+        if (!u.searchParams.has(key))
+          return void res.writeHead(400, { "content-type": "application/json" }).end('{"error":"unknown argument"}');
         res.writeHead(200, { "content-type": "application/json" });
-        return void res.end(JSON.stringify({ results: [{ q: u.searchParams.get(key), page: u.searchParams.get("page") }, { q: "x" }] }));
+        return void res.end(
+          JSON.stringify({ results: [{ q: u.searchParams.get(key), page: u.searchParams.get("page") }, { q: "x" }] }),
+        );
       }
       pageLoads++;
       res.writeHead(200, { "content-type": "text/html" });
@@ -56,7 +59,16 @@ fetch("/api/search?${key}="+encodeURIComponent(p.get("q"))+"&page="+encodeURICom
     const { server, base } = await search();
     servers.push(server);
     version = "v1";
-    await addOperation({ site: "s1", op: "search", trigger: { url: `${base}/s?q={q}&page={page}` }, examples: [{ q: "hello", page: "100" }, { q: "world", page: "200" }], response: { extract: "results" } });
+    await addOperation({
+      site: "s1",
+      op: "search",
+      trigger: { url: `${base}/s?q={q}&page={page}` },
+      examples: [
+        { q: "hello", page: "100" },
+        { q: "world", page: "200" },
+      ],
+      response: { extract: "results" },
+    });
     const site = loadSite("s1")!.site;
     site.operations[0]!.params[1] = { ...site.operations[0]!.params[1]!, required: false, default: "100" };
     saveSite(site);
@@ -73,7 +85,16 @@ fetch("/api/search?${key}="+encodeURIComponent(p.get("q"))+"&page="+encodeURICom
     const { server, base } = await search();
     servers.push(server);
     version = "v1";
-    await addOperation({ site: "s2", op: "search", trigger: { url: `${base}/s?q={q}&page={page}` }, examples: [{ q: "hello", page: "100" }, { q: "world", page: "200" }], response: { extract: "results" } });
+    await addOperation({
+      site: "s2",
+      op: "search",
+      trigger: { url: `${base}/s?q={q}&page={page}` },
+      examples: [
+        { q: "hello", page: "100" },
+        { q: "world", page: "200" },
+      ],
+      response: { extract: "results" },
+    });
     version = "v2";
     const r = await call("s2", "search", { q: "cats", page: "2" }, fast);
     assert.equal(r.healed, true, JSON.stringify(r));
@@ -84,7 +105,16 @@ fetch("/api/search?${key}="+encodeURIComponent(p.get("q"))+"&page="+encodeURICom
     const { server, base } = await search();
     servers.push(server);
     version = "v2";
-    await addOperation({ site: "s3", op: "search", trigger: { url: `${base}/s?q={q}&page={page}` }, examples: [{ q: "hello", page: "100" }, { q: "world", page: "200" }], response: { extract: "results" } });
+    await addOperation({
+      site: "s3",
+      op: "search",
+      trigger: { url: `${base}/s?q={q}&page={page}` },
+      examples: [
+        { q: "hello", page: "100" },
+        { q: "world", page: "200" },
+      ],
+      response: { extract: "results" },
+    });
     version = "v3"; // the page no longer fires the request: nothing can heal
     const loads = pageLoads;
     const failed = await call("s3", "search", { q: "cats", page: "3" }, fast);

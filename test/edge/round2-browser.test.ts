@@ -36,7 +36,10 @@ describe("browser", { skip: noChrome }, () => {
       res.end(`<!doctype html><html><head><meta charset="utf-8"><title>t</title></head><body>${body}</body></html>`);
     };
     if (u.pathname === "/pop") return page(`<button id="popupws" onclick="window.open('/chat2')">chat</button>`);
-    if (u.pathname === "/chat2") return page(`<script>const ws=new WebSocket("ws://"+location.host+"/ws");ws.onopen=()=>ws.send("a private message")</script>`);
+    if (u.pathname === "/chat2")
+      return page(
+        `<script>const ws=new WebSocket("ws://"+location.host+"/ws");ws.onopen=()=>ws.send("a private message")</script>`,
+      );
     if (u.pathname === "/hotels") {
       // AWS WAF-style interstitial that takes a while to solve, then reloads with its token cookie
       const delay = Number(u.searchParams.get("delay") ?? 2500);
@@ -58,8 +61,12 @@ describe("browser", { skip: noChrome }, () => {
   const sockets = new Set<import("node:stream").Duplex>();
   server.on("upgrade", (req, socket) => {
     sockets.add(socket);
-    const accept = createHash("sha1").update(`${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
-    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    const accept = createHash("sha1")
+      .update(`${req.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest("base64");
+    socket.write(
+      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+    );
     socket.on("data", (d: Buffer) => void ((d[0]! & 0x0f) === 1 && wsMessages++));
     socket.on("error", () => {});
   });
@@ -76,7 +83,10 @@ describe("browser", { skip: noChrome }, () => {
     await ready;
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     newHome();
-    const steps = [{ action: "click" as const, selector: "#popupws" }, { action: "wait" as const, ms: 1500 }];
+    const steps = [
+      { action: "click" as const, selector: "#popupws" },
+      { action: "wait" as const, ms: 1500 },
+    ];
     await capturePage({ url: `${url}/pop`, steps, write: true });
     await new Promise((r) => setTimeout(r, 300));
     assert.equal(wsMessages, 0, "the popup's message was sent while learning a write");
@@ -104,12 +114,19 @@ describe("browser", { skip: noChrome }, () => {
     await ready;
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     newHome();
-    const withMatch = await runTrigger({ url: `${url}/hotels?q=Madrid&delay=2500`, profileDir: profileDir(), match: (e) => e.request.url.includes("/hotels") });
+    const withMatch = await runTrigger({
+      url: `${url}/hotels?q=Madrid&delay=2500`,
+      profileDir: profileDir(),
+      match: (e) => e.request.url.includes("/hotels"),
+    });
     const docs = withMatch.exchanges.filter((e) => e.request.url.includes("/hotels") && e.response);
     assert.equal(docs.at(-1)?.response?.status, 200, `documents: ${docs.map((d) => d.response?.status).join(",")}`);
     assert.match(docs.at(-1)?.response?.body ?? "", /Madrid hotel/);
     newHome(); // a fresh profile: challenged again
     const plain = await runTrigger({ url: `${url}/hotels?q=Porto&delay=3000`, profileDir: profileDir() });
-    assert.ok(plain.exchanges.some((e) => e.request.url.endsWith("/api/list") && e.response?.status === 200), "the real page's data request was captured");
+    assert.ok(
+      plain.exchanges.some((e) => e.request.url.endsWith("/api/list") && e.response?.status === 200),
+      "the real page's data request was captured",
+    );
   });
 });
