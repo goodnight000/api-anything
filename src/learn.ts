@@ -1081,13 +1081,29 @@ function refuseLeftoverText(slots: Slot[], leaves: Leaf[]): void {
  * away. A container that is a credential stays one in every part, so each of its other string
  * leaves becomes a ref of its own, named by its position: an empty one too, which the page may
  * fill on a later load. A leaf that cannot be one (a number, a flag, a leaf that is only partly a
- * slot) refuses the learn. A saved request is no credential: its other leaves stay.
+ * slot) refuses the learn, and so does a key that is itself a credential: its text would stay in
+ * the container, in a slot's pointer and in a ref's name. A saved request is no credential: its
+ * other leaves stay.
  */
 function innerWins(refs: Refs, leaves: Leaf[]): void {
   const under = (outer: Step[], at: Step[]) => at.length > outer.length && outer.every((step, i) => at[i] === step);
   const outer = refs.slots.filter((s) => s.ref && refs.slots.some((o) => under(s.at, o.at)));
   refs.slots = refs.slots.filter((s) => !outer.includes(s));
   const credentials = outer.filter((o) => !refs.plain.has(key(o.at)));
+  // a known live value, or random-looking and no name (includePromotedContent is one)
+  const secret = (k: string) =>
+    refs.live.get(k)?.secret !== false && (refs.live.has(k) || (highEntropy(k) && !wordy(k)));
+  for (const whole of credentials) {
+    const inside = leaves.filter((l) => key(l.at) === key(whole.at) || under(whole.at, l.at));
+    // the keys on the way to each leaf, and those of the container's own JSON: a key may hold no leaf
+    const keys = inside.flatMap((l) => [...l.at.slice(whole.at.length).flatMap(pointerKeys), ...jsonKeys(l.value)]);
+    const bad = keys.find(secret);
+    if (bad !== undefined)
+      throw new Error(
+        `${whole.at.join(" > ")} has an object key that is itself a credential (${bad.length} characters), and a key cannot be a reference: ` +
+          `its text would stay in the spec. Not learned: ${ANOTHER_REQUEST}`,
+      );
+  }
   for (const leaf of leaves) {
     const whole = credentials.find((o) => under(o.at, leaf.at));
     if (!whole || leaf.container) continue;
@@ -1108,6 +1124,30 @@ function innerWins(refs: Refs, leaves: Leaf[]): void {
     for (const o of credentials) if (o.ref === `session:${name}`) refs.yielded.push({ at: o.at, name, value });
     delete refs.sessionValues[name];
   }
+}
+
+/** The object keys (and array indexes) a json: step passes through. */
+const pointerKeys = (step: Step) =>
+  step.startsWith("json:")
+    ? step
+        .slice(5)
+        .split("/")
+        .slice(1)
+        .map((t) => t.replace(/~1/g, "/").replace(/~0/g, "~"))
+    : [];
+
+/** Every object key of a JSON text, at any depth. A text that is not JSON has none. */
+function jsonKeys(text: string): string[] {
+  const keys: string[] = [];
+  const visit = (v: unknown): void => {
+    if (!v || typeof v !== "object") return;
+    for (const [k, child] of Object.entries(v)) {
+      if (!Array.isArray(v)) keys.push(k);
+      visit(child);
+    }
+  };
+  if (/^\s*[[{]/.test(text)) visit(tryParse(text));
+  return keys;
 }
 
 /** A slot at `at` takes in the leaf: the leaf is deeper in its layers, or below its JSON pointer. */

@@ -323,6 +323,38 @@ test("an empty string beside a slot in a credential container is a reference too
   );
 });
 
+test("a credential that is a key of a yielding container refuses the learn: a key cannot be a reference", () => {
+  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
+  const run = (value: unknown, extra: Parameters<typeof learn>[2] = {}) =>
+    learn(
+      [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-csrf-token": JSON.stringify(value) } })],
+      [{ q: "kittens" }],
+      extra,
+    );
+  const refusal = /header:x-csrf-token has an object key that is itself a credential .* Not learned/;
+  // the opaque string is the key: its text would stay in the header, in a slot's pointer and in a ref's name
+  assert.throws(() => run({ q: "kittens", [T]: "v1" }), refusal);
+  // the same when the header is a credential because a cookie holds its whole text
+  const header = { q: "kittens", [T]: "v1" };
+  assert.throws(() => run(header, { cookies: [cookie("csrf", JSON.stringify(header))] }), refusal);
+  // a key that holds no leaf, a key deeper down, and a key that is a known live value
+  assert.throws(() => run({ q: "kittens", [T]: {} }), refusal);
+  assert.throws(() => run({ q: "kittens", inner: { [T]: "v1" } }), refusal);
+  assert.throws(() => run({ q: "kittens", secret123: "v1" }, { cookies: [cookie("sess", "secret123")] }), refusal);
+  // the error does not repeat the credential
+  assert.throws(
+    () => run({ q: "kittens", [T]: "v1" }),
+    (e: Error) => !e.message.includes(T),
+  );
+
+  // control: an ordinary key, however long, is a name
+  const { operation: op } = run({ q: "kittens", includePromotedContentInResults: "v1" });
+  assert.deepEqual(
+    op.slots.map((s) => s.at.join(" > ")),
+    ["query:q", "header:x-csrf-token > json:/q", "header:x-csrf-token > json:/includePromotedContentInResults"],
+  );
+});
+
 test("a path segment that is a reference is a wildcard in the match, as a param's is", () => {
   // the session id rides in the path, with a dot so it does not look like a hash on its own
   const first = "u1.q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
