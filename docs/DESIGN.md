@@ -327,7 +327,12 @@ A write executes exactly
 once per call. Retry only on a definite non-execution (400/401/403/404 answered to the request
 itself: after a redirect, as in Post/Redirect/Get, it ran; at tier 3 the page sent it, and the
 answer judged may be a redirect's follow-up, so a tier-3 write is never retried); timeouts, 5xx and network errors are
-ambiguous and are never retried. At tier 3 the page can also send it twice by itself (a handler
+ambiguous and are never retried. A redirect does not send it a second time either: at tiers 1 and 2
+one that keeps the method and body (307, 308; 301/302 after a PUT or DELETE), or that leads back to
+the op's own request (a GET write redirected to itself), is not followed. The write was sent once;
+the call fails naming the redirect and the origin it pointed to, and its `next` says to check the
+site and, if the operation moved, to learn it at its new address. A 301/302/303 that turns it into a
+GET (Post/Redirect/Get) is followed: nothing is sent again. At tier 3 the page can also send it twice by itself (a handler
 bound twice, a client that sends again), so the run has a budget: the op's own request, by its
 `match`, leaves once, every further request matching it is aborted, and the result's `reason` says
 a repeat was stopped. The server's redirect of the one that left is still that one. What else the
@@ -374,8 +379,9 @@ the browser profile) stops at once and marks nothing stale.
 | 2 | `fetch()` inside a real page on the site origin (real TLS, cookies, sec-fetch); redirects one hop at a time under the same policy | tier 1 `blocked`, or op `minTier: 2` |
 | 3 | run the trigger in the browser, capture the matched response | op `minTier: 3`, or after a heal fails for reads |
 
-One redirect policy, for tiers 1 and 2 (`nextHop`), at most 20 redirects as in a browser's own
-fetch (one more fails the call saying that the limit was reached, and its `next` says not to retry
+One redirect policy, for tiers 1 and 2 (`nextHop`). A write follows no redirect that would send it
+again (see writes above), so a write behind a 307/308 fails where it worked before. A request is taken
+through at most 20 redirects as in a browser's own fetch (one more fails the call saying that the limit was reached, and its `next` says not to retry
 but to learn the operation where the site now answers): 303 after anything but a GET or HEAD, and 301/302 after a POST,
 make a bodiless GET, without the headers that described the body (Content-Type, -Language,
 -Encoding, -Location, -Length), as a browser's own redirect does; every other redirect sends the

@@ -178,7 +178,15 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     if (e instanceof RedirectRefused) {
       // The redirect is the site's answer, so a retry meets it again; the request it answered was sent.
       const add = `api-anything add ${ctx.site} ${op.name} ...${op.readOnly ? "" : " --write"}`;
-      const why = e.limit
+      if (e.kind === "again")
+        return {
+          tier,
+          class: "error",
+          reason: e.message,
+          ambiguous: true,
+          hint: `the write was sent once and may have run: check the site first. Do not retry: the site answered it with a redirect that would send it a second time, which was not followed; if the operation moved, learn it at its new address: ${add}`,
+        };
+      const why = e.kind
         ? `the site's redirects for this request do not end (a loop, or a chain past the limit); learn the operation again from the page that uses it, at the address the site now answers from: ${add}`
         : op.readOnly
           ? `the site sends this request on to another origin, which was not followed; re-learn it with ${add} if the site moved there`

@@ -7,7 +7,7 @@ import { chromeAvailable, ProfileInUse, runTrigger } from "./browser.js";
 import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
-import { buildRequest, MAX_REDIRECTS, REDIRECT, send } from "./http.js";
+import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, send } from "./http.js";
 import { type Args, ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches } from "./learn.js";
 import { scanSecrets } from "./secrets.js";
 import {
@@ -893,11 +893,7 @@ export async function rescan(
     if (cookie) h.cookie = cookie;
     return h;
   };
-  // An op with no `match` is told by its template's own address.
-  const own = Object.keys(op.match).length
-    ? op.match
-    : { method: op.request.method, host: new URL(op.request.url).hostname, path: new URL(op.request.url).pathname };
-  const theWrite = (u: string) => !op.readOnly && matches(own, { method: "GET", url: u, headers: {} });
+  const theWrite = (u: string) => !op.readOnly && matches(ownMatch(op), { method: "GET", url: u, headers: {} });
   const { text: doc, url: docUrl } = await fetchText(url, headers, fetchImpl, theWrite);
   if (!doc) return undefined;
   // relative to the document's final URL: a redirect (a locale prefix) moves where "../static" points

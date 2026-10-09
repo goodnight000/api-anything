@@ -155,24 +155,21 @@ describe("tier 1 cookies and redirects", () => {
 
     fx.otherHits.length = 0;
     const w = await call("xo", "post307", {}, { ...t1, allowWrites: true });
-    assert.equal(w.ok, true, JSON.stringify(w));
-    assert.equal(fx.otherHits[0]!.method, "POST", "307 keeps the method");
-    assert.equal(
-      fx.otherHits[0]!.headers.authorization,
-      undefined,
-      "even a literal authorization is dropped cross-origin",
-    );
+    assert.equal(w.ok, false, JSON.stringify(w));
+    assert.match(w.reason ?? "", /it would send this write again/);
+    assert.equal(fx.otherHits.length, 0, "a 307 would send the write a second time");
   });
 
   test("a cross-origin 307 is not followed when a body slot holds a session value, whatever encodes it (base64)", async () => {
-    site("xob64", wrapped("/away?s=307"));
+    // a read with a body (a query sent as a POST): a write stops at any 307
+    site("xob64", wrapped("/away?s=307", { readOnly: true }));
     saveSession("xob64", { cookies: [], values: { token: "SECRET-BODY-TOKEN-123" } });
-    const r = await call("xob64", "post", {}, { ...t1, allowWrites: true });
+    const r = await call("xob64", "post", {}, t1);
     assert.match(unwrapped(fx.hits[0]!.body), /SECRET-BODY-TOKEN-123/, "the site itself gets its token");
     assert.equal(fx.otherHits.length, 0, `the other origin got ${fx.otherHits[0]?.body}`);
     assert.equal(r.ok, false, JSON.stringify(r));
     assert.match(r.reason ?? "", /not following the HTTP 307 redirect to http:\/\/localhost/);
-    assert.match(r.next ?? "", /may have run: check the site first.* re-learn it with api-anything add xob64 post/);
+    assert.match(r.next ?? "", /^do not retry: .* re-learn it with api-anything add xob64 post/);
     assert.doesNotMatch(r.next ?? "", /retry once/);
     assert.equal(fx.hits.length, 1, "sent once");
   });
@@ -737,7 +734,7 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
         slots: [{ ref: "cookie:ct", at: ["header:x-csrf"] }],
         response: { format: "json" },
       }),
-      wrapped("/away?s=307", { minTier: 2 }),
+      wrapped("/away?s=307", { minTier: 2, readOnly: true }),
     );
     saveSession("t2xo", {
       cookies: [cookie("ct", "SECRET-CSRF-VALUE-123", "127.0.0.1")],
@@ -756,20 +753,21 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
 
     fx.hits.length = 0;
     fx.otherHits.length = 0;
-    const w = await call("t2xo", "post", {}, { ...o, allowWrites: true });
-    assert.match(unwrapped(fx.hits[0]!.body), /SECRET-BODY-TOKEN-123/, "the site itself gets its token");
+    const w = await call("t2xo", "post", {}, o);
+    assert.match(unwrapped(fx.hits.find((h) => h.method === "POST")!.body), /SECRET-BODY-TOKEN-123/);
     assert.equal(landed().length, 0, `the other origin got ${landed()[0]?.body}`);
     assert.equal(w.ok, false, JSON.stringify(w));
     assert.equal(w.tier, 2);
     assert.match(w.reason ?? "", /not following the HTTP 307 redirect to http:\/\/localhost/);
-    assert.match(w.next ?? "", /may have run: check the site first.* re-learn it with api-anything add t2xo post/);
-    assert.equal(fx.hits.filter((h) => h.method === "POST").length, 1, "the write was sent once");
+    assert.match(w.next ?? "", /^do not retry: .* re-learn it with api-anything add t2xo post/);
+    assert.equal(fx.hits.filter((h) => h.method === "POST").length, 1, "the request was sent once");
   });
 
   test("tier 2 same-origin redirects: a hop's cookie rides on the next; 307 keeps POST and body, 303 makes a bodiless GET; a loop ends", async () => {
     const post = (s: number) => ({
       ...rd(`post${s}`, `/hop?s=${s}`, { minTier: 2 }),
-      readOnly: false,
+      // the 307 is a read with a body: a write stops there
+      readOnly: s === 307,
       request: {
         method: "POST",
         url: `${fx.base}/hop?s=${s}`,
@@ -864,6 +862,50 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
       });
       const r = await call(`told${tier}`, "q", {}, o);
       assert.deepEqual(r.data, [{ language: "fr", type: "application/json" }], JSON.stringify(r));
+    });
+
+    test(`tier ${tier}: a write is not sent a second time by a redirect, and the result says where it stopped`, async () => {
+      const write = (name: string, method: string, path: string) => ({
+        ...rd(name, path, { minTier: tier }),
+        readOnly: false,
+        request: { method, url: `${fx.base}${path}`, headers: {}, ...(method === "GET" ? {} : { body: "x=1" }) },
+      });
+      const sends = () => fx.hits.map((h) => h.url).filter((u) => /^\/(again|hop|landed)/.test(u));
+      site(
+        `once${tier}`,
+        write("loop307", "POST", "/again?s=307"),
+        write("loop308", "POST", "/again?s=308"),
+        write("moved", "POST", "/hop?s=307"),
+        write("put", "PUT", "/hop?s=302"),
+        write("vote", "GET", "/again?s=302"),
+        write("prg", "GET", "/hop?s=302"),
+      );
+      for (const [name, status] of [
+        ["loop307", 307],
+        ["loop308", 308],
+        ["moved", 307],
+        ["put", 302],
+        ["vote", 302],
+      ] as const) {
+        fx.hits.length = 0;
+        const r = await call(`once${tier}`, name, {}, { ...o, allowWrites: true });
+        assert.equal(sends().length, 1, `${name} was sent to ${sends()}: ${JSON.stringify(r)}`);
+        assert.equal(r.ok, false, `${name}: ${JSON.stringify(r)}`);
+        assert.equal(
+          r.reason,
+          `not following the HTTP ${status} redirect to ${fx.base}: it would send this write again`,
+          name,
+        );
+        assert.match(
+          r.next ?? "",
+          /^the write was sent once.*check the site first.*Do not retry.*api-anything add once\d \w+ \.\.\. --write/,
+        );
+      }
+      // a GET write's landing page is another request: followed
+      fx.hits.length = 0;
+      const prg = await call(`once${tier}`, "prg", {}, { ...o, allowWrites: true });
+      assert.equal(prg.ok, true, JSON.stringify(prg));
+      assert.deepEqual(sends(), ["/hop?s=302", "/landed"]);
     });
 
     test(`tier ${tier}: six redirects are followed to the data; a loop ends saying so, and how to go on`, async () => {

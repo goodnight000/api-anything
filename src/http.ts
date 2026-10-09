@@ -1,8 +1,9 @@
 /** Tier 1: fill the stored template and send it with Node fetch. */
 import * as zlib from "node:zlib";
 import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
+import { matches } from "./learn.js";
 import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
-import type { Operation, Param, Request } from "./spec.js";
+import type { Match, Operation, Param, Request } from "./spec.js";
 import type { StoredCookie } from "./types.js";
 
 export interface Sent {
@@ -192,25 +193,37 @@ const BODY_HEADERS = new Set([
 /** How many redirects one request is taken through: what a browser's own fetch allows. */
 export const MAX_REDIRECTS = 20;
 
-/** A redirect the policy does not take: nothing was sent to its target. `limit`: it was one too many. */
+/**
+ * A redirect the policy does not take: nothing was sent to its target. `kind`: it was one too many
+ * ("limit"), or it would have sent a write a second time ("again").
+ */
 export class RedirectRefused extends Error {
   constructor(
     message: string,
-    readonly limit = false,
+    readonly kind?: "limit" | "again",
   ) {
     super(message);
   }
 }
 
+/** What tells an op's own request: its `match`, or with none its template's method and address. */
+export const ownMatch = (op: Operation): Match =>
+  Object.keys(op.match).length
+    ? op.match
+    : { method: op.request.method, host: new URL(op.request.url).hostname, path: new URL(op.request.url).pathname };
+
 /**
  * The redirect policy of tiers 1 and 2: the request a redirect asks for next, or a refusal.
- * 303 after anything but a GET or HEAD, and 301/302 after a POST, make a bodiless GET. On an origin change the credential headers go
- * (authorization, cookie, every header a ref fills), since neither undici nor a page's fetch()
- * would keep a CSRF header from the other origin. A hop that would still carry a session's value
- * there is not taken: a body it re-sends when any ref slot lives in the body (decided from the
- * slots: a value can sit under any number of encoding layers, so searching the bytes misses it), or
- * a Location that repeats the value of any ref slot, wherever the request carried it. `taken`: the
- * redirects before this one; one past the limit is refused too, saying that it is the limit.
+ * 303 after anything but a GET or HEAD, and 301/302 after a POST, make a bodiless GET. A write is
+ * sent once, so no redirect is taken that would send it again: one that keeps its method and body
+ * (307, 308; 301/302 after a PUT), or one that leads back to the op's own request. On an origin
+ * change the credential headers go (authorization, cookie, every header a ref fills), since neither
+ * undici nor a page's fetch() would keep a CSRF header from the other origin. A hop that would
+ * still carry a session's value there is not taken: a body it re-sends when any ref slot lives in
+ * the body (decided from the slots: a value can sit under any number of encoding layers, so
+ * searching the bytes misses it), or a Location that repeats the value of any ref slot, wherever
+ * the request carried it. `taken`: the redirects before this one; one past the limit is refused
+ * too, saying that it is the limit.
  */
 export function nextHop(
   op: Operation,
@@ -222,7 +235,7 @@ export function nextHop(
 ): Request {
   const next = new URL(location, from.url);
   if (taken >= MAX_REDIRECTS)
-    throw new RedirectRefused(`stopped after ${MAX_REDIRECTS} redirects, the last one to ${next.origin}`, true);
+    throw new RedirectRefused(`stopped after ${MAX_REDIRECTS} redirects, the last one to ${next.origin}`, "limit");
   const refused = (why: string) =>
     new RedirectRefused(`not following the HTTP ${status} redirect to ${next.origin}: ${why}`);
   if (!/^https?:$/.test(next.protocol)) throw refused("it is not an http(s) address");
@@ -230,6 +243,13 @@ export function nextHop(
   const toGet =
     (status === 303 && from.method !== "GET" && from.method !== "HEAD") ||
     ((status === 301 || status === 302) && from.method === "POST");
+  const method = toGet ? "GET" : from.method;
+  const carriesOn = !toGet && from.method !== "GET" && from.method !== "HEAD";
+  if (!op.readOnly && (carriesOn || matches(ownMatch(op), { url: next.href, method, headers: {} })))
+    throw new RedirectRefused(
+      `not following the HTTP ${status} redirect to ${next.origin}: it would send this write again`,
+      "again",
+    );
   const cross = next.origin !== new URL(from.url).origin;
   // The slots that hold a cookie:/session: value, by the layer their path starts in ("header:x-csrf", "form[1]:tok").
   const held = op.slots.filter(holdsRef).map((s) => ({
@@ -271,7 +291,7 @@ export function nextHop(
     if (inBody || carried.some((v) => forms(v).some((f) => plain.some((u) => u.includes(f)))))
       throw refused("the request would carry this session's values to another origin");
   }
-  return { url: next.href, method: toGet ? "GET" : from.method, headers, body };
+  return { url: next.href, method, headers, body };
 }
 
 /** Send the filled template. Redirects are followed by hand, each hop decided by `nextHop`. */
