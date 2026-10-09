@@ -425,6 +425,18 @@ test("the check knows a stored credential that no pass made a reference, and no 
   );
   // a short per-session value inside a longer leaf, where no pass templates it
   assert.throws(() => run({ ctx: "v1:Ab3dEf9h" }, { storage: { csrf: "Ab3dEf9h" } }), /storage:csrf/);
+  // a value is a credential when any entry that holds it is one, whichever comes first in storage
+  const orders: Record<string, string>[] = [
+    { saved: "ordinary-value", token: "ordinary-value" },
+    { token: "ordinary-value", saved: "ordinary-value" },
+    { saved: "ordinary-value", auth: JSON.stringify({ token: "ordinary-value" }) },
+  ];
+  for (const storage of orders)
+    assert.throws(
+      () => run({ state: b64("ordinary-value") }, { storage }),
+      /holds the live session value storage:/,
+      JSON.stringify(storage),
+    );
 
   // a setting is no credential, wherever else it turns up
   const settings = { theme: "dark-mode", prefs: JSON.stringify({ locale: "en-US-posix", tz: "Europe/Berlin" }) };

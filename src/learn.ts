@@ -800,7 +800,13 @@ const sentCookies = (e: Exchange): StoredCookie[] =>
  */
 function liveValues(cookies: StoredCookie[], storage: Record<string, string> = {}): Map<string, Live> {
   const out = new Map<string, Live>();
-  const put = (v: string, live: Live) => v.length >= 8 && !out.has(v) && out.set(v, live);
+  // The first entry to hold a text names it. Any stored entry that holds it as a credential makes
+  // it one, whatever the order of the entries.
+  const put = (v: string, live: Live) => {
+    const held = out.get(v);
+    if (v.length >= 8 && !held) out.set(v, live);
+    else if (held?.value !== undefined && live.secret) held.secret = true;
+  };
   // Every cookie as stored first: a text one cookie holds exactly is not another's unquoted or
   // decoded form, which could not fill a hole.
   for (const { name, value } of cookies) put(value, { ref: `cookie:${name}` });
