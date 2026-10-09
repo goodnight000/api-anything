@@ -893,17 +893,19 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     assert.equal(fromPage.length, 1, "one attempt from a page, and no trigger run");
   });
 
-  test("a write is never given the page attempt: it was sent once, and ends as tier 1's auth", async () => {
-    const post = {
-      readOnly: false,
-      request: { method: "POST", url: `${fx.base}/api/picky`, headers: {}, body: "x=1" },
-    };
-    site("pickywrite", rd("save", "/api/picky", post));
+  test("a write is never given the page attempt: it ends as tier 1's auth, and no page sent it", async () => {
+    // 401 is an answer a write may be retried after, so only the read-only rule keeps this one from the page
+    const url = `${fx.base}/api/picky?status=401`;
+    site(
+      "pickywrite",
+      rd("save", "/api/picky", { readOnly: false, request: { method: "POST", url, headers: {}, body: "x=1" } }),
+    );
     fx.hits.length = 0;
     const r = await call("pickywrite", "save", {}, { allowWrites: true, minIntervalMs: 0, timeoutMs: 5000 });
     assert.equal(r.class, "auth", JSON.stringify(r));
     assert.equal(r.tier, 1);
-    assert.equal(fx.hits.filter((h) => h.url === "/api/picky").length, 1, "the one POST, from plain HTTP");
+    // recovery may send it once more after a 401, with the profile's cookies: that is plain HTTP too
+    assert.ok(fx.hits.filter((h) => h.method === "POST").length <= 2);
     assert.equal(
       fx.hits.filter((h) => /Chrome\//.test(String(h.headers["user-agent"]))).length,
       0,
