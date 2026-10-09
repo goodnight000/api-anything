@@ -185,7 +185,7 @@ async function refreshCookies(ctx: Ctx, op: Operation, tier: Tier): Promise<bool
   } catch {
     return false;
   }
-  return withLock(sessionFile(ctx.site), () => {
+  const swap = () => {
     const s = loadSession(ctx.site);
     const sent = (cookies: StoredCookie[]) => {
       try {
@@ -199,7 +199,12 @@ async function refreshCookies(ctx: Ctx, op: Operation, tier: Tier): Promise<bool
     const before = sent(s.cookies);
     saveSession(ctx.site, { ...s, cookies: fresh });
     return sent(fresh) !== before;
-  });
+  };
+  try {
+    return withLock(sessionFile(ctx.site), swap);
+  } catch {
+    return false; // a full disk, an unreadable session file: nothing refreshed, and the call keeps its own answer
+  }
 }
 
 async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise<Result> {

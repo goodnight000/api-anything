@@ -91,6 +91,16 @@ test("a number past 2^53 goes exactly as plain digits; a form that would be roun
   for (const v of ["9007199254740993e0", "-9007199254740993e0", "9007199254740993.0", "1e400"]) {
     assert.throws(() => sent(v), /param "count" would lose precision: .* past 2\^53.* plain digits/, v);
   }
+  // the boundary is decided on the digits: a hair past the limit rounds down to it in a double
+  for (const v of ["9007199254740991.1", "90071992547409911e-1", "-9007199254740991.1", "9007199254740992e0"]) {
+    assert.throws(() => sent(v), /would lose precision/, v);
+  }
+  // exactly at the limit, in any form, is sent as the limit
+  for (const v of ["9007199254740991", "9007199254740991.0", "9007199254740991e0", "90071992547409910e-1"]) {
+    assert.equal(sent(v), "9007199254740991", v);
+  }
+  assert.equal(sent("-9007199254740991"), "-9007199254740991");
+  assert.equal(sent("1e-400"), "0");
 });
 
 test("template slots fill a substring of the leaf", () => {

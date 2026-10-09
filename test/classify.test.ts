@@ -202,32 +202,6 @@ test("login wording on 400, 403 and 422 is auth; a 422 validation error or form 
   assert.equal(cls(op({ readOnly: false }), html(422, taken)), "error");
 });
 
-test("line-delimited JSON and a finite event stream are judged as JSON; text that is not JSON is drift as before", async () => {
-  const { judge } = await import("../src/classify.js");
-  const rows = op({ response: { format: "json", extract: "[*].name" } });
-  const as = (type: string, body: string): Observed => ({ status: 200, headers: { "content-type": type }, body });
-  for (const r of [
-    as("application/x-ndjson", '{"name":"a"}\n{"name":"b"}\n'),
-    as("text/event-stream", 'data: {"name":"a"}\n\ndata: {"name":"b"}\n\n'),
-  ]) {
-    assert.deepEqual(judge(rows, r), { class: "ok", reason: "ok", data: ["a", "b"] });
-  }
-  assert.deepEqual(classify(rows, as("application/x-ndjson", '{"other":1}\n{"other":2}\n')), {
-    class: "drift",
-    reason: 'extract path "[*].name" missing',
-    missing: true,
-  });
-  assert.deepEqual(classify(rows, as("text/plain", "data: none\nplease retry")), {
-    class: "drift",
-    reason: "response is not JSON: data: none please retry",
-  });
-  assert.deepEqual(classify(rows, as("text/event-stream", "")), {
-    class: "drift",
-    reason: "HTTP 200 with an empty body",
-    missing: true,
-  });
-});
-
 test("missing data is drift flagged missing, so the caller can check the example args first", () => {
   assert.deepEqual(classify(op(), json(200, { data: {} })), {
     class: "drift",

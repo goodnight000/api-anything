@@ -67,7 +67,7 @@ A JSON leaf replaced by a param keeps the arg's native type, except that a leaf 
 string stays a string (`"id":"123"` next to `ids:[123]`). Params default to type `string`.
 A param may declare `pattern` (a regex the whole value must match) and `hint` (what a valid value
 is, "a date as YYYY-MM-DD"): an arg that fails it is `input`, named with the hint, and nothing is sent.
-A numeric string past the largest safe integer (2^53 − 1) is never rounded: plain digits are sent exactly, and any other form (an
+A numeric string whose exact value is past the largest safe integer (2^53 − 1) is never rounded: plain digits are sent exactly, and any other form (an
 exponent, a decimal point: `9007199254740993e0`) is `input`, saying so, with nothing sent. `"false"` is false.
 
 ## Learning (`learn.ts`)
@@ -301,13 +301,6 @@ dropped. It runs in about linear time on 10k-member objects. For HTML-only pages
 in Node; a field written `all:<css>[@attr]` returns every match as a list (a book's genres). For data embedded in the HTML document (for example Google's `AF_initDataCallback`), `format:
 "embedded"` with a regex whose capture group is JSON, followed by `extract`. Seroval/JS-literal
 payloads are out of scope for v1.
-
-A body that is several JSON values parses as a list of them, so the same `extract` and `pick` apply:
-Google's `rt=c` length-prefixed chunks, an XSSI prefix repeated before each value, newline-delimited
-JSON (one value per line, every line) and a finite `text/event-stream` (one value per `data:` line;
-data that is not JSON, such as a `[DONE]` end marker, is skipped). The body alone decides, so
-learning and calling agree: a one-line NDJSON body is its one value, not a list of one. Any other
-text is not JSON, and is classified as before. Never-ending streams are out of scope.
 
 ## Spec files and where they live
 

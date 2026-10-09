@@ -156,37 +156,6 @@ test("parseBody: Meta's for (;;); prefix, repeated before each chunk, gives an a
   assert.deepEqual(parseBody("while(1);[1,2]"), [1, 2]);
 });
 
-test("parseBody: newline-delimited JSON and a finite event stream give an array of their JSON values", () => {
-  assert.deepEqual(parseBody('{"id":1}\n{"id":2}\r\n\n[3]\n'), [{ id: 1 }, { id: 2 }, [3]]);
-  const stream =
-    'event: delta\nid: 1\ndata: {"text":"He"}\n\n: keep-alive\n\ndata:{"text":"llo"}\r\n\r\ndata: [DONE]\n\n';
-  assert.deepEqual(parseBody(stream), [{ text: "He" }, { text: "llo" }]);
-  assert.deepEqual(parseBody('data: {"only":1}\n\n'), [{ only: 1 }], "one event is still a list");
-  // lines that start with a number are not a length prefix: every record is kept
-  assert.deepEqual(parseBody("1\n2\n3"), [1, 2, 3]);
-  assert.deepEqual(parseBody("1\n2"), [1, 2]);
-  assert.deepEqual(parseBody("1\n2\n3\n4"), [1, 2, 3, 4]);
-  assert.deepEqual(parseBody('0\n{"id":1}'), [0, { id: 1 }]);
-  assert.deepEqual(parseBody('0\n{"id":1}\n{"id":2}'), [0, { id: 1 }, { id: 2 }]);
-  assert.deepEqual(extract(ResponseSchema.parse({ extract: "[*].text" }), stream), ["He", "llo"]);
-  assert.deepEqual(extract(ResponseSchema.parse({ pick: ["id"] }), '{"id":1,"x":0}\n{"id":2,"x":0}'), [
-    { id: 1 },
-    { id: 2 },
-  ]);
-  // text that is not JSON still fails to parse
-  for (const text of [
-    "",
-    "not json at all",
-    "OK\nthanks",
-    '{"id":1}\nnot json',
-    "data: hello\n\ndata: world\n\n",
-    'name: x\ndata: {"a":1}\n',
-    '<!doctype html>\n<p>data: {"a":1}</p>',
-  ]) {
-    assert.throws(() => parseBody(text), SyntaxError, JSON.stringify(text));
-  }
-});
-
 test("pick: name=path renames the output key", () => {
   assert.deepEqual(
     pick(

@@ -11,71 +11,32 @@ const PREFIXES = [XSSI, "for (;;);", "while(1);"];
 export const xssiOf = (body: string) => PREFIXES.find((p) => body.trimStart().startsWith(p));
 
 /**
- * Strip the XSSI prefix and parse JSON losslessly. Google `rt=c` length-prefixed chunks, Meta-style
- * bodies that repeat the prefix before each JSON value, newline-delimited JSON and a finite event
- * stream become an array. Text that is none of these throws, as JSON.parse does.
+ * Strip the XSSI prefix and parse JSON losslessly. Google `rt=c` length-prefixed chunks, and
+ * Meta-style bodies that repeat the prefix before each JSON value, become an array.
  */
 export function parseBody(body: string, xssiPrefix?: string): unknown {
   let text = body.trimStart();
   const prefix = xssiPrefix ?? xssiOf(text) ?? "";
   if (prefix && text.startsWith(prefix)) text = text.slice(prefix.length);
   text = text.trim();
-  // Number lines are chunk lengths only behind an XSSI prefix (Google's rt=c); bare, they are NDJSON records.
-  const chunks = prefix && /^\d+[ \t]*\r?\n/.test(text) ? parseChunks(text) : undefined;
-  if (chunks) return chunks;
+  if (/^\d+[ \t]*\r?\n/.test(text)) return parseChunks(text);
   const parts = prefix ? text.split(prefix) : [text];
-  if (parts.length > 1) return parts.map((p) => parseJson(p.trim()));
-  try {
-    return parseJson(text);
-  } catch (e) {
-    const values = parseLines(text);
-    if (!values) throw e;
-    return values;
-  }
+  return parts.length > 1 ? parts.map((p) => parseJson(p.trim())) : parseJson(text);
 }
 
-const SSE_FIELD = /^(data|event|id|retry)?:/;
-
-/**
- * One JSON value per line (NDJSON), every line; or per `data:` line of an event stream, where data
- * that is not JSON (an end marker, `[DONE]`) is no value. Undefined when the text is neither.
- * ponytail: a one-line NDJSON body is plain JSON, so it never gets here and parses as its one
- * value, not a list of one; telling the two apart takes the content type, at learning too.
- */
-function parseLines(text: string): unknown[] | undefined {
-  const lines = text.split(/\r\n?|\n/).filter((l) => l.trim());
-  const stream = lines.every((l) => SSE_FIELD.test(l));
-  const out: unknown[] = [];
-  // ponytail: an event's data split over several data: lines is not joined; join per event if a site sends that
-  for (const line of stream ? lines.filter((l) => l.startsWith("data:")) : lines) {
-    try {
-      out.push(parseJson(stream ? line.slice(5) : line));
-    } catch {
-      if (!stream) return undefined;
-    }
-  }
-  return out.length ? out : undefined;
-}
-
-/** Length-prefixed chunks, each a JSON value; a last length with nothing after it ends them. Undefined unless that framing covers the whole text. */
-function parseChunks(text: string): unknown[] | undefined {
+function parseChunks(text: string): unknown[] {
   const out: unknown[] = [];
   const head = /\s*\d+[ \t]*\r?\n\s*/y;
   let i = 0;
   while (i < text.length) {
-    if (/^\s*\d+\s*$/.test(text.slice(i))) break;
     head.lastIndex = i;
     const m = head.exec(text);
-    if (!m) return undefined;
+    if (!m) break;
     i += m[0].length;
     // Chunk lengths count bytes or UTF-16 units depending on the server; scanning the JSON is exact.
-    try {
-      const end = jsonValueEnd(text, i);
-      out.push(parseJson(text.slice(i, end)));
-      i = end;
-    } catch {
-      return undefined;
-    }
+    const end = jsonValueEnd(text, i);
+    out.push(parseJson(text.slice(i, end)));
+    i = end;
   }
   return out;
 }

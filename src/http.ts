@@ -27,9 +27,20 @@ export interface SendOptions {
   minIntervalMs?: number;
 }
 
+/** Whether a decimal or exponent literal's exact value is past the largest safe integer (2^53 - 1) in size. */
+function pastSafeInteger(v: string): boolean {
+  const [, int = "", frac = "", exp = "0"] = /^-?(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(v) ?? [];
+  const shift = Number(exp) - frac.length;
+  // 10^400 is past it for any non-zero digits, and 10^-400 brings any plausible digit string under it
+  if (Math.abs(shift) > 400) return shift > 0 && /[1-9]/.test(int + frac);
+  const digits = BigInt(int + frac);
+  const max = BigInt(Number.MAX_SAFE_INTEGER);
+  return shift >= 0 ? digits * 10n ** BigInt(shift) > max : digits > max * 10n ** BigInt(-shift);
+}
+
 /**
- * Coerce an arg to the param's declared type. Past 2^53 plain digits become bigint; any other form
- * is refused, never rounded.
+ * Coerce an arg to the param's declared type. A numeric string past the largest safe integer is
+ * never rounded: plain digits become a bigint, and any other form is refused.
  */
 function coerce(p: Param, v: unknown): unknown {
   const bad = () => new Error(`param "${p.name}" must be ${p.type}, got ${JSON.stringify(v)}`);
@@ -37,12 +48,11 @@ function coerce(p: Param, v: unknown): unknown {
     case "number":
       if (typeof v === "number" || typeof v === "bigint") return v;
       if (typeof v === "string" && /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(v)) {
-        const n = Number(v);
-        if (Math.abs(n) <= Number.MAX_SAFE_INTEGER) return n;
+        if (!pastSafeInteger(v)) return Number(v);
         if (/^-?\d+$/.test(v)) return BigInt(v);
         // ponytail: also refuses 1e21, which a double holds; parse the exponent into a bigint if that form is needed
         throw new Error(
-          `param "${p.name}" would lose precision: ${JSON.stringify(v)} is past 2^53 and would be sent as ${n}; write the integer as plain digits`,
+          `param "${p.name}" would lose precision: ${JSON.stringify(v)} is past 2^53 and would be sent as ${Number(v)}; write the integer as plain digits`,
         );
       }
       throw bad();
