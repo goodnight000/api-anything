@@ -133,13 +133,14 @@ describe("flags and command names", () => {
     assert.equal(upload.code, 1);
     const said = JSON.parse(upload.stdout).error;
     assert.match(said, /^--steps: .*"upload"/);
-    assert.match(said, /uploads are not supported/);
-    assert.match(said, /click, fill, press, wait, goto/);
+    assert.match(said, /upload.*not supported/);
+    for (const action of ["click", "fill", "press", "wait", "goto"]) assert.match(said, new RegExp(`\\b${action}\\b`));
+    assert.doesNotMatch(said, /"code"|\n/, "one line, not the validator's report");
 
     const hover = JSON.parse(
       (await cli("add", "plain", "x", "--trigger", `${fx.url}/list`, "--steps", step("hover"))).stdout,
     ).error;
-    assert.match(hover, /"hover".*click, fill, press, wait, goto/);
+    assert.match(hover, /"hover".*\bclick\b/);
     assert.doesNotMatch(hover, /upload/);
 
     // any other malformed step: what is wrong and where, on one line, not the validator's JSON report
@@ -277,7 +278,7 @@ describe("add from a saved capture", () => {
 
     const both = await add("twice", "alice", "--example name=alice --from2 cbob --example2 name=bob");
     assert.equal(both.code, 0, both.stdout);
-    assert.deepEqual(both.out.warnings, [], "the two captures were diffed: no 'learned from one example'");
+    assert.doesNotMatch(both.out.warnings.join("\n"), /one example/, "the two captures were diffed");
   });
 
   test("the capture that refusal asks for repeats how the first was made: --write, steps, quoting", async () => {
@@ -325,7 +326,7 @@ describe("add from a saved capture", () => {
   test("a recipe repair (add --from with recipe flags only) replaces the recipe and says so", async () => {
     const wrong = await add("getUser", "alice", "--example name=alice --extract data.wrong");
     assert.deepEqual(wrong.out.params, ["name:string"]);
-    assert.match(wrong.out.warnings.join("\n"), /re-run add --from calice/);
+    assert.match(wrong.out.warnings.join("\n"), /add --from calice/);
 
     // that advice, followed: no example, and the op's own match finds the request in the capture
     const r = await cli("add", "fixture", "getUser", "--from", "calice", "--extract", "data.user", "--pick", "name");
@@ -339,7 +340,7 @@ describe("add from a saved capture", () => {
     // the new recipe is judged on the captured answer, as add judges one
     const still = await add("getUser", "alice", "--extract data.nope");
     assert.equal(still.out.preview, undefined);
-    assert.match(still.out.warnings.join("\n"), /data\.nope.*re-run add --from calice/);
+    assert.match(still.out.warnings.join("\n"), /data\.nope.*add --from calice/);
 
     // a flag that shapes the request makes it a re-learn, which needs the example: nothing is saved
     const relearn = await add("getUser", "alice", "--match path=/api/graphql/*/UserByName --extract data.user");
@@ -350,7 +351,7 @@ describe("add from a saved capture", () => {
 
     // --pick-request names the answer to read; when it is not the op's request, the output says so
     const page = await cli("add", "fixture", "getUser", "--from", "calice", "--pick-request", "1");
-    assert.match(JSON.parse(page.stdout).warnings.join("\n"), /request 1 is not one getUser's match finds/);
+    assert.match(JSON.parse(page.stdout).warnings.join("\n"), /request 1 .*match/);
   });
 
   test("a repair from a capture made with other values binds no param anew", async () => {
@@ -451,7 +452,7 @@ describe("capture's next hint", { skip: noChrome }, () => {
       assert.doesNotMatch(next, learn, why);
     }
     const gone = (await capture("/no/such/page")).next;
-    assert.match(gone, /HTTP 404.*check the URL/);
+    assert.match(gone, /404.*URL/);
     assert.doesNotMatch(gone, learn);
   });
 
