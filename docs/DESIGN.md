@@ -17,7 +17,7 @@ Each operation stores, besides its request template:
 - **trigger**: how to make the site's own frontend fire the request. It is a URL template
   (`https://x.com/{screen_name}`), optionally with UI steps or a soft navigation from a neutral page.
 - **match**: how to recognize that request in captured traffic, using stable identity only:
-  method, host, path with hash-like segments wildcarded, and GraphQL operationName.
+  method, host, path with hash-like segments and the segments a param or a ref fills wildcarded, and GraphQL operationName.
   **Never a queryId/doc_id/hash**; putting those in the matcher is what makes rotation unhealable
   (as happened to unbrowse).
 
@@ -51,7 +51,11 @@ Store the captured request **verbatim** (method, url, headers, body string) plus
 Step kinds: `path:<i>` (URL path segment), `query:<key>`, `header:<name>`, `form:<key>`,
 `json:<RFC6901 pointer>` (the current string is parsed as JSON), `b64` (the current string is
 base64 of JSON), `body` (the whole body). A repeated key's later occurrences are `query[1]:<key>`,
-`form[1]:<key>`, and so on. Header names are lower-cased when a spec is parsed.
+`form[1]:<key>`, and so on. A JSON object has no such form: a pointer reaches a key's first occurrence
+only. The walk reads every occurrence, so learning knows what any of them would be, and refuses the request
+where a repeated key is, or holds, a param, a session reference or a volatile anchor in any occurrence
+(`{"token":A,"token":B}`): the later value could be neither blanked nor filled. A repeated key that is none of
+those is a constant and is sent as captured, byte for byte (`{"limit":1,"limit":2}`). Header names are lower-cased when a spec is parsed.
 Filling decodes only the layers a slot touches, sets the value, and re-encodes only those layers.
 Untouched bytes stay identical, so RestLi parens, key order and the exact encoding survive.
 No `{x}` string interpolation over raw captured text. In a slot `template`, `{{` and `}}` are
@@ -92,7 +96,16 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    several params in one leaf are replaced longest first. Headers the browser computes (user-agent,
    accept*, content-type, sec-*) are never slots. A `true`/`false`/`null` example binds only to the
    leaf named like the param, even when it is the only such flag. An array or object example binds to the equal JSON container. Example
-   values must be distinct and at least 3 chars. If a value appears in several unrelated places,
+   values must be distinct and at least 3 chars: a shorter one found by substring in one capture is ambiguous.
+   A shorter value (`US`, `page=2`, a small enum) is accepted only with a second example that differs, and its
+   run. A param with a short value in either example (`USA`, then `US`) is then placed only where a whole decoded leaf equals its value in run 1 and equals the other example at the
+   same place in run 2, never inside a longer leaf; a leaf that equals it and does not follow (`gl=US` on every
+   request, `size: 2` beside `page: 2`) is no slot. The same both-runs match says which request carries it, endpoint by endpoint:
+   run 2's evidence counts for the request with the same method, host and path (a path segment may differ the way the
+   examples do), so another endpoint's `country=CA` does not vouch for a feed that always asks for `US`.
+   Without that evidence the example is refused, with a hint to pass a second one. A known limit: two leaves that both
+   follow the examples (`{"page":1,"counter":1}`, then `{"page":2,"counter":2}`) both become slots for the param, with
+   the warning below; two runs cannot tell them apart. If a value appears in several unrelated places,
    record all of them but warn. (Google Flights reuses the destination as the return-leg origin.)
    A short example (4 chars or fewer, "SFO") inside a random-looking leaf counts only where it
    stands alone between non-alphanumerics: inside a base64 blob it is chance.
@@ -114,11 +127,24 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    templated leaf, such as a signed URL; browser-computed headers never count) is a nonce/signature, so the op gets `minTier: 3`,
    unless one tier-1 replay of run 1's template with example 2's args still answers ok: then the value is
    session-scoped (Google's `f.sid`), not a signature, and `minTier` stays 1. Everything else is a constant.
+   That includes a place step 2 gave a param which stays as it was although the param changed (the endpoint's own
+   segment in `/api/search?q=search`, when example 2 is `q=kitten`): run 2 disproves it, so it is no slot, and learning
+   runs again without it, which makes the leaf a constant to every step (the match names the segment, a credential in
+   it is found). A param left with no place is an error, not a warning. This covers params whose example is a
+   string, number or flag. An object or array param is outside it: its places are not checked against run 2, so a
+   copy of it elsewhere in the request that did not follow stays a slot, and the leaves inside it, which change with
+   the example, are read as nonces (`minTier: 3`). Run 2's request is chosen on the evidence
+   run 1's was: what the response recipe reads, when there is one, and for a read an answer that is data: a captured 2xx,
+   not a bare acknowledgement, an error, or a request nobody answered (unless run 1's own answer, pinned by the caller, is no data either). Among the requests that pass, the one on run 1's own path that carries the args comes first (the
+   wildcard a false path param puts in the match fits sibling endpoints too). When none passes, run 2 disproves nothing.
 4. **Session references.** A header, query or JSON leaf whose value equals a cookie value (raw,
    quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Capture also snapshots the
    final page origin's localStorage and sessionStorage; a leaf equal to a stored value (or to a
    string inside a JSON entry, as auth SDKs keep tokens; ≥ 8 chars) becomes a `session:` ref named
-   after the storage key. A key or header named like a credential (its words: token, secret, key,
+   after the storage key. The leaf's own name changes none of this: under a persisted-query key (`sha256Hash`,
+   `doc_id`, `queryId`, `hash`) a cookie or stored value is a ref as anywhere else, whole or inside the leaf, since a
+   token the page stores and sends as `queryId` reads exactly like a query id it caches there. So a query id the app
+   keeps in storage is a `session:` ref too; only one that is in no cookie and no storage stays a volatile anchor. A key or header named like a credential (its words: token, secret, key,
    auth, sess(ion), sid, signature, password, credential; "author" is not) with a random-looking
    value (≥ 16 chars, two character classes, ≥ 3 bits/char) is a `session:` ref too, unless the site
    ships that value in a static bundle to every visitor (a public API key): then it stays
@@ -127,8 +153,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    a per-user script sent with the session cookie proves nothing. A random value (≥ 16 chars, as
    above) that an earlier response of the same capture holds (a bootstrap JSON, a per-user config
    script, a token in the document; not a static bundle) is server-issued: a `session:` ref named
-   after its leaf, whatever the name. Hash-like path segments and persisted-query keys stay
-   volatile anchors. Like every `session:` ref it is refreshed by each trigger run; when it
+   after its leaf, whatever the name. This rule leaves hash-like path segments and persisted-query keys
+   alone: issued, but in no cookie and no storage, they stay volatile anchors. Like every `session:` ref it is refreshed by each trigger run; when it
    expires, tier 1 answers `auth` or a bare 403, and the ladder's tier-3 run (below) re-derives it
    and answers the call, so it needs no `minTier` of its own. Auth/anti-bot-looking
    headers (authorization, x-*-token, x-csrf*, x-goog-batchexecute-bgr, x-client-transaction-id)
@@ -138,17 +164,83 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    them (Meta's `x-fb-lsd`) shares its ref. A cookie or stored value (≥ 16 chars) inside a longer
    leaf (`v1:<cookie>`, percent-encoded in a `next=` URL, JSON-escaped) is a templated ref that
    re-encodes it the same way; in a leaf that also holds an arg (`next=/search?q={q}&auth=<cookie>`)
-   it is a `{cookie:x}` hole in the param's template, filled at call time. When that slot has no
-   escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. A capture refreshes a
-   templated `session:` value from its place in the leaf. Newly learned session references are scoped by operation, with distinct request positions
-   for different tokens that share a name. All discovered credentials participate in compound-copy
-   removal. Add and heal refuse to save any spec that still contains a detected live credential.
-   The spec never holds a credential. At call time a `cookie:` ref takes the
+   it is a `{cookie:x}` hole in the param's template, filled at call time. A hole is filled with the value as
+   stored; only a ref slot's own value takes a `transform`. So a cookie that could only be a hole and sits
+   there unquoted or URL-decoded has no safe form, and learning refuses the request rather than keep its text. When that slot has no
+   escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. The text then left
+   around the holes of a param's leaf may be a credential beside the arg. Under a per-session field or header name
+   (`token`, `x-csrf-token`) it is one from 8 characters on, as a whole leaf there is (`token=kittens.<token>`). Under any
+   other name, one that only reads like a credential's included (`cache_key`, `api_key`), it is one only when a piece of
+   it, without the separators next to the hole, is a token and nothing else: one unbroken run of 16 or more characters
+   of the hex or URL-safe base64 alphabet that is random-looking (`api_key=<token>:kittens`). Text with separators inside
+   it is structure and stays (`cache_key=query:{q}:page:1:sort:relevance`, a path), and so are words and numbers joined
+   by `-` or `_` (a slug). A credential there refuses the request. It is not made a hole, because no later capture
+   could tell where the arg ends and the credential begins (`red.fox.<token>`), and a refresh would store the wrong
+   text. The rule goes by shape, so it also refuses a public id or hash that stands alone beside the arg
+   (`/<docId>/kittens`, `rev=kittens@<hash>`); the caller can mark the name public when the text is the same for every
+   visitor. A capture refreshes a
+   templated `session:` value from its place in the leaf. A `session:` value the page later sends empty is not
+   refreshed: the stored one is kept. Slots never overlap, and a container that is a
+   session value is never serialized in part. A container is a string that holds JSON, as it is or in base64. One that
+   is a session value as a whole (a header named like a credential, a value equal to a cookie, a value the page also
+   keeps in storage under any key) is one ref: blank in the spec and sent whole from the session at call time, so no
+   key, no short leaf and no encoding of its text reaches the spec. The refs found inside it are dropped. A param
+   inside it could not be filled on replay, so the learn is refused: the error names the container and the param.
+   Where the container is one only by its header's name (it is in no cookie and no storage), the way on is to mark
+   it public (`--public x-csrf-token`) when the rest of it is the same for every visitor: it then stays as captured,
+   with the param inside it filled and any cookie or stored value inside it still a ref. Otherwise learn another
+   request. A container that is a cookie or a stored value as a whole (a body the page saved) has only that second
+   way: it is a ref under a public name too, and the error does not offer the mark. Only a header is a session value by its name alone: a
+   container under a credential-like field name is judged leaf by leaf. A stored value counts as a credential under a credential's name or when it is random-looking, in any
+   entry that holds it and whatever the entries' order; a stored JSON text by its key, and each string in it on its
+   own. A stored setting sent under a credential's name in the request (`token=<it>`) counts too. Newly learned session references are scoped by operation, with distinct request positions
+   for different tokens that share a name: one name never means two values, wherever the second was
+   found (a storage entry called `token` inside `v1:<value>`, next to a `token` field holding another). All discovered credentials participate in compound-copy
+   removal. Learning ends with one check behind all of these rules: the save-time secret scan, run over the stored
+   request and the slot templates. It looks for credentials, not for everything live: every cookie (the jar's and
+   the request's own Cookie header); the `session:` values that are credentials (found by name or as issued, stored as
+   one, or sent under a credential's name), those of refs dropped from inside a container sent whole included; and
+   the stored values that are credentials, whether or not anything made them refs. One exception, in this check only: a
+   stored value that is a credential by its storage key's name alone (`token: "solarized-dark"`), neither random-looking
+   nor shaped like a token (a JWT, a bearer, a long hex or base64 blob), does not refuse the learn, since the check
+   fires only for a copy that could not be a ref and the text is then kept as captured; where it can be a ref it still
+   is one. That lets through a short token (under 16 characters) kept under such a key and copied where no pass
+   reaches it. A stored setting
+   (a theme, a locale) is not looked for, also when a leaf that equals it made it a ref: a ref keeps a value fresh,
+   it does not make it secret. A copy no rule could turn into a ref (too short to template, base64, percent-encoded
+   twice) fails the learn, closed, and the error names the leaf that holds it. No name exempts a leaf, one marked
+   public included; exempt is only the caller's own example, for stored values. Add and heal
+   run the scan again before saving, against the site's whole session (every stored session value, settings too), and refuse to save any spec that still contains one.
+   What the scan finds is a copy of a value it is given, 6 characters or longer, as it is or unquoted or URL-decoded:
+   in the text; in what the text decodes to, through up to three layers of percent-encoding, JSON escapes and base64
+   runs of 16 characters or more decoded whole; and as the value's own base64 encoding at any byte offset, in the
+   standard and the URL-safe alphabet (a six-character value's eight characters, an encoding that follows other text).
+   That last search only says where to look: the text there is decoded at that offset and must hold the value's bytes,
+   so a match is always a copy of the value, never another one that encodes alike (`xqbcdef` beside `abcdef`).
+   It does not prove a spec holds no credential. These can still reach one: a cookie or value under
+   6 characters; a credential that is a number (a number leaf is never a ref, and digits alone are not random-looking, so
+   one is caught only as a copy of a known value); a credential split across two leaves; a copy behind more encoding
+   than that (four layers, base64 twice after other text, hex); a cookie that only the second run's request carried and the jar does not hold; a value under a
+   credential's name that is too plain for the name's rule (under 8 characters for a per-session name, not random-looking
+   for a credential-like one); beside a param under a name that is not per-session, a token with separators in it or
+   around it in the same piece (a JWT's dots, standard base64's `+` and `/`, `auth=<token>` after other text) or under
+   16 characters; and a credential no rule recognizes (not a cookie, not stored, not named like one, not issued by an
+   earlier answer). Export scans a
+   spec again, by name and by shape, before it is shared. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.
-   The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header a human marks public
-   (`add --public authorization` for a web app's shared bearer) stays literal; the op lists it in `public`,
-   and export allows it.
+   The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header or field name a human marks public
+   (`add --public authorization` for a web app's shared bearer) is listed by the op in `public`
+   and keeps literal what these rules would take by that name: a header by its name (`authorization`, `x-csrf-token`),
+   a credential-like name over a random-looking value (`api_key`), a value an earlier answer issued, the text beside
+   a param. It exempts nothing else. A per-session field (`token`, `csrf`, `at`: the list above) is a ref under a
+   public name too. A public leaf that equals or embeds a cookie or a stored value becomes its ref as anywhere else,
+   whatever the stored value looks like: a name or entropy rule that does not fire is no proof a stored value is
+   safe to keep. One that holds a cookie or a stored credential in a form no rule can make a ref (too short, base64)
+   fails the final check. The save-time scan (`heal.ts`) and export still waive a public header whole, and no other public name.
+   Learning runs first on every add and recapture, so a public header reaches them holding no cookie and no stored
+   credential the scan can find; a public query or body field that holds a session value another operation of the site stored
+   learns, and `add` then refuses to save it.
 5. **Volatile anchors.** A hash-like literal (queryId path segment, doc_id, persisted hash) gets a
    `volatile` entry recording its shape (charset + length) and a stable **anchor** string next to it
    (the GraphQL operationName or the neighboring path segment). This is what the cheap heal uses.

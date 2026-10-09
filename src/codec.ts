@@ -22,6 +22,8 @@ export interface Leaf {
   type: "string" | "number" | "boolean" | "null";
   /** the string was itself JSON and its leaves follow in the walk */
   container?: boolean;
+  /** on a container: the keys objects in its JSON repeat. Step paths reach such a key's first occurrence only. */
+  repeated?: Step[][];
 }
 
 /* ------------------------------------------------------------- JSON spans */
@@ -372,7 +374,8 @@ export function fillSlotTemplate(template: string, vars: Record<string, unknown>
   );
 }
 
-function walkJsonString(s: string, at: Step[], out: Leaf[]): boolean {
+/** Walk the leaves of s, the JSON text `holder` holds at `at`, into out. False when s is not JSON. */
+function walkJsonString(s: string, at: Step[], out: Leaf[], holder: Leaf): boolean {
   const start = skipWs(s, 0);
   if (s[start] !== "{" && s[start] !== "[") return false;
   try {
@@ -382,13 +385,22 @@ function walkJsonString(s: string, at: Step[], out: Leaf[]): boolean {
   }
   const visit = (i: number, ptr: string) => {
     const c = s[i];
-    if (c === "{" || c === "[") return eachChild(s, i, (key, child) => void visit(child, `${ptr}/${escapeToken(key)}`));
+    if (c === "{" || c === "[") {
+      const seen = new Set<string>();
+      return eachChild(s, i, (key, child) => {
+        const p = `${ptr}/${escapeToken(key)}`;
+        // noted where the object is walked: a repeated key may hold no leaf at all ({} twice)
+        if (c === "{" && seen.has(key)) holder.repeated = [...(holder.repeated ?? []), [...at, `json:${p}`]];
+        seen.add(key);
+        visit(child, p);
+      });
+    }
     const span = s.slice(i, jsonValueEnd(s, i));
     const steps = [...at, `json:${ptr}`];
     if (c === '"') {
       const leaf: Leaf = { at: steps, value: JSON.parse(span) as string, type: "string" };
       out.push(leaf);
-      if (walkInner(leaf.value, steps, out)) leaf.container = true;
+      walkInner(leaf, out);
     } else {
       out.push({ at: steps, value: span, type: c === "t" || c === "f" ? "boolean" : c === "n" ? "null" : "number" });
     }
@@ -397,18 +409,19 @@ function walkJsonString(s: string, at: Step[], out: Leaf[]): boolean {
   return true;
 }
 
-/** Walk a string that holds JSON, directly or base64-encoded. */
-function walkInner(s: string, at: Step[], out: Leaf[]): boolean {
-  if (walkJsonString(s, at, out)) return true;
-  if (!B64.test(s)) return false;
-  const text = fromB64(s);
-  // only a clean round trip counts: a hash or token decodes to bytes that are not JSON text
-  return (
-    /^\s*[[{]/.test(text) &&
-    Buffer.from(text, "utf8").toString("base64").replace(/=+$/, "") ===
-      s.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "") &&
-    walkJsonString(text, [...at, "b64"], out)
-  );
+/** A string leaf that holds JSON, directly or base64-encoded, is a container: its leaves follow it in out. */
+function walkInner(leaf: Leaf, out: Leaf[]): void {
+  const s = leaf.value;
+  if (walkJsonString(s, leaf.at, out, leaf)) leaf.container = true;
+  else if (B64.test(s)) {
+    const text = fromB64(s);
+    // only a clean round trip counts: a hash or token decodes to bytes that are not JSON text
+    const clean =
+      /^\s*[[{]/.test(text) &&
+      Buffer.from(text, "utf8").toString("base64").replace(/=+$/, "") ===
+        s.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
+    if (clean && walkJsonString(text, [...leaf.at, "b64"], out, leaf)) leaf.container = true;
+  }
 }
 
 /** Every decoded leaf of the request with its step path, including JSON inside strings, recursively. */
@@ -417,7 +430,7 @@ export function walk(req: Request): Leaf[] {
   const add = (at: Step[], value: string) => {
     const leaf: Leaf = { at, value, type: "string" };
     out.push(leaf);
-    if (walkInner(value, at, out)) leaf.container = true;
+    walkInner(leaf, out);
   };
   const u = splitUrl(req.url);
   u.segments.forEach((seg, i) => {
