@@ -58,7 +58,13 @@ export async function startLiveFixture(): Promise<LiveFixture> {
       body = raw.toString("latin1");
     }
     const refIdx = req.rawHeaders.findIndex((h, i) => i % 2 === 0 && h.toLowerCase() === "referer");
-    hits.push({ method: req.method ?? "GET", path: p + u.search, headers: req.headers, rawReferer: refIdx >= 0 ? req.rawHeaders[refIdx + 1] : undefined, body });
+    hits.push({
+      method: req.method ?? "GET",
+      path: p + u.search,
+      headers: req.headers,
+      rawReferer: refIdx >= 0 ? req.rawHeaders[refIdx + 1] : undefined,
+      body,
+    });
     const q = u.searchParams.get("q") ?? "";
     const cookie = String(req.headers.cookie ?? "");
     const send = (status: number, type: string, text: string) => {
@@ -66,7 +72,11 @@ export async function startLiveFixture(): Promise<LiveFixture> {
       res.end(text);
     };
     const html = (markup: string, status = 200) =>
-      send(status, "text/html; charset=utf-8", `<!doctype html><html><head><meta charset="utf-8"><title>Fixture</title></head><body>${markup}</body></html>`);
+      send(
+        status,
+        "text/html; charset=utf-8",
+        `<!doctype html><html><head><meta charset="utf-8"><title>Fixture</title></head><body>${markup}</body></html>`,
+      );
 
     // Amazon/Reddit shape: server-rendered list, plus a telemetry beacon (JSON in, JSON out) carrying the page URL and title.
     if (p === "/shop") {
@@ -88,7 +98,9 @@ export async function startLiveFixture(): Promise<LiveFixture> {
     }
     if (p === "/api/b64") {
       try {
-        const v = JSON.parse(Buffer.from((JSON.parse(body) as { payload: string }).payload, "base64").toString("utf8")) as { query: string };
+        const v = JSON.parse(
+          Buffer.from((JSON.parse(body) as { payload: string }).payload, "base64").toString("utf8"),
+        ) as { query: string };
         return send(200, "application/json", JSON.stringify({ results: [{ title: `${v.query} result` }] }));
       } catch {
         return send(400, "application/json", '{"error":"bad payload"}');
@@ -119,7 +131,8 @@ export async function startLiveFixture(): Promise<LiveFixture> {
 
     // Booking.com shape: without the WAF cookie, a 202 interstitial that reloads with &chal_t=.
     if (p === "/hotels") {
-      if (!/aws-waf-token=ok/.test(cookie)) return send(202, "text/html", wafPage(`${p}${u.search}&chal_t=1790531654141&force_referer=`));
+      if (!/aws-waf-token=ok/.test(cookie))
+        return send(202, "text/html", wafPage(`${p}${u.search}&chal_t=1790531654141&force_referer=`));
       return html(`${[1, 2].map((n) => `<div class="card">${esc(q)} hotel ${n}</div>`).join("")}`);
     }
 
@@ -140,9 +153,10 @@ export async function startLiveFixture(): Promise<LiveFixture> {
     setDown: (d) => {
       down = d;
     },
-    close: () => new Promise<void>((r) => {
-      server.closeAllConnections();
-      server.close(() => r());
-    }),
+    close: () =>
+      new Promise<void>((r) => {
+        server.closeAllConnections();
+        server.close(() => r());
+      }),
   };
 }

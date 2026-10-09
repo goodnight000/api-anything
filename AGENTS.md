@@ -34,7 +34,9 @@ holds the evidence behind it, including the api-anything bugs that must not come
 ## Commands
 
 ```sh
-npm run check                                  # tsc, no emit
+npm run check                                  # tsc over src and test, no emit
+npm run lint                                   # Biome: format and lint, no changes
+npm run format                                 # Biome: apply formatting and safe fixes
 npm test                                       # all tests
 node --import tsx --test test/<file>.test.ts   # one file
 npm run cli -- <command>                       # run the CLI from source

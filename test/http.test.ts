@@ -2,13 +2,19 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
-import { buildRequest, send } from "../src/http.ts";
-import type { Session } from "../src/session.ts";
-import { OperationSchema, type Operation } from "../src/spec.ts";
-import type { StoredCookie } from "../src/types.ts";
+import { buildRequest, send } from "../src/http.js";
+import type { Session } from "../src/session.js";
+import { type Operation, OperationSchema } from "../src/spec.js";
+import type { StoredCookie } from "../src/types.js";
 
 const cookie = (name: string, value: string, domain: string): StoredCookie => ({
-  name, value, domain, path: "/", expires: -1, httpOnly: false, secure: false,
+  name,
+  value,
+  domain,
+  path: "/",
+  expires: -1,
+  httpOnly: false,
+  secure: false,
 });
 
 const op = (over: Record<string, unknown> = {}): Operation =>
@@ -29,19 +35,32 @@ const op = (over: Record<string, unknown> = {}): Operation =>
       { ref: "cookie:JSESSIONID", transform: "strip-quotes", at: ["header:csrf-token"] },
       { ref: "session:authorization", at: ["header:authorization"] },
     ],
-    params: [{ name: "text" }, { name: "tweet_id" }, { name: "count", type: "number", default: 20 }, { name: "dark", type: "boolean", required: false }],
+    params: [
+      { name: "text" },
+      { name: "tweet_id" },
+      { name: "count", type: "number", default: 20 },
+      { name: "dark", type: "boolean", required: false },
+    ],
     trigger: { url: "https://x.com/compose" },
     readOnly: false,
     ...over,
   });
 
 const session: Session = {
-  cookies: [cookie("ct0", "csrf123", ".x.com"), cookie("JSESSIONID", '"ajax:42"', ".x.com"), cookie("elsewhere", "no", ".other.com")],
+  cookies: [
+    cookie("ct0", "csrf123", ".x.com"),
+    cookie("JSESSIONID", '"ajax:42"', ".x.com"),
+    cookie("elsewhere", "no", ".other.com"),
+  ],
   values: { authorization: "Bearer PUBLIC" },
 };
 
 test("buildRequest fills params with native types, refs with transforms, and scopes cookies", () => {
-  const req = buildRequest(op(), { text: 'He said "hi"', tweet_id: "2085462611575857621", count: "1234567890123456789", dark: "false" }, session);
+  const req = buildRequest(
+    op(),
+    { text: 'He said "hi"', tweet_id: "2085462611575857621", count: "1234567890123456789", dark: "false" },
+    session,
+  );
   assert.equal(req.method, "POST");
   assert.equal(
     req.body,
@@ -72,7 +91,10 @@ test("template slots fill a substring of the leaf", () => {
     trigger: { url: "https://a.test/" },
     readOnly: true,
   });
-  assert.equal(buildRequest(search, { user: "esa" }, { cookies: [], values: {} }).url, "https://a.test/s?q=from%3Aesa%20lang%3Aen&n=1");
+  assert.equal(
+    buildRequest(search, { user: "esa" }, { cookies: [], values: {} }).url,
+    "https://a.test/s?q=from%3Aesa%20lang%3Aen&n=1",
+  );
 });
 
 test("send: injectable fetch, returns status/headers/body/url/ms", async () => {
@@ -110,7 +132,10 @@ test("send against a local server: GET has no body, per-site pacing, timeout", a
     const local: Session = { cookies: [cookie("sid", "abc", "127.0.0.1")], values: {} };
     // pacing is measured where fetch is called, so server/network jitter can't flake it
     const calls: number[] = [];
-    const timed = ((url: string, init: RequestInit) => (calls.push(Date.now()), fetch(url, init))) as typeof fetch;
+    const timed = ((url: string, init: RequestInit) => {
+      calls.push(Date.now());
+      return fetch(url, init);
+    }) as typeof fetch;
     const a = await send(get, { id: "123" }, local, { site: "pace", minIntervalMs: 150, fetchImpl: timed });
     const b = await send(get, { id: "456" }, local, { site: "pace", minIntervalMs: 150, fetchImpl: timed });
     assert.equal(a.body, "GET /items?id=123 sid=abc");
@@ -119,7 +144,10 @@ test("send against a local server: GET has no body, per-site pacing, timeout", a
     assert.equal(a.url, `${base}/items?id=123`);
 
     const slow = { ...get, request: { ...get.request, url: `${base}/slow?id=1` } };
-    await assert.rejects(send(slow, { id: "1" }, local, { site: "slow", minIntervalMs: 0, timeoutMs: 50 }), /no response within 50 ms/);
+    await assert.rejects(
+      send(slow, { id: "1" }, local, { site: "slow", minIntervalMs: 0, timeoutMs: 50 }),
+      /no response within 50 ms/,
+    );
   } finally {
     server.closeAllConnections();
     server.close();

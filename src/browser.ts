@@ -5,7 +5,16 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
-import { chromium, type BrowserContext, type Cookie, type Frame, type Page, type Request, type Response, type Route } from "playwright-core";
+import {
+  type BrowserContext,
+  type Cookie,
+  chromium,
+  type Frame,
+  type Page,
+  type Request,
+  type Response,
+  type Route,
+} from "playwright-core";
 import { botWall } from "./classify.js";
 import { siteOf } from "./session.js";
 import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
@@ -24,7 +33,9 @@ const LOCKED = /ProcessSingleton|profile (directory )?is already in use|Singleto
 /** Another process holds api-anything's Chrome profile. */
 export class ProfileInUse extends Error {
   constructor(dir: string) {
-    super(`the api-anything Chrome profile is in use by another process (an MCP server or another api-anything command): ${dir}`);
+    super(
+      `the api-anything Chrome profile is in use by another process (an MCP server or another api-anything command): ${dir}`,
+    );
     this.name = "ProfileInUse";
   }
 }
@@ -48,7 +59,10 @@ function hold(): () => void {
   };
 }
 
-async function launch(profileDir: string, options: Parameters<typeof chromium.launchPersistentContext>[1]): Promise<BrowserContext> {
+async function launch(
+  profileDir: string,
+  options: Parameters<typeof chromium.launchPersistentContext>[1],
+): Promise<BrowserContext> {
   const until = Date.now() + LOCK_WAIT_MS;
   for (;;) {
     try {
@@ -91,7 +105,13 @@ async function probeHeadlessUA(): Promise<string> {
  * The process-wide persistent context. A different profileDir or headless mode closes the old one
  * first, since Chrome locks a profile to one running instance.
  */
-export function openBrowser({ profileDir, headless = true }: { profileDir: string; headless?: boolean }): Promise<BrowserContext> {
+export function openBrowser({
+  profileDir,
+  headless = true,
+}: {
+  profileDir: string;
+  headless?: boolean;
+}): Promise<BrowserContext> {
   if (users === 0) scheduleIdleClose();
   if (current && current.profileDir === profileDir && current.headless === headless) return current.ctx;
   const prev = current;
@@ -155,13 +175,19 @@ function siteCookies(cookies: Cookie[], url: string): StoredCookie[] {
   return cookies
     .filter((c) => {
       const d = c.domain.replace(/^\./, "");
-      return d === site || d.endsWith("." + site);
+      return d === site || d.endsWith(`.${site}`);
     })
     .map(toStored);
 }
 
 /** The profile's current cookies for url's site: the cheap auth refresh, no page load. */
-export async function profileCookies({ url, profileDir }: { url: string; profileDir: string }): Promise<StoredCookie[]> {
+export async function profileCookies({
+  url,
+  profileDir,
+}: {
+  url: string;
+  profileDir: string;
+}): Promise<StoredCookie[]> {
   const release = hold();
   try {
     const ctx = await openBrowser({ profileDir });
@@ -176,20 +202,20 @@ export async function addCookiesToProfile(cookies: StoredCookie[], profileDir: s
   if (!cookies.length) return;
   const release = hold();
   try {
-  const ctx = await openBrowser({ profileDir });
-  // Playwright wants a domain that starts with a dot or an exact host; a leading-dot domain plus path is safe.
-  await ctx.addCookies(
-    cookies.map((c) => ({
-      name: c.name,
-      value: c.value,
-      domain: c.domain,
-      path: c.path || "/",
-      expires: c.expires > 0 ? c.expires : undefined,
-      httpOnly: c.httpOnly,
-      secure: c.secure,
-      sameSite: c.sameSite,
-    })),
-  );
+    const ctx = await openBrowser({ profileDir });
+    // Playwright wants a domain that starts with a dot or an exact host; a leading-dot domain plus path is safe.
+    await ctx.addCookies(
+      cookies.map((c) => ({
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path || "/",
+        expires: c.expires > 0 ? c.expires : undefined,
+        httpOnly: c.httpOnly,
+        secure: c.secure,
+        sameSite: c.sameSite,
+      })),
+    );
   } finally {
     release();
   }
@@ -240,7 +266,11 @@ async function guardSockets(ctx: BrowserContext, guard: SocketGuard): Promise<()
     const ready = ctx.routeWebSocket(/.*/, (ws) => {
       const server = ws.connectToServer();
       ws.onMessage((m) => {
-        const ex: Exchange = { id: 0, resourceType: "websocket", request: { method: "SEND", url: ws.url(), headers: {} } };
+        const ex: Exchange = {
+          id: 0,
+          resourceType: "websocket",
+          request: { method: "SEND", url: ws.url(), headers: {} },
+        };
         if (![...guards].some((drop) => drop(ex))) server.send(m);
       });
     });
@@ -314,7 +344,9 @@ function requestBody(req: Request): string | undefined {
   const buf = enc ? req.postDataBuffer() : null;
   if (buf) {
     try {
-      return (enc.includes("gzip") ? gunzipSync(buf) : enc.includes("br") ? brotliDecompressSync(buf) : inflateSync(buf)).toString("utf8");
+      return (
+        enc.includes("gzip") ? gunzipSync(buf) : enc.includes("br") ? brotliDecompressSync(buf) : inflateSync(buf)
+      ).toString("utf8");
     } catch {
       /* not really encoded: fall through */
     }
@@ -404,7 +436,12 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       nextDoc = new Promise<void>((r) => (navigated = r));
     }
     // allHeaders() is what went on the wire: cookie, sec-fetch-*, origin, referer.
-    bounded(req.allHeaders().then((h) => (ex.request.headers = h), () => {}));
+    bounded(
+      req.allHeaders().then(
+        (h) => (ex.request.headers = h),
+        () => {},
+      ),
+    );
     let endpoint = req.url();
     try {
       const u = new URL(endpoint);
@@ -447,7 +484,10 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   // The latest top-level document of this run's first page, when it is a bot challenge's interstitial.
   const walled = () => {
     const d = docs.at(-1);
-    return !!d?.response && !!botWall({ status: d.response.status, headers: d.response.headers, body: d.response.body ?? "" });
+    return (
+      !!d?.response &&
+      !!botWall({ status: d.response.status, headers: d.response.headers, body: d.response.body ?? "" })
+    );
   };
   /** walled(), once the latest document's body is in (bounded: a stuck read is not a wall) */
   const walledNow = async () => {
@@ -470,7 +510,8 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       }
     : undefined;
 
-  const quiet = () => ![...pending.values()].some((t) => Date.now() - t < LONG_MS) && Date.now() - lastActivity >= QUIET_MS;
+  const quiet = () =>
+    ![...pending.values()].some((t) => Date.now() - t < LONG_MS) && Date.now() - lastActivity >= QUIET_MS;
   const idle = async (capMs = timeout) => {
     const end = Math.min(deadline, Date.now() + capMs);
     while (Date.now() < end && !quiet()) await sleep(50);
@@ -481,7 +522,8 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     if (o.match) {
       // The op's own request answering is the signal; then a short settle.
       // A page quiet for a few seconds without it is not going to send it (a login wall, a 404 page).
-      while (Date.now() < deadline && !answered() && !(quiet() && Date.now() - lastActivity > MATCH_GRACE_MS)) await sleep(50);
+      while (Date.now() < deadline && !answered() && !(quiet() && Date.now() - lastActivity > MATCH_GRACE_MS))
+        await sleep(50);
       await sleep(o.settleMs ?? 300);
       await idle(3000);
       return;
@@ -491,7 +533,8 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     await idle();
     if (!exchanges.some((e) => e.resourceType === "xhr" || e.resourceType === "fetch")) {
       const end = Math.min(deadline, Date.now() + FIRST_XHR_MS);
-      while (Date.now() < end && !exchanges.some((e) => e.resourceType === "xhr" || e.resourceType === "fetch")) await sleep(50);
+      while (Date.now() < end && !exchanges.some((e) => e.resourceType === "xhr" || e.resourceType === "fetch"))
+        await sleep(50);
       await idle();
     }
   };
@@ -516,7 +559,9 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       // A link the app rendered goes through its router; otherwise the history API plus popstate,
       // which client routers (React Router, TanStack, Next) listen to. An injected <a> would not be routed.
       await page.evaluate((u) => {
-        const link = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find((a) => a.href === u && (!a.target || a.target === "_self"));
+        const link = [...document.querySelectorAll<HTMLAnchorElement>("a[href]")].find(
+          (a) => a.href === u && (!a.target || a.target === "_self"),
+        );
         if (link) return link.click();
         try {
           history.pushState({}, "", u);
@@ -551,9 +596,21 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     await Promise.race([settled, grace]);
     // Tokens an SPA keeps in web storage (not the jar); learning turns a request repeating one into a session: ref.
     const storage = await page
-      .evaluate(() => Object.fromEntries([localStorage, sessionStorage].flatMap((s) => Object.keys(s).map((k) => [k, s.getItem(k) ?? ""])).filter(([, v]) => v.length <= 16_384)))
+      .evaluate(() =>
+        Object.fromEntries(
+          [localStorage, sessionStorage]
+            .flatMap((s) => Object.keys(s).map((k) => [k, s.getItem(k) ?? ""]))
+            .filter(([, v]) => v.length <= 16_384),
+        ),
+      )
       .catch(() => ({}));
-    return { exchanges, cookies: siteCookies(await ctx.cookies(), o.url), finalUrl: page.url(), storage, locations: [...locations] };
+    return {
+      exchanges,
+      cookies: siteCookies(await ctx.cookies(), o.url),
+      finalUrl: page.url(),
+      storage,
+      locations: [...locations],
+    };
   } finally {
     page.off("framenavigated", onNavigated);
     ctx.off("page", onPage);
@@ -593,7 +650,9 @@ async function originPage(ctx: BrowserContext, origin: string, timeout: number):
   if (here !== origin) {
     // Same-origin is what matters for fetch(): serve a blank document at an unused path, never sent to the site.
     const blank = `${origin}/__api_anything_blank__`;
-    await page.route(blank, (r) => r.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title></title>" }));
+    await page.route(blank, (r) =>
+      r.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title></title>" }),
+    );
     await page.goto(blank, { waitUntil: "domcontentloaded", timeout });
   }
   originPages.set(origin, page);
@@ -627,11 +686,26 @@ export async function pageFetch(o: {
       const run = page.evaluate(
         async ({ url, method, headers, body, timeoutMs }) => {
           const t = performance.now();
-          const r = await fetch(url, { method, headers, body, credentials: "include", signal: AbortSignal.timeout(timeoutMs) });
+          const r = await fetch(url, {
+            method,
+            headers,
+            body,
+            credentials: "include",
+            signal: AbortSignal.timeout(timeoutMs),
+          });
           const h: Record<string, string> = {};
-          r.headers.forEach((v, k) => (h[k] = v));
+          r.headers.forEach((v, k) => {
+            h[k] = v;
+          });
           const text = await r.text();
-          return { status: r.status, headers: h, body: text, url: r.url, ms: Math.round(performance.now() - t), redirected: r.redirected };
+          return {
+            status: r.status,
+            headers: h,
+            body: text,
+            url: r.url,
+            ms: Math.round(performance.now() - t),
+            redirected: r.redirected,
+          };
         },
         { url: o.url, method: o.method, headers, body, timeoutMs },
       );
@@ -643,7 +717,8 @@ export async function pageFetch(o: {
       try {
         return await Promise.race([run, late]);
       } catch (e) {
-        if (/TimeoutError|timed out|signal timed out/i.test((e as Error).message)) throw new Error(`no response within ${timeoutMs} ms`);
+        if (/TimeoutError|timed out|signal timed out/i.test((e as Error).message))
+          throw new Error(`no response within ${timeoutMs} ms`);
         throw e;
       } finally {
         clearTimeout(timer);
@@ -655,7 +730,9 @@ export async function pageFetch(o: {
     } catch (e) {
       if (!o.retryOnNavigation || !/Execution context was destroyed|navigat/i.test((e as Error).message)) throw e;
       // waitForFunction outlives a context swap (a bare load-state wait can resolve on the old document)
-      await page.waitForFunction(() => document.readyState !== "loading", undefined, { timeout: timeoutMs }).catch(() => {});
+      await page
+        .waitForFunction(() => document.readyState !== "loading", undefined, { timeout: timeoutMs })
+        .catch(() => {});
       // it may have landed on another origin (a challenge's redirect): start from a fresh page on ours
       let here = "";
       try {
@@ -678,7 +755,15 @@ export async function pageFetch(o: {
  * Open `url` headed so the user can sign in. Resolves when they close the window or press Enter
  * in the terminal; what counts as logged in is the caller's call. Returns the site's cookies.
  */
-export async function login({ url, profileDir, waitForEnter = true }: { url: string; profileDir: string; waitForEnter?: boolean }): Promise<StoredCookie[]> {
+export async function login({
+  url,
+  profileDir,
+  waitForEnter = true,
+}: {
+  url: string;
+  profileDir: string;
+  waitForEnter?: boolean;
+}): Promise<StoredCookie[]> {
   const release = hold();
   try {
     return await loginWindow(url, profileDir, waitForEnter);
@@ -693,7 +778,14 @@ async function loginWindow(url: string, profileDir: string, waitForEnter: boolea
   await page.goto(url);
   // Closing the last window closes the context, after which cookies can't be read, so keep a snapshot.
   let snapshot = await ctx.cookies();
-  const poll = setInterval(() => ctx.cookies().then((c) => (snapshot = c), () => {}), 1000);
+  const poll = setInterval(
+    () =>
+      ctx.cookies().then(
+        (c) => (snapshot = c),
+        () => {},
+      ),
+    1000,
+  );
   let onEnter = () => {};
   try {
     await new Promise<void>((resolve) => {

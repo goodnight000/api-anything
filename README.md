@@ -1,5 +1,7 @@
 # API Anything
 
+[![CI](https://github.com/goodnight000/api-anything/actions/workflows/ci.yml/badge.svg)](https://github.com/goodnight000/api-anything/actions/workflows/ci.yml)
+
 **Teach your agent a website once. After that, it calls the site like an API instead of driving a browser.**
 
 API Anything watches a site's own page make a request and learns which parts of it are your

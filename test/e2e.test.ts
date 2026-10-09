@@ -14,11 +14,11 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { chromeAvailable, closeBrowser, openBrowser, runTrigger } from "../src/browser.js";
 import { call } from "../src/execute.js";
 import { addOperation, capturePage, profileDir } from "../src/heal.js";
+import { importSession } from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
 import { rememberedTier, staleMark } from "../src/store.js";
-import { PUBLIC_BEARER, startFixture, type Fixture } from "./fixture/server.js";
 import { makeChromiumDb } from "./fixture/cookie-db.js";
-import { importSession } from "../src/login.js";
+import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-e2e-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -29,7 +29,11 @@ const fast = { minIntervalMs: 0 };
 
 const heals = (): { op: string; strategy: string }[] => {
   try {
-    return readFileSync(join(HOME, "heals.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    return readFileSync(join(HOME, "heals.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
   } catch {
     return [];
   }
@@ -39,8 +43,11 @@ const specFile = () => join(HOME, "sites", `${SITE}.json`);
 function cli(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   // async on purpose: the fixture server lives in this process and must keep answering
   return new Promise((resolve) =>
-    execFile(process.execPath, ["--import", "tsx", CLI, ...args], { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } }, (err, stdout, stderr) =>
-      resolve({ code: err ? Number(err.code ?? 1) : 0, stdout, stderr }),
+    execFile(
+      process.execPath,
+      ["--import", "tsx", CLI, ...args],
+      { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } },
+      (err, stdout, stderr) => resolve({ code: err ? Number(err.code ?? 1) : 0, stdout, stderr }),
     ),
   );
 }
@@ -64,7 +71,10 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     });
     assert.equal(r.operation.minTier, 1, r.warnings.join("\n"));
     assert.deepEqual(r.operation.match, { method: "GET", host: "127.0.0.1", path: "/api/graphql/*/UserByName" });
-    assert.deepEqual(r.operation.volatile.map((v) => v.anchor), ["UserByName"]);
+    assert.deepEqual(
+      r.operation.volatile.map((v) => v.anchor),
+      ["UserByName"],
+    );
 
     const res = await call(SITE, "getUser", { name: "carol" }, fast);
     assert.equal(res.ok, true, JSON.stringify(res));
@@ -82,7 +92,10 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(res.healed, true);
     assert.equal(res.tier, 1);
-    assert.deepEqual(heals().map((h) => [h.op, h.strategy]), [["getUser", "rescan"]]);
+    assert.deepEqual(
+      heals().map((h) => [h.op, h.strategy]),
+      [["getUser", "rescan"]],
+    );
     assert.ok(readFileSync(specFile(), "utf8").includes(fx.state.userQueryId));
   });
 
@@ -95,9 +108,15 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   });
 
   test("3. heal-loop guard, then a heal by recapture when rescan cannot work", async () => {
-    await addOperation({ site: SITE, op: "getUser2", trigger: { url: `${fx.url}/u/{name}` }, examples: [{ name: "alice" }, { name: "bob" }] });
+    await addOperation({
+      site: SITE,
+      op: "getUser2",
+      trigger: { url: `${fx.url}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bob" }],
+    });
     const spec = JSON.parse(readFileSync(specFile(), "utf8"));
-    for (const v of spec.operations.find((o: { name: string }) => o.name === "getUser2").volatile) v.anchor = "NoSuchAnchor";
+    for (const v of spec.operations.find((o: { name: string }) => o.name === "getUser2").volatile)
+      v.anchor = "NoSuchAnchor";
     writeFileSync(specFile(), JSON.stringify(spec));
     fx.rotate();
 
@@ -122,7 +141,13 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     const r = await addOperation({
       site: SITE,
       op: "createPost",
-      trigger: { url: `${fx.url}/compose`, steps: [{ action: "fill", selector: "#text", value: "{text}" }, { action: "click", selector: "#post" }] },
+      trigger: {
+        url: `${fx.url}/compose`,
+        steps: [
+          { action: "fill", selector: "#text", value: "{text}" },
+          { action: "click", selector: "#post" },
+        ],
+      },
       examples: [{ text: "first draft here" }, { text: "second draft here" }],
       write: true,
     });
@@ -141,18 +166,37 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
 
   test("5. a per-request signature pins the op to tier 3, which answers through the trigger", async () => {
     fx.setRequireSignature(true);
-    const r = await addOperation({ site: SITE, op: "feed", trigger: { url: `${fx.url}/feed` }, examples: [{}], match: { path: "/api/signed/feed" } });
+    const r = await addOperation({
+      site: SITE,
+      op: "feed",
+      trigger: { url: `${fx.url}/feed` },
+      examples: [{}],
+      match: { path: "/api/signed/feed" },
+    });
     assert.equal(r.operation.minTier, 3, r.warnings.join("\n"));
     const res = await call(SITE, "feed", {}, fast);
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(res.tier, 3);
-    assert.equal(rememberedTier(SITE, "feed"), undefined, "the spec's own minTier is not remembered, so editing it takes effect");
-    assert.deepEqual(res.data, [{ id: "f1", text: "first" }, { id: "f2", text: "second" }]);
+    assert.equal(
+      rememberedTier(SITE, "feed"),
+      undefined,
+      "the spec's own minTier is not remembered, so editing it takes effect",
+    );
+    assert.deepEqual(res.data, [
+      { id: "f1", text: "first" },
+      { id: "f2", text: "second" },
+    ]);
   });
 
   test("6. a login wall served as 200 HTML is auth, with a login hint", async () => {
     await runTrigger({ url: `${fx.url}/login`, profileDir: profileDir() }); // stands in for `api-anything login`
-    await addOperation({ site: SITE, op: "secret", trigger: { url: `${fx.url}/private` }, examples: [{}], match: { path: "/private" } });
+    await addOperation({
+      site: SITE,
+      op: "secret",
+      trigger: { url: `${fx.url}/private` },
+      examples: [{}],
+      match: { path: "/private" },
+    });
     assert.deepEqual((await call(SITE, "secret", {}, fast)).data, { data: { secret: "only for you" } });
 
     // log out everywhere: the profile and the jar
@@ -165,7 +209,13 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   });
 
   test("7. a rate limit is reported as rate, with no heal and no retry (via the CLI)", async () => {
-    await addOperation({ site: SITE, op: "limited", trigger: { url: `${fx.url}/api/limited` }, examples: [{}], match: { path: "/api/limited" } });
+    await addOperation({
+      site: SITE,
+      op: "limited",
+      trigger: { url: `${fx.url}/api/limited` },
+      examples: [{}],
+      match: { path: "/api/limited" },
+    });
     const hits = () => fx.calls.filter((c) => c.path === "/api/limited").length;
     const before = hits();
     const healCount = heals().length;
@@ -179,13 +229,24 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   });
 
   test("8. layered f.req form encoding with the XSSI prefix works for a new query", async () => {
-    const r = await addOperation({ site: SITE, op: "search", trigger: { url: `${fx.url}/search?q={q}` }, examples: [{ q: "kittens" }, { q: "puppies" }] });
-    assert.ok(r.operation.slots.some((s) => s.param === "q" && s.at[0] === "form:f.req" && s.at.length === 3), JSON.stringify(r.operation.slots));
+    const r = await addOperation({
+      site: SITE,
+      op: "search",
+      trigger: { url: `${fx.url}/search?q={q}` },
+      examples: [{ q: "kittens" }, { q: "puppies" }],
+    });
+    assert.ok(
+      r.operation.slots.some((s) => s.param === "q" && s.at[0] === "form:f.req" && s.at.length === 3),
+      JSON.stringify(r.operation.slots),
+    );
     assert.equal(r.operation.response.xssiPrefix, ")]}'");
     const res = await call(SITE, "search", { q: 'red "pandas" & co' }, fast);
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.equal(r.operation.response.extract, "[0][2][0]", "the suggestion steps into the JSON-encoded payload");
-    assert.deepEqual((res.data as string[][])[0], ['red "pandas" & co result 1', "https://example.test/red%20%22pandas%22%20%26%20co/1"]);
+    assert.deepEqual((res.data as string[][])[0], [
+      'red "pandas" & co result 1',
+      "https://example.test/red%20%22pandas%22%20%26%20co/1",
+    ]);
   });
 
   test("9. the html recipe on a server-rendered list returns picked items", async () => {
@@ -195,9 +256,15 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
       trigger: { url: `${fx.url}/list` },
       examples: [{}],
       match: { path: "/list" },
-      response: { html: { items: "li.user", fields: { name: "a.name", followers: "span.followers", href: "a.name@href" } }, pick: ["name", "href"] },
+      response: {
+        html: { items: "li.user", fields: { name: "a.name", followers: "span.followers", href: "a.name@href" } },
+        pick: ["name", "href"],
+      },
     });
-    assert.ok(!added.warnings.some((w) => /response is HTML/.test(w)), "no 'set response.html' warning when --html was given");
+    assert.ok(
+      !added.warnings.some((w) => /response is HTML/.test(w)),
+      "no 'set response.html' warning when --html was given",
+    );
     assert.deepEqual(added.preview, { count: 3, first: { name: "alice", href: "/u/alice" } });
     assert.equal(added.captures.length, 2, "both trigger runs are saved as captures");
     const res = await call(SITE, "listUsers", {}, fast);
@@ -212,25 +279,42 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   test("10. the MCP server lists 3 meta-tools, calls reads, and hides and refuses writes", async () => {
     const client = new Client({ name: "e2e", version: "0" });
     await client.connect(
-      new StdioClientTransport({ command: process.execPath, args: ["--import", "tsx", CLI, "mcp"], cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } as Record<string, string> }),
+      new StdioClientTransport({
+        command: process.execPath,
+        args: ["--import", "tsx", CLI, "mcp"],
+        cwd: ROOT,
+        env: { ...process.env, API_ANYTHING_HOME: HOME } as Record<string, string>,
+      }),
     );
     try {
       const tools = await client.listTools();
-      assert.deepEqual(tools.tools.map((t) => t.name).sort(), ["call_operation", "list_operations", "list_sites", "login"]);
+      assert.deepEqual(tools.tools.map((t) => t.name).sort(), [
+        "call_operation",
+        "list_operations",
+        "list_sites",
+        "login",
+      ]);
       assert.equal(tools.tools.find((t) => t.name === "call_operation")?.annotations?.readOnlyHint, true);
       // the agent is told which sites it can call before it picks web search
       assert.match(client.getInstructions() ?? "", new RegExp(`\\b${SITE}\\b`));
 
-      const text = (r: Awaited<ReturnType<typeof client.callTool>>) => JSON.parse((r.content as { text: string }[])[0]!.text);
+      const text = (r: Awaited<ReturnType<typeof client.callTool>>) =>
+        JSON.parse((r.content as { text: string }[])[0]!.text);
       const ops = text(await client.callTool({ name: "list_operations", arguments: { site: SITE } }));
       assert.ok(ops.operations.some((o: { name: string }) => o.name === "search"));
       assert.ok(!ops.operations.some((o: { name: string }) => o.name === "createPost"), "writes are hidden");
 
-      const ok = await client.callTool({ name: "call_operation", arguments: { site: SITE, op: "search", args: { q: "otters" } } });
+      const ok = await client.callTool({
+        name: "call_operation",
+        arguments: { site: SITE, op: "search", args: { q: "otters" } },
+      });
       assert.ok(!ok.isError, JSON.stringify(ok));
       assert.ok(JSON.stringify(text(ok).data).includes("otters result 1"));
 
-      const refused = await client.callTool({ name: "call_operation", arguments: { site: SITE, op: "createPost", args: { text: "nope" } } });
+      const refused = await client.callTool({
+        name: "call_operation",
+        arguments: { site: SITE, op: "createPost", args: { text: "nope" } },
+      });
       assert.equal(refused.isError, true);
       assert.equal(text(refused).class, "refused");
     } finally {
@@ -239,7 +323,13 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   });
 
   test("11. a missing session value (clean home) is auth; one trigger run refreshes it, then tier 1 works", async () => {
-    await addOperation({ site: SITE, op: "getUser3", trigger: { url: `${fx.url}/u/{name}` }, examples: [{ name: "alice" }, { name: "bob" }], response: { extract: "data.user.name" } });
+    await addOperation({
+      site: SITE,
+      op: "getUser3",
+      trigger: { url: `${fx.url}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bob" }],
+      response: { extract: "data.user.name" },
+    });
     const s = loadSession(SITE);
     saveSession(SITE, { ...s, values: {} }); // as from a bundled spec on a fresh machine
     const r = await call(SITE, "getUser3", { name: "heidi" }, fast);
@@ -252,7 +342,14 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   });
 
   test("12. --public keeps a public bearer literal: works with no session values, and export allows it", async () => {
-    await addOperation({ site: SITE, op: "getUserPublic", trigger: { url: `${fx.url}/u/{name}` }, examples: [{ name: "alice" }, { name: "bob" }], public: ["authorization"], response: { extract: "data.user.name" } });
+    await addOperation({
+      site: SITE,
+      op: "getUserPublic",
+      trigger: { url: `${fx.url}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bob" }],
+      public: ["authorization"],
+      response: { extract: "data.user.name" },
+    });
     saveSession(SITE, { ...loadSession(SITE), values: {} });
     const r = await call(SITE, "getUserPublic", { name: "judy" }, { ...fast, maxTier: 1 });
     assert.equal(r.ok, true, JSON.stringify(r));
@@ -277,11 +374,20 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
     assert.equal(r.operation.request.method, "GET");
     assert.equal(follows(), 0, "learning sent no write");
     const cap = await capturePage({ url: `${fx.url}/list` });
-    await assert.rejects(addOperation({ site: SITE, op: "w2", examples: [{}], write: true, from: { capture: cap } }), /ran without --write/);
+    await assert.rejects(
+      addOperation({ site: SITE, op: "w2", examples: [{}], write: true, from: { capture: cap } }),
+      /ran without --write/,
+    );
   });
 
   test("14. ids that differ per page load but replay fine are session-scoped: minTier stays 1", async () => {
-    const r = await addOperation({ site: SITE, op: "scoped", trigger: { url: `${fx.url}/scoped?q={q}` }, examples: [{ q: "kittens" }, { q: "puppies" }], response: { extract: "data.results" } });
+    const r = await addOperation({
+      site: SITE,
+      op: "scoped",
+      trigger: { url: `${fx.url}/scoped?q={q}` },
+      examples: [{ q: "kittens" }, { q: "puppies" }],
+      response: { extract: "data.results" },
+    });
     assert.equal(r.operation.minTier, 1, r.warnings.join("\n"));
     assert.ok(r.warnings.some((w) => /session-scoped/.test(w)));
     const res = await call(SITE, "scoped", { q: "otters" }, fast);
@@ -290,15 +396,34 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   });
 
   test("15. add --from a saved run re-learns without a browser, templating step selectors", async () => {
-    const cap = await capturePage({ url: `${fx.url}/follow/alice`, steps: [{ action: "click", selector: "#follow" }, { action: "wait", selector: 'a[href="/u/alice"], #follow' }], write: true });
-    const r = await addOperation({ site: SITE, op: "follow2", examples: [{ user: "alice" }], write: true, from: { capture: cap } });
+    const cap = await capturePage({
+      url: `${fx.url}/follow/alice`,
+      steps: [
+        { action: "click", selector: "#follow" },
+        { action: "wait", selector: 'a[href="/u/alice"], #follow' },
+      ],
+      write: true,
+    });
+    const r = await addOperation({
+      site: SITE,
+      op: "follow2",
+      examples: [{ user: "alice" }],
+      write: true,
+      from: { capture: cap },
+    });
     assert.equal(r.operation.trigger.url, `${fx.url}/follow/{user}`);
     assert.equal(r.operation.trigger.steps?.[1]?.selector, 'a[href="/u/{user}"], #follow');
     assert.deepEqual(r.captures, []);
   });
 
   test("16. a site that walls plain HTTP answers at tier 2, and the result says why", async () => {
-    await addOperation({ site: SITE, op: "walled", trigger: { url: `${fx.url}/walled` }, examples: [{}], match: { path: "/api/walled" } });
+    await addOperation({
+      site: SITE,
+      op: "walled",
+      trigger: { url: `${fx.url}/walled` },
+      examples: [{}],
+      match: { path: "/api/walled" },
+    });
     const r = await call(SITE, "walled", {}, fast);
     assert.equal(r.tier, 2, JSON.stringify(r));
     assert.match(r.reason ?? "", /tier 1 was blocked \(Cloudflare/);
@@ -311,14 +436,26 @@ describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, (
   test("18. login imports the session from the browser; a revoke + fresh cookie self-heals by re-import", async () => {
     const host = new URL(fx.url).hostname; // 127.0.0.1
     const browserRoot = mkdtempSync(join(tmpdir(), "aa-e2e-browser-"));
-    const writeSession = (token: string) => makeChromiumDb(join(browserRoot, "Default"), [{ host_key: host, name: "session", value: token }], { password: "pw" });
+    const writeSession = (token: string) =>
+      makeChromiumDb(join(browserRoot, "Default"), [{ host_key: host, name: "session", value: token }], {
+        password: "pw",
+      });
     const first = fx.mintSession();
     writeSession(first);
-    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([{ name: "Chrome", family: "chromium", root: browserRoot, password: "pw" }]);
+    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([
+      { name: "Chrome", family: "chromium", root: browserRoot, password: "pw" },
+    ]);
     try {
       // Learn the op while the profile is signed in, so its response format is JSON not the login wall.
       await runTrigger({ url: `${fx.url}/login`, profileDir: profileDir() });
-      await addOperation({ site: SITE, op: "secret2", trigger: { url: `${fx.url}/private` }, examples: [{}], match: { path: "/private" }, response: { extract: "data" } });
+      await addOperation({
+        site: SITE,
+        op: "secret2",
+        trigger: { url: `${fx.url}/private` },
+        examples: [{}],
+        match: { path: "/private" },
+        response: { extract: "data" },
+      });
 
       // login by import: browserless, no Keychain (password injected), no profile push
       const imported = await importSession(SITE, `${fx.url}/`, { pushProfile: false });

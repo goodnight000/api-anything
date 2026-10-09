@@ -9,14 +9,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
-import { chromeAvailable, closeBrowser } from "../../src/browser.ts";
-import { classify } from "../../src/classify.ts";
-import { call } from "../../src/execute.ts";
-import { addOperation, capturePage, type CaptureFile } from "../../src/heal.ts";
-import { learnOperation, rankCandidates } from "../../src/learn.ts";
-import type { Operation } from "../../src/spec.ts";
-import type { Exchange } from "../../src/types.ts";
-import { startFixture, type Fixture } from "./live-b.fixture.ts";
+import { chromeAvailable, closeBrowser } from "../../src/browser.js";
+import { classify } from "../../src/classify.js";
+import { call } from "../../src/execute.js";
+import { addOperation, type CaptureFile, capturePage } from "../../src/heal.js";
+import { learnOperation, rankCandidates } from "../../src/learn.js";
+import type { Operation } from "../../src/spec.js";
+import type { Exchange } from "../../src/types.js";
+import { type Fixture, startFixture } from "./live-b.fixture.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-live-b-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -25,7 +25,8 @@ after(async () => {
   rmSync(HOME, { recursive: true, force: true });
 });
 
-const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
+const UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36";
 let nextId = 1;
 function ex(o: {
   url: string;
@@ -42,12 +43,30 @@ function ex(o: {
   return {
     id: nextId++,
     resourceType: o.kind ?? "document",
-    request: { method: o.method ?? "GET", url: o.url, headers: { "user-agent": UA, accept: "*/*", ...(o.reqHeaders ?? {}) }, ...(o.reqBody !== undefined ? { body: o.reqBody } : {}) },
-    response: { status: o.status ?? 200, headers: { "content-type": type, ...(o.headers ?? {}) }, body: o.body ?? "", contentType: type },
+    request: {
+      method: o.method ?? "GET",
+      url: o.url,
+      headers: { "user-agent": UA, accept: "*/*", ...(o.reqHeaders ?? {}) },
+      ...(o.reqBody !== undefined ? { body: o.reqBody } : {}),
+    },
+    response: {
+      status: o.status ?? 200,
+      headers: { "content-type": type, ...(o.headers ?? {}) },
+      body: o.body ?? "",
+      contentType: type,
+    },
   };
 }
-const capture = (url: string, exchanges: Exchange[]): CaptureFile => ({ id: `c-live-b-${nextId++}`, at: new Date().toISOString(), url, exchanges, cookies: [], finalUrl: url });
-const htmlDoc = (url: string, body: string, status = 200, reqHeaders?: Record<string, string>) => ex({ url, type: "text/html; charset=utf-8", body, status, reqHeaders });
+const capture = (url: string, exchanges: Exchange[]): CaptureFile => ({
+  id: `c-live-b-${nextId++}`,
+  at: new Date().toISOString(),
+  url,
+  exchanges,
+  cookies: [],
+  finalUrl: url,
+});
+const htmlDoc = (url: string, body: string, status = 200, reqHeaders?: Record<string, string>) =>
+  ex({ url, type: "text/html; charset=utf-8", body, status, reqHeaders });
 function htmlOp(url: string, args: Record<string, string>, items = "li.r"): Operation {
   const op = learnOperation({
     exchanges: [htmlDoc(url, `<ul><li class="r">${Object.values(args).join(" ")}</li></ul>`)],
@@ -86,18 +105,32 @@ describe("bot-wall classification", () => {
   const title = htmlOp("https://www.imdb.com/title/tt1375666/", { id: "tt1375666" }, "h1");
 
   test("AWS WAF 405 'Human Verification' CAPTCHA page (IMDb) is blocked, not error", () => {
-    const c = classify(title, { status: 405, headers: { "content-type": "text/html; charset=UTF-8" }, body: AWS_WAF_405 });
+    const c = classify(title, {
+      status: 405,
+      headers: { "content-type": "text/html; charset=UTF-8" },
+      body: AWS_WAF_405,
+    });
     assert.equal(c.class, "blocked", c.reason);
   });
 
   test("AWS WAF 202 JS challenge page (IMDb) is blocked, not drift", () => {
-    const c = classify(title, { status: 202, headers: { "content-type": "text/html; charset=UTF-8" }, body: AWS_WAF_202 });
+    const c = classify(title, {
+      status: 202,
+      headers: { "content-type": "text/html; charset=UTF-8" },
+      body: AWS_WAF_202,
+    });
     assert.equal(c.class, "blocked", c.reason);
   });
 
   test("regression: DataDome 403 (Yelp) and PerimeterX 403 (Zillow, Skyscanner) are blocked", () => {
-    assert.equal(classify(title, { status: 403, headers: { "content-type": "text/html" }, body: DATADOME_403 }).class, "blocked");
-    assert.equal(classify(title, { status: 403, headers: { "content-type": "text/html" }, body: PERIMETERX_403 }).class, "blocked");
+    assert.equal(
+      classify(title, { status: 403, headers: { "content-type": "text/html" }, body: DATADOME_403 }).class,
+      "blocked",
+    );
+    assert.equal(
+      classify(title, { status: 403, headers: { "content-type": "text/html" }, body: PERIMETERX_403 }).class,
+      "blocked",
+    );
   });
 
   test("add on a page that served a bot challenge does not tell the agent to fix its recipe", async () => {
@@ -120,9 +153,15 @@ describe("bot-wall classification", () => {
 
 describe("request picking", () => {
   test("a document whose URL ends in .js (github.com/mrdoob/three.js) is a candidate, not an asset", () => {
-    const doc = htmlDoc("https://github.com/mrdoob/three.js", "<html><body><strong itemprop=name><a>three.js</a></strong></body></html>");
+    const doc = htmlDoc(
+      "https://github.com/mrdoob/three.js",
+      "<html><body><strong itemprop=name><a>three.js</a></strong></body></html>",
+    );
     const ranked = rankCandidates([doc], { owner: "mrdoob", repo: "three.js" });
-    assert.deepEqual(ranked.map((c) => c.id), [doc.id]);
+    assert.deepEqual(
+      ranked.map((c) => c.id),
+      [doc.id],
+    );
   });
 
   test("add --from with repo=next.js learns the document", async () => {
@@ -144,8 +183,13 @@ describe("request picking", () => {
 
   test("with --embedded, add picks the document the recipe resolves on, not a POST whose multipart body merely contains the value as a substring (GitHub search)", async () => {
     const url = "https://github.com/search?q=playwright&type=repositories";
-    const results = { payload: { blackbirdSearchRoute: { results: [{ hl_name: "microsoft/<em>playwright</em>", followers: 96753 }] } } };
-    const doc = htmlDoc(url, `<html><body><script type="application/json" data-target="react-app.embeddedData">${JSON.stringify(results)}</script></body></html>`);
+    const results = {
+      payload: { blackbirdSearchRoute: { results: [{ hl_name: "microsoft/<em>playwright</em>", followers: 96753 }] } },
+    };
+    const doc = htmlDoc(
+      url,
+      `<html><body><script type="application/json" data-target="react-app.embeddedData">${JSON.stringify(results)}</script></body></html>`,
+    );
     const b = "----WebKitFormBoundaryeZEwOAxK1zXOg1LT";
     const sponsor = ex({
       url: "https://github.com/sponsors/batch_deferred_sponsor_buttons",
@@ -159,7 +203,10 @@ describe("request picking", () => {
       site: "gh-edge",
       op: "search",
       examples: [{ q: "playwright" }],
-      response: { embedded: { regex: 'data-target="react-app.embeddedData">(\\{)' }, extract: "payload.blackbirdSearchRoute.results" },
+      response: {
+        embedded: { regex: 'data-target="react-app.embeddedData">(\\{)' },
+        extract: "payload.blackbirdSearchRoute.results",
+      },
       from: { capture: capture(url, [doc, sponsor]) },
     });
     assert.equal(r.operation.request.method, "GET", r.warnings.join(" | "));
@@ -174,7 +221,12 @@ describe("conditional request headers", () => {
   test("If-None-Match / If-Modified-Since from a revalidating browser are not stored in the template", () => {
     const url = "https://github.com/search?q=playwright&type=repositories";
     const op = learnOperation({
-      exchanges: [htmlDoc(url, "<ul><li class=r>playwright</li></ul>", 200, { "if-none-match": 'W/"25f941cd5c0f1f789be9542912883d9d"', "if-modified-since": "Sat, 26 Sep 2026 10:00:00 GMT" })],
+      exchanges: [
+        htmlDoc(url, "<ul><li class=r>playwright</li></ul>", 200, {
+          "if-none-match": 'W/"25f941cd5c0f1f789be9542912883d9d"',
+          "if-modified-since": "Sat, 26 Sep 2026 10:00:00 GMT",
+        }),
+      ],
       examples: [{ q: "playwright" }],
       cookies: [],
       name: "search",
@@ -185,7 +237,9 @@ describe("conditional request headers", () => {
     assert.equal(op.request.headers["if-modified-since"], undefined);
   });
 
-  describe("capture then add (the SKILL flow) on a site with stable ETags", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
+  describe("capture then add (the SKILL flow) on a site with stable ETags", {
+    skip: !chromeAvailable() && "Google Chrome not installed",
+  }, () => {
     let fx: Fixture;
     before(async () => (fx = await startFixture()));
     after(async () => fx.close());
@@ -200,7 +254,11 @@ describe("conditional request headers", () => {
         response: { html: { items: "li.r", fields: { t: "a" } } },
       });
       const res = await call("etag", "search", { q: "alpha" }, { minIntervalMs: 0, maxTier: 1 });
-      assert.equal(res.ok, true, `${JSON.stringify(res)}; stored if-none-match=${r.operation.request.headers["if-none-match"]}; server saw ${JSON.stringify(fx.conditional)}`);
+      assert.equal(
+        res.ok,
+        true,
+        `${JSON.stringify(res)}; stored if-none-match=${r.operation.request.headers["if-none-match"]}; server saw ${JSON.stringify(fx.conditional)}`,
+      );
     });
   });
 });
@@ -221,18 +279,28 @@ describe("shape drift", () => {
   const entity = (code: string) => ({ code, name: `${code} airport`, city: "x", lat: 1, lng: 2, tz: "z" });
 
   test("an id-keyed entity map with different ids for new args is not a shape change", () => {
-    const op = learnFrom({ results: [{ id: "r1", from: "SFO", to: "JFK" }], airports: { SFO: entity("SFO"), JFK: entity("JFK") } });
+    const op = learnFrom({
+      results: [{ id: "r1", from: "SFO", to: "JFK" }],
+      airports: { SFO: entity("SFO"), JFK: entity("JFK") },
+    });
     const c = classify(op, {
       status: 200,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ results: [{ id: "r9", from: "BOS", to: "SEA" }], airports: { BOS: entity("BOS"), SEA: entity("SEA") } }),
+      body: JSON.stringify({
+        results: [{ id: "r9", from: "BOS", to: "SEA" }],
+        airports: { BOS: entity("BOS"), SEA: entity("SEA") },
+      }),
     });
     assert.equal(c.class, "ok", c.reason);
   });
 
   test("regression: a real shape change (the data moved) is still drift", () => {
     const op = learnFrom({ results: [{ id: "r1", from: "SFO", to: "JFK", price: 1, carrier: "UA" }] });
-    const c = classify(op, { status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ data: { items: [{ a: 1 }] } }) });
+    const c = classify(op, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ data: { items: [{ a: 1 }] } }),
+    });
     assert.equal(c.class, "drift");
   });
 });
@@ -259,12 +327,23 @@ describe("400 classification", () => {
       readOnly: true,
     }).operation;
     assert.deepEqual(op.slots.find((s) => s.param)?.at, ["body", "json:/legs/0/origin/airports/0"]);
-    const c = classify(op, { status: 400, headers: { "content-type": "application/json" }, body: JSON.stringify({ error: "upstream failure", retry: 0 }) });
+    const c = classify(op, {
+      status: 400,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ error: "upstream failure", retry: 0 }),
+    });
     assert.equal(c.class, "error", c.reason);
   });
 
   test("regression: Wikipedia-style 404 on a templated path is input", () => {
     const op = htmlOp("https://en.wikipedia.org/wiki/Platypus", { title: "Platypus" }, "#content");
-    assert.equal(classify(op, { status: 404, headers: { "content-type": "text/html" }, body: "<html>Wikipedia does not have an article with this exact name.</html>" }).class, "input");
+    assert.equal(
+      classify(op, {
+        status: 404,
+        headers: { "content-type": "text/html" },
+        body: "<html>Wikipedia does not have an article with this exact name.</html>",
+      }).class,
+      "input",
+    );
   });
 });

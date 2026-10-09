@@ -60,6 +60,7 @@ export function jsonValueEnd(s: string, i: number): number {
 }
 
 /** Visit each member/element of the container at i as (key, valueStart). Return true to stop. */
+// biome-ignore lint/suspicious/noConfusingVoidType: a visitor that never stops returns nothing
 function eachChild(s: string, i: number, fn: (key: string, start: number) => boolean | void): void {
   const obj = s[i] === "{";
   const close = obj ? "}" : "]";
@@ -365,7 +366,10 @@ export function escapeValue(v: unknown, escape: Escape | undefined): string {
 /** fillTemplate with every var escaped for the leaf's encoding layer. */
 export function fillSlotTemplate(template: string, vars: Record<string, unknown>, escape?: Escape): string {
   if (!escape) return fillTemplate(template, vars);
-  return fillTemplate(template, Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, v === undefined ? v : escapeValue(v, escape)])));
+  return fillTemplate(
+    template,
+    Object.fromEntries(Object.entries(vars).map(([k, v]) => [k, v === undefined ? v : escapeValue(v, escape)])),
+  );
 }
 
 function walkJsonString(s: string, at: Step[], out: Leaf[]): boolean {
@@ -399,7 +403,12 @@ function walkInner(s: string, at: Step[], out: Leaf[]): boolean {
   if (!B64.test(s)) return false;
   const text = fromB64(s);
   // only a clean round trip counts: a hash or token decodes to bytes that are not JSON text
-  return /^\s*[[{]/.test(text) && Buffer.from(text, "utf8").toString("base64").replace(/=+$/, "") === s.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "") && walkJsonString(text, [...at, "b64"], out);
+  return (
+    /^\s*[[{]/.test(text) &&
+    Buffer.from(text, "utf8").toString("base64").replace(/=+$/, "") ===
+      s.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "") &&
+    walkJsonString(text, [...at, "b64"], out)
+  );
 }
 
 /** Every decoded leaf of the request with its step path, including JSON inside strings, recursively. */
@@ -411,7 +420,9 @@ export function walk(req: Request): Leaf[] {
     if (walkInner(value, at, out)) leaf.container = true;
   };
   const u = splitUrl(req.url);
-  u.segments.forEach((seg, i) => seg && add([`path:${i}`], decode(seg, false)));
+  u.segments.forEach((seg, i) => {
+    if (seg) add([`path:${i}`], decode(seg, false));
+  });
   // A repeated key (tag=a&tag=b) is walked at every occurrence: query:tag, query[1]:tag, ...
   const pairs = (kind: string, raw: string) => {
     const seen = new Map<string, number>();

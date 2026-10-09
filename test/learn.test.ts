@@ -1,15 +1,25 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getAt } from "../src/codec.ts";
-import { buildRequest } from "../src/http.ts";
-import { learnOperation, matches, rankCandidates } from "../src/learn.ts";
-import type { Exchange, StoredCookie } from "../src/types.ts";
+import { getAt } from "../src/codec.js";
+import { buildRequest } from "../src/http.js";
+import { learnOperation, matches, rankCandidates } from "../src/learn.js";
+import type { Exchange, StoredCookie } from "../src/types.js";
 
 const cookie = (name: string, value: string, domain = ".x.com"): StoredCookie => ({
-  name, value, domain, path: "/", expires: -1, httpOnly: false, secure: true,
+  name,
+  value,
+  domain,
+  path: "/",
+  expires: -1,
+  httpOnly: false,
+  secure: true,
 });
 
-const X_COOKIES = [cookie("ct0", "c0ffee0123456789abcdef"), cookie("auth_token", "a1b2c3d4e5f60718293a"), cookie("gt", "1840000000000000001")];
+const X_COOKIES = [
+  cookie("ct0", "c0ffee0123456789abcdef"),
+  cookie("auth_token", "a1b2c3d4e5f60718293a"),
+  cookie("gt", "1840000000000000001"),
+];
 const BEARER = "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7";
 
 function xExchanges(handle: string, txn: string, id0 = 1): Exchange[] {
@@ -19,8 +29,17 @@ function xExchanges(handle: string, txn: string, id0 = 1): Exchange[] {
     {
       id: id0,
       resourceType: "document",
-      request: { method: "GET", url: `https://x.com/${handle}`, headers: { "user-agent": "Mozilla/5.0 Chrome/153.0.0.0" } },
-      response: { status: 200, headers: {}, body: `<html><title>${handle} / X</title></html>`, contentType: "text/html; charset=utf-8" },
+      request: {
+        method: "GET",
+        url: `https://x.com/${handle}`,
+        headers: { "user-agent": "Mozilla/5.0 Chrome/153.0.0.0" },
+      },
+      response: {
+        status: 200,
+        headers: {},
+        body: `<html><title>${handle} / X</title></html>`,
+        contentType: "text/html; charset=utf-8",
+      },
     },
     {
       id: id0 + 1,
@@ -64,7 +83,14 @@ function xExchanges(handle: string, txn: string, id0 = 1): Exchange[] {
         headers: {},
         contentType: "application/json; charset=utf-8",
         body: JSON.stringify({
-          data: { user: { result: { rest_id: "11348282", legacy: { screen_name: handle.toUpperCase(), name: "Name", followers_count: 1 } } } },
+          data: {
+            user: {
+              result: {
+                rest_id: "11348282",
+                legacy: { screen_name: handle.toUpperCase(), name: "Name", followers_count: 1 },
+              },
+            },
+          },
         }),
       },
     },
@@ -74,7 +100,11 @@ function xExchanges(handle: string, txn: string, id0 = 1): Exchange[] {
 const trigger = { url: "https://x.com/{screen_name}" };
 
 test("X-like GraphQL GET: params, cookie/session refs, volatile anchor, match, headers, response", () => {
-  const { operation: op, warnings, sessionValues } = learnOperation({
+  const {
+    operation: op,
+    warnings,
+    sessionValues,
+  } = learnOperation({
     exchanges: xExchanges("nasa", "txnAAAAAAAAAAAAAAAAAAAAAAA"),
     exchanges2: xExchanges("spacex", "txnBBBBBBBBBBBBBBBBBBBBBBB", 10),
     examples: [{ screen_name: "nasa" }, { screen_name: "spacex" }],
@@ -93,7 +123,10 @@ test("X-like GraphQL GET: params, cookie/session refs, volatile anchor, match, h
     ],
   );
   assert.deepEqual(
-    op.slots.filter((s) => s.ref).map((s) => [s.ref, s.at.join()]).sort(),
+    op.slots
+      .filter((s) => s.ref)
+      .map((s) => [s.ref, s.at.join()])
+      .sort(),
     [
       ["cookie:ct0", "header:x-csrf-token"],
       ["cookie:gt", "header:x-guest-token"],
@@ -101,18 +134,31 @@ test("X-like GraphQL GET: params, cookie/session refs, volatile anchor, match, h
       ["session:getUser/x-client-transaction-id", "header:x-client-transaction-id"],
     ],
   );
-  assert.deepEqual(sessionValues, { "getUser/authorization": BEARER, "getUser/x-client-transaction-id": "txnAAAAAAAAAAAAAAAAAAAAAAA" });
+  assert.deepEqual(sessionValues, {
+    "getUser/authorization": BEARER,
+    "getUser/x-client-transaction-id": "txnAAAAAAAAAAAAAAAAAAAAAAA",
+  });
 
   // header policy: verbatim minus pseudo/cookie/accept-encoding; per-op headers like x-twitter-auth-type stay
   assert.deepEqual(Object.keys(op.request.headers).sort(), [
-    "accept", "authorization", "referer", "sec-fetch-site", "user-agent", "x-client-transaction-id", "x-csrf-token", "x-guest-token", "x-twitter-auth-type",
+    "accept",
+    "authorization",
+    "referer",
+    "sec-fetch-site",
+    "user-agent",
+    "x-client-transaction-id",
+    "x-csrf-token",
+    "x-guest-token",
+    "x-twitter-auth-type",
   ]);
   const serialized = JSON.stringify(op);
   for (const secret of ["c0ffee0123456789abcdef", "a1b2c3d4e5f60718293a", "1840000000000000001", "1Zv7", "txnAAAA"]) {
     assert.ok(!serialized.includes(secret), `spec must not hold ${secret}`);
   }
 
-  assert.deepEqual(op.volatile, [{ at: ["path:3"], shape: { charset: "base64url", length: 22 }, anchor: "UserByScreenName" }]);
+  assert.deepEqual(op.volatile, [
+    { at: ["path:3"], shape: { charset: "base64url", length: 22 }, anchor: "UserByScreenName" },
+  ]);
   assert.deepEqual(op.match, { method: "GET", host: "x.com", path: "/i/api/graphql/*/UserByScreenName" });
   assert.equal(op.minTier, 1);
   assert.equal(op.learnedLoggedIn, true);
@@ -134,10 +180,16 @@ test("X-like GraphQL GET: params, cookie/session refs, volatile anchor, match, h
 
 test("rankCandidates drops noise and puts the XHR carrying the args first", () => {
   const ranked = rankCandidates(xExchanges("nasa", "t"), { screen_name: "nasa" });
-  assert.deepEqual(ranked.map((c) => c.id), [4, 1]);
+  assert.deepEqual(
+    ranked.map((c) => c.id),
+    [4, 1],
+  );
   assert.deepEqual(ranked[0]!.hits, ["screen_name"]);
   assert.equal(ranked[1]!.resourceType, "document");
-  assert.deepEqual(rankCandidates(xExchanges("nasa", "t")).map((c) => c.id), [4, 1]);
+  assert.deepEqual(
+    rankCandidates(xExchanges("nasa", "t")).map((c) => c.id),
+    [4, 1],
+  );
 });
 
 test("matches uses stable identity only", () => {
@@ -145,11 +197,25 @@ test("matches uses stable identity only", () => {
   assert.ok(matches({ method: "GET", host: "x.com", path: "/i/api/graphql/*/UserByScreenName" }, req));
   assert.ok(!matches({ path: "/i/api/graphql/*/UserTweets" }, req));
   assert.ok(!matches({ method: "POST" }, req));
-  assert.ok(!matches({ operationName: "UserByScreenName" }, req), "operationName comes from the body/form, not the path");
+  assert.ok(
+    !matches({ operationName: "UserByScreenName" }, req),
+    "operationName comes from the body/form, not the path",
+  );
 });
 
 function flights(origin: string, dest: string, reqid: string, id: number, bgr: string): Exchange {
-  const inner = JSON.stringify([[null, null, null, "HKUJcc"], [null, null, 1, [[[[[origin, 0]]], [[[dest, 0]]], null, 0, null, null, "2026-11-12"], [[[[dest, 0]]], [[[origin, 0]]], null, 0, null, null, "2026-11-16"]]]]);
+  const inner = JSON.stringify([
+    [null, null, null, "HKUJcc"],
+    [
+      null,
+      null,
+      1,
+      [
+        [[[[origin, 0]]], [[[dest, 0]]], null, 0, null, null, "2026-11-12"],
+        [[[[dest, 0]]], [[[origin, 0]]], null, 0, null, null, "2026-11-16"],
+      ],
+    ],
+  ]);
   return {
     id,
     resourceType: "xhr",
@@ -176,7 +242,10 @@ test("Google Flights: triple-encoded form params, value in several roles, counte
   const learned = learnOperation({
     exchanges: [flights("SFO", "JFK", "4521", 1, '[";u6W4pcHQ-one"]')],
     exchanges2: [flights("OAK", "LAX", "8837", 2, '[";u6W4pcHQ-two"]')],
-    examples: [{ origin: "SFO", destination: "JFK" }, { origin: "OAK", destination: "LAX" }],
+    examples: [
+      { origin: "SFO", destination: "JFK" },
+      { origin: "OAK", destination: "LAX" },
+    ],
     cookies: [],
     name: "search",
     trigger: { url: "https://www.google.com/travel/flights?q={origin}+to+{destination}" },
@@ -204,7 +273,12 @@ test("a high-entropy value that changes without an arg change is a nonce: minTie
     id,
     resourceType: "fetch",
     request: { method: "GET", url: `https://shop.test/api/search?q=${q}&sig=${sig}`, headers: {} },
-    response: { status: 200, headers: {}, contentType: "application/json", body: `{"items":[{"name":"${q} one"},{"name":"${q} two"}]}` },
+    response: {
+      status: 200,
+      headers: {},
+      contentType: "application/json",
+      body: `{"items":[{"name":"${q} one"},{"name":"${q} two"}]}`,
+    },
   });
   const { operation, warnings } = learnOperation({
     exchanges: [ex("kettle", "f3a9c1d2e4b5a6c7", 1)],
@@ -231,7 +305,12 @@ test("LinkedIn-style quoted JSESSIONID echoed without quotes -> strip-quotes coo
           url: "https://www.linkedin.com/voyager/api/graphql?variables=(start:0,query:(keywords:rustacean))&queryId=voyagerSearchDashClusters.52fec77d08aa4598c8a056ca6bce6c11",
           headers: { "csrf-token": "ajax:4815162342", cookie: 'JSESSIONID="ajax:4815162342"; li_at=AQEDAxxxxxxxxxx' },
         },
-        response: { status: 200, headers: {}, contentType: "application/vnd.linkedin.normalized+json+2.1", body: '{"included":[{"title":"rustacean"}]}' },
+        response: {
+          status: 200,
+          headers: {},
+          contentType: "application/vnd.linkedin.normalized+json+2.1",
+          body: '{"included":[{"title":"rustacean"}]}',
+        },
       },
     ],
     examples: [{ keywords: "rustacean" }],
@@ -250,7 +329,11 @@ test("LinkedIn-style quoted JSESSIONID echoed without quotes -> strip-quotes coo
     template: "(start:0,query:(keywords:{keywords}))",
   });
   assert.equal(operation.request.headers["csrf-token"], "");
-  const req = buildRequest(operation, { keywords: "zig" }, { cookies: [cookie("JSESSIONID", '"ajax:1"', ".linkedin.com")], values: {} });
+  const req = buildRequest(
+    operation,
+    { keywords: "zig" },
+    { cookies: [cookie("JSESSIONID", '"ajax:1"', ".linkedin.com")], values: {} },
+  );
   assert.ok(req.url.includes("variables=(start:0,query:(keywords:zig))&queryId="), req.url);
   assert.equal(req.headers["csrf-token"], "ajax:1");
 });
@@ -267,10 +350,19 @@ test("Instagram-style form POST: friendly name is the anchor and the match opera
         request: {
           method: "POST",
           url: "https://www.instagram.com/api/graphql",
-          headers: { "content-type": "application/x-www-form-urlencoded", "x-ig-app-id": "936619743392459", "x-fb-lsd": "AVqbxe3J_YA" },
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "x-ig-app-id": "936619743392459",
+            "x-fb-lsd": "AVqbxe3J_YA",
+          },
           body,
         },
-        response: { status: 200, headers: {}, contentType: "text/javascript; charset=utf-8", body: '{"data":{"user":{"edges":[{"n":1},{"n":2}]}}}' },
+        response: {
+          status: 200,
+          headers: {},
+          contentType: "text/javascript; charset=utf-8",
+          body: '{"data":{"user":{"edges":[{"n":1},{"n":2}]}}}',
+        },
       },
     ],
     examples: [{ username: "nasa", first: 12345, id: "2085462611575857621" }],
@@ -282,12 +374,24 @@ test("Instagram-style form POST: friendly name is the anchor and the match opera
   assert.deepEqual(operation.volatile, [
     { at: ["form:doc_id"], shape: { charset: "digits", length: 17 }, anchor: "PolarisProfilePostsTabContentQuery" },
   ]);
-  assert.deepEqual(operation.match, { method: "POST", host: "www.instagram.com", path: "/api/graphql", operationName: "PolarisProfilePostsTabContentQuery" });
+  assert.deepEqual(operation.match, {
+    method: "POST",
+    host: "www.instagram.com",
+    path: "/api/graphql",
+    operationName: "PolarisProfilePostsTabContentQuery",
+  });
   const types = Object.fromEntries(operation.params.map((p) => [p.name, p.type]));
   assert.deepEqual(types, { username: "string", first: "number", id: "number" });
   assert.equal(operation.request.headers["x-ig-app-id"], "936619743392459");
-  const req = buildRequest(operation, { username: "esa", first: "12", id: "1999999999999999999" }, { cookies: [], values: {} });
-  assert.equal(new URLSearchParams(req.body).get("variables"), '{"first":12,"username":"esa","id":1999999999999999999}');
+  const req = buildRequest(
+    operation,
+    { username: "esa", first: "12", id: "1999999999999999999" },
+    { cookies: [], values: {} },
+  );
+  assert.equal(
+    new URLSearchParams(req.body).get("variables"),
+    '{"first":12,"username":"esa","id":1999999999999999999}',
+  );
 });
 
 test("HTML document op and an aborted write both learn", () => {
@@ -297,7 +401,12 @@ test("HTML document op and an aborted write both learn", () => {
         id: 1,
         resourceType: "document",
         request: { method: "GET", url: "https://news.ycombinator.com/from?site=github.com", headers: {} },
-        response: { status: 200, headers: {}, contentType: "text/html; charset=utf-8", body: "<tr class=athing>github.com</tr>" },
+        response: {
+          status: 200,
+          headers: {},
+          contentType: "text/html; charset=utf-8",
+          body: "<tr class=athing>github.com</tr>",
+        },
       },
     ],
     examples: [{ site: "github.com" }],
@@ -339,8 +448,14 @@ test("example validation and pick errors", () => {
   const base = { exchanges: xExchanges("nasa", "t"), cookies: [], name: "g", trigger, readOnly: true };
   assert.throws(() => learnOperation({ ...base, examples: [{ screen_name: "na" }] }), /at least 3 characters/);
   assert.throws(() => learnOperation({ ...base, examples: [{ a: "nasa", b: "NASA" }] }), /must be distinct/);
-  assert.throws(() => learnOperation({ ...base, examples: [{ screen_name: "nobody-here" }] }), /no captured request carries/);
-  assert.throws(() => learnOperation({ ...base, examples: [{ screen_name: "nasa" }], id: 99 }), /no captured request with id 99/);
+  assert.throws(
+    () => learnOperation({ ...base, examples: [{ screen_name: "nobody-here" }] }),
+    /no captured request carries/,
+  );
+  assert.throws(
+    () => learnOperation({ ...base, examples: [{ screen_name: "nasa" }], id: 99 }),
+    /no captured request with id 99/,
+  );
   const byId = learnOperation({ ...base, examples: [{ screen_name: "nasa" }], id: 1 });
   assert.equal(byId.operation.request.url, "https://x.com/nasa");
   assert.deepEqual(byId.operation.slots, [{ param: "screen_name", at: ["path:0"] }]);
@@ -355,16 +470,31 @@ test("per-session form tokens (Google at, Meta fb_dtsg) become session refs, and
     {
       id: 1,
       resourceType: "xhr",
-      request: { method: "POST", url: "https://www.google.test/_/rpc?rpcids=rpc1", headers: { "content-type": "application/x-www-form-urlencoded", authorization: BEARER }, body },
+      request: {
+        method: "POST",
+        url: "https://www.google.test/_/rpc?rpcids=rpc1",
+        headers: { "content-type": "application/x-www-form-urlencoded", authorization: BEARER },
+        body,
+      },
       response: { status: 200, headers: {}, contentType: "application/json", body: '[["paris",1]]' },
     },
   ];
-  const base = { exchanges, examples: [{ city: "paris" }] as [Record<string, unknown>], cookies: [], name: "s", trigger: { url: "https://www.google.test/s?q={city}" }, readOnly: true };
+  const base = {
+    exchanges,
+    examples: [{ city: "paris" }] as [Record<string, unknown>],
+    cookies: [],
+    name: "s",
+    trigger: { url: "https://www.google.test/s?q={city}" },
+    readOnly: true,
+  };
   const { operation: op, sessionValues } = learnOperation(base);
   assert.ok(op.slots.some((s) => s.ref === "session:s/at" && s.at[0] === "form:at"));
   assert.ok(op.slots.some((s) => s.ref === "session:s/fb_dtsg"));
   assert.equal(sessionValues["s/at"], AT);
-  assert.ok(!op.request.body!.includes(encodeURIComponent(AT)) && !op.request.body!.includes(encodeURIComponent(DTSG)), op.request.body);
+  assert.ok(
+    !op.request.body!.includes(encodeURIComponent(AT)) && !op.request.body!.includes(encodeURIComponent(DTSG)),
+    op.request.body!,
+  );
   assert.equal(op.request.headers.authorization, "", "authorization is a session ref by default");
 
   const pub = learnOperation({ ...base, public: ["Authorization"] }).operation;
@@ -383,7 +513,16 @@ test("an example value not in the chosen request is an error, not a param that c
     },
   ];
   assert.throws(
-    () => learnOperation({ exchanges, examples: [{ q: "sqlite" }], cookies: [], name: "s", trigger: { url: "https://a.test/?q={q}" }, readOnly: true, id: 1 }),
+    () =>
+      learnOperation({
+        exchanges,
+        examples: [{ q: "sqlite" }],
+        cookies: [],
+        name: "s",
+        trigger: { url: "https://a.test/?q={q}" },
+        readOnly: true,
+        id: 1,
+      }),
     /"q" \("sqlite"\) is not in the learned request/,
   );
 });
@@ -395,8 +534,18 @@ test("a learned template keeps the leaf's own {name} text (minified GraphQL sele
       {
         id: 1,
         resourceType: "fetch",
-        request: { method: "POST", url: "https://g.test/graphql", headers: { "content-type": "application/json" }, body },
-        response: { status: 200, headers: {}, contentType: "application/json", body: '{"data":{"repository":{"name":"hello-world"}}}' },
+        request: {
+          method: "POST",
+          url: "https://g.test/graphql",
+          headers: { "content-type": "application/json" },
+          body,
+        },
+        response: {
+          status: 200,
+          headers: {},
+          contentType: "application/json",
+          body: '{"data":{"repository":{"name":"hello-world"}}}',
+        },
       },
     ],
     examples: [{ owner: "octocat", name: "hello-world" }],
@@ -416,11 +565,26 @@ test("telemetry that logs the page URL does not count as carrying the args", () 
     request: { method: body ? "POST" : "GET", url, headers: {}, ...(body ? { body } : {}) },
     response: { status: 200, headers: {}, contentType: "application/json", body: "{}" },
   });
-  const ranked = rankCandidates([ex(1, "https://x.test/1.1/viewer_context.json", JSON.stringify({ page: "https://x.test/nasa" })), ex(2, "https://api.x.test/User?screen_name=nasa")], {
-    screen_name: "nasa",
-  });
-  assert.deepEqual(ranked.map((c) => [c.id, c.hits]), [[2, ["screen_name"]], [1, []]]);
-  const video: Exchange = { ...ex(3, "https://video.test/seg-1.m4s?nasa"), response: { status: 200, headers: {}, contentType: "video/mp4", body: "x" } };
+  const ranked = rankCandidates(
+    [
+      ex(1, "https://x.test/1.1/viewer_context.json", JSON.stringify({ page: "https://x.test/nasa" })),
+      ex(2, "https://api.x.test/User?screen_name=nasa"),
+    ],
+    {
+      screen_name: "nasa",
+    },
+  );
+  assert.deepEqual(
+    ranked.map((c) => [c.id, c.hits]),
+    [
+      [2, ["screen_name"]],
+      [1, []],
+    ],
+  );
+  const video: Exchange = {
+    ...ex(3, "https://video.test/seg-1.m4s?nasa"),
+    response: { status: 200, headers: {}, contentType: "video/mp4", body: "x" },
+  };
   assert.deepEqual(rankCandidates([video], { screen_name: "nasa" }), [], "media fetched by XHR is noise");
 });
 
@@ -435,16 +599,31 @@ test("a short example found by chance inside a random header token is not a slot
         // Google's x-goog-batchexecute-bgr: a random blob that happens to hold "SFO"
         headers: { "x-goog-batchexecute-bgr": "q7ZkSFOb2Xw9LmT4pRvN8cYd", "x-route": "k9Qz2Lw7Rt4Xy8/SFO/Mn3Vb6" },
       },
-      response: { status: 200, headers: {}, contentType: "application/json", body: '{"days":[{"from":"SFO","price":80},{"from":"SFO","price":95}]}' },
+      response: {
+        status: 200,
+        headers: {},
+        contentType: "application/json",
+        body: '{"days":[{"from":"SFO","price":80},{"from":"SFO","price":95}]}',
+      },
     },
   ];
-  const { operation } = learnOperation({ exchanges, examples: [{ origin: "SFO" }], cookies: [], name: "cal", trigger: { url: "https://g.test/" }, readOnly: true });
+  const { operation } = learnOperation({
+    exchanges,
+    examples: [{ origin: "SFO" }],
+    cookies: [],
+    name: "cal",
+    trigger: { url: "https://g.test/" },
+    readOnly: true,
+  });
   const at = operation.slots.filter((s) => s.param === "origin").map((s) => s.at[0]);
   assert.deepEqual(at.sort(), ["header:x-route", "query:origin"]);
 });
 
 test("a response that is itself a list of results is learned whole, not as its first item", () => {
-  const list = [{ bookId: "1", title: "Dune" }, { bookId: "2", title: "Dune Messiah" }];
+  const list = [
+    { bookId: "1", title: "Dune" },
+    { bookId: "2", title: "Dune Messiah" },
+  ];
   const learned = learnOperation({
     exchanges: [
       {

@@ -4,7 +4,7 @@
  * site-specific rules: JSON outlines, JSON embedded in a page (JSON-LD, __NEXT_DATA__, state
  * assignments), and repeated HTML items that carry an example value.
  */
-import { parse as parseHtml, type HTMLElement } from "node-html-parser";
+import { type HTMLElement, parse as parseHtml } from "node-html-parser";
 import { extractEmbedded, getPath, innerJson, parseBody } from "./extract.js";
 import { suggestExtract } from "./learn.js";
 
@@ -40,7 +40,8 @@ function sample(v: unknown): string {
   return String(v);
 }
 
-const step = (path: string, k: string) => (/^[A-Za-z_$][\w$-]*$/.test(k) ? (path ? `${path}.${k}` : k) : `${path}[${JSON.stringify(k)}]`);
+const step = (path: string, k: string) =>
+  /^[A-Za-z_$][\w$-]*$/.test(k) ? (path ? `${path}.${k}` : k) : `${path}[${JSON.stringify(k)}]`;
 // an id-like key: digits, or a URN/URL-ish value (Apollo's "Book:kca://book/...", "User:123")
 const idLike = (k: string) => /\d{3,}|[:/]/.test(k);
 
@@ -57,7 +58,9 @@ function findPaths(root: unknown, values: string[], max = 5): string[] {
       continue;
     }
     if (depth > 12 || !v || typeof v !== "object") continue;
-    const entries: [string, unknown][] = Array.isArray(v) ? v.slice(0, 100).map((c, i) => [`${path}[${i}]`, c]) : Object.entries(v).map(([k, c]) => [step(path, k), c]);
+    const entries: [string, unknown][] = Array.isArray(v)
+      ? v.slice(0, 100).map((c, i) => [`${path}[${i}]`, c])
+      : Object.entries(v).map(([k, c]) => [step(path, k), c]);
     for (const [p, c] of entries) queue.push({ v: c, path: p, depth: depth + 1 });
   }
   return out;
@@ -95,8 +98,19 @@ export function outlineJson(root: unknown, values: string[]): JsonOutline {
   const extract = suggested && carries(getPath(root, suggested)) ? suggested : undefined;
   const target = getPath(root, extract);
   const fields = fieldsOf(Array.isArray(target) ? target[0] : target);
-  const varyingKeys = [...new Set(at.flatMap((p) => [...p.matchAll(/\["((?:[^"\\]|\\.)*)"\]/g)].map((m) => JSON.parse(`"${m[1]}"`) as string).filter(idLike)))];
-  return { ...(at.length ? { at } : {}), ...(extract ? { extract } : {}), fields, ...(varyingKeys.length ? { varyingKeys: varyingKeys.slice(0, 3) } : {}) };
+  const varyingKeys = [
+    ...new Set(
+      at.flatMap((p) =>
+        [...p.matchAll(/\["((?:[^"\\]|\\.)*)"\]/g)].map((m) => JSON.parse(`"${m[1]}"`) as string).filter(idLike),
+      ),
+    ),
+  ];
+  return {
+    ...(at.length ? { at } : {}),
+    ...(extract ? { extract } : {}),
+    fields,
+    ...(varyingKeys.length ? { varyingKeys: varyingKeys.slice(0, 3) } : {}),
+  };
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -112,7 +126,8 @@ export function embeddedBlocks(body: string): string[] {
       out.push(`application/ld\\+json[^>]*>\\s*(\\{)${type ? `(?=[^<]*?"@type"\\s*:\\s*"${escapeRe(type)}")` : ""}`);
     } else if (id && /application\/json/i.test(attrs)) out.push(`id="${escapeRe(id)}"[^>]*>\\s*([[{])`);
   }
-  for (const m of body.matchAll(/\bwindow\.([A-Za-z_$][\w$]*)\s*=\s*([[{])/g)) out.push(`window\\.${escapeRe(m[1]!)}\\s*=\\s*([[{])`);
+  for (const m of body.matchAll(/\bwindow\.([A-Za-z_$][\w$]*)\s*=\s*([[{])/g))
+    out.push(`window\\.${escapeRe(m[1]!)}\\s*=\\s*([[{])`);
   return [...new Set(out)];
 }
 
@@ -122,7 +137,9 @@ const SKIP = new Set(["script", "style", "noscript", "head", "title", "meta", "s
 const tag = (el: HTMLElement) => el.rawTagName?.toLowerCase() ?? "";
 // class names a build tool generated (css-1x2y3z, sc-abc, Foo__bar_3kd9f) change between deploys
 const stableClass = (c: string) =>
-  /^[A-Za-z][\w-]*$/.test(c) && !/^(css|sc|jsx|svelte|tw)-/.test(c) && !/\d{3,}|[_-](?=(?:[a-z]*\d){2})[a-z0-9]{5,}$/i.test(c);
+  /^[A-Za-z][\w-]*$/.test(c) &&
+  !/^(css|sc|jsx|svelte|tw)-/.test(c) &&
+  !/\d{3,}|[_-](?=(?:[a-z]*\d){2})[a-z0-9]{5,}$/i.test(c);
 
 // a data-testid that embeds a record id ("book-item-kca://book/...") differs per record
 const stableTestid = (t: string | undefined): t is string => !!t && !/\d{3,}|[:/]/.test(t);
@@ -138,17 +155,25 @@ export function sig(el: HTMLElement): string {
 const elementChildren = (el: HTMLElement) => el.childNodes.filter((c): c is HTMLElement => c.nodeType === 1);
 const textOf = (el: HTMLElement) => el.text.replace(/\s+/g, " ").trim();
 
-const labelled = (el: HTMLElement) => stableTestid(el.getAttribute("data-testid")) || (el.getAttribute("class") ?? "").split(/\s+/).some(stableClass);
+const labelled = (el: HTMLElement) =>
+  stableTestid(el.getAttribute("data-testid")) || (el.getAttribute("class") ?? "").split(/\s+/).some(stableClass);
 
 function nameFor(el: HTMLElement, used: Set<string>, attr?: string): string {
-  const raw = (stableTestid(el.getAttribute("data-testid")) ? el.getAttribute("data-testid") : undefined) ?? (el.getAttribute("class") ?? "").split(/\s+/).filter(stableClass).at(-1) ?? tag(el);
+  const raw =
+    (stableTestid(el.getAttribute("data-testid")) ? el.getAttribute("data-testid") : undefined) ??
+    (el.getAttribute("class") ?? "").split(/\s+/).filter(stableClass).at(-1) ??
+    tag(el);
   // the last two words name it: "book-item-ratings-count" -> ratingsCount, "BookStats__rating" -> bookStatsRating
-  const words = raw.split(/[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])/).filter(Boolean).slice(-2);
+  const words = raw
+    .split(/[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])/)
+    .filter(Boolean)
+    .slice(-2);
   let base = words.map((w, i) => (i ? w[0]!.toUpperCase() + w.slice(1) : w.toLowerCase())).join("") || tag(el);
   if (attr === "href") base = `${base}Url`;
   if (attr === "src") base = `${base}Image`;
   if (attr === "aria-label") base = `${base}Label`;
-  let name = base, n = 2;
+  let name = base,
+    n = 2;
   while (used.has(name)) name = `${base}${n++}`;
   used.add(name);
   return name;
@@ -168,7 +193,10 @@ function selectorIn(item: HTMLElement, el: HTMLElement): { css: string; named: H
 
 /** Fields inside one item: short texts and links, each with a selector that finds that element first. */
 function itemFields(item: HTMLElement, items: HTMLElement[]): Pick<HtmlList, "fields" | "sample"> {
-  const fields: Record<string, string> = {}, sampleOut: Record<string, string> = {}, used = new Set<string>(), seen = new Set<string>();
+  const fields: Record<string, string> = {},
+    sampleOut: Record<string, string> = {},
+    used = new Set<string>(),
+    seen = new Set<string>();
   const add = (el: HTMLElement, attr?: "href" | "src" | "aria-label") => {
     if (Object.keys(fields).length >= 14) return;
     const at = selectorIn(item, el);
@@ -200,10 +228,17 @@ export function outlineHtmlList(root: HTMLElement, values: string[]): HtmlList |
   const hits = root.querySelectorAll("*").filter((el) => {
     if (SKIP.has(tag(el))) return false;
     const t = textOf(el).toLowerCase();
-    return values.some((v) => t.includes(v)) && !elementChildren(el).some((c) => values.some((v) => textOf(c).toLowerCase().includes(v)));
+    return (
+      values.some((v) => t.includes(v)) &&
+      !elementChildren(el).some((c) => values.some((v) => textOf(c).toLowerCase().includes(v)))
+    );
   });
   for (const hit of hits.slice(0, 20)) {
-    for (let a: HTMLElement | null = hit, depth = 0; a?.parentNode && depth < 14; a = a.parentNode as HTMLElement, depth++) {
+    for (
+      let a: HTMLElement | null = hit, depth = 0;
+      a?.parentNode && depth < 14;
+      a = a.parentNode as HTMLElement, depth++
+    ) {
       const p = a.parentNode as HTMLElement;
       if (!p || !tag(p)) break;
       const s = sig(a);
@@ -233,10 +268,12 @@ function outlineLabels(root: HTMLElement): Record<string, string> {
     if (t && t.length <= 160) out[css] = JSON.stringify(clip(t, 80));
     const counts = new Map<string, string[]>();
     for (const d of el.querySelectorAll("*")) {
-      const s = sig(d), txt = textOf(d);
+      const s = sig(d),
+        txt = textOf(d);
       if (s !== tag(d) && txt && txt.length <= 60) counts.set(s, [...(counts.get(s) ?? []), txt]);
     }
-    const [child, texts] = [...counts].filter(([, v]) => v.length >= 3).sort((a, b) => b[1].length - a[1].length)[0] ?? [];
+    const [child, texts] =
+      [...counts].filter(([, v]) => v.length >= 3).sort((a, b) => b[1].length - a[1].length)[0] ?? [];
     if (child) out[`all:${css} ${child}`] = JSON.stringify(texts!.slice(0, 4).map((x) => clip(x, 30)));
   }
   return out;

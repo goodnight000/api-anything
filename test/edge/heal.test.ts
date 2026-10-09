@@ -13,12 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chromeAvailable, closeBrowser } from "../../src/browser.ts";
-import { call, heal } from "../../src/execute.ts";
-import { addOperation, rescan } from "../../src/heal.ts";
-import { loadSession, saveSession } from "../../src/session.ts";
-import { parseSite, type Operation } from "../../src/spec.ts";
-import { BUNDLED_DIR, loadSite, markStale, saveSite, staleMark } from "../../src/store.ts";
+import { chromeAvailable, closeBrowser } from "../../src/browser.js";
+import { call, heal } from "../../src/execute.js";
+import { addOperation, rescan } from "../../src/heal.js";
+import { loadSession, saveSession } from "../../src/session.js";
+import { type Operation, parseSite } from "../../src/spec.js";
+import { BUNDLED_DIR, loadSite, markStale, saveSite, staleMark } from "../../src/store.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-heal-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -32,17 +32,28 @@ const fake = (h: Handler): typeof fetch =>
     seen.push({ url, method: init?.method ?? "GET", body: typeof init?.body === "string" ? init.body : undefined });
     return h(url, init);
   }) as typeof fetch;
-const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
+const json = (v: unknown, status = 200) =>
+  new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
 const html = (s: string, status = 200) => new Response(s, { status, headers: { "content-type": "text/html" } });
 const tier1 = (h: Handler) => ({ fetchImpl: fake(h), maxTier: 1 as const, minIntervalMs: 0 });
 const heals = (): { site: string; op: string; strategy: string; diff: string }[] => {
   try {
-    return readFileSync(join(HOME, "heals.jsonl"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    return readFileSync(join(HOME, "heals.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
   } catch {
     return [];
   }
 };
-const setState = (patch: (s: { stale: Record<string, unknown>; tier: Record<string, unknown>; healedAt: Record<string, number> }) => void) => {
+const setState = (
+  patch: (s: {
+    stale: Record<string, unknown>;
+    tier: Record<string, unknown>;
+    healedAt: Record<string, number>;
+  }) => void,
+) => {
   const file = join(HOME, "state.json");
   const s = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
   const full = { stale: s.stale ?? {}, tier: s.tier ?? {}, healedAt: s.healedAt ?? {} };
@@ -76,14 +87,17 @@ const userSite = (name: string, extra: Partial<Operation> = {}) =>
   });
 
 /** A site whose bundle names the current id and whose API answers only that id. */
-const rotatingHandler = (cur: () => string): Handler => (url) => {
-  if (url.startsWith("https://t.test/u/")) return html('<html><script src="/static/main.js"></script></html>');
-  if (url === "https://t.test/static/main.js") return new Response(`var ops=[{queryId:"${cur()}",operationName:"User",operationType:"query"}];`);
-  const u = new URL(url);
-  if (u.pathname === `/api/${cur()}/User`) return json({ user: { name: u.searchParams.get("name") } });
-  if (u.pathname.startsWith("/api/")) return new Response("", { status: 404 });
-  return new Response("", { status: 404 });
-};
+const rotatingHandler =
+  (cur: () => string): Handler =>
+  (url) => {
+    if (url.startsWith("https://t.test/u/")) return html('<html><script src="/static/main.js"></script></html>');
+    if (url === "https://t.test/static/main.js")
+      return new Response(`var ops=[{queryId:"${cur()}",operationName:"User",operationType:"query"}];`);
+    const u = new URL(url);
+    if (u.pathname === `/api/${cur()}/User`) return json({ user: { name: u.searchParams.get("name") } });
+    if (u.pathname.startsWith("/api/")) return new Response("", { status: 404 });
+    return new Response("", { status: 404 });
+  };
 
 beforeEach(() => {
   rmSync(join(HOME, "state.json"), { force: true });
@@ -112,7 +126,10 @@ describe("heal without a browser (maxTier 1)", () => {
     const r = await call("rot2", "user", { name: "bob" }, tier1(rotatingHandler(() => cur)));
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.healed, true);
-    assert.deepEqual(heals().map((h) => h.strategy), ["rescan", "rescan"]);
+    assert.deepEqual(
+      heals().map((h) => h.strategy),
+      ["rescan", "rescan"],
+    );
   });
 
   test("an expired stale mark no longer blocks a heal; a live one does", async () => {
@@ -131,7 +148,10 @@ describe("heal without a browser (maxTier 1)", () => {
   test("a stale mark written by another process is honoured by this one", async () => {
     saveSite(userSite("xproc"));
     const script = `import { markStale } from ${JSON.stringify(join(ROOT, "src", "store.ts"))}; markStale("xproc", "user", "set by another process");`;
-    execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } });
+    execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], {
+      cwd: ROOT,
+      env: { ...process.env, API_ANYTHING_HOME: HOME },
+    });
     const r = await call("xproc", "user", { name: "bob" }, tier1(rotatingHandler(() => NEW)));
     assert.equal(r.ok, false);
     assert.match(r.reason ?? "", /set by another process/);
@@ -156,7 +176,12 @@ describe("heal without a browser (maxTier 1)", () => {
           {
             name: "user",
             readOnly: true,
-            request: { method: "POST", url: `https://t.test/api/${OLD}/User`, headers: { "content-type": "application/json" }, body: `{"queryId":"${OLD}","variables":{"name":"alice"}}` },
+            request: {
+              method: "POST",
+              url: `https://t.test/api/${OLD}/User`,
+              headers: { "content-type": "application/json" },
+              body: `{"queryId":"${OLD}","variables":{"name":"alice"}}`,
+            },
             slots: [{ param: "name", at: ["body", "json:/variables/name"] }],
             volatile: [
               { at: ["path:1"], shape: { charset: "base64url", length: 22 }, anchor: "User" },
@@ -173,7 +198,8 @@ describe("heal without a browser (maxTier 1)", () => {
       if (url.startsWith("https://t.test/u/")) return html('<script src="/main.js"></script>');
       if (url.endsWith("/main.js")) return new Response(`{queryId:"${NEW}",operationName:"User"}`);
       const body = JSON.parse(String(init?.body ?? "{}"));
-      if (url.endsWith(`/api/${NEW}/User`) && body.queryId === NEW) return json({ user: { name: body.variables.name } });
+      if (url.endsWith(`/api/${NEW}/User`) && body.queryId === NEW)
+        return json({ user: { name: body.variables.name } });
       return new Response("", { status: 404 });
     };
     const r = await call("both", "user", { name: "bob" }, tier1(h));
@@ -193,9 +219,16 @@ describe("heal without a browser (maxTier 1)", () => {
           {
             name: "q",
             readOnly: true,
-            request: { method: "POST", url: "https://t.test/api/graphql", headers: { "content-type": "application/json" }, body: `{"doc_id":${OLD_DOC},"variables":{"name":"alice"}}` },
+            request: {
+              method: "POST",
+              url: "https://t.test/api/graphql",
+              headers: { "content-type": "application/json" },
+              body: `{"doc_id":${OLD_DOC},"variables":{"name":"alice"}}`,
+            },
             slots: [{ param: "name", at: ["body", "json:/variables/name"] }],
-            volatile: [{ at: ["body", "json:/doc_id"], shape: { charset: "digits", length: 16 }, anchor: "ProfileQuery" }],
+            volatile: [
+              { at: ["body", "json:/doc_id"], shape: { charset: "digits", length: 16 }, anchor: "ProfileQuery" },
+            ],
             trigger: { url: "https://t.test/u/{name}" },
             params: [{ name: "name", example: "alice" }],
             response: { extract: "user" },
@@ -211,10 +244,13 @@ describe("heal without a browser (maxTier 1)", () => {
     };
     const r = await call("numdoc", "q", { name: "bob" }, tier1(h));
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.equal(loadSite("numdoc")!.site.operations[0]!.request.body, `{"doc_id":${NEW_DOC},"variables":{"name":"alice"}}`);
+    assert.equal(
+      loadSite("numdoc")!.site.operations[0]!.request.body,
+      `{"doc_id":${NEW_DOC},"variables":{"name":"alice"}}`,
+    );
   });
 
-  // BUG: nearestToken() matches the anchor as a raw substring, so "Followers" also hits
+  // Was a bug: nearestToken() matches the anchor as a raw substring, so "Followers" also hits
   // "FollowersYouKnow"; on a distance tie the first occurrence in the bundle wins. The wrong
   // queryId answers 200 with the same shape, so validation passes and wrong data is saved.
   test("anchor that is a prefix of another operation's name: the rescan must take the exact operation's queryId", async () => {
@@ -236,13 +272,21 @@ describe("heal without a browser (maxTier 1)", () => {
             params: [{ name: "userId", example: "12345678" }],
             response: {
               extract: "data.user.timeline.users",
-              shape: { data: "object", "data.user": "object", "data.user.timeline": "object", "data.user.timeline.users": "array", "data.user.timeline.users[]": "object", "data.user.timeline.users[].name": "string" },
+              shape: {
+                data: "object",
+                "data.user": "object",
+                "data.user.timeline": "object",
+                "data.user.timeline.users": "array",
+                "data.user.timeline.users[]": "object",
+                "data.user.timeline.users[].name": "string",
+              },
             },
           },
         ],
       }),
     );
-    const list = (names: string[]) => json({ data: { user: { timeline: { users: names.map((name) => ({ name })) } } } });
+    const list = (names: string[]) =>
+      json({ data: { user: { timeline: { users: names.map((name) => ({ name })) } } } });
     const h: Handler = (url) => {
       if (url.includes("/u/")) return html('<script src="/main.js"></script>');
       if (url.endsWith("/main.js")) {
@@ -257,10 +301,14 @@ describe("heal without a browser (maxTier 1)", () => {
     };
     const r = await call("fol", "followers", { userId: "87654321" }, tier1(h));
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.deepEqual(r.data, [{ name: "everyone" }, { name: "who" }, { name: "follows" }], `healed onto the wrong operation: ${heals().at(-1)?.diff}`);
+    assert.deepEqual(
+      r.data,
+      [{ name: "everyone" }, { name: "who" }, { name: "follows" }],
+      `healed onto the wrong operation: ${heals().at(-1)?.diff}`,
+    );
   });
 
-  // BUG: Meta-style bundles put each doc_id in its own module right after the previous module's
+  // Was a bug: Meta-style bundles put each doc_id in its own module right after the previous module's
   // doc_id, so the previous operation's id sits ~14 chars before the anchor while the op's own id is
   // ~64 chars after it. The rescan takes the neighbour's id; validation passes on a same-shaped answer.
   test("Meta-style module layout: the rescan must take the doc_id of the anchor's own module, not the previous module's", async () => {
@@ -282,11 +330,21 @@ describe("heal without a browser (maxTier 1)", () => {
               body: `doc_id=${OLD_DOC}&fb_api_req_friendly_name=PolarisProfileQuery&variables=${encodeURIComponent('{"username":"alice"}')}`,
             },
             slots: [{ param: "username", at: ["form:variables", "json:/username"] }],
-            volatile: [{ at: ["form:doc_id"], shape: { charset: "digits", length: 16 }, anchor: "PolarisProfileQuery" }],
+            volatile: [
+              { at: ["form:doc_id"], shape: { charset: "digits", length: 16 }, anchor: "PolarisProfileQuery" },
+            ],
             trigger: { url: "https://m.test/{username}/" },
             match: { method: "POST", path: "/api/graphql/", operationName: "PolarisProfileQuery" },
             params: [{ name: "username", example: "alice" }],
-            response: { extract: "data.user", shape: { data: "object", "data.user": "object", "data.user.username": "string", "data.user.full_name": "string" } },
+            response: {
+              extract: "data.user",
+              shape: {
+                data: "object",
+                "data.user": "object",
+                "data.user.username": "string",
+                "data.user.full_name": "string",
+              },
+            },
           },
         ],
       }),
@@ -303,16 +361,21 @@ describe("heal without a browser (maxTier 1)", () => {
       }
       const form = new URLSearchParams(String(init.body));
       const username = JSON.parse(form.get("variables")!).username;
-      if (form.get("doc_id") === PROFILE_DOC) return json({ data: { user: { username, full_name: `${username} (profile)` } } });
+      if (form.get("doc_id") === PROFILE_DOC)
+        return json({ data: { user: { username, full_name: `${username} (profile)` } } });
       if (form.get("doc_id") === FEED_DOC) return json({ data: { user: { username, feed: [{ id: "p1" }] } } });
       return json({ errors: [{ message: "PersistedQueryNotFound" }], data: null }, 400);
     };
     const r = await call("meta", "profile", { username: "bob" }, tier1(h));
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.deepEqual(r.data, { username: "bob", full_name: "bob (profile)" }, `healed onto the neighbour's doc_id: ${heals().at(-1)?.diff}`);
+    assert.deepEqual(
+      r.data,
+      { username: "bob", full_name: "bob (profile)" },
+      `healed onto the neighbour's doc_id: ${heals().at(-1)?.diff}`,
+    );
   });
 
-  // BUG (critical): a write's rescan candidate is validated by performing it. With the anchor
+  // Was a bug: a write's rescan candidate is validated by performing it. With the anchor
   // matched as a substring, "CreateTweet" resolves to CreateTweetDownvote's queryId, and that other
   // mutation is sent for real.
   test("write heal: a rescan guess must never send a different mutation", async () => {
@@ -326,7 +389,12 @@ describe("heal without a browser (maxTier 1)", () => {
           {
             name: "createTweet",
             readOnly: false,
-            request: { method: "POST", url: `https://w.test/graphql/${OLD}/CreateTweet`, headers: { "content-type": "application/json" }, body: `{"variables":{"tweet_text":"hello"},"queryId":"${OLD}"}` },
+            request: {
+              method: "POST",
+              url: `https://w.test/graphql/${OLD}/CreateTweet`,
+              headers: { "content-type": "application/json" },
+              body: `{"variables":{"tweet_text":"hello"},"queryId":"${OLD}"}`,
+            },
             slots: [{ param: "text", at: ["body", "json:/variables/tweet_text"] }],
             volatile: [
               { at: ["path:1"], shape: { charset: "base64url", length: 22 }, anchor: "CreateTweet" },
@@ -348,12 +416,22 @@ describe("heal without a browser (maxTier 1)", () => {
             `e.exports={queryId:"${RIGHT}",operationName:"CreateTweet",operationType:"mutation"};`,
         );
       }
-      if (init?.method === "POST" && url.includes(`/graphql/${DOWNVOTE}/`)) return (executed.push("CreateTweetDownvote"), json({ data: { downvoted: true } }));
-      if (init?.method === "POST" && url.includes(`/graphql/${RIGHT}/`)) return (executed.push("CreateTweet"), json({ data: { create_tweet: { id: "1" } } }));
+      if (init?.method === "POST" && url.includes(`/graphql/${DOWNVOTE}/`)) {
+        executed.push("CreateTweetDownvote");
+        return json({ data: { downvoted: true } });
+      }
+      if (init?.method === "POST" && url.includes(`/graphql/${RIGHT}/`)) {
+        executed.push("CreateTweet");
+        return json({ data: { create_tweet: { id: "1" } } });
+      }
       return new Response("", { status: 404 });
     };
     await call("wr", "createTweet", { text: "hi there" }, { ...tier1(h), allowWrites: true });
-    assert.deepEqual(executed.filter((x) => x !== "CreateTweet"), [], "a mutation other than the op's own was performed");
+    assert.deepEqual(
+      executed.filter((x) => x !== "CreateTweet"),
+      [],
+      "a mutation other than the op's own was performed",
+    );
   });
 
   test("a write is sent at most once by the heal: the one validation after a definite 404", async () => {
@@ -366,7 +444,12 @@ describe("heal without a browser (maxTier 1)", () => {
           {
             name: "post",
             readOnly: false,
-            request: { method: "POST", url: `https://w.test/graphql/${OLD}/CreatePost`, headers: { "content-type": "application/json" }, body: '{"text":"hello"}' },
+            request: {
+              method: "POST",
+              url: `https://w.test/graphql/${OLD}/CreatePost`,
+              headers: { "content-type": "application/json" },
+              body: '{"text":"hello"}',
+            },
             slots: [{ param: "text", at: ["body", "json:/text"] }],
             volatile: [{ at: ["path:1"], shape: { charset: "base64url", length: 22 }, anchor: "CreatePost" }],
             trigger: { url: "https://w.test/compose" },
@@ -376,17 +459,22 @@ describe("heal without a browser (maxTier 1)", () => {
       }),
     );
     const h: Handler = (url, init) => {
-      if (url === "https://w.test/compose") return html(`<script>x={queryId:"${RIGHT}",operationName:"CreatePost"}</script>`);
+      if (url === "https://w.test/compose")
+        return html(`<script>x={queryId:"${RIGHT}",operationName:"CreatePost"}</script>`);
       if (init?.method === "POST" && url.includes(RIGHT)) return new Response("", { status: 502 });
       return new Response("", { status: 404 });
     };
     const r = await call("wr1", "post", { text: "hi there" }, { ...tier1(h), allowWrites: true });
     assert.equal(r.ok, false);
-    assert.equal(seen.filter((s) => s.method === "POST").length, 2, "the stored template (404) and one validation; the ambiguous 502 is not retried");
+    assert.equal(
+      seen.filter((s) => s.method === "POST").length,
+      2,
+      "the stored template (404) and one validation; the ambiguous 502 is not retried",
+    );
     assert.match(r.next ?? "", /may have (gone through|run)/);
   });
 
-  // BUG (low): a write whose heal failed is marked stale; the next drift's `next` tells the agent to
+  // Was a bug: a write whose heal failed is marked stale; the next drift's `next` tells the agent to
   // force `api-anything heal`, which refuses every write.
   test("a stale write's next hint does not point at `api-anything heal` (which refuses writes)", async () => {
     saveSite(
@@ -397,7 +485,12 @@ describe("heal without a browser (maxTier 1)", () => {
           {
             name: "post",
             readOnly: false,
-            request: { method: "POST", url: `https://w.test/graphql/${OLD}/CreatePost`, headers: {}, body: '{"text":"hello"}' },
+            request: {
+              method: "POST",
+              url: `https://w.test/graphql/${OLD}/CreatePost`,
+              headers: {},
+              body: '{"text":"hello"}',
+            },
             slots: [{ param: "text", at: ["body", "json:/text"] }],
             volatile: [{ at: ["path:1"], shape: { charset: "base64url", length: 22 }, anchor: "CreatePost" }],
             trigger: { url: "https://w.test/compose" },
@@ -407,7 +500,12 @@ describe("heal without a browser (maxTier 1)", () => {
       }),
     );
     markStale("wst", "post", "heal failed earlier");
-    const r = await call("wst", "post", { text: "hi there" }, { ...tier1(() => new Response("", { status: 404 })), allowWrites: true });
+    const r = await call(
+      "wst",
+      "post",
+      { text: "hi there" },
+      { ...tier1(() => new Response("", { status: 404 })), allowWrites: true },
+    );
     assert.equal(r.ok, false);
     const forced = await heal("wst", "post", { text: "hi there" });
     assert.equal(forced.class, "refused");
@@ -423,50 +521,80 @@ describe("heal without a browser (maxTier 1)", () => {
       () => html('<html><form><input type="password"></form></html>'),
     ]) {
       seen = [];
-      const h: Handler = (url) => (url.includes("/api/") ? res() : url.includes("/login") ? html('<html><form><input type="password"></form></html>') : rotatingHandler(() => NEW)(url));
+      const h: Handler = (url) =>
+        url.includes("/api/")
+          ? res()
+          : url.includes("/login")
+            ? html('<html><form><input type="password"></form></html>')
+            : rotatingHandler(() => NEW)(url);
       const r = await call("auth", "user", { name: "bob" }, tier1(h));
       assert.equal(r.class, "auth", JSON.stringify(r));
       assert.equal(heals().length, 0);
-      assert.ok(!seen.some((s) => s.url.includes("/u/") || s.url.endsWith(".js")), `no rescan when logged out: ${JSON.stringify(seen)}`);
+      assert.ok(
+        !seen.some((s) => s.url.includes("/u/") || s.url.endsWith(".js")),
+        `no rescan when logged out: ${JSON.stringify(seen)}`,
+      );
     }
   });
 
-  // BUG (medium): DESIGN step 7 records learnedLoggedIn so a changed session state is recognised,
+  // Was a bug: DESIGN step 7 records learnedLoggedIn so a changed session state is recognised,
   // but nothing reads it. An op learned logged in, called with a jar that holds no login cookie,
   // gets "no data" (the site hides it from guests), is healed as drift, and is told to heal/re-add,
   // never to log in.
   test("op learned logged in, jar now logged out, data missing: the failure points at login instead of heal/re-add", async () => {
-    const site = userSite("lo", { learnedLoggedIn: true, volatile: [], request: { method: "GET", url: "https://t.test/api/Feed?name=alice", headers: {} }, match: { method: "GET", path: "/api/Feed" } });
+    const site = userSite("lo", {
+      learnedLoggedIn: true,
+      volatile: [],
+      request: { method: "GET", url: "https://t.test/api/Feed?name=alice", headers: {} },
+      match: { method: "GET", path: "/api/Feed" },
+    });
     saveSite({ ...site, loginCookies: ["sessionid"] });
     saveSession("lo", { cookies: [], values: {} });
-    const r = await call("lo", "user", { name: "bob" }, tier1((url) => (url.includes("/api/") ? json({ data: {} }) : html("<html></html>"))));
+    const r = await call(
+      "lo",
+      "user",
+      { name: "bob" },
+      tier1((url) => (url.includes("/api/") ? json({ data: {} }) : html("<html></html>"))),
+    );
     assert.equal(r.ok, false);
-    assert.ok(r.class === "auth" || /login/.test(r.next ?? ""), `logged-out failure does not mention login: ${JSON.stringify(r)}`);
+    assert.ok(
+      r.class === "auth" || /login/.test(r.next ?? ""),
+      `logged-out failure does not mention login: ${JSON.stringify(r)}`,
+    );
   });
 
   test("rate limited on the first try: reported as rate, no heal, one request", async () => {
     saveSite(userSite("rate0"));
-    const r = await call("rate0", "user", { name: "bob" }, tier1(() => json({ message: "Too many requests" }, 429)));
+    const r = await call(
+      "rate0",
+      "user",
+      { name: "bob" },
+      tier1(() => json({ message: "Too many requests" }, 429)),
+    );
     assert.equal(r.class, "rate");
     assert.equal(seen.length, 1);
     assert.equal(staleMark("rate0", "user"), undefined);
   });
 
-  // BUG (medium): the example-args replay that tells "no such user" from drift can itself be rate
+  // Was a bug: the example-args replay that tells "no such user" from drift can itself be rate
   // limited; that 429 is ignored and the heal runs anyway (fetching the page and up to 40 bundles).
   test("rate limited during the example-args replay: stop and report rate, do not heal", async () => {
     saveSite(userSite("rate1"));
     let n = 0;
     const h: Handler = (url) => {
-      if (url.includes("/api/")) return n++ === 0 ? json({ nothing: true }) : json({ message: "Too many requests" }, 429);
+      if (url.includes("/api/"))
+        return n++ === 0 ? json({ nothing: true }) : json({ message: "Too many requests" }, 429);
       return rotatingHandler(() => NEW)(url);
     };
     const r = await call("rate1", "user", { name: "bob" }, tier1(h));
-    assert.ok(!seen.some((s) => s.url.includes("/u/") || s.url.endsWith(".js")), `heal ran while rate limited: ${seen.map((s) => s.url).join(", ")}`);
+    assert.ok(
+      !seen.some((s) => s.url.includes("/u/") || s.url.endsWith(".js")),
+      `heal ran while rate limited: ${seen.map((s) => s.url).join(", ")}`,
+    );
     assert.equal(r.class, "rate", JSON.stringify(r));
   });
 
-  // BUG (low): when the rescan candidate's replay is rate limited, the failure reason says the rescan
+  // Was a bug: when the rescan candidate's replay is rate limited, the failure reason says the rescan
   // "found nothing new", which is false and hides that the candidate was never really checked.
   test("rate limited while validating a rescan candidate: class rate, and the reason does not claim the rescan found nothing", async () => {
     saveSite(userSite("rate2"));
@@ -476,7 +604,7 @@ describe("heal without a browser (maxTier 1)", () => {
     };
     const r = await call("rate2", "user", { name: "bob" }, tier1(h));
     assert.equal(r.class, "rate", JSON.stringify(r));
-    assert.doesNotMatch(r.reason ?? "", /found nothing new/, r.reason);
+    assert.doesNotMatch(r.reason ?? "", /found nothing new/);
   });
 
   test("404 with the param in the path and a volatile in the path: example replay separates not-found from drift", async () => {
@@ -499,7 +627,8 @@ describe("heal without a browser (maxTier 1)", () => {
     saveSite(site);
     let build = OLD;
     const h: Handler = (url) => {
-      if (url.startsWith("https://t.test/u/")) return html(`<script id="__NEXT_DATA__">{"buildId":"${build}"}</script>`);
+      if (url.startsWith("https://t.test/u/"))
+        return html(`<script id="__NEXT_DATA__">{"buildId":"${build}"}</script>`);
       const m = new URL(url).pathname.match(/^\/_next\/data\/([^/]+)\/u\/([^/]+)\.json$/);
       if (m && m[1] === build && ["alice", "bob"].includes(m[2]!)) return json({ pageProps: { user: { name: m[2] } } });
       return new Response("not found", { status: 404 });
@@ -527,7 +656,15 @@ describe("heal without a browser (maxTier 1)", () => {
     );
     saveSession("sec", {
       cookies: [
-        { name: "auth_token", value: SECRET_COOKIE, domain: ".t.test", path: "/", expires: -1, httpOnly: true, secure: true },
+        {
+          name: "auth_token",
+          value: SECRET_COOKIE,
+          domain: ".t.test",
+          path: "/",
+          expires: -1,
+          httpOnly: true,
+          secure: true,
+        },
         { name: "ct0", value: SECRET_CSRF, domain: ".t.test", path: "/", expires: -1, httpOnly: false, secure: true },
       ],
       values: {},
@@ -542,7 +679,10 @@ describe("heal without a browser (maxTier 1)", () => {
     }
     assert.equal(statSync(join(HOME, "heals.jsonl")).mode & 0o777, 0o600);
     assert.equal(statSync(join(HOME, "sites", "sec.json")).mode & 0o777, 0o600);
-    assert.deepEqual(readdirSync(join(HOME, "sites")).filter((f) => f.endsWith(".tmp")), []);
+    assert.deepEqual(
+      readdirSync(join(HOME, "sites")).filter((f) => f.endsWith(".tmp")),
+      [],
+    );
     assert.doesNotThrow(() => parseSite(JSON.parse(spec)));
   });
 
@@ -559,13 +699,30 @@ describe("heal without a browser (maxTier 1)", () => {
       if (path.includes("[]")) continue;
       const keys = path.split(".");
       let o = body as Record<string, unknown>;
-      for (const k of keys.slice(0, -1)) o = (o[k] ??= {}) as Record<string, unknown>;
+      for (const k of keys.slice(0, -1)) {
+        o[k] ??= {};
+        o = o[k] as Record<string, unknown>;
+      }
       const last = keys.at(-1)!;
-      if (o[last] === undefined) o[last] = type === "object" ? {} : type === "array" ? [] : type === "number" ? 1 : type === "boolean" ? true : type === "null" ? null : "x";
+      if (o[last] === undefined)
+        o[last] =
+          type === "object"
+            ? {}
+            : type === "array"
+              ? []
+              : type === "number"
+                ? 1
+                : type === "boolean"
+                  ? true
+                  : type === "null"
+                    ? null
+                    : "x";
     }
     const h: Handler = (url) => {
-      if (url === "https://x.com/nasa") return html('<script src="https://abs.twimg.com/responsive-web/client-web/main.abc.js"></script>');
-      if (url.endsWith("main.abc.js")) return new Response(`e.exports={queryId:"${NEWX}",operationName:"UserByScreenName",operationType:"query"}`);
+      if (url === "https://x.com/nasa")
+        return html('<script src="https://abs.twimg.com/responsive-web/client-web/main.abc.js"></script>');
+      if (url.endsWith("main.abc.js"))
+        return new Response(`e.exports={queryId:"${NEWX}",operationName:"UserByScreenName",operationType:"query"}`);
       if (url.includes(`/graphql/${NEWX}/UserByScreenName`)) return json(body);
       if (url.includes(`/graphql/${OLDX}/`)) return new Response("", { status: 404 });
       return new Response("", { status: 404 });
@@ -576,28 +733,39 @@ describe("heal without a browser (maxTier 1)", () => {
     const after = loadSite("x")!;
     assert.equal(after.source, "user");
     assert.ok(after.site.operations.find((o) => o.name === "getUser")!.request.url.includes(NEWX));
-    assert.equal(after.site.operations.length, loadSite("x", join(HOME, "no-such-dir"))!.site.operations.length, "the user copy keeps every other op");
+    assert.equal(
+      after.site.operations.length,
+      loadSite("x", join(HOME, "no-such-dir"))!.site.operations.length,
+      "the user copy keeps every other op",
+    );
     assert.equal(createHash("sha256").update(readFileSync(bundled)).digest("hex"), before, "bundled spec modified");
   });
 
   test("concurrent heals of one op in one process both answer correctly and leave one consistent spec", async () => {
     saveSite(userSite("conc"));
     const h = rotatingHandler(() => NEW);
-    const [a, b] = await Promise.all([call("conc", "user", { name: "bob" }, tier1(h)), call("conc", "user", { name: "carol" }, tier1(h))]);
+    const [a, b] = await Promise.all([
+      call("conc", "user", { name: "bob" }, tier1(h)),
+      call("conc", "user", { name: "carol" }, tier1(h)),
+    ]);
     assert.deepEqual([a.ok, b.ok], [true, true], JSON.stringify([a, b]));
     assert.deepEqual([a.data, b.data], [{ name: "bob" }, { name: "carol" }]);
     assert.ok(loadSite("conc")!.site.operations[0]!.request.url.includes(NEW));
     assert.ok(heals().length >= 1);
   });
 
-  // BUG (low): rescan resolves script src against the trigger URL, not the document's final URL, so
+  // Was a bug: rescan resolves script src against the trigger URL, not the document's final URL, so
   // a redirected page (locale prefix, trailing-slash or app-path redirects) with a relative src loses its bundle.
   test("rescan resolves script paths against the redirected document URL", async () => {
     const server = createServer((req, res) => {
       const p = new URL(req.url!, "http://x").pathname;
       if (p === "/u/bob") return void res.writeHead(302, { location: "/en/app/u/bob" }).end();
-      if (p === "/en/app/u/bob") return void res.writeHead(200, { "content-type": "text/html" }).end('<script src="../static/main.js"></script>');
-      if (p === "/en/app/static/main.js") return void res.writeHead(200).end(`x={queryId:"${NEW}",operationName:"User"}`);
+      if (p === "/en/app/u/bob")
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end('<script src="../static/main.js"></script>');
+      if (p === "/en/app/static/main.js")
+        return void res.writeHead(200).end(`x={queryId:"${NEW}",operationName:"User"}`);
       res.writeHead(404).end();
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -614,7 +782,8 @@ describe("heal without a browser (maxTier 1)", () => {
   test("rescan ignores a token that overlaps or is the anchor, and a token farther than ~300 chars", async () => {
     const op = userSite("far").operations[0]!;
     const h: Handler = (url) => {
-      if (url.startsWith("https://t.test/u/")) return html(`<script>x={queryId:"${NEW}",pad:"${"-".repeat(400)}",operationName:"User"}</script>`);
+      if (url.startsWith("https://t.test/u/"))
+        return html(`<script>x={queryId:"${NEW}",pad:"${"-".repeat(400)}",operationName:"User"}</script>`);
       return new Response("", { status: 404 });
     };
     assert.equal(await rescan("far", op, { name: "bob" }, fake(h)), undefined);
@@ -623,7 +792,9 @@ describe("heal without a browser (maxTier 1)", () => {
 
 /* ------------------------------------------------------------------ browser */
 
-async function serve(handler: (req: IncomingMessage, res: ServerResponse, body: string) => void): Promise<{ server: Server; base: string }> {
+async function serve(
+  handler: (req: IncomingMessage, res: ServerResponse, body: string) => void,
+): Promise<{ server: Server; base: string }> {
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
@@ -632,16 +803,22 @@ async function serve(handler: (req: IncomingMessage, res: ServerResponse, body: 
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   return { server, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
 }
-const sendJson = (res: ServerResponse, v: unknown, status = 200) => void res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(v));
-const sendHtml = (res: ServerResponse, s: string, status = 200) => void res.writeHead(status, { "content-type": "text/html" }).end(s);
-const sendJs = (res: ServerResponse, s: string) => void res.writeHead(200, { "content-type": "application/javascript" }).end(s);
+const sendJson = (res: ServerResponse, v: unknown, status = 200) =>
+  void res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(v));
+const sendHtml = (res: ServerResponse, s: string, status = 200) =>
+  void res.writeHead(status, { "content-type": "text/html" }).end(s);
+const sendJs = (res: ServerResponse, s: string) =>
+  void res.writeHead(200, { "content-type": "application/javascript" }).end(s);
 const fast = { minIntervalMs: 0 };
 
 describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
   const servers: Server[] = [];
   after(async () => {
     await closeBrowser();
-    for (const s of servers) (s.closeAllConnections(), s.close());
+    for (const s of servers) {
+      s.closeAllConnections();
+      s.close();
+    }
     rmSync(HOME, { recursive: true, force: true });
   });
   const start = async (h: Parameters<typeof serve>[0]) => {
@@ -654,19 +831,31 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
     let qid = OLD;
     const base = await start((req, res) => {
       const u = new URL(req.url!, "http://x");
-      if (u.pathname.startsWith("/u/")) return sendHtml(res, '<html><body><script type="module" src="/main.js"></script></body></html>');
-      if (u.pathname === "/main.js") return sendJs(res, 'import("/chunk-user.js").then(m=>m.load(location.pathname.split("/")[2]));');
-      if (u.pathname === "/chunk-user.js") return sendJs(res, `export function load(n){fetch("/api/${qid}/User?name="+encodeURIComponent(n))}`);
+      if (u.pathname.startsWith("/u/"))
+        return sendHtml(res, '<html><body><script type="module" src="/main.js"></script></body></html>');
+      if (u.pathname === "/main.js")
+        return sendJs(res, 'import("/chunk-user.js").then(m=>m.load(location.pathname.split("/")[2]));');
+      if (u.pathname === "/chunk-user.js")
+        return sendJs(res, `export function load(n){fetch("/api/${qid}/User?name="+encodeURIComponent(n))}`);
       if (u.pathname === `/api/${qid}/User`) return sendJson(res, { user: { name: u.searchParams.get("name") } });
       sendJson(res, {}, 404);
     });
-    await addOperation({ site: "lazy", op: "user", trigger: { url: `${base}/u/{name}` }, examples: [{ name: "alice" }, { name: "bobby" }], response: { extract: "user" } });
+    await addOperation({
+      site: "lazy",
+      op: "user",
+      trigger: { url: `${base}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bobby" }],
+      response: { extract: "user" },
+    });
     assert.equal(loadSite("lazy")!.site.operations[0]!.volatile.length, 1);
     qid = NEW;
     const r = await call("lazy", "user", { name: "carol" }, fast);
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.healed, true);
-    assert.deepEqual(heals().map((h) => h.strategy), ["recapture"]);
+    assert.deepEqual(
+      heals().map((h) => h.strategy),
+      ["recapture"],
+    );
     const again = await call("lazy", "user", { name: "dave" }, fast);
     assert.equal(again.tier, 1);
     assert.deepEqual(again.data, { name: "dave" });
@@ -677,27 +866,43 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
     const DECOY = "Dd9Ee8Cc7Oo6Yy5Hh4Aa3S";
     const base = await start((req, res) => {
       const u = new URL(req.url!, "http://x");
-      if (u.pathname.startsWith("/u/")) return sendHtml(res, '<html><body><script src="/main.js"></script></body></html>');
+      if (u.pathname.startsWith("/u/"))
+        return sendHtml(res, '<html><body><script src="/main.js"></script></body></html>');
       if (u.pathname === "/main.js") {
         // after the deploy, the op name sits next to an unrelated chunk hash; the id is far away
-        const registry = qid === OLD ? `{queryId:"${qid}",operationName:"User"}` : `{chunk:"${DECOY}",operationName:"User"};${" ".repeat(600)}var ids={a:"${qid}"}`;
+        const registry =
+          qid === OLD
+            ? `{queryId:"${qid}",operationName:"User"}`
+            : `{chunk:"${DECOY}",operationName:"User"};${" ".repeat(600)}var ids={a:"${qid}"}`;
         const id = qid === OLD ? JSON.stringify(qid) : "ids.a";
         // the path is assembled so the op name never sits next to the id in the source
-        return sendJs(res, `var reg=${registry};fetch("/api/"+${id}+"/"+reg.operationName+"?name="+encodeURIComponent(location.pathname.split("/")[2]));`);
+        return sendJs(
+          res,
+          `var reg=${registry};fetch("/api/"+${id}+"/"+reg.operationName+"?name="+encodeURIComponent(location.pathname.split("/")[2]));`,
+        );
       }
       if (u.pathname === `/api/${qid}/User`) return sendJson(res, { user: { name: u.searchParams.get("name") } });
       sendJson(res, {}, 404);
     });
-    await addOperation({ site: "moved", op: "user", trigger: { url: `${base}/u/{name}` }, examples: [{ name: "alice" }, { name: "bobby" }], response: { extract: "user" } });
+    await addOperation({
+      site: "moved",
+      op: "user",
+      trigger: { url: `${base}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bobby" }],
+      response: { extract: "user" },
+    });
     qid = NEW;
     const r = await call("moved", "user", { name: "carol" }, fast);
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.healed, true);
-    assert.deepEqual(heals().map((h) => h.strategy), ["recapture"]);
+    assert.deepEqual(
+      heals().map((h) => h.strategy),
+      ["recapture"],
+    );
     assert.ok(!loadSite("moved")!.site.operations[0]!.request.url.includes(DECOY));
   });
 
-  // BUG (high): recapture learns the new template's session refs but throws away their values
+  // Was a bug: recapture learns the new template's session refs but throws away their values
   // (learnOperation's sessionValues); runOpTrigger only stores values for the OLD op's refs. A
   // deploy that adds or renames an auth/anti-bot header (x-*-token, x-csrf-*) can then never heal:
   // the validation replay drops the header because the session store has no value for it.
@@ -714,37 +919,58 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
         return sendHtml(res, `<html><body><script>${js}</script></body></html>`);
       }
       if (u.pathname === "/api/User") {
-        if (version === 2 && req.headers["x-api-token"] !== TOKEN) return sendJson(res, { error: "unknown operation" }, 404);
+        if (version === 2 && req.headers["x-api-token"] !== TOKEN)
+          return sendJson(res, { error: "unknown operation" }, 404);
         return sendJson(res, { user: { name: u.searchParams.get("name") } });
       }
       sendJson(res, {}, 404);
     });
-    await addOperation({ site: "hdr", op: "user", trigger: { url: `${base}/u/{name}` }, examples: [{ name: "alice" }, { name: "bobby" }], response: { extract: "user" } });
+    await addOperation({
+      site: "hdr",
+      op: "user",
+      trigger: { url: `${base}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bobby" }],
+      response: { extract: "user" },
+    });
     version = 2;
     const r = await call("hdr", "user", { name: "carol" }, fast);
     assert.equal(r.ok, true, JSON.stringify(r));
     const op = loadSite("hdr")!.site.operations[0]!;
-    assert.equal(r.healed, true, `${JSON.stringify(r)}\nslots now: ${JSON.stringify(op.slots)}\nsession values: ${JSON.stringify(loadSession("hdr").values)}`);
+    assert.equal(
+      r.healed,
+      true,
+      `${JSON.stringify(r)}\nslots now: ${JSON.stringify(op.slots)}\nsession values: ${JSON.stringify(loadSession("hdr").values)}`,
+    );
     const later = await call("hdr", "user", { name: "dave" }, fast);
     assert.equal(later.tier, 1, JSON.stringify(later));
     assert.deepEqual(later.data, { name: "dave" });
   });
 
-  // BUG (medium): a renamed response field (user -> account) is response drift, not bad args: the
+  // Was a bug: a renamed response field (user -> account) is response drift, not bad args: the
   // example args fail too. The recapture learns the same request, so the heal says "identical" and
   // call() reports class "input" with "check the args", and nothing tells the agent to fix --extract.
   test("response field renamed: reported as drift with a re-add hint, not as input", async () => {
     let renamed = false;
     const base = await start((req, res) => {
       const u = new URL(req.url!, "http://x");
-      if (u.pathname.startsWith("/u/")) return sendHtml(res, '<html><body><script>fetch("/api/User?name="+encodeURIComponent(location.pathname.split("/")[2]))</script></body></html>');
+      if (u.pathname.startsWith("/u/"))
+        return sendHtml(
+          res,
+          '<html><body><script>fetch("/api/User?name="+encodeURIComponent(location.pathname.split("/")[2]))</script></body></html>',
+        );
       if (u.pathname === "/api/User") {
         const who = { name: u.searchParams.get("name"), followers: 3 };
         return sendJson(res, renamed ? { account: who } : { user: who });
       }
       sendJson(res, {}, 404);
     });
-    await addOperation({ site: "ren", op: "user", trigger: { url: `${base}/u/{name}` }, examples: [{ name: "alice" }, { name: "bobby" }], response: { extract: "user" } });
+    await addOperation({
+      site: "ren",
+      op: "user",
+      trigger: { url: `${base}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bobby" }],
+      response: { extract: "user" },
+    });
     renamed = true;
     const r = await call("ren", "user", { name: "carol" }, fast);
     assert.equal(r.ok, false);
@@ -760,12 +986,22 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
       if (u.pathname.startsWith("/u/")) {
         if (req.headers["sec-fetch-dest"] === "document") pageLoads++;
         if (gone) return sendHtml(res, "<html><body>Not found</body></html>", 404);
-        return sendHtml(res, `<html><body><script>fetch("/api/${OLD}/User?name="+encodeURIComponent(location.pathname.split("/")[2]))</script></body></html>`);
+        return sendHtml(
+          res,
+          `<html><body><script>fetch("/api/${OLD}/User?name="+encodeURIComponent(location.pathname.split("/")[2]))</script></body></html>`,
+        );
       }
-      if (!gone && u.pathname === `/api/${OLD}/User`) return sendJson(res, { user: { name: u.searchParams.get("name") } });
+      if (!gone && u.pathname === `/api/${OLD}/User`)
+        return sendJson(res, { user: { name: u.searchParams.get("name") } });
       sendJson(res, {}, 404);
     });
-    await addOperation({ site: "p404", op: "user", trigger: { url: `${base}/u/{name}` }, examples: [{ name: "alice" }, { name: "bobby" }], response: { extract: "user" } });
+    await addOperation({
+      site: "p404",
+      op: "user",
+      trigger: { url: `${base}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bobby" }],
+      response: { extract: "user" },
+    });
     gone = true;
     const r = await call("p404", "user", { name: "carol" }, fast);
     assert.equal(r.ok, false);
@@ -789,14 +1025,23 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
           `<html><body><input id="t"><button id="go">Post</button><script>document.getElementById("go").onclick=()=>fetch("/api/${qid}/CreatePost",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:document.getElementById("t").value})})</script></body></html>`,
         );
       }
-      if (req.method === "POST" && u.pathname === `/api/${qid}/CreatePost`) return (executed.push(JSON.parse(body).text), sendJson(res, { ok: 1 }));
+      if (req.method === "POST" && u.pathname === `/api/${qid}/CreatePost`) {
+        executed.push(JSON.parse(body).text);
+        return sendJson(res, { ok: 1 });
+      }
       sendJson(res, {}, 404);
     });
     const steps = [
       { action: "fill" as const, selector: "#t", value: "{text}" },
       { action: "click" as const, selector: "#go" },
     ];
-    await addOperation({ site: "wb", op: "post", trigger: { url: `${base}/compose`, steps }, examples: [{ text: "first post" }], write: true });
+    await addOperation({
+      site: "wb",
+      op: "post",
+      trigger: { url: `${base}/compose`, steps },
+      examples: [{ text: "first post" }],
+      write: true,
+    });
     assert.deepEqual(executed, [], "learning a write must not send it");
     qid = NEW;
     const r = await call("wb", "post", { text: "second post" }, { ...fast, allowWrites: true });
@@ -805,7 +1050,7 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
     assert.deepEqual(executed, ["second post"], "only the validation send executed");
   });
 
-  // BUG (medium): a rate-limited validation doesn't stop the heal: a read spends its second try on a
+  // Was a bug: a rate-limited validation doesn't stop the heal: a read spends its second try on a
   // browser recapture against the rate-limiting site, then the op is marked stale for 30 minutes.
   test("rate limited while validating the rescan candidate: no browser recapture and no stale mark", async () => {
     let qid = OLD;
@@ -814,7 +1059,10 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
       const u = new URL(req.url!, "http://x");
       if (u.pathname.startsWith("/u/")) {
         if (req.headers["sec-fetch-dest"] === "document") pageLoads++; // browser loads only, not the rescan's fetch
-        return sendHtml(res, `<html><body><script>var r={queryId:"${qid}",operationName:"User"};fetch("/api/${qid}/User?name="+encodeURIComponent(location.pathname.split("/")[2]))</script></body></html>`);
+        return sendHtml(
+          res,
+          `<html><body><script>var r={queryId:"${qid}",operationName:"User"};fetch("/api/${qid}/User?name="+encodeURIComponent(location.pathname.split("/")[2]))</script></body></html>`,
+        );
       }
       if (u.pathname === `/api/${qid}/User`) {
         if (qid === NEW) return sendJson(res, { message: "Too many requests" }, 429);
@@ -822,15 +1070,25 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
       }
       sendJson(res, {}, 404);
     });
-    await addOperation({ site: "rateb", op: "user", trigger: { url: `${base}/u/{name}` }, examples: [{ name: "alice" }, { name: "bobby" }], response: { extract: "user" } });
+    await addOperation({
+      site: "rateb",
+      op: "user",
+      trigger: { url: `${base}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bobby" }],
+      response: { extract: "user" },
+    });
     qid = NEW;
     const loads = pageLoads;
     const r = await call("rateb", "user", { name: "carol" }, fast);
     assert.equal(r.class, "rate", JSON.stringify(r));
-    assert.equal(pageLoads - loads, 0, `a browser run was spent on a rate-limited site; stale mark: ${JSON.stringify(staleMark("rateb", "user"))}`);
+    assert.equal(
+      pageLoads - loads,
+      0,
+      `a browser run was spent on a rate-limited site; stale mark: ${JSON.stringify(staleMark("rateb", "user"))}`,
+    );
     assert.equal(staleMark("rateb", "user"), undefined, "rate limiting marked the op stale for 30 min");
   });
-  // BUG (medium): Chrome locks a profile to one process. While another api-anything process (the
+  // Was a bug: Chrome locks a profile to one process. While another api-anything process (the
   // MCP server keeps its context open until stdin closes) holds ~/.api-anything/profile, a heal's
   // recapture in this process cannot launch: the call fails and the op is marked stale for 30 min
   // with tier 3 disabled, though nothing about the site is wrong.
@@ -839,7 +1097,11 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
     const base = await start((req, res) => {
       const u = new URL(req.url!, "http://x");
       const key = version === 1 ? "q" : "term";
-      if (u.pathname === "/s") return sendHtml(res, `<html><body><script>fetch("/api/search?${key}="+encodeURIComponent(new URLSearchParams(location.search).get("q")))</script></body></html>`);
+      if (u.pathname === "/s")
+        return sendHtml(
+          res,
+          `<html><body><script>fetch("/api/search?${key}="+encodeURIComponent(new URLSearchParams(location.search).get("q")))</script></body></html>`,
+        );
       if (u.pathname === "/api/search") {
         if (!u.searchParams.has(key)) return sendJson(res, { error: "unknown argument" }, 404);
         return sendJson(res, { results: [{ q: u.searchParams.get(key) }, { q: "x" }] });
@@ -847,20 +1109,29 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
       sendJson(res, {}, 404);
     });
     // this process opens the shared profile, as a running MCP server does
-    await addOperation({ site: "xp", op: "search", trigger: { url: `${base}/s?q={q}` }, examples: [{ q: "hello" }, { q: "world" }], response: { extract: "results" } });
+    await addOperation({
+      site: "xp",
+      op: "search",
+      trigger: { url: `${base}/s?q={q}` },
+      examples: [{ q: "hello" }, { q: "world" }],
+      response: { extract: "results" },
+    });
     version = 2;
     const script = `import { call } from ${JSON.stringify(join(ROOT, "src", "execute.ts"))}; import { closeBrowser } from ${JSON.stringify(join(ROOT, "src", "browser.ts"))};
 const r = await call("xp", "search", { q: "cats" }, { minIntervalMs: 0 }); await closeBrowser(); console.log(JSON.stringify(r));`;
     const out = await new Promise<string>((resolve, reject) =>
-      execFile(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME }, timeout: 120_000 }, (err, stdout, stderr) =>
-        err && !stdout ? reject(new Error(stderr)) : resolve(stdout),
+      execFile(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "-e", script],
+        { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME }, timeout: 120_000 },
+        (err, stdout, stderr) => (err && !stdout ? reject(new Error(stderr)) : resolve(stdout)),
       ),
     );
     const r = JSON.parse(out.trim().split("\n").at(-1)!);
     assert.equal(r.ok, true, `${JSON.stringify(r)}\nstale mark: ${JSON.stringify(staleMark("xp", "search"))}`);
     assert.equal(staleMark("xp", "search"), undefined, `op marked stale: ${JSON.stringify(staleMark("xp", "search"))}`);
   });
-  // BUG (high): recapture learns from the call's own args whenever they are 3+ chars and distinct.
+  // Was a bug: recapture learns from the call's own args whenever they are 3+ chars and distinct.
   // An arg that equals a constant part of the request (q="search" vs the path /api/search) becomes a
   // slot there too; the replay with the same args passes, so the template is saved and every later
   // call with other args sends its query into the URL path.
@@ -869,11 +1140,22 @@ const r = await call("xp", "search", { q: "cats" }, { minIntervalMs: 0 }); await
     const base = await start((req, res) => {
       const u = new URL(req.url!, "http://x");
       const key = version === 1 ? "q" : "term";
-      if (u.pathname === "/s") return sendHtml(res, `<html><body><script>fetch("/api/search?${key}="+encodeURIComponent(new URLSearchParams(location.search).get("q")))</script></body></html>`);
-      if (u.pathname === "/api/search" && u.searchParams.has(key)) return sendJson(res, { results: [{ q: u.searchParams.get(key) }, { q: "x" }] });
+      if (u.pathname === "/s")
+        return sendHtml(
+          res,
+          `<html><body><script>fetch("/api/search?${key}="+encodeURIComponent(new URLSearchParams(location.search).get("q")))</script></body></html>`,
+        );
+      if (u.pathname === "/api/search" && u.searchParams.has(key))
+        return sendJson(res, { results: [{ q: u.searchParams.get(key) }, { q: "x" }] });
       sendJson(res, { error: "not found" }, 404);
     });
-    await addOperation({ site: "coll", op: "search", trigger: { url: `${base}/s?q={q}` }, examples: [{ q: "hello" }, { q: "world" }], response: { extract: "results" } });
+    await addOperation({
+      site: "coll",
+      op: "search",
+      trigger: { url: `${base}/s?q={q}` },
+      examples: [{ q: "hello" }, { q: "world" }],
+      response: { extract: "results" },
+    });
     version = 2;
     const healed = await call("coll", "search", { q: "search" }, fast);
     assert.equal(healed.ok, true, JSON.stringify(healed));
@@ -883,7 +1165,7 @@ const r = await call("xp", "search", { q: "cats" }, { minIntervalMs: 0 }); await
     assert.equal(later.tier, 1, `slots after the heal: ${JSON.stringify(loadSite("coll")!.site.operations[0]!.slots)}`);
     assert.deepEqual((later.data as unknown[])[0], { q: "cats" });
   });
-  // BUG (medium): the example-args replay only runs for "missing" drift. A REST API that answers 404
+  // Was a bug: the example-args replay only runs for "missing" drift. A REST API that answers 404
   // for an unknown entity named in the query (/api/user?name=nosuch) is drift, so the heal runs a
   // browser recapture; the site renders its own 404 page without firing the API, so the heal
   // "fails" and the op is marked stale for 30 min (tier 3 off) because a user does not exist.
@@ -904,12 +1186,22 @@ const r = await call("xp", "search", { q: "cats" }, { minIntervalMs: 0 }); await
       }
       sendJson(res, {}, 404);
     });
-    await addOperation({ site: "nf404", op: "user", trigger: { url: `${base}/u/{name}` }, examples: [{ name: "alice" }, { name: "bobby" }], response: { extract: "user" } });
+    await addOperation({
+      site: "nf404",
+      op: "user",
+      trigger: { url: `${base}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bobby" }],
+      response: { extract: "user" },
+    });
     const loads = pageLoads;
     const r = await call("nf404", "user", { name: "nosuchuser" }, fast);
     assert.equal(r.ok, false);
     assert.equal(r.class, "input", JSON.stringify(r));
-    assert.equal(staleMark("nf404", "user"), undefined, `an unknown user marked the op stale: ${JSON.stringify(staleMark("nf404", "user"))}`);
+    assert.equal(
+      staleMark("nf404", "user"),
+      undefined,
+      `an unknown user marked the op stale: ${JSON.stringify(staleMark("nf404", "user"))}`,
+    );
     assert.equal(pageLoads - loads, 0, "a browser run was spent on a not-found lookup");
   });
 });

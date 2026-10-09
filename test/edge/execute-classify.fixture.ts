@@ -54,14 +54,18 @@ export async function startFixture(): Promise<Fixture> {
       case "/bootstrap":
         return void res.writeHead(302, { location: "/needs-step", "set-cookie": "step=1; Path=/" }).end();
       case "/needs-step":
-        return /(^|; )step=1/.test(cookie) ? json(res, { items: [{ id: 1 }] }) : json(res, { error: "session not initialised" }, 400);
+        return /(^|; )step=1/.test(cookie)
+          ? json(res, { items: [{ id: 1 }] })
+          : json(res, { error: "session not initialised" }, 400);
       // rotates a cookie on every answer; the next call must present the latest value
       case "/rotate": {
         const want = `tok=${state.rotate}`;
         const had = state.rotate === 0 || cookie.includes(want);
         state.rotate++;
         const set = `tok=${state.rotate}; Path=/`;
-        return had ? json(res, { items: [{ n: state.rotate }] }, 200, { "set-cookie": set }) : json(res, { error: "stale token" }, 401, { "set-cookie": set });
+        return had
+          ? json(res, { items: [{ n: state.rotate }] }, 200, { "set-cookie": set })
+          : json(res, { error: "stale token" }, 401, { "set-cookie": set });
       }
       case "/away":
         return void res.writeHead(Number(u.searchParams.get("s") ?? 302), { location: `${otherBase}/landing` }).end();
@@ -70,29 +74,53 @@ export async function startFixture(): Promise<Fixture> {
       case "/to-login":
         return void res.writeHead(302, { location: "/accounts/login/?next=/api" }).end();
       case "/accounts/login/":
-        return void res.writeHead(200, { "content-type": "text/html" }).end("<!doctype html><title>Welcome</title><div id=app></div>");
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end("<!doctype html><title>Welcome</title><div id=app></div>");
       case "/enc": {
         const raw = Buffer.from(JSON.stringify({ items: [{ name: "café ☕" }] }));
         const e = u.searchParams.get("e")!;
-        const buf = e === "gzip" ? gzipSync(raw) : e === "br" ? brotliCompressSync(raw) : e === "deflate" ? deflateSync(raw) : zstdCompressSync(raw);
+        const buf =
+          e === "gzip"
+            ? gzipSync(raw)
+            : e === "br"
+              ? brotliCompressSync(raw)
+              : e === "deflate"
+                ? deflateSync(raw)
+                : zstdCompressSync(raw);
         return void res.writeHead(200, { "content-type": "application/json", "content-encoding": e }).end(buf);
       }
       case "/latin1":
         // "café" in ISO-8859-1
-        return void res.writeHead(200, { "content-type": "application/json; charset=iso-8859-1" }).end(Buffer.from('{"items":[{"name":"caf\xe9"}]}', "latin1"));
+        return void res
+          .writeHead(200, { "content-type": "application/json; charset=iso-8859-1" })
+          .end(Buffer.from('{"items":[{"name":"caf\xe9"}]}', "latin1"));
       case "/sjis":
         // "日本" in Shift_JIS
         return void res
           .writeHead(200, { "content-type": "text/html; charset=shift_jis" })
-          .end(Buffer.concat([Buffer.from("<html><body><ul><li class=i>"), Buffer.from([0x93, 0xfa, 0x96, 0x7b]), Buffer.from("</li></ul></body></html>")]));
+          .end(
+            Buffer.concat([
+              Buffer.from("<html><body><ul><li class=i>"),
+              Buffer.from([0x93, 0xfa, 0x96, 0x7b]),
+              Buffer.from("</li></ul></body></html>"),
+            ]),
+          );
       case "/bom":
-        return void res.writeHead(200, { "content-type": "application/json" }).end(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"items":[1]}')]));
+        return void res
+          .writeHead(200, { "content-type": "application/json" })
+          .end(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"items":[1]}')]));
       case "/huge": {
         const items = Array.from({ length: 50_000 }, (_, i) => ({ id: i, title: `item ${i}`, blurb: "x".repeat(60) }));
         return json(res, { items });
       }
       case "/fat-item":
-        return json(res, { items: [{ id: 1, text: "y".repeat(40_000) }, { id: 2, text: "short" }] });
+        return json(res, {
+          items: [
+            { id: 1, text: "y".repeat(40_000) },
+            { id: 2, text: "short" },
+          ],
+        });
       case "/stall":
         res.writeHead(200, { "content-type": "application/json" });
         res.write('{"items":[');
@@ -105,7 +133,9 @@ export async function startFixture(): Promise<Fixture> {
         return void res.writeHead(204).end();
       // "no results" answered as 204; the example query has results
       case "/maybe":
-        return u.searchParams.get("q") === "alice" ? json(res, { items: [{ q: "alice" }] }) : void res.writeHead(204).end();
+        return u.searchParams.get("q") === "alice"
+          ? json(res, { items: [{ q: "alice" }] })
+          : void res.writeHead(204).end();
       case "/r429":
         return json(res, { error: "Too Many Requests" }, 429, { "retry-after": u.searchParams.get("ra") ?? "120" });
       case "/gql":

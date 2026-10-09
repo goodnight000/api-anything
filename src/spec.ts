@@ -4,7 +4,10 @@ import { z } from "zod";
 /** A step through decoded request layers; see codec.ts. */
 const Step = z
   .string()
-  .regex(/^(path:\d+|(query|form)(\[\d+\])?:.+|header:.+|json:(\/.*)?|b64|body)$/, "step must be path:<i>, query:<k>, header:<n>, form:<k>, json:<pointer>, or body");
+  .regex(
+    /^(path:\d+|(query|form)(\[\d+\])?:.+|header:.+|json:(\/.*)?|b64|body)$/,
+    "step must be path:<i>, query:<k>, header:<n>, form:<k>, json:<pointer>, or body",
+  );
 
 export const RequestSchema = z.object({
   method: z.string(),
@@ -20,7 +23,10 @@ export const RequestSchema = z.object({
 export const SlotSchema = z
   .object({
     param: z.string().optional(),
-    ref: z.string().regex(/^(cookie|session):.+/, "ref must be cookie:<name> or session:<name>").optional(),
+    ref: z
+      .string()
+      .regex(/^(cookie|session):.+/, "ref must be cookie:<name> or session:<name>")
+      .optional(),
     at: z.array(Step).min(1),
     /** the leaf's text with `{param}` where the value goes (value is a substring of the leaf) */
     template: z.string().optional(),
@@ -79,7 +85,16 @@ export const ResponseSchema = z.object({
   xssiPrefix: z.string().optional(),
   extract: z.string().optional(),
   /** paths kept per item; `name=path~regex` keeps what the regex's group 1 finds in a string */
-  pick: z.array(z.string().refine((p) => !p.includes("~") || validRegex(p.slice(p.indexOf("~") + 1)), "the regex after ~ in pick must be valid")).optional(),
+  pick: z
+    .array(
+      z
+        .string()
+        .refine(
+          (p) => !p.includes("~") || validRegex(p.slice(p.indexOf("~") + 1)),
+          "the regex after ~ in pick must be valid",
+        ),
+    )
+    .optional(),
   /** key path -> type, for drift detection */
   shape: z.record(z.string(), z.string()).optional(),
   html: z.object({ items: z.string(), fields: z.record(z.string(), z.string()) }).optional(),

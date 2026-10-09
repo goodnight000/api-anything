@@ -20,8 +20,25 @@ try {
   const res = await client.callTool({ name: "call_operation", arguments: { site, op, args } });
   const r = JSON.parse(res.content[0].text);
   // call_operation sends a list of records as {columns, rows}; turn it back into objects to print.
-  const items = r.data?.columns ? r.data.rows.map((row) => Object.fromEntries(r.data.columns.map((c, i) => [c, row[i]]))) : [].concat(r.data ?? []);
-  console.log(JSON.stringify({ ok: r.ok, class: r.class, tier: r.tier, ms: r.ms, results: items.length, first: items.slice(0, 3), reason: r.reason, next: r.next }, null, 2));
+  const items = r.data?.columns
+    ? r.data.rows.map((row) => Object.fromEntries(r.data.columns.map((c, i) => [c, row[i]])))
+    : [].concat(r.data ?? []);
+  console.log(
+    JSON.stringify(
+      {
+        ok: r.ok,
+        class: r.class,
+        tier: r.tier,
+        ms: r.ms,
+        results: items.length,
+        first: items.slice(0, 3),
+        reason: r.reason,
+        next: r.next,
+      },
+      null,
+      2,
+    ),
+  );
   if (!r.ok) process.exitCode = 1;
 } finally {
   await client.close();

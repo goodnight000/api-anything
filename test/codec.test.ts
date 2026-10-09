@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fillTemplate, getAt, parseJson, setAt, walk } from "../src/codec.ts";
-import type { Request } from "../src/spec.ts";
+import { fillTemplate, getAt, parseJson, setAt, walk } from "../src/codec.js";
+import type { Request } from "../src/spec.js";
 
 const get = (url: string, headers: Record<string, string> = {}): Request => ({ method: "GET", url, headers });
 
@@ -12,7 +12,11 @@ test("path segments: get decodes, set encodes only that segment", () => {
   const r2 = setAt(r, ["path:3"], "NEWID");
   assert.equal(r2.url, "https://x.com/i/api/graphql/NEWID/UserByScreenName?x=1#frag");
   assert.equal(setAt(get("https://a.com/u/x"), ["path:1"], "a b/c").url, "https://a.com/u/a%20b%2Fc");
-  assert.equal(r.url, "https://x.com/i/api/graphql/Gb-d6r0vxPOADdG62OEBpQ/UserByScreenName?x=1#frag", "input not mutated");
+  assert.equal(
+    r.url,
+    "https://x.com/i/api/graphql/Gb-d6r0vxPOADdG62OEBpQ/UserByScreenName?x=1#frag",
+    "input not mutated",
+  );
 });
 
 test("query: raw pairs kept byte-identical, empty values preserved, missing key appended", () => {
@@ -56,7 +60,12 @@ test("X-like variables JSON in the query: set one leaf, keep key order and other
 });
 
 test("native type kept when a whole JSON leaf is replaced", () => {
-  const r: Request = { method: "POST", url: "https://a.com/g", headers: { "content-type": "application/json" }, body: '{"v":{"n":1,"s":"x","b":false}}' };
+  const r: Request = {
+    method: "POST",
+    url: "https://a.com/g",
+    headers: { "content-type": "application/json" },
+    body: '{"v":{"n":1,"s":"x","b":false}}',
+  };
   assert.equal(setAt(r, ["body", "json:/v/n"], 42).body, '{"v":{"n":42,"s":"x","b":false}}');
   assert.equal(setAt(r, ["body", "json:/v/n"], "42").body, '{"v":{"n":"42","s":"x","b":false}}');
   assert.equal(setAt(r, ["body", "json:/v/b"], true).body, '{"v":{"n":1,"s":"x","b":true}}');
@@ -70,10 +79,16 @@ test("19-digit snowflake ids never lose precision", () => {
   assert.equal(getAt(r, ["body", "json:/tweet_id"]), "2085462611575857621");
   // editing a sibling leaves the big number's bytes (and 1.50) untouched
   const r2 = setAt(r, ["body", "json:/reply/in_reply_to_tweet_id"], "1999999999999999999");
-  assert.equal(r2.body, '{"tweet_id":2085462611575857621,"reply":{"in_reply_to_tweet_id":"1999999999999999999"},"n":1.50}');
+  assert.equal(
+    r2.body,
+    '{"tweet_id":2085462611575857621,"reply":{"in_reply_to_tweet_id":"1999999999999999999"},"n":1.50}',
+  );
   // a bigint is written as raw digits, not rounded
   const r3 = setAt(r, ["body", "json:/tweet_id"], 2085462611575857699n);
-  assert.equal(r3.body, '{"tweet_id":2085462611575857699,"reply":{"in_reply_to_tweet_id":"2085462611575857621"},"n":1.50}');
+  assert.equal(
+    r3.body,
+    '{"tweet_id":2085462611575857699,"reply":{"in_reply_to_tweet_id":"2085462611575857621"},"n":1.50}',
+  );
   const leaf = walk(r).find((l) => l.at.join() === "body,json:/tweet_id")!;
   assert.deepEqual([leaf.value, leaf.type], ["2085462611575857621", "number"]);
   assert.deepEqual(parseJson('{"a":12345678901234567890,"b":5}'), { a: "12345678901234567890", b: 5 });
@@ -83,18 +98,35 @@ test("19-digit snowflake ids never lose precision", () => {
 function flightsRequest(origin: string, dest: string) {
   const inner = JSON.stringify([
     [null, null, null, "HKUJcc"],
-    [null, null, 1, null, [], 1, [1, 0, 0, 0], null, null, null, null, null, null,
+    [
+      null,
+      null,
+      1,
+      null,
+      [],
+      1,
+      [1, 0, 0, 0],
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
       [
         [[[[origin, 0]]], [[[dest, 0]]], null, 0, null, null, "2026-11-12"],
         [[[[dest, 0]]], [[[origin, 0]]], null, 0, null, null, "2026-11-16"],
-      ]],
+      ],
+    ],
   ]);
   const outer = JSON.stringify([null, inner]);
   const body = `f.req=${encodeURIComponent(outer)}&at=AFoo%3A1700000000000&`;
   return {
     method: "POST",
     url: "https://www.google.com/_/FlightsFrontendUi/data/GetShoppingResults?f.sid=-123&bl=boq_x&hl=en-US&_reqid=4521&rt=c",
-    headers: { "content-type": "application/x-www-form-urlencoded;charset=UTF-8", "x-goog-ext-259736195-jspb": '["en-US","US","USD"]' },
+    headers: {
+      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+      "x-goog-ext-259736195-jspb": '["en-US","US","USD"]',
+    },
     body,
   } satisfies Request;
 }
@@ -171,10 +203,17 @@ test("a JSON body labeled form-urlencoded (Algolia) is walked as JSON, so its va
   assert.deepEqual(leaf?.at, ["body", "json:/query"]);
   assert.equal(setAt(r, leaf!.at, "duckdb").body, '{"query":"duckdb","hitsPerPage":30}');
   const form: Request = { ...r, body: "q=sqlite&n=1" };
-  assert.deepEqual(walk(form).find((l) => l.value === "sqlite")?.at, ["form:q"], "a real form body still parses as pairs");
+  assert.deepEqual(
+    walk(form).find((l) => l.value === "sqlite")?.at,
+    ["form:q"],
+    "a real form body still parses as pairs",
+  );
 });
 
 test("fillTemplate: doubled braces are literal, so a learned leaf's own {name} text survives", () => {
-  assert.equal(fillTemplate('query{{repo(name:"{name}"){{name}}}}', { name: "linux" }), 'query{repo(name:"linux"){name}}');
+  assert.equal(
+    fillTemplate('query{{repo(name:"{name}"){{name}}}}', { name: "linux" }),
+    'query{repo(name:"linux"){name}}',
+  );
   assert.equal(fillTemplate("{{{name}}}", { name: "x" }), "{x}");
 });

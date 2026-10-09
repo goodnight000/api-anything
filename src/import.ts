@@ -12,10 +12,10 @@
  * hex() plus escaping of binary output.
  */
 import { execFileSync } from "node:child_process";
-import { pbkdf2Sync, createDecipheriv } from "node:crypto";
+import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { AUTH_COOKIE, siteOf } from "./session.js";
@@ -31,7 +31,10 @@ process.emitWarning = ((w: unknown, ...rest: unknown[]) => {
 
 // Loaded on first use, after the filter above: a static import would warn before this module body runs.
 let sqlite: typeof import("node:sqlite") | undefined;
-const openDb = (file: string) => new (sqlite ??= createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite")).DatabaseSync(file, { readOnly: true });
+const openDb = (file: string) => {
+  sqlite ??= createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+  return new sqlite.DatabaseSync(file, { readOnly: true });
+};
 
 /** One installed browser to scan. Tests inject these via API_ANYTHING_BROWSER_ROOTS. */
 export interface BrowserRoot {
@@ -71,7 +74,9 @@ export class AmbiguousProfile extends Error {
     readonly site: string,
     readonly candidates: ProfileChoice[],
   ) {
-    super(`${candidates.length} browser profiles are signed in to ${site}; pick one: ${candidates.map((c) => `"${c.profile}"${c.name || c.email ? ` (${[c.name, c.email].filter(Boolean).join(", ")})` : ""}`).join(", ")}`);
+    super(
+      `${candidates.length} browser profiles are signed in to ${site}; pick one: ${candidates.map((c) => `"${c.profile}"${c.name || c.email ? ` (${[c.name, c.email].filter(Boolean).join(", ")})` : ""}`).join(", ")}`,
+    );
     this.name = "AmbiguousProfile";
   }
 }
@@ -86,7 +91,13 @@ const CHROMIUM_MAC: [string, string][] = [
   ["Vivaldi", "Vivaldi"],
 ];
 // The Keychain service is "<x> Safe Storage" where x differs from the display name for a few.
-const SAFE_STORAGE: Record<string, string> = { Brave: "Brave", Edge: "Microsoft Edge", Arc: "Arc", Chromium: "Chromium", Vivaldi: "Vivaldi" };
+const SAFE_STORAGE: Record<string, string> = {
+  Brave: "Brave",
+  Edge: "Microsoft Edge",
+  Arc: "Arc",
+  Chromium: "Chromium",
+  Vivaldi: "Vivaldi",
+};
 
 /** Installed browsers on this OS, or the injected set for tests. */
 export function browserRoots(): BrowserRoot[] {
@@ -104,7 +115,12 @@ export function browserRoots(): BrowserRoot[] {
     if (existsSync(ff)) out.push({ name: "Firefox", family: "firefox", root: ff });
   } else if (process.platform === "linux") {
     const config = process.env.XDG_CONFIG_HOME || join(home, ".config");
-    for (const [name, rel] of [["Chrome", "google-chrome"], ["Chromium", "chromium"], ["Brave", "BraveSoftware/Brave-Browser"], ["Edge", "microsoft-edge"]] as const) {
+    for (const [name, rel] of [
+      ["Chrome", "google-chrome"],
+      ["Chromium", "chromium"],
+      ["Brave", "BraveSoftware/Brave-Browser"],
+      ["Edge", "microsoft-edge"],
+    ] as const) {
       const root = join(config, rel);
       // Linux v10 is AES under a fixed password; v11 (secret-tool) is not attempted here.
       if (existsSync(root)) out.push({ name, family: "chromium", root, password: "peanuts", iterations: 1 });
@@ -122,7 +138,9 @@ function keychainPassword(name: string): string {
   try {
     return execFileSync("security", ["find-generic-password", "-w", "-s", service], { encoding: "utf8" }).trim();
   } catch (e) {
-    throw new Error(`could not read the "${service}" password from the macOS Keychain (${(e as Error).message.split("\n")[0]})`);
+    throw new Error(
+      `could not read the "${service}" password from the macOS Keychain (${(e as Error).message.split("\n")[0]})`,
+    );
   }
 }
 
@@ -132,7 +150,8 @@ function withDb<T>(dbPath: string, fn: (db: DatabaseSync) => T): T {
   try {
     const copy = join(dir, basename(dbPath));
     copyFileSync(dbPath, copy);
-    for (const ext of ["-wal", "-journal", "-shm"]) if (existsSync(dbPath + ext)) copyFileSync(dbPath + ext, copy + ext);
+    for (const ext of ["-wal", "-journal", "-shm"])
+      if (existsSync(dbPath + ext)) copyFileSync(dbPath + ext, copy + ext);
     const db = openDb(copy);
     try {
       return fn(db);
@@ -186,7 +205,9 @@ function candidatesFor(site: string): Candidate[] {
 
 function safeReaddir(dir: string): string[] {
   try {
-    return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
   } catch {
     return [];
   }
@@ -195,7 +216,7 @@ function safeReaddir(dir: string): string[] {
 /** true when a cookie's host_key/host belongs to the site's registrable domain. */
 export const belongs = (host: string, site: string) => {
   const h = host.replace(/^\./, "").toLowerCase();
-  return h === site || h.endsWith("." + site) || siteOf(h) === site;
+  return h === site || h.endsWith(`.${site}`) || siteOf(h) === site;
 };
 
 function chromiumNames(dbPath: string, site: string): Set<string> {
@@ -241,13 +262,25 @@ function readChromium(root: BrowserRoot, dbPath: string, site: string): StoredCo
   const password = root.password ?? keychainPassword(root.name);
   const key = deriveKey(password, iterations);
   return withDb(dbPath, (db) => {
-    const metaRow = db.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value: string | number } | undefined;
+    const metaRow = db.prepare("SELECT value FROM meta WHERE key = 'version'").get() as
+      | { value: string | number }
+      | undefined;
     const metaVersion = metaRow ? Number(metaRow.value) : 0;
-    const stmt = db.prepare("SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite FROM cookies");
+    const stmt = db.prepare(
+      "SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite FROM cookies",
+    );
     // expires_utc (microseconds since 1601) overflows a JS number; read every integer as BigInt.
     stmt.setReadBigInts(true);
     const rows = stmt.all() as unknown as {
-      host_key: string; name: string; value: string; encrypted_value: Uint8Array; path: string; expires_utc: bigint; is_secure: bigint; is_httponly: bigint; samesite: bigint;
+      host_key: string;
+      name: string;
+      value: string;
+      encrypted_value: Uint8Array;
+      path: string;
+      expires_utc: bigint;
+      is_secure: bigint;
+      is_httponly: bigint;
+      samesite: bigint;
     }[];
     const out: StoredCookie[] = [];
     for (const r of rows) {
@@ -271,8 +304,17 @@ function readChromium(root: BrowserRoot, dbPath: string, site: string): StoredCo
 
 function readFirefox(dbPath: string, site: string): StoredCookie[] {
   return withDb(dbPath, (db) => {
-    const rows = db.prepare("SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite FROM moz_cookies").all() as {
-      host: string; name: string; value: string; path: string; expiry: number; isSecure: number; isHttpOnly: number; sameSite: number;
+    const rows = db
+      .prepare("SELECT host, name, value, path, expiry, isSecure, isHttpOnly, sameSite FROM moz_cookies")
+      .all() as {
+      host: string;
+      name: string;
+      value: string;
+      path: string;
+      expiry: number;
+      isSecure: number;
+      isHttpOnly: number;
+      sameSite: number;
     }[];
     return rows
       .filter((r) => belongs(r.host, site))
@@ -302,13 +344,16 @@ export function parsePin(text: string): ImportPin {
   return { browser: text.slice(0, i), profile: text.slice(i + 1) };
 }
 
-const matchesPin = (c: Candidate, pin: ImportPin) => c.profile === pin.profile && (!pin.browser || c.browser.toLowerCase() === pin.browser.toLowerCase());
+const matchesPin = (c: Candidate, pin: ImportPin) =>
+  c.profile === pin.profile && (!pin.browser || c.browser.toLowerCase() === pin.browser.toLowerCase());
 
 /** A chromium profile's display name and signed-in Google account, from the browser's "Local State". */
 function profileInfo(c: Candidate): { name?: string; email?: string } {
   if (c.family !== "chromium") return {};
   try {
-    const state = JSON.parse(readFileSync(join(c.root.root, "Local State"), "utf8")) as { profile?: { info_cache?: Record<string, { name?: string; user_name?: string }> } };
+    const state = JSON.parse(readFileSync(join(c.root.root, "Local State"), "utf8")) as {
+      profile?: { info_cache?: Record<string, { name?: string; user_name?: string }> };
+    };
     const info = state.profile?.info_cache?.[c.profile];
     return { ...(info?.name ? { name: info.name } : {}), ...(info?.user_name ? { email: info.user_name } : {}) };
   } catch {
@@ -323,21 +368,43 @@ function profileInfo(c: Candidate): { name?: string; email?: string } {
  * AmbiguousProfile with their display names and emails. Undefined when nothing is importable
  * (the caller falls back to the window flow).
  */
-export function importFromBrowsers(o: { url: string; loginCookies?: string[]; pin?: ImportPin }): ImportedSession | undefined {
+export function importFromBrowsers(o: {
+  url: string;
+  loginCookies?: string[];
+  pin?: ImportPin;
+}): ImportedSession | undefined {
   const site = siteOf(new URL(o.url).hostname.toLowerCase());
   let candidates = candidatesFor(site);
   if (o.pin) {
     candidates = candidates.filter((c) => matchesPin(c, o.pin!));
-    if (!candidates.length) throw new Error(`no browser profile "${o.pin.browser ? `${o.pin.browser}/` : ""}${o.pin.profile}" has cookies for ${site}`);
+    if (!candidates.length)
+      throw new Error(
+        `no browser profile "${o.pin.browser ? `${o.pin.browser}/` : ""}${o.pin.profile}" has cookies for ${site}`,
+      );
   }
-  const signedIn = candidates.filter((c) => (o.loginCookies?.length ? o.loginCookies.every((n) => c.names.has(n)) : [...c.names].some((n) => AUTH_COOKIE.test(n))));
+  const signedIn = candidates.filter((c) =>
+    o.loginCookies?.length
+      ? o.loginCookies.every((n) => c.names.has(n))
+      : [...c.names].some((n) => AUTH_COOKIE.test(n)),
+  );
   const pool = signedIn.length ? signedIn : candidates;
-  if (pool.length > 1) throw new AmbiguousProfile(site, pool.map((c) => ({ profile: `${c.browser}/${c.profile}`, ...profileInfo(c) })));
+  if (pool.length > 1)
+    throw new AmbiguousProfile(
+      site,
+      pool.map((c) => ({ profile: `${c.browser}/${c.profile}`, ...profileInfo(c) })),
+    );
   const chosen = pool[0];
   if (!chosen) return undefined;
-  const cookies = chosen.family === "chromium" ? readChromium(chosen.root, chosen.dbPath, site) : readFirefox(chosen.dbPath, site);
+  const cookies =
+    chosen.family === "chromium" ? readChromium(chosen.root, chosen.dbPath, site) : readFirefox(chosen.dbPath, site);
   if (!cookies.length) return undefined;
-  return { cookies, source: `${chosen.browser.toLowerCase()}:${chosen.profile}`, browser: chosen.browser, profile: chosen.profile, ...profileInfo(chosen) };
+  return {
+    cookies,
+    source: `${chosen.browser.toLowerCase()}:${chosen.profile}`,
+    browser: chosen.browser,
+    profile: chosen.profile,
+    ...profileInfo(chosen),
+  };
 }
 
 /* --------------------------------------------------------------- file import */

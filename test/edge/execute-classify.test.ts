@@ -1,6 +1,6 @@
 /**
- * Edge probes for execution, HTTP and classification. Tests that fail today assert the correct
- * behaviour, so they pass once the bug is fixed. Chrome-only probes skip without Chrome.
+ * Edge cases for execution, HTTP and classification. Each test is a regression for a bug that was
+ * fixed. Chrome-only tests skip without Chrome.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -10,15 +10,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chromeAvailable, closeBrowser } from "../../src/browser.ts";
-import { classify, judge, type Observed } from "../../src/classify.ts";
-import { call } from "../../src/execute.ts";
-import { capOutput } from "../../src/extract.ts";
-import { cookieHeaderFor, cookieValue, loadSession, saveSession } from "../../src/session.ts";
-import { OperationSchema, parseSite, type Operation } from "../../src/spec.ts";
-import { rememberTier, saveSite } from "../../src/store.ts";
-import type { StoredCookie } from "../../src/types.ts";
-import { startFixture, type Fixture } from "./execute-classify.fixture.ts";
+import { chromeAvailable, closeBrowser } from "../../src/browser.js";
+import { classify, judge, type Observed } from "../../src/classify.js";
+import { call } from "../../src/execute.js";
+import { capOutput } from "../../src/extract.js";
+import { cookieHeaderFor, cookieValue, loadSession, saveSession } from "../../src/session.js";
+import { type Operation, OperationSchema, parseSite } from "../../src/spec.js";
+import { rememberTier, saveSite } from "../../src/store.js";
+import type { StoredCookie } from "../../src/types.js";
+import { type Fixture, startFixture } from "./execute-classify.fixture.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-exec-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -41,7 +41,14 @@ beforeEach(() => {
 });
 
 const cookie = (name: string, value: string, domain: string, extra: Partial<StoredCookie> = {}): StoredCookie => ({
-  name, value, domain, path: "/", expires: -1, httpOnly: false, secure: false, ...extra,
+  name,
+  value,
+  domain,
+  path: "/",
+  expires: -1,
+  httpOnly: false,
+  secure: false,
+  ...extra,
 });
 
 /** A read op on the fixture: GET <path>, extract "items". */
@@ -75,28 +82,47 @@ describe("tier 1 cookies and redirects", () => {
     fx.state.rotate = 0;
     const a = await call("rot", "list", {}, t1);
     assert.equal(a.ok, true, JSON.stringify(a));
-    assert.ok(loadSession("rot").cookies.some((c) => c.name === "tok" && c.value === "1"), "tok=1 from the answer is in the jar");
+    assert.ok(
+      loadSession("rot").cookies.some((c) => c.name === "tok" && c.value === "1"),
+      "tok=1 from the answer is in the jar",
+    );
     const b = await call("rot", "list", {}, t1);
     assert.equal(b.ok, true, JSON.stringify(b));
   });
 
   test("cross-origin redirects drop authorization, ref'd headers and cookies; 303 turns POST into GET", async () => {
-    site("xo", {
-      ...rd("me", "/away?s=302"),
-      request: { method: "GET", url: `${fx.base}/away?s=302`, headers: { authorization: "", "x-csrf-token": "", "x-keep": "1" } },
-      slots: [
-        { ref: "session:authorization", at: ["header:authorization"] },
-        { ref: "cookie:ct0", at: ["header:x-csrf-token"] },
-      ],
-      response: { format: "json" },
-    }, {
-      name: "post307",
-      readOnly: false,
-      request: { method: "POST", url: `${fx.base}/away?s=307`, headers: { authorization: "Bearer PUBLIC-LITERAL", "content-type": "application/json" }, body: "{}" },
-      trigger: { url: `${fx.base}/` },
-      response: { format: "json" },
+    site(
+      "xo",
+      {
+        ...rd("me", "/away?s=302"),
+        request: {
+          method: "GET",
+          url: `${fx.base}/away?s=302`,
+          headers: { authorization: "", "x-csrf-token": "", "x-keep": "1" },
+        },
+        slots: [
+          { ref: "session:authorization", at: ["header:authorization"] },
+          { ref: "cookie:ct0", at: ["header:x-csrf-token"] },
+        ],
+        response: { format: "json" },
+      },
+      {
+        name: "post307",
+        readOnly: false,
+        request: {
+          method: "POST",
+          url: `${fx.base}/away?s=307`,
+          headers: { authorization: "Bearer PUBLIC-LITERAL", "content-type": "application/json" },
+          body: "{}",
+        },
+        trigger: { url: `${fx.base}/` },
+        response: { format: "json" },
+      },
+    );
+    saveSession("xo", {
+      cookies: [cookie("ct0", "SECRET-CSRF-VALUE-123", "127.0.0.1")],
+      values: { authorization: "Bearer SECRET-BEARER" },
     });
-    saveSession("xo", { cookies: [cookie("ct0", "SECRET-CSRF-VALUE-123", "127.0.0.1")], values: { authorization: "Bearer SECRET-BEARER" } });
     const r = await call("xo", "me", {}, t1);
     assert.equal(r.ok, true, JSON.stringify(r));
     const h = fx.otherHits[0]!.headers;
@@ -109,7 +135,11 @@ describe("tier 1 cookies and redirects", () => {
     const w = await call("xo", "post307", {}, { ...t1, allowWrites: true });
     assert.equal(w.ok, true, JSON.stringify(w));
     assert.equal(fx.otherHits[0]!.method, "POST", "307 keeps the method");
-    assert.equal(fx.otherHits[0]!.headers.authorization, undefined, "even a literal authorization is dropped cross-origin");
+    assert.equal(
+      fx.otherHits[0]!.headers.authorization,
+      undefined,
+      "even a literal authorization is dropped cross-origin",
+    );
   });
 
   test("a redirect loop ends with a non-ok answer instead of hanging", async () => {
@@ -143,7 +173,10 @@ describe("tier 1 cookies and redirects", () => {
   test("a cookie: ref never takes another site's cookie under a multi-label public suffix (co.uk, github.io)", () => {
     // browser.ts siteCookies keeps every cookie whose domain ends in siteOf(host); for bbc.co.uk that is ".co.uk",
     // so the shared profile's argos.co.uk cookies land in bbc's jar
-    const jar = [cookie("csrftoken", "ARGOS-SECRET", ".argos.co.uk", { secure: true }), cookie("csrftoken", "ALICE-SECRET", "alice.github.io", { secure: true })];
+    const jar = [
+      cookie("csrftoken", "ARGOS-SECRET", ".argos.co.uk", { secure: true }),
+      cookie("csrftoken", "ALICE-SECRET", "alice.github.io", { secure: true }),
+    ];
     assert.equal(cookieValue(jar, "csrftoken", "https://api.bbc.co.uk/x"), undefined);
     assert.equal(cookieValue(jar, "csrftoken", "https://mallory.github.io/api"), undefined);
   });
@@ -167,7 +200,11 @@ describe("response bodies", () => {
   });
 
   test("the declared charset is honoured (ISO-8859-1 JSON, Shift_JIS HTML)", async () => {
-    site("cs", rd("latin", "/latin1"), rd("sjis", "/sjis", { response: { format: "html", html: { items: "li.i", fields: { t: "" } } } }));
+    site(
+      "cs",
+      rd("latin", "/latin1"),
+      rd("sjis", "/sjis", { response: { format: "html", html: { items: "li.i", fields: { t: "" } } } }),
+    );
     const l = await call("cs", "latin", {}, t1);
     const s = await call("cs", "sjis", {}, t1);
     assert.deepEqual({ latin: l.data, sjis: s.data }, { latin: [{ name: "café" }], sjis: [{ t: "日本" }] });
@@ -187,7 +224,10 @@ describe("response bodies", () => {
     const r = await call("fat", "f", {}, t1);
     assert.equal(r.ok, true);
     assert.ok(r.truncated);
-    assert.ok(Array.isArray(r.data) && r.data.length >= 1, `data: ${JSON.stringify(r.data).slice(0, 80)} / ${r.truncated}`);
+    assert.ok(
+      Array.isArray(r.data) && r.data.length >= 1,
+      `data: ${JSON.stringify(r.data).slice(0, 80)} / ${r.truncated}`,
+    );
   });
 
   test("capping a long string keeps a prefix of the string itself, not of its JSON encoding", () => {
@@ -198,7 +238,10 @@ describe("response bodies", () => {
   });
 
   test("capping an object with a big nested array returns a JSON value, not cut JSON text", () => {
-    const value = { user: { id: 1 }, timeline: Array.from({ length: 2000 }, (_, i) => ({ id: i, text: "tweet text here" })) };
+    const value = {
+      user: { id: 1 },
+      timeline: Array.from({ length: 2000 }, (_, i) => ({ id: i, text: "tweet text here" })),
+    };
     const { data } = capOutput(value);
     assert.equal(typeof data, "object", `got a ${typeof data}: ${JSON.stringify(data).slice(0, 60)}`);
   });
@@ -257,13 +300,21 @@ describe("timeouts and network errors", () => {
         s.close(() => r(p));
       });
     });
-    saveSite(parseSite({ name: "down", baseUrl: `http://127.0.0.1:${port}`, operations: [{ ...rd("d", "/"), request: { method: "GET", url: `http://127.0.0.1:${port}/x`, headers: {} } }] }));
+    saveSite(
+      parseSite({
+        name: "down",
+        baseUrl: `http://127.0.0.1:${port}`,
+        operations: [{ ...rd("d", "/"), request: { method: "GET", url: `http://127.0.0.1:${port}/x`, headers: {} } }],
+      }),
+    );
     const r = await call("down", "d", {}, t1);
     assert.equal(r.class, "error");
     assert.match(r.reason ?? "", /ECONNREFUSED|refused/i, `reason: ${r.reason}`);
 
     const dns = (async () => {
-      throw new TypeError("fetch failed", { cause: Object.assign(new Error("getaddrinfo ENOTFOUND api.nowhere.test"), { code: "ENOTFOUND" }) });
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(new Error("getaddrinfo ENOTFOUND api.nowhere.test"), { code: "ENOTFOUND" }),
+      });
     }) as typeof fetch;
     const d = await call("down", "d", {}, { ...t1, fetchImpl: dns });
     assert.match(d.reason ?? "", /ENOTFOUND/, `reason: ${d.reason}`);
@@ -292,7 +343,12 @@ const gqlOp = (over: Record<string, unknown> = {}): Operation =>
     readOnly: true,
     ...over,
   });
-const obs = (status: number, body: string, ct = "application/json", headers: Record<string, string> = {}): Observed => ({
+const obs = (
+  status: number,
+  body: string,
+  ct = "application/json",
+  headers: Record<string, string> = {},
+): Observed => ({
   status,
   headers: { "content-type": ct, ...headers },
   body,
@@ -302,25 +358,54 @@ describe("classification", () => {
   test("challenge pages from every listed vendor are blocked, whatever the status", () => {
     const o = gqlOp();
     const cases: [string, Observed][] = [
-      ["Cloudflare 403", obs(403, "<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><script>window._cf_chl_opt={}</script></body></html>", "text/html")],
+      [
+        "Cloudflare 403",
+        obs(
+          403,
+          "<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><script>window._cf_chl_opt={}</script></body></html>",
+          "text/html",
+        ),
+      ],
       ["Cloudflare cf-mitigated", obs(403, "", "text/html", { "cf-mitigated": "challenge" })],
       ["Cloudflare 503", obs(503, "<title>Just a moment...</title>", "text/html")],
       ["Cloudflare WAF", obs(403, "<title>Attention Required! | Cloudflare</title>", "text/html")],
-      ["Akamai", obs(403, '<HTML><HEAD><TITLE>Access Denied</TITLE></HEAD><BODY>Reference #18.1 <a href="https://errors.edgesuite.net/18.1">', "text/html")],
+      [
+        "Akamai",
+        obs(
+          403,
+          '<HTML><HEAD><TITLE>Access Denied</TITLE></HEAD><BODY>Reference #18.1 <a href="https://errors.edgesuite.net/18.1">',
+          "text/html",
+        ),
+      ],
       ["DataDome JSON", obs(403, '{"url":"https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAA"}')],
       ["PerimeterX JSON", obs(403, '{"appId":"PXu6b0qd2S","blockScript":"/u6b0qd2S/captcha/captcha.js","vid":"x"}')],
       ["PerimeterX 200 page", obs(200, "<html><body><div id=px-captcha></div>Press & Hold</body></html>", "text/html")],
-      ["reCAPTCHA 200 interstitial", obs(200, '<html><div class="g-recaptcha" data-sitekey="x"></div></html>', "text/html")],
+      [
+        "reCAPTCHA 200 interstitial",
+        obs(200, '<html><div class="g-recaptcha" data-sitekey="x"></div></html>', "text/html"),
+      ],
     ];
     for (const [name, r] of cases) assert.equal(classify(o, r).class, "blocked", name);
-    assert.equal(classify(o, obs(429, "<title>Access denied | Error 1015</title> You are being rate limited", "text/html")).class, "rate");
+    assert.equal(
+      classify(o, obs(429, "<title>Access denied | Error 1015</title> You are being rate limited", "text/html")).class,
+      "rate",
+    );
   });
 
   test("Imperva/Incapsula and Kasada interstitials are blocked (tier escalation), not drift or rate", () => {
     const o = gqlOp();
-    const incapsula = obs(200, '<html><head><META NAME="robots" CONTENT="noindex,nofollow"><script src="/_Incapsula_Resource?SWJIYLWA=5074a744"></script></head><body><iframe src="/_Incapsula_Resource?CWUDNSAI=9">Request unsuccessful. Incapsula incident ID: 1</iframe></body></html>', "text/html");
+    const incapsula = obs(
+      200,
+      '<html><head><META NAME="robots" CONTENT="noindex,nofollow"><script src="/_Incapsula_Resource?SWJIYLWA=5074a744"></script></head><body><iframe src="/_Incapsula_Resource?CWUDNSAI=9">Request unsuccessful. Incapsula incident ID: 1</iframe></body></html>',
+      "text/html",
+    );
     assert.equal(classify(o, incapsula).class, "blocked", "Imperva");
-    const kasada = obs(429, '<html><script src="/149e9513-01fa-4fb0-aad4-566afd725d1b/2d206a39-8ed7-437e-a3be-862e0f06eea3/ips.js"></script></html>', "text/html", { "x-kpsdk-ct": "abc" });
+    const kasada = obs(
+      429,
+      '<html><script src="/149e9513-01fa-4fb0-aad4-566afd725d1b/2d206a39-8ed7-437e-a3be-862e0f06eea3/ips.js"></script></html>',
+      "text/html",
+      { "x-kpsdk-ct": "abc" },
+    );
     assert.equal(classify(o, kasada).class, "blocked", "Kasada");
   });
 
@@ -331,7 +416,10 @@ describe("classification", () => {
   });
 
   test("5xx is error (retry hint), 4xx without markers is not auth", () => {
-    assert.equal(classify(gqlOp(), obs(503, "Service Unavailable", "text/plain", { "retry-after": "30" })).class, "error");
+    assert.equal(
+      classify(gqlOp(), obs(503, "Service Unavailable", "text/plain", { "retry-after": "30" })).class,
+      "error",
+    );
     assert.equal(classify(gqlOp(), obs(500, '{"error":"internal"}')).class, "error");
     assert.equal(classify(gqlOp(), obs(403, '{"message":"CSRF token missing or incorrect."}')).class, "auth");
     assert.equal(classify(gqlOp(), obs(401, "")).class, "auth");
@@ -339,7 +427,11 @@ describe("classification", () => {
 
   test("JSON served as text/html is still JSON; an HTML login page where JSON was expected is auth", () => {
     assert.equal(classify(gqlOp(), obs(200, '{"data":{"user":{"id":1}}}', "text/html; charset=utf-8")).class, "ok");
-    assert.equal(classify(gqlOp(), obs(200, '<!doctype html><form><input name=u><input type="password"></form>', "text/html")).class, "auth");
+    assert.equal(
+      classify(gqlOp(), obs(200, '<!doctype html><form><input name=u><input type="password"></form>', "text/html"))
+        .class,
+      "auth",
+    );
   });
 
   test("GraphQL errors with null data map to rate/auth/drift/error", () => {
@@ -351,18 +443,33 @@ describe("classification", () => {
 
   test("GraphQL partial data: errors next to a null extract target are not a successful null", () => {
     const o = gqlOp();
-    const rate = judge(o, obs(200, '{"data":{"user":null},"errors":[{"message":"Rate limit exceeded","path":["user"]}]}'));
+    const rate = judge(
+      o,
+      obs(200, '{"data":{"user":null},"errors":[{"message":"Rate limit exceeded","path":["user"]}]}'),
+    );
     assert.equal(rate.class, "rate", JSON.stringify(rate));
-    const nf = judge(o, obs(200, `{"data":{"user":null},"errors":[{"type":"NOT_FOUND","path":["user"],"message":"Could not resolve to a User with the login of 'zz'."}]}`));
+    const nf = judge(
+      o,
+      obs(
+        200,
+        `{"data":{"user":null},"errors":[{"type":"NOT_FOUND","path":["user"],"message":"Could not resolve to a User with the login of 'zz'."}]}`,
+      ),
+    );
     assert.notEqual(nf.class, "ok", JSON.stringify(nf));
     // errors on an unrelated field with the target present: still ok
-    assert.equal(judge(o, obs(200, '{"data":{"user":{"id":1},"ads":null},"errors":[{"message":"x","path":["ads"]}]}')).class, "ok");
+    assert.equal(
+      judge(o, obs(200, '{"data":{"user":{"id":1},"ads":null},"errors":[{"message":"x","path":["ads"]}]}')).class,
+      "ok",
+    );
   });
 
   test("a write answered 2xx is ok even when the landing page has a password field (it ran)", () => {
     const w = gqlOp({ readOnly: false, response: { format: "json" } });
     assert.equal(classify(w, obs(204, "", "")).class, "ok");
-    const saved = judge(w, obs(200, '<!doctype html><h1>Settings saved</h1><form><input type="password" name="new"></form>', "text/html"));
+    const saved = judge(
+      w,
+      obs(200, '<!doctype html><h1>Settings saved</h1><form><input type="password" name="new"></form>', "text/html"),
+    );
     assert.equal(saved.class, "ok", JSON.stringify(saved));
   });
 });
@@ -430,7 +537,12 @@ describe("allowWrites at every entry point", () => {
     site("wr", rd("read", "/plain"), {
       name: "follow",
       readOnly: false,
-      request: { method: "POST", url: `${fx.base}/api/follow`, headers: { "content-type": "application/json" }, body: '{"id":"1"}' },
+      request: {
+        method: "POST",
+        url: `${fx.base}/api/follow`,
+        headers: { "content-type": "application/json" },
+        body: '{"id":"1"}',
+      },
       trigger: { url: `${fx.base}/` },
       response: { format: "json" },
     });
@@ -439,14 +551,14 @@ describe("allowWrites at every entry point", () => {
     writeSite();
     const r = await call("wr", "follow", {}, t1);
     assert.equal(r.class, "refused");
-    const { heal } = await import("../../src/execute.ts");
+    const { heal } = await import("../../src/execute.js");
     assert.equal((await heal("wr", "follow", {}, { ...t1, allowWrites: true })).class, "refused");
     assert.equal(fx.hits.length, 0);
   });
 
   test("MCP: writes hidden and refused unless the server allows them", async () => {
     writeSite();
-    const { createServer: mcp } = await import("../../src/mcp.ts");
+    const { createServer: mcp } = await import("../../src/mcp.js");
     const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
     const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
     const [a, b] = InMemoryTransport.createLinkedPair();
@@ -464,7 +576,10 @@ describe("allowWrites at every entry point", () => {
 
   const cli = (...args: string[]) =>
     new Promise<{ code: number; out: string; err: string }>((resolve) => {
-      const p = spawn(process.execPath, ["--import", "tsx", join(ROOT, "src/cli.ts"), ...args], { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } });
+      const p = spawn(process.execPath, ["--import", "tsx", join(ROOT, "src/cli.ts"), ...args], {
+        cwd: ROOT,
+        env: { ...process.env, API_ANYTHING_HOME: HOME },
+      });
       let out = "";
       let err = "";
       p.stdout.on("data", (d) => (out += d));
@@ -482,7 +597,10 @@ describe("allowWrites at every entry point", () => {
         { ref: "cookie:ct0", at: ["header:x-csrf-token"] },
       ],
     });
-    saveSession("dry", { cookies: [cookie("ct0", "LIVE-CSRF-SECRET-1", "127.0.0.1")], values: { authorization: "Bearer LIVE-BEARER-SECRET" } });
+    saveSession("dry", {
+      cookies: [cookie("ct0", "LIVE-CSRF-SECRET-1", "127.0.0.1")],
+      values: { authorization: "Bearer LIVE-BEARER-SECRET" },
+    });
     const w = await cli("call", "wr", "follow");
     assert.equal(w.code, 1);
     assert.match(w.out, /refused/);
@@ -511,7 +629,12 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     site("prg", {
       name: "follow",
       readOnly: false,
-      request: { method: "POST", url: `${fx.base}/api/follow`, headers: { "content-type": "application/json" }, body: '{"id":"1"}' },
+      request: {
+        method: "POST",
+        url: `${fx.base}/api/follow`,
+        headers: { "content-type": "application/json" },
+        body: '{"id":"1"}',
+      },
       trigger: { url: `${fx.base}/` },
       response: { format: "json" },
     });
@@ -540,14 +663,21 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
       await new Promise((r) => setTimeout(r, 8000)); // an MCP server stays up with Chrome open
       process.exit(0);
     `;
-    const p = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", holder], { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } });
+    const p = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", holder], {
+      cwd: ROOT,
+      env: { ...process.env, API_ANYTHING_HOME: HOME },
+    });
     try {
       await new Promise<void>((resolve, reject) => {
         p.stdout.on("data", (d) => (/HOLDER true/.test(String(d)) ? resolve() : reject(new Error(String(d)))));
         p.on("close", () => reject(new Error("holder exited")));
       });
       const r = await call("two", "l", {}, { minIntervalMs: 0 });
-      assert.equal(r.ok, true, `${r.class}: ${(r.reason ?? "").slice(0, 200)} (reason ${(r.reason ?? "").length} chars)`);
+      assert.equal(
+        r.ok,
+        true,
+        `${r.class}: ${(r.reason ?? "").slice(0, 200)} (reason ${(r.reason ?? "").length} chars)`,
+      );
     } finally {
       p.kill();
     }
@@ -563,7 +693,11 @@ test("two processes merging browser cookies into one jar lose nothing", async ()
   `;
   const run = (tag: string) =>
     new Promise<number>((resolve) => {
-      const p = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script(tag)], { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME }, stdio: "inherit" });
+      const p = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script(tag)], {
+        cwd: ROOT,
+        env: { ...process.env, API_ANYTHING_HOME: HOME },
+        stdio: "inherit",
+      });
       p.on("close", (c) => resolve(c ?? -1));
     });
   const codes = await Promise.all([run("a"), run("b")]);
@@ -579,7 +713,11 @@ test("two processes writing state.json (tier memory, stale marks) lose nothing",
   `;
   const run = (tag: string) =>
     new Promise<number>((resolve) => {
-      const p = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script(tag)], { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME }, stdio: "inherit" });
+      const p = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script(tag)], {
+        cwd: ROOT,
+        env: { ...process.env, API_ANYTHING_HOME: HOME },
+        stdio: "inherit",
+      });
       p.on("close", (c) => resolve(c ?? -1));
     });
   assert.deepEqual(await Promise.all([run("a"), run("b")]), [0, 0]);
