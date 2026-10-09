@@ -778,8 +778,12 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
    * the seal first: its document unloads here, what it sends last fails, and the page that is
    * closed afterwards has nothing left to send. A tab of the run that has no page (Playwright has
    * not reported it, or its opener was closed by the time it did) is closed through the browser.
-   * Pages keep being adopted meanwhile, and this goes round until there is nothing new. Every
-   * step is bounded: a page that will not be emptied or closed does not hold the run.
+   * Pages keep being adopted meanwhile, and this goes round until there is nothing new, for 15 s
+   * at most. Within a round each wait has its own 5 s: for the adoptions and taps under way, for
+   * a page to be emptied and for its tap's answers, for the browser's list of tabs, for a stray
+   * to close; and after the rounds, for each page's close(). The wait for the guard's requests
+   * in flight ends with the rounds. A page that will not be emptied or closed does not hold the
+   * run: the caller then leaves the guards in place.
    */
   const closePages = async (): Promise<boolean> => {
     if (guard) {

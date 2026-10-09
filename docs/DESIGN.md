@@ -177,7 +177,8 @@ route is context-wide) are dropped too. A new tab's first navigation (a `target=
 navigation commits, so the guard cannot ask whose request it is. The browser reports each new tab
 with the tab that opened it, and that is recorded as it happens (the browser forgets it once
 the opener is closed, as does Playwright's `opener()`), on a DevTools session of the browser itself,
-which outlives every page; the record is brought up to date before each such decision. The request
+which outlives every page. The record holds open tabs only (when one closes, the tabs it opened
+pass to the tab that opened it), and is brought up to date before each such decision. The request
 is judged as the run's own
 unless the run has no stray tab, one its pages opened that it does not hold yet, and
 an aborted one joins the capture once its page shows the tab was the run's. Two runs that open a
@@ -205,9 +206,11 @@ when that session detaches. So when a guarded run ends, each of its pages is fir
 `about:blank` with its session and the guards still live, and everything it sends from then on
 fails; what is closed afterwards has nothing left to send. What the guard itself would stop is
 still recorded as aborted then, so a write a page only sends on leaving can be learned; the rest of
-a closing page's traffic is stopped without a record. Emptying a page and closing it each
-have a bound (5 s: a hung renderer answers nothing, and neither `evaluate()` nor `close()` has a
-timeout of its own), and the guards are lifted only when every page of the run and every stray tab
+a closing page's traffic is stopped without a record. Every wait in that sequence has a bound,
+since a hung renderer answers nothing and neither `evaluate()` nor `close()` has a timeout of its
+own: 5 s each for a page to be emptied, for its session to answer, for the browser's list of tabs
+(also when a new tab's owner is decided: no answer counts as a possible owner) and for a page or a
+stray tab to close, and 15 s for the rounds together. The guards are lifted only when every page of the run and every stray tab
 is known to be closed. If one is not, the browser is still released, and both guards stay until the
 last of them is gone: the route, which acts on the run's pages only, and the socket guard, although
 it drops every run's sends. A page that is still open can still write, and time passing is no sign
