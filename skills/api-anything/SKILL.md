@@ -117,6 +117,16 @@ don't capture pages the user didn't ask for.
    - Example values must be at least 3 characters and distinct from each other, and they must
      appear in the request. `add` fails if an example is not in the chosen request: pick another
      request rather than dropping the param.
+   - A shorter value (a country code, a page number, a small enum) needs both examples, with
+     different values: `--example country=US --example2 country=CA`. It is placed only where a
+     whole value in the request equals it and becomes the other one in the second run, so a
+     `gl=US` that rides on every request is left alone. Given once, a short value is refused.
+   - To teach a paged operation, capture two different pages, with the page number as the example:
+     ```
+     api-anything add site list --trigger "https://site.com/list?q={q}&page={page}" \
+       --example q=kittens --example page=2 --example2 q=kittens --example2 page=3
+     ```
+     Use pages 2 and 3: many sites leave the page number out of the first page's request.
    - An op with no args (a feed, a list) needs `--match path=/api/feed` to say which request.
    - If `add` warns that the match is ambiguous, or picks the wrong request, run `capture` again
      and use `add --from <captureId> --pick-request <id>`.

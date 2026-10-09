@@ -496,8 +496,8 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   const existing = loadSite(i.site)?.site;
   const [ex1, ex2] = i.examples;
   // before any browser run: a too-short or duplicate example would only fail after it
-  if (ex1) checkExamples(ex1, "example");
-  if (ex2) checkExamples(ex2, "example 2");
+  if (ex1) checkExamples(ex1, "example", ex2);
+  if (ex2) checkExamples(ex2, "example 2", ex1);
   for (const c of [i.from?.capture, i.from2]) {
     if (i.write && c && !c.write)
       throw new Error(

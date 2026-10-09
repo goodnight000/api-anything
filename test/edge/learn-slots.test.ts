@@ -3,7 +3,16 @@
  * spec or were stored under the wrong name, and params the second example proves or disproves.
  */
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, test } from "node:test";
+
+const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-slots-"));
+process.env.API_ANYTHING_HOME = HOME;
+after(() => rmSync(HOME, { recursive: true, force: true }));
+
+import { addOperation, type CaptureFile } from "../../src/heal.js";
 import { buildRequest } from "../../src/http.js";
 import { learnOperation } from "../../src/learn.js";
 import type { Exchange, StoredCookie } from "../../src/types.js";
@@ -58,7 +67,7 @@ const cookie = (name: string, value: string): StoredCookie => ({
   secure: false,
 });
 
-/* ------------------------------------------------------- 1: repeated keys */
+/* ------------------------------------------------------- repeated keys */
 
 test("a JSON object that repeats a key is refused: its later occurrence could not be blanked", () => {
   assert.throws(
@@ -81,7 +90,7 @@ test("a JSON object that repeats a key is refused: its later occurrence could no
   );
 });
 
-/* ------------------------------------------------------------- 5: public */
+/* ------------------------------------------------------------- public */
 
 test("a name the caller marked public is a constant in every pass", () => {
   const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
@@ -109,7 +118,7 @@ test("a name the caller marked public is a constant in every pass", () => {
   assert.deepEqual([r.headers["x-app"], r.headers["x-ctx"]], [SID, `v1:${SID}`]);
 });
 
-/* ------------------------------------------------ 2: a hole has no transform */
+/* ------------------------------------------------ a hole has no transform */
 
 test("a cookie sitting unquoted or URL-decoded next to an arg in one leaf is refused, not left literal", () => {
   const bare = "ajax:4815162342108151623";
@@ -141,7 +150,7 @@ test("a cookie sitting unquoted or URL-decoded next to an arg in one leaf is ref
   }
 });
 
-/* --------------------------------------------------- 3: one name, one value */
+/* --------------------------------------------------- one name, one value */
 
 test("a stored value found inside a longer leaf never takes over another credential's name", () => {
   // storage calls A "token"; the request's own token field holds B, and A rides inside other leaves
@@ -160,7 +169,7 @@ test("a stored value found inside a longer leaf never takes over another credent
   }
 });
 
-/* ------------------------------------------------------- 6: no overlapping */
+/* ------------------------------------------------------- no overlapping */
 
 test("a ref for a whole container yields to the params and refs inside it", () => {
   const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
@@ -210,7 +219,7 @@ test("a ref for a whole container yields to the params and refs inside it", () =
   assert.deepEqual(whole.sessionValues, { "op/state": state });
 });
 
-/* -------------------------------------------------- 4: cached query hashes */
+/* -------------------------------------------------- cached query hashes */
 
 test("a persisted-query hash the app caches in storage stays a volatile anchor at any length", () => {
   const hash = "e0f2a1b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f";
@@ -271,7 +280,7 @@ test("learning refuses a request it could not clear of a live value, in any enco
   assert.equal(op.request.headers["x-ctx"], "v1:secret123");
 });
 
-/* ------------------------------------------- 7: what example 2 disproves */
+/* ------------------------------------------- what example 2 disproves */
 
 const noSession = { cookies: [] as StoredCookie[], values: {} as Record<string, string> };
 const answer = (q: string) => ({ results: [{ title: `${q} one` }, { title: `${q} two` }] });
@@ -318,4 +327,91 @@ test("a param whose every place the second example disproves is a failure to lea
     () => learn(run(), [{ q: "search" }, { q: "kitten" }], { exchanges2: run() }),
     /example 2 disproves "q": path:1 is "search" in both runs.*would change nothing/,
   );
+});
+
+/* ------------------------------------------------------ short examples */
+
+// The visitor's own country rides along as gl=US on every request, whatever country is asked for.
+const byCountry = (c: string) => [
+  xhr({ url: "https://api.site.test/v1/geo?gl=US" }, { stores: Array(60).fill({ city: "Springfield", open: true }) }),
+  xhr({ url: `https://api.site.test/v1/top?country=${c}&gl=US&lang=en-${c}` }, answer(`top in ${c}`)),
+];
+
+test("a short example is placed where a whole leaf equals it and follows a different second example", () => {
+  const { operation: op, exchange } = learn(byCountry("US"), [{ q: "US" }, { q: "CA" }], {
+    exchanges2: byCountry("CA"),
+  });
+  assert.equal(new URL(exchange.request.url).pathname, "/v1/top", "the request whose leaf follows, not the bigger one");
+  assert.deepEqual(op.slots, [{ param: "q", at: ["query:country"] }]);
+  assert.equal(
+    buildRequest(op, { q: "DE" }, noSession).url,
+    "https://api.site.test/v1/top?country=DE&gl=US&lang=en-US",
+  );
+
+  // a page number: a JSON number beside another 2 that is no page
+  const page = (n: number) => [post(JSON.stringify({ q: "kittens", page: n, size: 2 }))];
+  const paged = learn(
+    page(2),
+    [
+      { q: "kittens", page: 2 },
+      { q: "kittens", page: 3 },
+    ],
+    { exchanges2: page(3) },
+  );
+  assert.deepEqual(paged.operation.slots, [
+    { param: "q", at: ["body", "json:/q"] },
+    { param: "page", at: ["body", "json:/page"] },
+  ]);
+  assert.equal(paged.operation.params.find((p) => p.name === "page")!.type, "number");
+  assert.equal(buildRequest(paged.operation, { q: "cats", page: 7 }, noSession).body, '{"q":"cats","page":7,"size":2}');
+  assert.equal(paged.operation.minTier, 1, paged.warnings.join("\n"));
+});
+
+test("a short example without that evidence is refused, with a hint to pass a second one", () => {
+  const hint = /q="US": example values need at least 3 characters.*second example/;
+  assert.throws(() => learn(byCountry("US"), [{ q: "US" }]), hint);
+  assert.throws(() => learn(byCountry("US"), [{ q: "US" }, { q: "us" }], { exchanges2: byCountry("US") }), hint);
+  assert.throws(() => learn(byCountry("US"), [{ q: "US" }, { q: "CA" }]), hint, "a second example needs its run");
+  // a second run in which no leaf follows: every US is somebody else's
+  assert.throws(
+    () =>
+      learn(byCountry("US"), [{ q: "US" }, { q: "CA" }], { exchanges2: byCountry("US"), match: { path: "/v1/top" } }),
+    /example 2 disproves "q": query:country is "US" in both runs.*query:gl is "US" in both runs/,
+  );
+  // a second run without the request: nothing confirms the place
+  assert.throws(
+    () => learn(byCountry("US"), [{ q: "US" }, { q: "CA" }], { exchanges2: [], match: { path: "/v1/top" } }),
+    /run 2 produced no request matching .*short example of q/,
+  );
+  // inside a longer leaf only: a short value is never a part of one
+  const lang = (c: string) => [xhr({ url: `https://api.site.test/v1/top?lang=en-${c}` })];
+  assert.throws(
+    () => learn(lang("US"), [{ q: "US" }, { q: "CA" }], { exchanges2: lang("CA"), match: { path: "/v1/top" } }),
+    /"q" \("US"\) is not in the learned request.*whole leaf/,
+  );
+});
+
+test("add checks a short example before any browser run, and learns one from two captures", async () => {
+  const capture = (c: string): CaptureFile => ({
+    id: `slots-${c}`,
+    at: new Date().toISOString(),
+    url: `https://site.test/top?country=${c}`,
+    finalUrl: `https://site.test/top?country=${c}`,
+    exchanges: byCountry(c),
+    cookies: [],
+  });
+  const add = { site: "slots", op: "top", trigger: { url: "https://site.test/top?country={q}" } };
+  // no capture and no Chrome is reached: the check comes first
+  await assert.rejects(addOperation({ ...add, examples: [{ q: "US" }] }), /at least 3 characters.*second example/);
+  await assert.rejects(
+    addOperation({ ...add, examples: [{ q: "US" }, { q: "US" }] }),
+    /at least 3 characters.*second example/,
+  );
+  const r = await addOperation({
+    ...add,
+    examples: [{ q: "US" }, { q: "CA" }],
+    from: { capture: capture("US") },
+    from2: capture("CA"),
+  });
+  assert.deepEqual(r.operation.slots, [{ param: "q", at: ["query:country"] }]);
 });

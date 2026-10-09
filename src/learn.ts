@@ -221,6 +221,32 @@ function exampleValues(args: Args): [string, string][] {
   return Object.entries(args).map(([k, v]) => [k, exampleText(v)]);
 }
 
+/** Under 3 characters: found by substring in one capture, such a value is ambiguous ("US", page 2). */
+const isShort = (v: unknown) => asText(v).length < 3;
+
+/** The second trigger run and the example it was made with. */
+type Second = { exchanges: Exchange[]; args: Args };
+
+/**
+ * Whether a request carries a short example: only as a whole leaf, and with a second run only
+ * where a request to the same host holds the other example at the same place (gl=US rides on
+ * every request, whatever country is asked for).
+ */
+function shortCarrier(short: [string, string][], second?: Second) {
+  const place = (e: Exchange, l: Leaf, v: string) => {
+    const host = URL.canParse(e.request.url) ? new URL(e.request.url).host : "";
+    return `${e.request.method.toUpperCase()} ${host}\0${key(l.at)}\0${v}`;
+  };
+  const other = new Map(short.map(([k]) => [k, exampleText(second?.args[k])]));
+  const values = new Set(other.values());
+  const seen = new Set<string>();
+  for (const e of short.length ? (second?.exchanges ?? []) : [])
+    for (const l of walk(e.request))
+      if (values.has(l.value.toLowerCase())) seen.add(place(e, l, l.value.toLowerCase()));
+  return (e: Exchange, leaves: Leaf[], k: string, v: string) =>
+    leaves.some((l) => l.value.toLowerCase() === v && (!second || seen.has(place(e, l, other.get(k)!))));
+}
+
 function tryParse(body: string | undefined): unknown {
   if (!body) return undefined;
   try {
@@ -235,13 +261,19 @@ function tryParse(body: string | undefined): unknown {
  * `all`: the caller already chose the pool (a match), so only preflights are dropped.
  * `pages`: the capture's page URLs (default: its documents and Referers); a value found only in an
  * echo of them is no hit. A data-less answer (a beacon's ack) ranks below every real answer.
+ * `second`: the other run, which says where a short example (under 3 characters) is carried.
  */
 export function rankCandidates(
   exchanges: Exchange[],
   args: Args = {},
-  o: { all?: boolean; pages?: string[] } = {},
+  o: { all?: boolean; pages?: string[]; second?: Second } = {},
 ): Candidate[] {
-  const values = exampleValues(args).filter(([, v]) => v.length >= 3);
+  const examples = exampleValues(args);
+  const values = examples.filter(([, v]) => v.length >= 3);
+  const carriesShort = shortCarrier(
+    examples.filter(([, v]) => v.length < 3),
+    o.second,
+  );
   const locs = locations(o.pages ?? pageUrls(exchanges));
   return exchanges
     .filter((e) => (o.all ? e.request.method.toUpperCase() !== "OPTIONS" : !isNoise(e)))
@@ -251,7 +283,9 @@ export function rankCandidates(
       const has = (v: string, ls: Leaf[]) => ls.some((l) => l.value.toLowerCase().includes(v));
       // a URL-valued example (a link preview's ?url=) is evidence in a URL-valued leaf
       const direct = (v: string) => leaves(v).filter((l) => !l.container && (!URLISH.test(l.value) || URLISH.test(v)));
-      const hits = values.filter(([, v]) => has(v, direct(v))).map(([k]) => k);
+      const hits = examples
+        .filter(([k, v]) => (v.length >= 3 ? has(v, direct(v)) : carriesShort(e, direct(v), k, v)))
+        .map(([k]) => k);
       const urlHits = values.filter(([k, v]) => !hits.includes(k) && has(v, leaves(v))).length;
       const body = e.response?.body ?? "";
       const parsed = tryParse(body);
@@ -390,26 +424,36 @@ const lastToken = (at: Step[]) => {
 /** The name a leaf goes by: its header, field, query key or JSON key. */
 export const leafName = (at: Step[]) => headerName(at) ?? lastToken(at);
 
-export function checkExamples(args: Args, label: string): void {
+/**
+ * Example values are distinct and can be located. A short one can only with `other`, the other
+ * example set, holding a different value for the same param: it is then placed where a whole leaf
+ * equals it in its run and the other value in the other run.
+ */
+export function checkExamples(args: Args, label: string, other?: Args): void {
   const seen = new Map<string, string>();
   for (const [name, v] of Object.entries(args)) {
     const s = asText(v).toLowerCase();
-    if (s.length < 3)
-      throw new Error(`${label} ${name}=${JSON.stringify(v)}: example values need at least 3 characters to be located`);
-    const other = seen.get(s);
-    if (other)
+    if (isShort(v) && (other?.[name] === undefined || asText(other[name]).toLowerCase() === s))
       throw new Error(
-        `${label}: ${other} and ${name} share the value ${JSON.stringify(v)}; example values must be distinct`,
+        `${label} ${name}=${JSON.stringify(v)}: example values need at least 3 characters to be located. ` +
+          `A shorter one needs a second example with a different value, run on its own page (--example2 ${name}=..., and --from2 when learning from captures): ` +
+          "it is then placed where a whole leaf follows the two",
+      );
+    const dup = seen.get(s);
+    if (dup)
+      throw new Error(
+        `${label}: ${dup} and ${name} share the value ${JSON.stringify(v)}; example values must be distinct`,
       );
     seen.set(s, name);
   }
 }
 
 /** Both example sets can be located; the second should name the same params as the first. */
-function checkExampleSets([args1, args2]: LearnInput["examples"], warnings: string[]): void {
-  checkExamples(args1, "example");
+function checkExampleSets({ examples: [args1, args2], exchanges2 }: LearnInput, warnings: string[]): void {
+  // a second example without its run proves nothing about a short value
+  checkExamples(args1, "example", exchanges2 && args2);
   if (!args2) return;
-  checkExamples(args2, "example 2");
+  checkExamples(args2, "example 2", args1);
   const k1 = Object.keys(args1).sort().join();
   if (Object.keys(args2).sort().join() !== k1) warnings.push("example 2 names different params than example 1");
 }
@@ -444,7 +488,11 @@ function pickExchange(
     return e;
   }
   const pool = input.match ? exchanges.filter((e) => matches(input.match!, e.request)) : exchanges;
-  const ranked = rankCandidates(pool, args, { all: !!input.match, pages }).filter((c) => input.match || c.hits.length);
+  const args2 = input.examples[1];
+  const second = input.exchanges2 && args2 ? { exchanges: input.exchanges2, args: args2 } : undefined;
+  const ranked = rankCandidates(pool, args, { all: !!input.match, pages, second }).filter(
+    (c) => input.match || c.hits.length,
+  );
   if (!ranked.length) {
     throw new Error(
       input.match
@@ -554,7 +602,8 @@ function scalarHits(name: string, raw: unknown, leaves: Leaf[]): { exact: Leaf[]
       exact.push(leaf);
       continue;
     }
-    if (leaf.container || leaf.type !== "string" || literal) continue;
+    // a short value is never a part of a leaf: only the whole-leaf match the second run can prove
+    if (leaf.container || leaf.type !== "string" || literal || isShort(raw)) continue;
     if (header && !URL_HEADER.has(leaf.at[0]!) && !header.startsWith("x-")) continue;
     // a short example ("SFO") turns up by chance inside a random token: there it must stand alone
     const within =
@@ -658,8 +707,9 @@ function paramSlots(
 const notFound = (name: string, raw: unknown, disproved: string[] = []) =>
   new Error(
     (disproved.length
-      ? `example 2 disproves "${name}": ${disproved.join("; ")}. Nothing else in the learned request holds it, so the param would change nothing. `
-      : `example value for "${name}" (${JSON.stringify(raw)}) is not in the learned request, so the param would change nothing. `) +
+      ? `example 2 disproves "${name}": ${disproved.slice(0, 4).join("; ")}${disproved.length > 4 ? `; and ${disproved.length - 4} more` : ""}. ` +
+        "Nothing else in the learned request holds it, so the param would change nothing. "
+      : `example value for "${name}" (${JSON.stringify(raw)}) is not in the learned request${isShort(raw) ? " as a whole leaf (a value under 3 characters is never placed inside a longer one)" : ""}, so the param would change nothing. `) +
       "Pick the request that carries it (capture, then add --from <id> --pick-request <n>), or drop the param",
   );
 
@@ -1189,7 +1239,10 @@ function diffRuns(
     if (slot?.ref) continue;
     const header = headerName(leaf.at);
     if (header && BROWSER_HEADER.test(header)) continue;
+    // A short example is placed only where run 2 proves it: a whole leaf holding example 2's value.
+    const short = slot?.param !== undefined && slot.template === undefined && isShort(args1[slot.param]);
     if (!other) {
+      if (short) disproved.set(pairKey(slot.param!, leaf.at), `${leaf.at.join(" > ")} is not in run 2's request`);
       missing.push(leaf.at.join(" > "));
       continue;
     }
@@ -1205,14 +1258,18 @@ function diffRuns(
         "is",
       );
       if (same.test(other.value)) continue;
-      if (other.value === leaf.value) {
+      if (other.value === leaf.value || short) {
         // The leaf stayed as it was although the arg changed: a constant that only held example 1.
         const fills = (p: string) =>
           slot.template === undefined ? p === slot.param : fillTemplate(slot.template, { [p]: "\0" }).includes("\0");
+        const where = `${leaf.at.join(" > ")} is ${JSON.stringify(leaf.value)}`;
+        const went = (p: string) => `${p} went from ${JSON.stringify(args1[p])} to ${JSON.stringify(args2[p])}`;
         for (const p of changed.filter(fills))
           disproved.set(
             pairKey(p, leaf.at),
-            `${leaf.at.join(" > ")} is ${JSON.stringify(leaf.value)} in both runs, though ${p} went from ${JSON.stringify(args1[p])} to ${JSON.stringify(args2[p])}`,
+            other.value === leaf.value
+              ? `${where} in both runs, though ${went(p)}`
+              : `${where}, then ${JSON.stringify(other.value)}, while ${went(p)}`,
           );
         continue;
       }
@@ -1275,6 +1332,12 @@ function twoRunDiff(
   const top = ranked.find((c) => c.hits.length && new URL(c.url).pathname === path) ?? ranked[0];
   const ex2 = top && pool.find((e) => e.id === top.id);
   if (!ex2) {
+    const short = Object.keys(args1).filter((p) => isShort(args1[p]));
+    if (short.length)
+      throw new Error(
+        `run 2 produced no request matching ${JSON.stringify(match)}, so nothing confirms where the short example of ${short.join(", ")} goes. ` +
+          "Check that the second example loads the same kind of page, or pass --match",
+      );
     warnings.push("run 2 produced no matching request; skipped the two-run diff");
     return 1;
   }
@@ -1285,21 +1348,25 @@ function twoRunDiff(
   return 3;
 }
 
-/**
- * DESIGN.md "Learning", step by step. The numbers are the design's; the order is the one the data
- * allows. The two-run diff (3) comes after the session refs (4), because a session value that
- * differs between the runs is not a nonce, and after the match, which finds run 2's request and is
- * built from the template once its credentials are blanked.
- */
 export function learnOperation(input: LearnInput): Learned {
   return learn(input, new Map());
 }
 
+/**
+ * DESIGN.md "Learning", step by step. The numbers are the design's; the order is the one the data
+ * allows. The two-run diff (3) comes after the session refs (4), because a session value that
+ * differs between the runs is not a nonce, and after the match, which finds run 2's request and is
+ * built from the template once its credentials are blanked. `disproved`: the places an earlier
+ * pass over the same input saw run 2 disprove.
+ */
 function learn(input: LearnInput, disproved: Disproved): Learned {
-  const warnings = [...disproved.values()].map((why) => `${why}: kept constant, not filled`);
   const { examples } = input;
   const [args1] = examples;
-  checkExampleSets(examples, warnings);
+  // a short example is expected to equal leaves that are not its own: only the other disproofs are news
+  const warnings = [...disproved]
+    .filter(([pair]) => !isShort(args1[pair.slice(0, pair.indexOf("\0"))]))
+    .map(([, why]) => `${why}: kept constant, not filled`);
+  checkExampleSets(input, warnings);
 
   // 1. pick the request (6: its headers are kept, minus the ones a replay must not send)
   const { exchange, pages } = pickRequest(input, args1, warnings);

@@ -94,7 +94,12 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    several params in one leaf are replaced longest first. Headers the browser computes (user-agent,
    accept*, content-type, sec-*) are never slots. A `true`/`false`/`null` example binds only to the
    leaf named like the param, even when it is the only such flag. An array or object example binds to the equal JSON container. Example
-   values must be distinct and at least 3 chars. If a value appears in several unrelated places,
+   values must be distinct and at least 3 chars: a shorter one found by substring in one capture is ambiguous.
+   A shorter value (`US`, `page=2`, a small enum) is accepted only with a second example that differs, and its
+   run. It is then placed only where a whole decoded leaf equals it in run 1 and equals the other example at the
+   same place in run 2, never inside a longer leaf; a leaf that equals it and does not follow (`gl=US` on every
+   request, `size: 2` beside `page: 2`) is no slot. The same both-runs match says which request carries it.
+   Without that evidence the example is refused, with a hint to pass a second one. If a value appears in several unrelated places,
    record all of them but warn. (Google Flights reuses the destination as the return-leg origin.)
    A short example (4 chars or fewer, "SFO") inside a random-looking leaf counts only where it
    stands alone between non-alphanumerics: inside a base64 blob it is chance.
