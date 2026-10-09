@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
-import { buildRequest, send } from "../src/http.ts";
-import type { Session } from "../src/session.ts";
-import { type Operation, OperationSchema } from "../src/spec.ts";
-import type { StoredCookie } from "../src/types.ts";
+import { buildRequest, send } from "../src/http.js";
+import type { Session } from "../src/session.js";
+import { type Operation, OperationSchema } from "../src/spec.js";
+import type { StoredCookie } from "../src/types.js";
 
 const cookie = (name: string, value: string, domain: string): StoredCookie => ({
   name,

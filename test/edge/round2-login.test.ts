@@ -12,11 +12,11 @@ import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { closeBrowser } from "../../src/browser.ts";
-import { importSession, reimportIfBrowser, resolveLoginTarget } from "../../src/login.ts";
-import { createServer as mcpServer } from "../../src/mcp.ts";
-import { cookieValue, loadSession, parseSetCookie, pruneCaptures, saveSession, siteOf } from "../../src/session.ts";
-import { makeChromiumDb } from "../fixture/cookie-db.ts";
+import { closeBrowser } from "../../src/browser.js";
+import { importSession, reimportIfBrowser, resolveLoginTarget } from "../../src/login.js";
+import { createServer as mcpServer } from "../../src/mcp.js";
+import { cookieValue, loadSession, parseSetCookie, pruneCaptures, saveSession, siteOf } from "../../src/session.js";
+import { makeChromiumDb } from "../fixture/cookie-db.js";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const TMP = mkdtempSync(join(tmpdir(), "aa-round2-"));

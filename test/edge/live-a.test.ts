@@ -1,23 +1,23 @@
 /**
- * Edge probes for dimension "live-a": deterministic offline repros of what live runs against
- * YouTube, Airbnb, Reddit, Amazon, Product Hunt and Booking.com showed. Tests that fail today
- * assert the correct behaviour, so they pass once the bug is fixed. Chrome probes skip without Chrome.
+ * Offline repros of what live runs against YouTube, Airbnb, Reddit, Amazon, Product Hunt and
+ * Booking.com showed. Each test is a regression for a bug that was fixed. Chrome tests skip
+ * without Chrome.
  */
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
-import { chromeAvailable, closeBrowser, openBrowser } from "../../src/browser.ts";
-import { classify } from "../../src/classify.ts";
-import { call } from "../../src/execute.ts";
-import { capOutput } from "../../src/extract.ts";
-import { addOperation, profileDir } from "../../src/heal.ts";
-import { learnOperation } from "../../src/learn.ts";
-import { saveSession } from "../../src/session.ts";
-import { type Operation, OperationSchema } from "../../src/spec.ts";
-import { loadSite, saveSite } from "../../src/store.ts";
-import { type LiveFixture, startLiveFixture } from "./live-a.fixture.ts";
+import { chromeAvailable, closeBrowser, openBrowser } from "../../src/browser.js";
+import { classify } from "../../src/classify.js";
+import { call } from "../../src/execute.js";
+import { capOutput } from "../../src/extract.js";
+import { addOperation, profileDir } from "../../src/heal.js";
+import { learnOperation } from "../../src/learn.js";
+import { saveSession } from "../../src/session.js";
+import { type Operation, OperationSchema } from "../../src/spec.js";
+import { loadSite, saveSite } from "../../src/store.js";
+import { type LiveFixture, startLiveFixture } from "./live-a.fixture.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-live-a-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -104,13 +104,13 @@ describe("a param templated into a header (Airbnb's referer)", () => {
     assert.deepEqual(r.data, ["new york one", "new york two"]);
   });
 
-  test("BUG: a CJK value (東京) must not crash tier 1 with a ByteString error", async () => {
+  test("a CJK value (東京) must not crash tier 1 with a ByteString error", async () => {
     const r = await call(SITE, "find", { q: "東京" }, { ...fast, maxTier: 1 });
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.deepEqual(r.data, ["東京 one", "東京 two"]);
   });
 
-  test("BUG: a Latin-1 value (São Paulo) goes into the referer percent-encoded, as a browser sends it", async () => {
+  test("a Latin-1 value (São Paulo) goes into the referer percent-encoded, as a browser sends it", async () => {
     const r = await call(SITE, "find", { q: "São Paulo" }, { ...fast, maxTier: 1 });
     assert.equal(r.ok, true, JSON.stringify(r));
     const hit = fx.hits.find((h) => h.path.startsWith("/api/find"));
@@ -145,7 +145,7 @@ describe("bot walls seen live must classify as blocked", () => {
     assert.equal(c.class, "blocked");
   });
 
-  test("BUG: Booking.com's AWS WAF interstitial (202 + awsWafCookieDomainList + challenge.js) is blocked, not drift", () => {
+  test("Booking.com's AWS WAF interstitial (202 + awsWafCookieDomainList + challenge.js) is blocked, not drift", () => {
     const body =
       "<!DOCTYPE html><html lang=\"en\"><head><title></title><script>window.awsWafCookieDomainList = ['booking.com'];</script>" +
       '<script src="https://www.booking.com/__challenge_h78IRKX3kpQxScCExxShBNwRUlb/d8c14d4960ca/a18a4859af9c/challenge.js"></script></head><body></body></html>';
@@ -155,14 +155,14 @@ describe("bot walls seen live must classify as blocked", () => {
     }
   });
 
-  test("BUG: Amazon's automated-access wall (503) is blocked, not error", () => {
+  test("Amazon's automated-access wall (503) is blocked, not error", () => {
     const body =
       "<!-- To discuss automated access to Amazon data please contact api-services-support@amazon.com. For information about migrating to our APIs refer to our Marketplace APIs --><!doctype html><html><head><title>Sorry! Something went wrong!</title></head><body></body></html>";
     const c = classify(op("html"), { status: 503, headers: { "content-type": "text/html" }, body });
     assert.equal(c.class, "blocked", JSON.stringify(c));
   });
 
-  test("BUG: Reddit's 200 JS proof-of-work page (auto-submitted 'solution' form, js_challenge) is blocked, not drift", () => {
+  test("Reddit's 200 JS proof-of-work page (auto-submitted 'solution' form, js_challenge) is blocked, not drift", () => {
     const body =
       '<!DOCTYPE html><html lang="en"><head><title>Reddit</title><script>document.addEventListener("DOMContentLoaded",async function(){var e=document.forms[0],n=(e.onsubmit=function(t){return!0},await(async e=>e+e)("8e41418a7cbe71e1"));e.elements.namedItem("solution").value=n,e.requestSubmit()},{once:!0});</script></head>' +
       '<body><main><form method="get"><input type="hidden" name="js_challenge" value="1"><input type="hidden" name="solution"></form></main></body></html>';
@@ -180,7 +180,7 @@ describe("bot walls seen live must classify as blocked", () => {
 
 /* ------------------------------------------------------------------ capOutput */
 
-test("BUG (low): inspect/call output whose first item alone exceeds the cap returns data: [] (reads as 'no results')", () => {
+test("inspect/call output whose first item alone exceeds the cap returns data: [] (reads as 'no results')", () => {
   const big = [{ blob: "x".repeat(25_000) }, { blob: "y" }];
   const r = capOutput(big);
   assert.ok(Array.isArray(r.data));
@@ -190,7 +190,7 @@ test("BUG (low): inspect/call output whose first item alone exceeds the cap retu
 /* ------------------------------------------------------------------ Chrome probes */
 
 describe("browser-backed live patterns", { skip: noChrome }, () => {
-  test("BUG: add with --html learns the HTML document, not a JSON telemetry beacon that echoes the page URL", async () => {
+  test("add with --html learns the HTML document, not a JSON telemetry beacon that echoes the page URL", async () => {
     const r = await addOperation({
       site: "shop",
       op: "search",
@@ -224,7 +224,7 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
     assert.equal(c.tier, 1);
   });
 
-  test("BUG: a gzip-compressed request body (YouTube innertube, content-encoding: gzip) is learned as a tier-1 body slot", async () => {
+  test("a gzip-compressed request body (YouTube innertube, content-encoding: gzip) is learned as a tier-1 body slot", async () => {
     const r = await addOperation({
       site: "gz",
       op: "search",
@@ -246,7 +246,7 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
     assert.deepEqual(c.data, [{ title: "otters video" }]);
   });
 
-  test("BUG (critical): a param found only in the referer never yields an op that returns the example's data for new args", async () => {
+  test("a param found only in the referer never yields an op that returns the example's data for new args", async () => {
     let learned = true;
     try {
       await addOperation({
@@ -268,7 +268,7 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
     }
   });
 
-  test("BUG: at tier 3 the challenge interstitial that precedes the real page is not taken as the answer (Booking.com)", async () => {
+  test("at tier 3 the challenge interstitial that precedes the real page is not taken as the answer (Booking.com)", async () => {
     await addOperation({
       site: "hotels",
       op: "search",
@@ -285,7 +285,7 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
     assert.deepEqual(r.data, [{ name: "Madrid hotel 1" }, { name: "Madrid hotel 2" }]);
   });
 
-  test("BUG: a WAF interstitial at tier 1 is not 'drift': no heal is logged and challenge params are not baked into the template", async () => {
+  test("a WAF interstitial at tier 1 is not 'drift': no heal is logged and challenge params are not baked into the template", async () => {
     await addOperation({
       site: "hotels2",
       op: "search",
@@ -305,7 +305,7 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
     assert.ok(!opOf("hotels2", "search").request.url.includes("chal_t"), opOf("hotels2", "search").request.url);
   });
 
-  test("BUG: when even the example args get no data, the verdict is not 'input' (the site is down, not the args)", async () => {
+  test("when even the example args get no data, the verdict is not 'input' (the site is down, not the args)", async () => {
     await addOperation({
       site: "status",
       op: "search",

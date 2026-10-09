@@ -4,9 +4,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, test } from "node:test";
-import { call } from "../src/execute.ts";
-import { parseSite } from "../src/spec.ts";
-import { saveSite, staleMark } from "../src/store.ts";
+import { call } from "../src/execute.js";
+import { parseSite } from "../src/spec.js";
+import { saveSite, staleMark } from "../src/store.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-exec-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -209,7 +209,7 @@ test("a write answered 204, HTML or plain text is ok, sent once", async () => {
 });
 
 test("add --from a capture judges the op on the captured response: a wrong --extract is a warning, a right one a preview", async () => {
-  const { addOperation } = await import("../src/heal.ts");
+  const { addOperation } = await import("../src/heal.js");
   const capture = {
     id: "cfake1",
     at: "",

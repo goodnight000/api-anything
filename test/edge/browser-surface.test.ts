@@ -1,6 +1,6 @@
 /**
- * Edge-case probes for the browser layer, CLI, MCP server and store. Every test asserts the
- * correct behaviour: the ones that fail today are bugs, the rest are regression coverage.
+ * Edge cases for the browser layer, CLI, MCP server and store. Each test is a regression for a
+ * bug that was fixed.
  * Run: node --import tsx --test test/edge/browser-surface.test.ts
  */
 import assert from "node:assert/strict";
@@ -177,7 +177,7 @@ describe("runTrigger on awkward pages", { skip: noChrome }, () => {
     assert.ok(Date.now() - t0 < 8000);
   });
 
-  test("BUG popup: the data request made in a tab the trigger opens is captured", async () => {
+  test("popup: the data request made in a tab the trigger opens is captured", async () => {
     const r = await runTrigger({
       url: `${fx.url}/popup?name=pop`,
       steps: [{ action: "click", selector: "#open" }],
@@ -186,7 +186,7 @@ describe("runTrigger on awkward pages", { skip: noChrome }, () => {
     assert.ok(data(r, "pop"), `captured: ${r.exchanges.map((e) => e.request.url).join(", ")}`);
   });
 
-  test("BUG popup: a tab the trigger opened is closed afterwards (no tab leak in a long-lived MCP server)", async () => {
+  test("popup: a tab the trigger opened is closed afterwards (no tab leak in a long-lived MCP server)", async () => {
     const ctx = await openBrowser({ profileDir: prof });
     const before = ctx.pages().length;
     for (let i = 0; i < 3; i++)
@@ -198,36 +198,36 @@ describe("runTrigger on awkward pages", { skip: noChrome }, () => {
     assert.equal(ctx.pages().length, before, "open tabs grew by one per run");
   });
 
-  test("BUG a subresource that never answers (no load event) still yields the data the page fetched", async () => {
+  test("a subresource that never answers (no load event) still yields the data the page fetched", async () => {
     const r = await runTrigger({ url: `${fx.url}/hang-img?name=hank`, profileDir: prof, timeoutMs: 6000 });
     assert.ok(data(r, "hank"));
   });
 
-  test("BUG a page with an open EventSource finishes long before the timeout", async () => {
+  test("a page with an open EventSource finishes long before the timeout", async () => {
     const t0 = Date.now();
     const r = await runTrigger({ url: `${fx.url}/sse-page?name=sse`, profileDir: prof, timeoutMs: 15_000 });
     assert.ok(data(r, "sse"));
     assert.ok(Date.now() - t0 < 6000, `took ${Date.now() - t0} ms (the whole timeout)`);
   });
 
-  test("BUG a page with a 150 ms analytics beacon finishes long before the timeout", async () => {
+  test("a page with a 150 ms analytics beacon finishes long before the timeout", async () => {
     const t0 = Date.now();
     const r = await runTrigger({ url: `${fx.url}/beacon-page?name=bea`, profileDir: prof, timeoutMs: 15_000 });
     assert.ok(data(r, "bea"));
     assert.ok(Date.now() - t0 < 6000, `took ${Date.now() - t0} ms (the whole timeout)`);
   });
 
-  test("BUG a data request fired 1.2 s after load (deferred hydration) is captured", async () => {
+  test("a data request fired 1.2 s after load (deferred hydration) is captured", async () => {
     const r = await runTrigger({ url: `${fx.url}/late?name=lately`, profileDir: prof });
     assert.ok(data(r, "lately"), `captured: ${r.exchanges.map((e) => e.request.url).join(", ")}`);
   });
 
-  test("BUG a trigger URL that answers with a download is captured, not a thrown 'Download is starting'", async () => {
+  test("a trigger URL that answers with a download is captured, not a thrown 'Download is starting'", async () => {
     const r = await runTrigger({ url: `${fx.url}/file.csv?name=carla`, profileDir: prof });
     assert.ok(r.exchanges.some((e) => e.request.url.includes("/file.csv")));
   });
 
-  test("BUG tier 2 works when the API origin's root redirects to another origin", async () => {
+  test("tier 2 works when the API origin's root redirects to another origin", async () => {
     const fx2 = await startEdgeFixture({ rootRedirect: true });
     try {
       const r = await pageFetch({
@@ -273,7 +273,7 @@ describe("tier-3 calls, login walls, and add", { skip: noChrome }, () => {
     );
   });
 
-  test("BUG tier-3 softFrom read: the answer is the request for this call's args, not the neutral page's own", async () => {
+  test("tier-3 softFrom read: the answer is the request for this call's args, not the neutral page's own", async () => {
     const main = await startFixture();
     try {
       const h = newHome();
@@ -306,7 +306,7 @@ describe("tier-3 calls, login walls, and add", { skip: noChrome }, () => {
     }
   });
 
-  test("BUG a readOnly op's tier-3 trigger cannot perform a write (MCP without --allow-writes)", async () => {
+  test("a readOnly op's tier-3 trigger cannot perform a write (MCP without --allow-writes)", async () => {
     process.env.API_ANYTHING_HOME = home;
     writeSpec(home, fx, [
       op(fx, "members", "/members?name={name}", "/api/data", { minTier: 3 }),
@@ -337,7 +337,7 @@ describe("tier-3 calls, login walls, and add", { skip: noChrome }, () => {
     }
   });
 
-  test("BUG add on a trigger that redirects to a login page does not silently learn the login page", async () => {
+  test("add on a trigger that redirects to a login page does not silently learn the login page", async () => {
     process.env.API_ANYTHING_HOME = home;
     await (await openBrowser({ profileDir: profileDir() })).clearCookies();
     let r: Awaited<ReturnType<typeof addOperation>>;
@@ -358,7 +358,7 @@ describe("tier-3 calls, login walls, and add", { skip: noChrome }, () => {
     );
   });
 
-  test("BUG a tier-3 read whose trigger lands on a login page is auth with a login hint", async () => {
+  test("a tier-3 read whose trigger lands on a login page is auth with a login hint", async () => {
     process.env.API_ANYTHING_HOME = home;
     await (await openBrowser({ profileDir: profileDir() })).clearCookies();
     const r = await call("edge", "members", { name: "zed" }, fast);
@@ -426,7 +426,7 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     ["#script", "an injected script (JSONP)"],
     ["#iframe", "an injected iframe"],
   ] as const) {
-    test(`BUG capture --write: a GET write sent by ${what} during the steps never reaches the server`, async () => {
+    test(`capture --write: a GET write sent by ${what} during the steps never reaches the server`, async () => {
       process.env.API_ANYTHING_HOME = home;
       const before = votes().length;
       await capturePage({ url: `${fx.url}/vote-page`, steps: [{ action: "click", selector: sel }], write: true });
@@ -434,7 +434,7 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     });
   }
 
-  test("BUG capture --write: a message sent over an already-open WebSocket never reaches the server", async () => {
+  test("capture --write: a message sent over an already-open WebSocket never reaches the server", async () => {
     process.env.API_ANYTHING_HOME = home;
     const before = fx.wsMessages();
     await capturePage({
@@ -449,7 +449,7 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     assert.equal(fx.wsMessages(), before, "the message was sent while learning it");
   });
 
-  test("BUG a tier-2 request that never answers times out instead of hanging the call", async () => {
+  test("a tier-2 request that never answers times out instead of hanging the call", async () => {
     process.env.API_ANYTHING_HOME = home;
     const t0 = Date.now();
     const r = await Promise.race([
@@ -541,7 +541,7 @@ describe("two processes sharing the Chrome profile; signals and zombies", { skip
     assert.ok(await until(() => chromes(home) === 0, 5000), "Chrome left running");
   });
 
-  test("BUG SIGTERM mid-capture exits promptly (Playwright's handler swallows it; the CLI runs on to its 30 s deadline)", async () => {
+  test("SIGTERM mid-capture exits promptly (Playwright's handler swallows it; the CLI runs on to its 30 s deadline)", async () => {
     let pid = 0;
     // a wait step keeps the capture busy (the SSE page alone no longer holds a capture open)
     const running = cli(home, ["capture", `${fx.url}/sse-page`, "--steps", BUSY], {
@@ -556,7 +556,7 @@ describe("two processes sharing the Chrome profile; signals and zombies", { skip
     assert.ok(Date.now() - t0 < 5000, `exited ${Date.now() - t0} ms after SIGTERM: ${r.stdout.slice(0, 160)}`);
   });
 
-  test("BUG while an MCP server holds the profile, a CLI capture fails fast with a hint naming the lock", async () => {
+  test("while an MCP server holds the profile, a CLI capture fails fast with a hint naming the lock", async () => {
     const { client } = await mcpHoldingChrome();
     try {
       const r = await cli(home, ["capture", `${fx.url}/data-page?name=second`], { killAfterMs: 60_000 });
@@ -572,7 +572,7 @@ describe("two processes sharing the Chrome profile; signals and zombies", { skip
     }
   });
 
-  test("BUG a heal that could not launch Chrome (profile locked) does not mark the op stale for 30 min", async () => {
+  test("a heal that could not launch Chrome (profile locked) does not mark the op stale for 30 min", async () => {
     const { client } = await mcpHoldingChrome();
     process.env.API_ANYTHING_HOME = home;
     let first: Awaited<ReturnType<typeof call>>;
@@ -586,7 +586,7 @@ describe("two processes sharing the Chrome profile; signals and zombies", { skip
     assert.equal(again.ok, true, `first: ${first.reason?.slice(0, 160)}\nthen: ${JSON.stringify(again).slice(0, 400)}`);
   });
 
-  test("BUG the MCP server exits on SIGTERM once it has launched Chrome", async () => {
+  test("the MCP server exits on SIGTERM once it has launched Chrome", async () => {
     const { client, pid } = await mcpHoldingChrome();
     try {
       process.kill(pid, "SIGTERM");
@@ -662,7 +662,7 @@ describe("MCP server edge cases (in-memory)", () => {
     );
   });
 
-  test("BUG a corrupt spec or an invalid site name comes back as JSON with a next hint, like every other failure", async () => {
+  test("a corrupt spec or an invalid site name comes back as JSON with a next hint, like every other failure", async () => {
     for (const site of ["broken", "../../etc/passwd"]) {
       const r = await client.callTool({ name: "call_operation", arguments: { site, op: "x" } });
       assert.equal(r.isError, true);
@@ -676,7 +676,7 @@ describe("MCP server edge cases (in-memory)", () => {
     }
   });
 
-  test("BUG huge results: items bigger than the output cap are cut, not dropped to an empty list", async () => {
+  test("huge results: items bigger than the output cap are cut, not dropped to an empty list", async () => {
     const r = JSON.parse(
       text(
         await client.callTool({
@@ -761,13 +761,13 @@ describe("CLI args and store files", () => {
     }
   });
 
-  test("BUG --max-tier with a non-number is rejected instead of silently meaning 'no cap, no browser'", async () => {
+  test("--max-tier with a non-number is rejected instead of silently meaning 'no cap, no browser'", async () => {
     const r = await cli(home, ["call", "edge", "get", "name=x", "--max-tier", "abc"]);
     assert.equal(r.code, 1);
     assert.match(JSON.parse(r.stdout).error ?? JSON.parse(r.stdout).reason ?? "", /max-tier/);
   });
 
-  test("BUG a corrupt session file is reported as such (file named), not as bad args", async () => {
+  test("a corrupt session file is reported as such (file named), not as bad args", async () => {
     mkdirSync(join(home, "sessions"), { recursive: true });
     writeFileSync(join(home, "sessions", "edge.json"), '{"cookies": [');
     try {
@@ -780,7 +780,7 @@ describe("CLI args and store files", () => {
     }
   });
 
-  test("BUG site names differ only by case: one spec file must not get two sets of state", () => {
+  test("site names differ only by case: one spec file must not get two sets of state", () => {
     process.env.API_ANYTHING_HOME = home;
     const upper = loadSite("EDGE");
     if (!upper) return; // case-sensitive file system: EDGE is simply unknown
@@ -815,7 +815,7 @@ describe("export secret scan", () => {
     assert.match(w.warnings.join(), /JWT/);
   });
 
-  test("BUG a live cookie that sits percent-encoded or JSON-escaped in the spec is still refused", () => {
+  test("a live cookie that sits percent-encoded or JSON-escaped in the spec is still refused", () => {
     const session = {
       cookies: [
         { name: "sid", value: TOKEN, domain: "example.com", path: "/", expires: -1, httpOnly: true, secure: true },
@@ -843,7 +843,7 @@ describe("export secret scan", () => {
       await fx.close();
     });
 
-    test("BUG add + export: a page that echoes its base64 session cookie inside a query value; export must refuse", async () => {
+    test("add + export: a page that echoes its base64 session cookie inside a query value; export must refuse", async () => {
       const r = await addOperation({
         site: "tok",
         op: "user",

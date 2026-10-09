@@ -10,8 +10,8 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
-import { chromeAvailable, closeBrowser, runTrigger } from "../../src/browser.ts";
-import { capturePage, profileDir } from "../../src/heal.ts";
+import { chromeAvailable, closeBrowser, runTrigger } from "../../src/browser.js";
+import { capturePage, profileDir } from "../../src/heal.js";
 
 const TMP = mkdtempSync(join(tmpdir(), "aa-round2-"));
 after(() => rmSync(TMP, { recursive: true, force: true }));

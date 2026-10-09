@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fillTemplate, getAt, parseJson, setAt, walk } from "../src/codec.ts";
-import type { Request } from "../src/spec.ts";
+import { fillTemplate, getAt, parseJson, setAt, walk } from "../src/codec.js";
+import type { Request } from "../src/spec.js";
 
 const get = (url: string, headers: Record<string, string> = {}): Request => ({ method: "GET", url, headers });
 

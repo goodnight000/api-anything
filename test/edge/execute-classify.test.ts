@@ -1,6 +1,6 @@
 /**
- * Edge probes for execution, HTTP and classification. Tests that fail today assert the correct
- * behaviour, so they pass once the bug is fixed. Chrome-only probes skip without Chrome.
+ * Edge cases for execution, HTTP and classification. Each test is a regression for a bug that was
+ * fixed. Chrome-only tests skip without Chrome.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -10,15 +10,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chromeAvailable, closeBrowser } from "../../src/browser.ts";
-import { classify, judge, type Observed } from "../../src/classify.ts";
-import { call } from "../../src/execute.ts";
-import { capOutput } from "../../src/extract.ts";
-import { cookieHeaderFor, cookieValue, loadSession, saveSession } from "../../src/session.ts";
-import { type Operation, OperationSchema, parseSite } from "../../src/spec.ts";
-import { rememberTier, saveSite } from "../../src/store.ts";
-import type { StoredCookie } from "../../src/types.ts";
-import { type Fixture, startFixture } from "./execute-classify.fixture.ts";
+import { chromeAvailable, closeBrowser } from "../../src/browser.js";
+import { classify, judge, type Observed } from "../../src/classify.js";
+import { call } from "../../src/execute.js";
+import { capOutput } from "../../src/extract.js";
+import { cookieHeaderFor, cookieValue, loadSession, saveSession } from "../../src/session.js";
+import { type Operation, OperationSchema, parseSite } from "../../src/spec.js";
+import { rememberTier, saveSite } from "../../src/store.js";
+import type { StoredCookie } from "../../src/types.js";
+import { type Fixture, startFixture } from "./execute-classify.fixture.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-exec-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -551,14 +551,14 @@ describe("allowWrites at every entry point", () => {
     writeSite();
     const r = await call("wr", "follow", {}, t1);
     assert.equal(r.class, "refused");
-    const { heal } = await import("../../src/execute.ts");
+    const { heal } = await import("../../src/execute.js");
     assert.equal((await heal("wr", "follow", {}, { ...t1, allowWrites: true })).class, "refused");
     assert.equal(fx.hits.length, 0);
   });
 
   test("MCP: writes hidden and refused unless the server allows them", async () => {
     writeSite();
-    const { createServer: mcp } = await import("../../src/mcp.ts");
+    const { createServer: mcp } = await import("../../src/mcp.js");
     const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
     const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
     const [a, b] = InMemoryTransport.createLinkedPair();

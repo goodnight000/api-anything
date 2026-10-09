@@ -10,8 +10,8 @@ import {
   parseBody,
   pick,
   splitPick,
-} from "../src/extract.ts";
-import { ResponseSchema } from "../src/spec.ts";
+} from "../src/extract.js";
+import { ResponseSchema } from "../src/spec.js";
 
 test("parseBody strips XSSI and keeps big integers exact", () => {
   assert.deepEqual(parseBody(')]}\'\n{"id":2085462611575857621,"n":3}'), { id: "2085462611575857621", n: 3 });

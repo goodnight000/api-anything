@@ -8,12 +8,12 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
-import { classify } from "../../src/classify.ts";
-import { call } from "../../src/execute.ts";
-import { capOutput, pick } from "../../src/extract.ts";
-import { saveSession } from "../../src/session.ts";
-import { type Operation, parseSite } from "../../src/spec.ts";
-import { saveSite } from "../../src/store.ts";
+import { classify } from "../../src/classify.js";
+import { call } from "../../src/execute.js";
+import { capOutput, pick } from "../../src/extract.js";
+import { saveSession } from "../../src/session.js";
+import { type Operation, parseSite } from "../../src/spec.js";
+import { saveSite } from "../../src/store.js";
 
 const TMP = mkdtempSync(join(tmpdir(), "aa-round2-"));
 after(() => rmSync(TMP, { recursive: true, force: true }));

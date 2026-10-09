@@ -5,11 +5,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { judge } from "../src/classify.ts";
-import { call } from "../src/execute.ts";
-import { buildRequest } from "../src/http.ts";
-import { type Operation, parseSite } from "../src/spec.ts";
-import type { StoredCookie } from "../src/types.ts";
+import { judge } from "../src/classify.js";
+import { call } from "../src/execute.js";
+import { buildRequest } from "../src/http.js";
+import { type Operation, parseSite } from "../src/spec.js";
+import type { StoredCookie } from "../src/types.js";
 
 const raw = (site: string) => JSON.parse(readFileSync(new URL(`../sites/${site}.json`, import.meta.url), "utf8"));
 const op = (site: string, name: string): Operation => parseSite(raw(site)).operations.find((o) => o.name === name)!;

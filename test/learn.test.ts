@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getAt } from "../src/codec.ts";
-import { buildRequest } from "../src/http.ts";
-import { learnOperation, matches, rankCandidates } from "../src/learn.ts";
-import type { Exchange, StoredCookie } from "../src/types.ts";
+import { getAt } from "../src/codec.js";
+import { buildRequest } from "../src/http.js";
+import { learnOperation, matches, rankCandidates } from "../src/learn.js";
+import type { Exchange, StoredCookie } from "../src/types.js";
 
 const cookie = (name: string, value: string, domain = ".x.com"): StoredCookie => ({
   name,
@@ -493,7 +493,7 @@ test("per-session form tokens (Google at, Meta fb_dtsg) become session refs, and
   assert.equal(sessionValues["s/at"], AT);
   assert.ok(
     !op.request.body!.includes(encodeURIComponent(AT)) && !op.request.body!.includes(encodeURIComponent(DTSG)),
-    op.request.body,
+    op.request.body!,
   );
   assert.equal(op.request.headers.authorization, "", "authorization is a session ref by default");
 

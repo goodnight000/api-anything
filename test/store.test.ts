@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { Site } from "../src/spec.ts";
+import type { Site } from "../src/spec.js";
 import {
   appendHeal,
   clearStale,
@@ -16,7 +16,7 @@ import {
   saveSite,
   staleList,
   staleMark,
-} from "../src/store.ts";
+} from "../src/store.js";
 
 const site = (description: string): Site => ({
   name: "demo",
@@ -100,7 +100,7 @@ test("stale marks expire after their TTL and carry a reason; tiers are remembere
 });
 
 test("secret scan: exact live values are secrets; heuristics only warn, and URL paths do not trip them", async () => {
-  const { scanSecrets } = await import("../src/store.ts");
+  const { scanSecrets } = await import("../src/store.js");
   const session = {
     cookies: [
       { name: "sid", value: '"abc123secret"', domain: "x.test", path: "/", expires: -1, httpOnly: true, secure: true },
@@ -128,8 +128,8 @@ test("a spec's file name is its name, so saving never overwrites another site's 
 });
 
 test("export: shapes and typed example values stripped, examples kept on request, public headers allowed", async () => {
-  const { exportSite } = await import("../src/store.ts");
-  const { saveSession } = await import("../src/session.ts");
+  const { exportSite } = await import("../src/store.js");
+  const { saveSession } = await import("../src/session.js");
   fresh();
   const spec: Site = {
     ...site("x"),

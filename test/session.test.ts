@@ -12,8 +12,8 @@ import {
   mergeCapture,
   parseCookieHeader,
   safeName,
-} from "../src/session.ts";
-import type { StoredCookie } from "../src/types.ts";
+} from "../src/session.js";
+import type { StoredCookie } from "../src/types.js";
 
 const c = (name: string, value: string, domain: string, extra: Partial<StoredCookie> = {}): StoredCookie => ({
   name,

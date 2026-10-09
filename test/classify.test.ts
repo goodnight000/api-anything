@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classify, type Observed } from "../src/classify.ts";
-import { type Operation, OperationSchema } from "../src/spec.ts";
+import { classify, type Observed } from "../src/classify.js";
+import { type Operation, OperationSchema } from "../src/spec.js";
 
 const op = (over: Record<string, unknown> = {}): Operation =>
   OperationSchema.parse({
@@ -184,7 +184,7 @@ test("missing data is drift flagged missing, so the caller can check the example
 });
 
 test("a write's 2xx is ok whatever the body; judge hands back the text; a bad recipe is an error, not a throw", async () => {
-  const { judge } = await import("../src/classify.ts");
+  const { judge } = await import("../src/classify.js");
   const write = op({ readOnly: false, response: { format: "json" } });
   for (const r of [
     json(204, ""),

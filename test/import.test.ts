@@ -7,8 +7,8 @@ import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { AmbiguousProfile, type BrowserRoot, cookiesFromFile, importFromBrowsers } from "../src/import.ts";
-import { makeChromiumDb, makeFirefoxDb } from "./fixture/cookie-db.ts";
+import { AmbiguousProfile, type BrowserRoot, cookiesFromFile, importFromBrowsers } from "../src/import.js";
+import { makeChromiumDb, makeFirefoxDb } from "./fixture/cookie-db.js";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "aa-import-"));
 const inject = (roots: BrowserRoot[]) => (process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify(roots));

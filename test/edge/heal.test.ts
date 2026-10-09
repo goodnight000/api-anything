@@ -13,12 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chromeAvailable, closeBrowser } from "../../src/browser.ts";
-import { call, heal } from "../../src/execute.ts";
-import { addOperation, rescan } from "../../src/heal.ts";
-import { loadSession, saveSession } from "../../src/session.ts";
-import { type Operation, parseSite } from "../../src/spec.ts";
-import { BUNDLED_DIR, loadSite, markStale, saveSite, staleMark } from "../../src/store.ts";
+import { chromeAvailable, closeBrowser } from "../../src/browser.js";
+import { call, heal } from "../../src/execute.js";
+import { addOperation, rescan } from "../../src/heal.js";
+import { loadSession, saveSession } from "../../src/session.js";
+import { type Operation, parseSite } from "../../src/spec.js";
+import { BUNDLED_DIR, loadSite, markStale, saveSite, staleMark } from "../../src/store.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-heal-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -250,7 +250,7 @@ describe("heal without a browser (maxTier 1)", () => {
     );
   });
 
-  // BUG: nearestToken() matches the anchor as a raw substring, so "Followers" also hits
+  // Was a bug: nearestToken() matches the anchor as a raw substring, so "Followers" also hits
   // "FollowersYouKnow"; on a distance tie the first occurrence in the bundle wins. The wrong
   // queryId answers 200 with the same shape, so validation passes and wrong data is saved.
   test("anchor that is a prefix of another operation's name: the rescan must take the exact operation's queryId", async () => {
@@ -308,7 +308,7 @@ describe("heal without a browser (maxTier 1)", () => {
     );
   });
 
-  // BUG: Meta-style bundles put each doc_id in its own module right after the previous module's
+  // Was a bug: Meta-style bundles put each doc_id in its own module right after the previous module's
   // doc_id, so the previous operation's id sits ~14 chars before the anchor while the op's own id is
   // ~64 chars after it. The rescan takes the neighbour's id; validation passes on a same-shaped answer.
   test("Meta-style module layout: the rescan must take the doc_id of the anchor's own module, not the previous module's", async () => {
@@ -375,7 +375,7 @@ describe("heal without a browser (maxTier 1)", () => {
     );
   });
 
-  // BUG (critical): a write's rescan candidate is validated by performing it. With the anchor
+  // Was a bug: a write's rescan candidate is validated by performing it. With the anchor
   // matched as a substring, "CreateTweet" resolves to CreateTweetDownvote's queryId, and that other
   // mutation is sent for real.
   test("write heal: a rescan guess must never send a different mutation", async () => {
@@ -474,7 +474,7 @@ describe("heal without a browser (maxTier 1)", () => {
     assert.match(r.next ?? "", /may have (gone through|run)/);
   });
 
-  // BUG (low): a write whose heal failed is marked stale; the next drift's `next` tells the agent to
+  // Was a bug: a write whose heal failed is marked stale; the next drift's `next` tells the agent to
   // force `api-anything heal`, which refuses every write.
   test("a stale write's next hint does not point at `api-anything heal` (which refuses writes)", async () => {
     saveSite(
@@ -537,7 +537,7 @@ describe("heal without a browser (maxTier 1)", () => {
     }
   });
 
-  // BUG (medium): DESIGN step 7 records learnedLoggedIn so a changed session state is recognised,
+  // Was a bug: DESIGN step 7 records learnedLoggedIn so a changed session state is recognised,
   // but nothing reads it. An op learned logged in, called with a jar that holds no login cookie,
   // gets "no data" (the site hides it from guests), is healed as drift, and is told to heal/re-add,
   // never to log in.
@@ -576,7 +576,7 @@ describe("heal without a browser (maxTier 1)", () => {
     assert.equal(staleMark("rate0", "user"), undefined);
   });
 
-  // BUG (medium): the example-args replay that tells "no such user" from drift can itself be rate
+  // Was a bug: the example-args replay that tells "no such user" from drift can itself be rate
   // limited; that 429 is ignored and the heal runs anyway (fetching the page and up to 40 bundles).
   test("rate limited during the example-args replay: stop and report rate, do not heal", async () => {
     saveSite(userSite("rate1"));
@@ -594,7 +594,7 @@ describe("heal without a browser (maxTier 1)", () => {
     assert.equal(r.class, "rate", JSON.stringify(r));
   });
 
-  // BUG (low): when the rescan candidate's replay is rate limited, the failure reason says the rescan
+  // Was a bug: when the rescan candidate's replay is rate limited, the failure reason says the rescan
   // "found nothing new", which is false and hides that the candidate was never really checked.
   test("rate limited while validating a rescan candidate: class rate, and the reason does not claim the rescan found nothing", async () => {
     saveSite(userSite("rate2"));
@@ -604,7 +604,7 @@ describe("heal without a browser (maxTier 1)", () => {
     };
     const r = await call("rate2", "user", { name: "bob" }, tier1(h));
     assert.equal(r.class, "rate", JSON.stringify(r));
-    assert.doesNotMatch(r.reason ?? "", /found nothing new/, r.reason);
+    assert.doesNotMatch(r.reason ?? "", /found nothing new/);
   });
 
   test("404 with the param in the path and a volatile in the path: example replay separates not-found from drift", async () => {
@@ -754,7 +754,7 @@ describe("heal without a browser (maxTier 1)", () => {
     assert.ok(heals().length >= 1);
   });
 
-  // BUG (low): rescan resolves script src against the trigger URL, not the document's final URL, so
+  // Was a bug: rescan resolves script src against the trigger URL, not the document's final URL, so
   // a redirected page (locale prefix, trailing-slash or app-path redirects) with a relative src loses its bundle.
   test("rescan resolves script paths against the redirected document URL", async () => {
     const server = createServer((req, res) => {
@@ -902,7 +902,7 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
     assert.ok(!loadSite("moved")!.site.operations[0]!.request.url.includes(DECOY));
   });
 
-  // BUG (high): recapture learns the new template's session refs but throws away their values
+  // Was a bug: recapture learns the new template's session refs but throws away their values
   // (learnOperation's sessionValues); runOpTrigger only stores values for the OLD op's refs. A
   // deploy that adds or renames an auth/anti-bot header (x-*-token, x-csrf-*) can then never heal:
   // the validation replay drops the header because the session store has no value for it.
@@ -946,7 +946,7 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
     assert.deepEqual(later.data, { name: "dave" });
   });
 
-  // BUG (medium): a renamed response field (user -> account) is response drift, not bad args: the
+  // Was a bug: a renamed response field (user -> account) is response drift, not bad args: the
   // example args fail too. The recapture learns the same request, so the heal says "identical" and
   // call() reports class "input" with "check the args", and nothing tells the agent to fix --extract.
   test("response field renamed: reported as drift with a re-add hint, not as input", async () => {
@@ -1050,7 +1050,7 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
     assert.deepEqual(executed, ["second post"], "only the validation send executed");
   });
 
-  // BUG (medium): a rate-limited validation doesn't stop the heal: a read spends its second try on a
+  // Was a bug: a rate-limited validation doesn't stop the heal: a read spends its second try on a
   // browser recapture against the rate-limiting site, then the op is marked stale for 30 minutes.
   test("rate limited while validating the rescan candidate: no browser recapture and no stale mark", async () => {
     let qid = OLD;
@@ -1088,7 +1088,7 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
     );
     assert.equal(staleMark("rateb", "user"), undefined, "rate limiting marked the op stale for 30 min");
   });
-  // BUG (medium): Chrome locks a profile to one process. While another api-anything process (the
+  // Was a bug: Chrome locks a profile to one process. While another api-anything process (the
   // MCP server keeps its context open until stdin closes) holds ~/.api-anything/profile, a heal's
   // recapture in this process cannot launch: the call fails and the op is marked stale for 30 min
   // with tier 3 disabled, though nothing about the site is wrong.
@@ -1131,7 +1131,7 @@ const r = await call("xp", "search", { q: "cats" }, { minIntervalMs: 0 }); await
     assert.equal(r.ok, true, `${JSON.stringify(r)}\nstale mark: ${JSON.stringify(staleMark("xp", "search"))}`);
     assert.equal(staleMark("xp", "search"), undefined, `op marked stale: ${JSON.stringify(staleMark("xp", "search"))}`);
   });
-  // BUG (high): recapture learns from the call's own args whenever they are 3+ chars and distinct.
+  // Was a bug: recapture learns from the call's own args whenever they are 3+ chars and distinct.
   // An arg that equals a constant part of the request (q="search" vs the path /api/search) becomes a
   // slot there too; the replay with the same args passes, so the template is saved and every later
   // call with other args sends its query into the URL path.
@@ -1165,7 +1165,7 @@ const r = await call("xp", "search", { q: "cats" }, { minIntervalMs: 0 }); await
     assert.equal(later.tier, 1, `slots after the heal: ${JSON.stringify(loadSite("coll")!.site.operations[0]!.slots)}`);
     assert.deepEqual((later.data as unknown[])[0], { q: "cats" });
   });
-  // BUG (medium): the example-args replay only runs for "missing" drift. A REST API that answers 404
+  // Was a bug: the example-args replay only runs for "missing" drift. A REST API that answers 404
   // for an unknown entity named in the query (/api/user?name=nosuch) is drift, so the heal runs a
   // browser recapture; the site renders its own 404 page without firing the API, so the heal
   // "fails" and the op is marked stale for 30 min (tier 3 off) because a user does not exist.
