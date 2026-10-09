@@ -639,6 +639,11 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
         `${i.op} takes ${old.params.map((p) => p.name).join(", ")}: learning its request again (--trigger, --match, --public, --example2, --from2 or --write does that) needs --example with the values capture ${i.from.capture.id} was made with. To change only what it returns, pass the recipe flags alone`,
       );
   }
+  // Before any browser run: learned as a read, a write is sent while learning it, and then on every call.
+  if (old && !old.readOnly && !i.write)
+    throw new Error(
+      `${i.op} is a write: learning it again needs --write${i.from ? ", and a capture made with --write" : ""}`,
+    );
   // before any browser run: a too-short or duplicate example would only fail after it
   if (ex1) checkExamples(ex1, "example");
   if (ex2) checkExamples(ex2, "example 2");

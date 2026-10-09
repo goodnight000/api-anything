@@ -96,7 +96,8 @@ const HELP: Record<string, string> = {
                   "all:<css>[@attr]" returns every match as a list (genres, tags)
   --embedded <regex>  JSON inside the page: group 1 marks where the JSON value starts; then --extract
   --public <header,...>  headers holding public constants (a web app's bearer): kept literal, allowed by export
-  --write         the op changes state: it is learned from intercepted, aborted requests only
+  --write         the op changes state: it is learned from intercepted, aborted requests only; learning an
+                  existing write again needs it again (it is never saved as a read)
   --description <text>
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.`,
   call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--max-tier 1|2|3] [--dry]

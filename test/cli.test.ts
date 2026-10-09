@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromeAvailable } from "../src/browser.js";
+import { addOperation } from "../src/heal.js";
+import type { TriggerStep } from "../src/types.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-cli-"));
@@ -236,7 +238,7 @@ describe("add from a saved capture", () => {
     }
   });
   /** The steps that post a text on /compose. */
-  const steps = (text: string) => [
+  const steps = (text: string): TriggerStep[] => [
     { action: "fill", selector: "#text", value: text },
     { action: "click", selector: "#post" },
   ];
@@ -365,7 +367,7 @@ describe("add from a saved capture", () => {
     assert.deepEqual(await carol("bare"), { name: "carol" });
   });
 
-  test("a write stays a write through a repair", async () => {
+  test("a write stays a write: a repair keeps it one, and learning it again without --write is refused", async () => {
     const post = `/api/graphql/${fx.state.createQueryId}/CreatePost`;
     const posts = () => fx.calls.filter((c) => c.path === post).length;
     // /compose captured with --write: the POST was aborted in the browser, so it has no answer
@@ -399,6 +401,16 @@ describe("add from a saved capture", () => {
     assert.equal(repaired.out.readOnly, false, "a repair does not relabel the write as a read");
     const refused = JSON.parse((await cli("call", "demo", "send", "text=never asked for")).stdout);
     assert.equal(refused.class, "refused", JSON.stringify(refused));
+
+    // with --example it is learned again, and without --write that would save it as a read
+    const relearn = await send("--pick-request", "2", "--example", "text=hello alice");
+    assert.equal(relearn.code, 1, relearn.stdout);
+    assert.match(relearn.out.error, /--write/);
+    assert.match((await cli("ops", "demo")).stdout, /"readOnly":false/);
+    // by its trigger too: refused before any browser runs it unintercepted
+    process.env.API_ANYTHING_HOME = HOME;
+    const again = { site: "demo", op: "send", trigger: { url: `${fx.url}/compose`, steps: steps("{text}") } };
+    await assert.rejects(addOperation({ ...again, examples: [{ text: "hello alice" }] }), /--write/);
     assert.equal(posts(), 0, "no POST reached the site");
   });
 });
