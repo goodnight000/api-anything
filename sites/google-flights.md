@@ -1,7 +1,22 @@
-# google-flights
+No account is needed. One-way, 1 adult, economy only. No pagination.
+
+- The cheapest flight on a date can be in either `search` or `top`. "Cheapest flight next month" is
+  one `priceCalendar` call per airport pair (for a metro area, one per airport: New York is JFK,
+  LGA, EWR), then `search` and `top` for the cheapest date.
+- In `search` and `top`, a metro code or city name covers all its airports, and each item's
+  `from`/`to` says which one. An ambiguous city name is resolved the way Google's search box
+  resolves it.
+- `priceCalendar`'s `pattern` refuses metro codes, but its list is not exhaustive: an unlisted metro
+  code comes back empty.
+- `via` is a flight's stop airports in order, absent for a nonstop flight. The departure date is the
+  one you asked for; only `arrivalDate` is returned.
+- A date in the past or a place Google can't resolve makes `search` and `top` return `input`: check
+  the date and places. `priceCalendar` with an empty range returns `input`.
+
+## Maintainer notes
 
 Verified 2026-09-27, logged out, US IP, from a clean `API_ANYTHING_HOME`: `verify` passes, and live
-calls covered airport, metro and city searches and 92-day calendars. No account is needed.
+calls covered airport, metro and city searches and 92-day calendars.
 
 | op | args | returns | tier |
 |---|---|---|---|
@@ -15,24 +30,18 @@ api-anything call google-flights top origin=BOS "destination=London" date=2027-0
 api-anything call google-flights priceCalendar origin=SFO destination=JFK start=2026-10-01 end=2026-10-31
 ```
 
-"Cheapest flight next month" is one `priceCalendar` call per airport pair, then `search` and `top`
-for the cheapest date to get the flights themselves. For a metro area, call the calendar once per
-airport (New York: JFK, LGA, EWR).
-
-## Places
+### Places
 
 `search` and `top` put the args into the page's own free-text query,
 `/travel/flights?q=Flights from {origin} to {destination} on {date} one way&hl=en-US&gl=US&curr=USD`,
 and Google resolves them. Airport codes (`JFK`), metro codes (`NYC`, `LON`, `TYO`) and city names
-(`New York`, `Tokyo`) all work; a metro or city covers all its airports, and each item's `from`/`to`
-says which one. An ambiguous city name is resolved the way Google's search box resolves it.
+(`New York`, `Tokyo`) all work.
 
 `priceCalendar` sends the airport code in its own slot (`["JFK",0]`). Google encodes a city there as a
 different entity (`["/m/02_286",4]`), so a metro code returns an empty calendar. The param
-`pattern` refuses 3-letter codes that are metro codes (NYC, LON, PAR, TYO, CHI, WAS, and so on);
-the list is not exhaustive, and an unlisted metro code still comes back empty.
+`pattern` refuses 3-letter codes that are metro codes (NYC, LON, PAR, TYO, CHI, WAS, and so on).
 
-## Result fields
+### Result fields
 
 `search` and `top` read the results the page embeds (`AF_initDataCallback` `ds:1`: `[2][0]` is the top
 list, `[3][0]` the other list). The JSPB paths are in `google-flights.json`. Each item:
@@ -52,11 +61,11 @@ per item. Add them to `pick` in your copy of the spec if you need them. `priceCa
 `[0][0][2]` of the batchexecute payload, one `[date, null, [[null, price], token], 1]` per day;
 `price` is missing on a day with no fare.
 
-## Known limits
+### Known limits
 
-- One-way, 1 adult, economy only. Round trips, cabins and passenger counts need their own ops.
-- `search` and `top` are disjoint: the cheapest flight on a date can be in either. Together they are
-  the whole results page, and each costs one 3 to 4 MB page download.
+- Round trips, cabins and passenger counts need their own ops.
+- `search` and `top` are disjoint. Together they are the whole results page, and each costs one
+  3 to 4 MB page download.
 - Calendar ranges were tested up to 3 months per call. The trigger (tier 3) opens the date picker,
   which requests the page's own range, not `start`/`end`. The runtime refuses that response
   when its request differs from the requested range. If direct replay fails, the calendar may
@@ -69,6 +78,6 @@ per item. Add them to `pick` in your copy of the spec if you need them. `priceCa
 - A date in the past or a place Google can't resolve makes `search`/`top` fall back to Google's
   Explore page, which has no results list. The call replays the example args once; they answer, so
   it returns `input`: check the date and places. A malformed date (`Oct 21`) is refused by the
-  param's `pattern` before anything is sent. `priceCalendar` with an empty range returns `input`.
+  param's `pattern` before anything is sent.
 - Prices and names follow `hl=en-US&gl=US&curr=USD` in the page URL and the calendar's
-  `x-goog-ext-259736195-jspb` header. No pagination. The EU consent wall was not tested.
+  `x-goog-ext-259736195-jspb` header. The EU consent wall was not tested.

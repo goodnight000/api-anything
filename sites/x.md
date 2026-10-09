@@ -1,8 +1,16 @@
-# x
+No account is needed. No tweets.
+
+- An unknown handle returns `input` from both ops.
+- `getProfile`'s `title` looks like "NASA (@NASA) on X".
+- `getUser`'s `avatar.image_url` is the `_normal` (48 px) size. Replace `_normal` with `_400x400` for
+  a larger one.
+- `getUser` sends X's public bearer, which X could rotate. Then every call returns 400 "Bad
+  Authentication data" (code 215), classified `auth`. Re-learn the op with `--public authorization`.
+
+## Maintainer notes
 
 Verified 2026-09-27, logged out, from a US IP. `api-anything verify x` passes, and both ops were called
-from a clean `API_ANYTHING_HOME` using only this bundled spec: tier 1, no cookies, no browser. No
-account is needed.
+from a clean `API_ANYTHING_HOME` using only this bundled spec: tier 1, no cookies, no browser.
 
 | op | args | returns | tier |
 |---|---|---|---|
@@ -14,7 +22,7 @@ api-anything call x getUser screen_name=spacex
 api-anything call x getProfile screen_name=NASAWebb
 ```
 
-## How it works
+### How it works
 
 - **getUser** sends `GET api.x.com/graphql/<queryId>/UserByScreenName?variables={"screenName":...}`
   with the public web-app bearer (the same constant X's JavaScript sends for every logged-out
@@ -39,7 +47,7 @@ api-anything add x getUser --from <capture> --pick-request <id> --example screen
 browser sends the same one) and lets `export` write it. The guest token and
 `x-client-transaction-id` headers were removed by hand: the bearer plus a browser user agent is enough.
 
-## Known limits
+### Known limits
 
 - **Healing getUser.** A rotated queryId returns 404 "Query not found" (drift). The browserless
   rescan finds the new id in the SSR document (`key:"<queryId>{...}",name:"UserByScreenName"`).
@@ -49,9 +57,6 @@ browser sends the same one) and lets `export` write it. The guest token and
   returns `input` too (HTTP 404).
 - If you query `spacex` itself, the soft-nav trigger's neutral page is the target page. This only
   matters for recapture.
-- The bearer is a public constant, but X could rotate it. Then every call returns 400 "Bad
-  Authentication data" (code 215), classified `auth`. Re-learn the op with `--public authorization`.
 - **No tweets.** Logged out, `UserOriginalsTimeline` returns an empty 404, even when sent by X's own
   frontend after a soft navigation. Tweets exist only in the SSR HTML, as a JS literal.
-- `avatar.image_url` is the `_normal` (48 px) size. Replace `_normal` with `_400x400` for a larger one.
 - Protected, suspended and logged-in-only fields were not tested.

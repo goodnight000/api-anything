@@ -1,9 +1,31 @@
-# linkedin
+Needs an account: there is no logged-out LinkedIn. Read-only: no posting, messaging, or connection
+requests.
+
+- The imported session is your everyday Chrome's session. If LinkedIn logs it out, your browser is
+  logged out too. Keep automated traffic light; LinkedIn may revoke a session that looks like a bot.
+  Use `api-anything login linkedin --window` for an independent session.
+- If more than one browser profile is signed in to LinkedIn, `login linkedin` without `--profile`
+  refuses and lists the candidates (profile, display name, the Chrome profile's Google email, which
+  is not the LinkedIn account's). Those can be two different LinkedIn members: ask the user which
+  one, pass `--profile "<Browser>/<Profile>"`, then run `getMe` and check the name before anything
+  else.
+- Search first when you only know a name: a company's universal name often differs from its brand
+  (`anthropic` is an unrelated investment fund; the AI company is `anthropicresearch`; Boston
+  Dynamics is `boston-dynamics`).
+- In `keywords`, apostrophes and non-ASCII letters work. A search with no matches returns `ok` with
+  `[]`.
+- An unknown or restricted `publicId` is `input`, and so is an unknown name in `getCompany`.
+- `getProfile` has no location name (only `countryCode`), follower count or experience list. Its
+  `summary` is the About text; `getMe`'s `occupation` is the headline.
+- `getCompany` returns `name`, `universalName`, `tagline` (when set), `description`, `industry`,
+  `staffCount`, `website`, `headquarters` (`{country, geographicArea, city, ...}`) and `url`.
+- `searchPeople`'s `distance` is `DISTANCE_2`, `DISTANCE_3`, ...
+
+## Maintainer notes
 
 Verified live on 2026-09-27, signed in, from a clean `API_ANYTHING_HOME`:
 `api-anything login linkedin --profile "Chrome/Profile 1"`, then `api-anything verify linkedin` passes
-(all five ops at tier 1). All ops are plain HTTP with the imported cookies, no browser. **Needs an
-account**: there is no logged-out LinkedIn.
+(all five ops at tier 1). All ops are plain HTTP with the imported cookies, no browser.
 
 | op | args | returns | tier |
 |---|---|---|---|
@@ -14,7 +36,7 @@ account**: there is no logged-out LinkedIn.
 | `searchCompanies` | `keywords` (example `anthropic`) | the first 10 company results: `name`, `subtitle` (industry, plus location when set), `followers`, `description`, `url` (`https://www.linkedin.com/company/<universalName>/`), `universalName` | 1 (about 0.6 s) |
 
 ```sh
-api-anything login linkedin --profile "Chrome/Profile 1"   # see "Several signed-in profiles" below
+api-anything login linkedin --profile "Chrome/Profile 1"   # several signed-in profiles: see the top of this file
 api-anything call linkedin getMe                           # check WHO you are signed in as
 api-anything call linkedin getProfile publicId=satyanadella
 api-anything call linkedin getCompany universalName=openai
@@ -22,7 +44,7 @@ api-anything call linkedin searchPeople "keywords=rust engineer zurich"
 api-anything call linkedin searchCompanies "keywords=boston dynamics"
 ```
 
-## Chaining search into get
+### Chaining search into get
 
 LinkedIn's search API returns only the profile or company URL, so the ops cut the id out of it
 (`pick` with `publicId=navigationUrl~/in/([^/?]+)`):
@@ -30,25 +52,13 @@ LinkedIn's search API returns only the profile or company URL, so the ops cut th
 - `searchPeople` `publicId` `satyanadella` -> `getProfile publicId=satyanadella`.
 - `searchCompanies` `universalName` `anthropicresearch` -> `getCompany universalName=anthropicresearch`.
 
-Search first when you only know a name: a company's universal name often differs from its brand
-(`anthropic` is an unrelated investment fund; the AI company is `anthropicresearch`; Boston Dynamics
-is `boston-dynamics`).
-
 Verified 2026-09-27 with the chain: `searchPeople` for `satya nadella`, `patrick collison`,
 `rust engineer zurich` and `conan o'brien`, then `getProfile` for `satyanadella`,
 `patrickcollison` and `conanobrien`; `searchCompanies` for `anthropic`, `stripe`, `openai` and
 `boston dynamics`, then `getCompany` for `anthropicresearch`, `openai` and `boston-dynamics`. Every
 call was tier 1.
 
-## Several signed-in profiles
-
-If more than one browser profile is signed in to LinkedIn, `login linkedin` without `--profile`
-refuses and lists the candidates (profile, display name, the Chrome profile's Google email). Those
-can be two different LinkedIn members: ask the user which one, pass
-`--profile "<Browser>/<Profile>"`, then run `getMe` and check the name before anything else. The
-email shown is the Chrome profile's, not the LinkedIn account's.
-
-## How it works
+### How it works
 
 Every op calls LinkedIn's Voyager REST API directly. Auth is the imported `li_at` cookie plus a
 `csrf-token` header that mirrors the `JSESSIONID` cookie with its quotes stripped
@@ -76,25 +86,21 @@ the constant `x-restli-protocol-version: 2.0.0`. The spec holds no credential. N
   `%2520`: people search still matched loosely, but company search found nothing for any multi-word
   name (`boston dynamics` gave 0 results).
 
-## Known limits
+### Known limits
 
 - **No commas, colons or parentheses in `keywords`.** They are Rest.li syntax, and the value can't
   be encoded so LinkedIn reads them as text (see above). The param's `pattern` refuses them; use
-  spaces (`rust engineer zurich`). Apostrophes and non-ASCII letters work.
+  spaces (`rust engineer zurich`).
 - Premium accounts were not tested; the cluster-independent extract should cover them.
-- A search with no matches answers `{"elements":[]}`, which returns `ok` with `[]`.
+- A search with no matches answers `{"elements":[]}`.
 - **An unknown or restricted `publicId` is `input`.** LinkedIn answers
   `403 {"message":"This profile can't be accessed"}`. A read's bare 403 replays the example args
   once; they answer, so the call returns `input` at tier 1 with no browser run and no stale mark
-  (not verified live against LinkedIn). `getCompany` on an unknown name returns `input` too.
-- **No location name or follower count in `getProfile`.** The default projection has only
-  `location.countryCode` and a `geoLocation.geoUrn`. It has no experience list (only a card URN).
+  (not verified live against LinkedIn).
+- `getProfile`'s default projection has only `location.countryCode` and a `geoLocation.geoUrn` for
+  the location, and only a card URN for the experience list.
 - **No `searchJobs`.** `/voyager/api/voyagerJobsDashJobCards` answers 500 without a `decorationId`,
   and a baked `decorationId` would break on the next deploy.
 - **Healing doesn't apply.** LinkedIn's profile and search pages are now React Server Components.
   The ops' trigger pages don't call these Voyager endpoints, so a heal finds no matching request. A
   real change surfaces as `drift` with a hint to re-add.
-- **The imported session is your everyday Chrome's session.** If LinkedIn logs it out, your browser
-  is logged out too. Keep automated traffic light; LinkedIn may revoke a session that looks like a
-  bot. Use `api-anything login linkedin --window` for an independent session.
-- Read-only. No posting, messaging, or connection requests.

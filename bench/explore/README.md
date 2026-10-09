@@ -97,8 +97,8 @@ Search by title, then choose the result by the book's author with the most ratin
 Searching "title author" instead ([reliability-title-author.jsonl](results/goodreads/reliability-title-author.jsonl))
 found the intended book for only 17 of 30. Goodreads's own search page ranks summaries and study
 guides first for those queries: the operation's top result matched the rendered page's top
-result 29 of 30 times. That's the site's ranking, not a replay error. The site notes tell callers
-to search by title.
+result 29 of 30 times. That's the site's ranking, not a replay error. The `searchBooks`
+description tells callers to search by title.
 
 ## Is it worth it? Browser agent vs API Anything agent
 
