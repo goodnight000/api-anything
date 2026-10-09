@@ -556,6 +556,50 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     }
   });
 
+  test("the run's only page closes while a tab it opened still has no page: the tab goes with the run, and other runs' tabs load", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    // Guarded like a write, except that the slow tab's own document may be asked for (and then
+    // waits at the server). The match never answers, so the run waits a few seconds without
+    // touching its page.
+    const run = runTrigger({
+      url: `${fx.url}/late-tab-page?name=only`,
+      profileDir: profileDir(),
+      match: () => false,
+      intercept: (e, acting) => acting && !e.request.url.endsWith("/held-vote"),
+    }).catch(() => undefined);
+    // after the run has started: it holds the browser. The interval is another user of it, so
+    // that the browser (and anything the run left behind) is still there once the run is over.
+    const ctx = await openBrowser({ profileDir: profileDir() });
+    const keep = setInterval(() => void openBrowser({ profileDir: profileDir() }), 1000);
+    const other = await ctx.newPage();
+    try {
+      await other.goto(`${fx.url}/vote-page?name=other`);
+      assert.ok(await until(() => fx.calls.slice(seen).includes("/held-vote"), 20_000), "the slow tab was opened");
+      await ctx
+        .pages()
+        .find((p) => p.url() === `${fx.url}/late-tab-page?name=only`)!
+        .close();
+      await run;
+      // A tab is reported once its first navigation is over: at its address, or on Chrome's error
+      // page when a guard aborted it (which Chrome reloads a second later, proving nothing).
+      const [tab] = await Promise.all([ctx.waitForEvent("page"), other.click("#newtab")]);
+      const landed = tab.url();
+      await tab.close();
+      assert.equal(landed, `${fx.url}/api/vote?how=newtab`, "what the run left behind aborted another run's tab");
+      fx.release(); // the slow tab's document, with a script that POSTs: nobody is left to run it
+      await sleep(500);
+      assert.deepEqual(votes().slice(before), ["/api/vote?how=newtab"]);
+      const open = ctx.pages().map((p) => p.url());
+      assert.ok(!open.some((u) => u.includes("/held-vote")), `the run's tab was left open: ${open}`);
+    } finally {
+      clearInterval(keep);
+      await run;
+      await other.close().catch(() => {});
+    }
+  });
+
   test("a tab the run's page opened that has no page yet when the run ends is closed with it, and never writes", async () => {
     process.env.API_ANYTHING_HOME = home;
     const before = votes().length;
