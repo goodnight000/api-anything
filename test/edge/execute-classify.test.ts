@@ -158,6 +158,43 @@ describe("tier 1 cookies and redirects", () => {
     assert.equal(w.ok, false, JSON.stringify(w));
     assert.match(w.reason ?? "", /it would send this write again/);
     assert.equal(fx.otherHits.length, 0, "a 307 would send the write a second time");
+
+    // the same request as a read (a query sent as a POST) is taken on, without its authorization
+    site("xoread", {
+      ...rd("query", "/away?s=307"),
+      request: {
+        ...wrapped("").request,
+        url: `${fx.base}/away?s=307`,
+        headers: { authorization: "Bearer PUBLIC-LITERAL", "content-type": "application/json" },
+        body: "{}",
+      },
+      response: { format: "json" },
+    });
+    const q = await call("xoread", "query", {}, t1);
+    assert.equal(q.ok, true, JSON.stringify(q));
+    assert.deepEqual(
+      fx.otherHits.map((h) => [h.method, h.body, h.headers.authorization]),
+      [["POST", "{}", undefined]],
+      "307 keeps the method and body; even a literal authorization is dropped cross-origin",
+    );
+  });
+
+  test("a write sent on by 303 to a page that answers 401 ran: it is not sent again", async () => {
+    site("prg401", {
+      ...rd("save", "/hop?s=303&to=/api/token"),
+      readOnly: false,
+      request: { method: "POST", url: `${fx.base}/hop?s=303&to=/api/token`, headers: {}, body: "x=1" },
+    });
+    fx.hits.length = 0;
+    const r = await call("prg401", "save", {}, { ...t1, allowWrites: true });
+    assert.deepEqual(
+      fx.hits.map((h) => `${h.method} ${h.url}`),
+      ["POST /hop?s=303&to=/api/token", "GET /api/token"],
+      JSON.stringify(r),
+    );
+    assert.equal(r.ok, false);
+    assert.match(r.next ?? "", /check the site/);
+    assert.doesNotMatch(r.next ?? "", /retry once/);
   });
 
   test("a cross-origin 307 is not followed when a body slot holds a session value, whatever encodes it (base64)", async () => {
@@ -198,7 +235,7 @@ describe("tier 1 cookies and redirects", () => {
     const r = await call("loop", "l", {}, t1);
     assert.equal(r.ok, false);
     assert.equal(r.class, "error");
-    assert.ok(fx.hits.length <= 21);
+    assert.ok(fx.hits.length <= 6);
   });
 
   test("a redirect to a login page where JSON was expected is auth", async () => {
@@ -924,17 +961,33 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
       assert.deepEqual(sends(), ["/hop?s=302", "/landed"]);
     });
 
-    test(`tier ${tier}: six redirects are followed to the data; a loop ends saying so, and how to go on`, async () => {
+    // each tier's cap is the one it had before redirects were followed by hand: 5 at tier 1, 20 at tier 2
+    const cap = tier === 1 ? 5 : 20;
+
+    test(`tier ${tier}: a chain is followed up to ${cap} redirects; one more ends saying so, and how to go on`, async () => {
       site(`chain${tier}`, rd("far", "/chain", { minTier: tier }), rd("round", "/loop", { minTier: tier }));
       const far = await call(`chain${tier}`, "far", {}, o);
-      assert.deepEqual(far.data, [{ end: 6 }], JSON.stringify(far));
+      if (tier === 2) assert.deepEqual(far.data, [{ end: 6 }], JSON.stringify(far));
+      else assert.match(far.reason ?? "", /^stopped after 5 redirects/, JSON.stringify(far));
 
       fx.hits.length = 0;
       const r = await call(`chain${tier}`, "round", {}, o);
       assert.equal(r.ok, false, JSON.stringify(r));
-      assert.match(r.reason ?? "", /^stopped after 20 redirects, the last one to http:\/\/127\.0\.0\.1:\d+$/);
+      assert.match(
+        r.reason ?? "",
+        new RegExp(`^stopped after ${cap} redirects, the last one to http://127\\.0\\.0\\.1:\\d+$`),
+      );
       assert.match(r.next ?? "", /do not retry.*api-anything add chain\d round/);
-      assert.equal(fx.hits.filter((h) => h.url === "/loop").length, 21);
+      assert.equal(fx.hits.filter((h) => h.url === "/loop").length, cap + 1);
+    });
+
+    test(`tier ${tier}: a GET write sent on to a new address at each hop reaches the server no more than ${cap + 1} times`, async () => {
+      site(`votes${tier}`, { ...rd("vote", "/vote/0", { minTier: tier }), readOnly: false });
+      fx.hits.length = 0;
+      const r = await call(`votes${tier}`, "vote", {}, { ...o, allowWrites: true });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.equal(fx.hits.filter((h) => h.url.startsWith("/vote")).length, cap + 1);
+      assert.match(r.next ?? "", /check the site first/);
     });
   }
 

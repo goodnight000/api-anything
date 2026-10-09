@@ -59,6 +59,9 @@ export async function startFixture(): Promise<Fixture> {
     hits.push({ method: req.method!, url: req.url!, headers: req.headers, body });
     const u = new URL(req.url!, "http://x");
     const cookie = req.headers.cookie ?? "";
+    // a GET write that counts a vote at each address and sends the browser on to the next one
+    const vote = /^\/vote\/(\d+)$/.exec(u.pathname);
+    if (vote) return void res.writeHead(302, { location: `/vote/${Number(vote[1]) + 1}` }).end();
     switch (u.pathname) {
       // a consent/session bootstrap: the cookie set on the redirect is required on the next hop
       case "/bootstrap":
@@ -124,6 +127,7 @@ export async function startFixture(): Promise<Fixture> {
       // a write that is passed on, with its method and body, for as long as it is followed
       case "/again":
         return void res.writeHead(Number(u.searchParams.get("s")), { location: req.url! }).end();
+      // a GET write that counts a vote at each address and sends the browser on to the next one
       // six redirects, then the data
       case "/chain": {
         const n = Number(u.searchParams.get("n") ?? 0);

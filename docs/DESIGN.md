@@ -385,7 +385,9 @@ the browser profile) stops at once and marks nothing stale.
 
 One redirect policy, for tiers 1 and 2 (`nextHop`). A write follows no redirect that would send it
 again (see writes above), so a write behind a 307/308 fails where it worked before. A request is taken
-through at most 20 redirects as in a browser's own fetch (one more fails the call saying that the limit was reached, and its `next` says not to retry
+through as many redirects as its tier took before redirects were followed by hand: 5 at tier 1, 20
+at tier 2 as in a browser's own fetch (more at tier 1 would send a GET write that moves on at each
+hop, or carry a copied value, further than it ever went). One more fails the call saying that the limit was reached, and its `next` says not to retry
 but to learn the operation where the site now answers): 303 after anything but a GET or HEAD, and 301/302 after a POST,
 make a bodiless GET, without the headers that described the body (Content-Type, -Language,
 -Encoding, -Location, -Length), as a browser's own redirect does; every other redirect sends the
@@ -417,7 +419,7 @@ Heal strategies, cheapest first:
   is a real send, only a token that is the single candidate is tried. And for a write, the pages the
   rescan fetches must not be the write: a trigger that is the write's own address (a GET vote link)
   would be performed by a plain fetch, before any validation and with nothing to intercept it. So
-  redirects (301, 302, 303, 307, 308 only; at most 20, for reads too) are taken by hand, and no address matching the op's `match` as a GET (or, for an op with
+  redirects (301, 302, 303, 307, 308 only; at most 20, as the plain fetch it replaced) are taken by hand, and no address matching the op's `match` as a GET (or, for an op with
   no `match`, its template's own address) is fetched, at first or at any hop. The rescan then finds
   nothing and the recapture, which intercepts, does the work.
 - **recapture**: run the trigger in the browser, match, re-learn, and validate by replaying at the op's
