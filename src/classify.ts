@@ -295,13 +295,11 @@ export function classify(op: Operation, r: Observed): Classified {
       ? missing(`HTTP ${r.status}`)
       : is("input", `HTTP ${r.status}: not found`);
   }
-  if (r.status === 400) {
-    if (DRIFT.test(body)) return is("drift", `HTTP 400 schema error: ${snippet(body)}`);
-    // a 400 form page (a signup's "username taken") shows a password field; only the wording counts
-    if (LOGIN_SAID.test(body)) return is("auth", `HTTP 400 with login markers: ${snippet(body)}`);
-    if (mentionsParam(op, body)) return is("input", `HTTP 400: ${snippet(body)}`);
-    return is("error", `HTTP 400: ${snippet(body)}`);
-  }
+  if (r.status === 400 && DRIFT.test(body)) return is("drift", `HTTP 400 schema error: ${snippet(body)}`);
+  // a 400/422 form page (a signup's "username taken") shows a password field; only the wording counts
+  if ((r.status === 400 || r.status === 422) && LOGIN_SAID.test(body))
+    return is("auth", `HTTP ${r.status} with login markers: ${snippet(body)}`);
+  if (r.status === 400 && mentionsParam(op, body)) return is("input", `HTTP 400: ${snippet(body)}`);
   if (r.status < 200 || r.status >= 300) return is("error", `HTTP ${r.status}: ${snippet(body)}`);
 
   let data: unknown;

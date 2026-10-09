@@ -172,6 +172,18 @@ test("auth and rate signals win over drift when the data is gone (X code 215, In
   );
 });
 
+test("login wording on 400, 403 and 422 is auth; a 422 validation error or form page is not", () => {
+  for (const status of [400, 403, 422]) {
+    assert.equal(cls(op(), json(status, { message: "Bad Authentication data" })), "auth", `HTTP ${status}`);
+  }
+  assert.equal(cls(op(), json(422, { errors: { email: ["is invalid"] } })), "error");
+  assert.equal(cls(op(), json(422, { error: "screen_name is invalid" })), "error");
+  // a signup's "username taken" page shows a password field; only the wording counts
+  const taken =
+    '<form action="/users"><p>Username has already been taken</p><input name="username"><input type="password" name="pw"></form>';
+  assert.equal(cls(op({ readOnly: false }), html(422, taken)), "error");
+});
+
 test("missing data is drift flagged missing, so the caller can check the example args first", () => {
   assert.deepEqual(classify(op(), json(200, { data: {} })), {
     class: "drift",
