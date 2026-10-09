@@ -663,23 +663,40 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     ["page", "the page"],
     ["frame", "a frame the page makes"],
   ] as const) {
-    test(`a shared worker cannot be started by ${by}: what it sends would reach no route and no capture`, async () => {
+    test(`a shared worker started by ${by} runs, and its write is stopped and recorded like the page's`, async () => {
       process.env.API_ANYTHING_HOME = home;
       const before = votes().length;
       const seen = fx.calls.length;
-      // guarded like a tier-3 read: the worker's script (a GET) would load, and its POST is what must not leave
-      await runTrigger({
+      // guarded like a write's learning run: no unsafe request leaves, whoever sends it
+      const r = await runTrigger({
         url: `${fx.url}/shared-worker-page?how=${how}&name=worker`,
         profileDir: profileDir(),
-        intercept: (e, acting) => acting && e.request.method !== "GET",
+        intercept: (e) => e.request.method !== "GET",
       });
       await sleep(300);
       const calls = fx.calls.slice(seen);
       assert.ok(calls.includes("/api/data?name=worker"), "the page ran");
+      assert.ok(
+        calls.some((c) => c.startsWith("/shared-worker.js")),
+        "the shared worker was not started",
+      );
       assert.deepEqual(votes().slice(before), [], "a shared worker wrote");
-      assert.ok(!calls.includes("/shared-worker.js"), "a shared worker was started");
+      assert.deepEqual(
+        r.exchanges.filter((e) => e.aborted).map((e) => `${e.request.method} ${new URL(e.request.url).pathname}`),
+        ["POST /api/vote"],
+        "the stopped write is not in the capture",
+      );
     });
   }
+
+  test("an app that waits for its shared worker starts, guarded or not", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    for (const intercept of [undefined, (e: { request: { method: string } }) => e.request.method !== "GET"]) {
+      const r = await runTrigger({ url: `${fx.url}/worker-app?name=app`, profileDir: profileDir(), intercept });
+      const urls = r.exchanges.map((e) => new URL(e.request.url).pathname + new URL(e.request.url).search);
+      assert.ok(urls.includes("/api/data?name=app"), `${intercept ? "guarded" : "unguarded"}: ${urls}`);
+    }
+  });
 
   test("a tab the run's page opened that has no page yet when the run ends is closed with it, and never writes", async () => {
     process.env.API_ANYTHING_HOME = home;

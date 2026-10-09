@@ -214,9 +214,11 @@ stray tab to close, and 15 s for the rounds together. The guards are lifted only
 is known to be closed. If one is not, the browser is still released, and both guards stay until the
 last of them is gone: the route, which acts on the run's pages only, and the socket guard, although
 it drops every run's sends. A page that is still open can still write, and time passing is no sign
-that it cannot. Service workers
-and shared workers are blocked in the profile, since their fetches bypass routing (a dedicated
-worker's are routed). The op is learned from the intercepted
+that it cannot. Service workers are blocked in the profile, since their fetches bypass routing (a
+dedicated worker's are routed). A shared worker's bypass routing too, but sites need them, so they
+run and are guarded instead: while a guarded run is under way each shared worker's requests are
+paused through the browser's own session and put to the guard, and what it stops is recorded like
+a page's. The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
 run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the
 steps are not running yet: its own verify POSTs (AWS WAF's `mp_verify`, Cloudflare's
@@ -340,10 +342,18 @@ send a request again (its own scripts, a retry after a navigation or a connectio
   to. Only if nothing fired does it load the URL. An injected `<a>` is not routed by React Router,
   TanStack or Comet, so it would be a second full page load that fires no data XHR.
 - Service workers are blocked in the profile: their fetches bypass routing and capture. So do a
-  shared worker's, so pages get no `SharedWorker` constructor (Chrome for Android has none either).
-  That is for the whole profile and not per guarded run: a new tab's first document runs before a
-  script could be set for that page alone, and a worker started by an unguarded page of the same
-  site (a tier-2 origin page) would be joined without a request.
+  shared worker's, but a site's sign-in or start-up can depend on one, so shared workers run. From
+  the first guarded run on, every shared worker in the browser is attached to through the browser's
+  own DevTools session and its requests are paused (Network and Fetch both on: with Fetch alone
+  Chrome pauses none of them); each is put to the guards of the runs under way, failed if any says
+  so, else let go. It is every guarded run's guard on every worker: a worker belongs to no page, a
+  guarded page can join one an unguarded page started, so it errs on the side of not sending.
+  Playwright's own session lets a new worker run as soon as it has looked at it, so holding it at
+  start is no guarantee; instead a guarded page's tap answers nothing while a worker is being
+  attached, and the worker's script is fetched through that tap, so it has no code to run before
+  its requests are paused. A worker that cannot be attached to is closed while a guard is set.
+  Not covered: a worker an unguarded page starts while another run is guarded runs its first lines
+  before it is attached.
 - A per-site minimum interval between network requests (default 1 s) keeps usage at human scale.
 
 ## Response extraction and token efficiency
