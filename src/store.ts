@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setAt, walk } from "./codec.js";
 import { isCredential, leafName } from "./learn.js";
-import { ensureDir, home, loadSession, readJson, safeName, withLock, writePrivate, type Session } from "./session.js";
+import { ensureDir, home, loadSession, readJson, type Session, safeName, withLock, writePrivate } from "./session.js";
 import { parseSite, type Site } from "./spec.js";
 
 export const BUNDLED_DIR = fileURLToPath(new URL("../sites", import.meta.url));
@@ -124,7 +124,9 @@ export function appendHeal(entry: HealEntry, now = Date.now()): void {
   const file = join(home(), "heals.jsonl");
   appendFileSync(file, `${JSON.stringify({ at: new Date(now).toISOString(), ...entry })}\n`, { mode: 0o600 });
   chmodSync(file, 0o600);
-  updateState((s) => void (s.healedAt[key(entry.site, entry.op)] = now));
+  updateState((s) => {
+    s.healedAt[key(entry.site, entry.op)] = now;
+  });
 }
 
 export function lastHealAt(site: string, op: string): number | undefined {
@@ -139,7 +141,9 @@ export function markStale(
   now = Date.now(),
   extra: { tier3?: boolean } = {},
 ): void {
-  updateState((s) => void (s.stale[key(site, op)] = { until: now + ttlMs, reason, ...extra }));
+  updateState((s) => {
+    s.stale[key(site, op)] = { until: now + ttlMs, reason, ...extra };
+  });
 }
 
 export function clearStale(site: string, op: string): void {
@@ -163,7 +167,10 @@ export function staleList(now = Date.now()): { site: string; op: string; until: 
 
 /** The tier an op escalated to; undefined forgets it (the op's own minTier applies again). */
 export function rememberTier(site: string, op: string, tier: 1 | 2 | 3 | undefined): void {
-  updateState((s) => void (tier === undefined ? delete s.tier[key(site, op)] : (s.tier[key(site, op)] = tier)));
+  updateState((s) => {
+    if (tier === undefined) delete s.tier[key(site, op)];
+    else s.tier[key(site, op)] = tier;
+  });
 }
 
 export function rememberedTier(site: string, op: string): 1 | 2 | 3 | undefined {
@@ -215,7 +222,9 @@ function decodings(v: string): Set<string> {
     const next: string[] = [];
     for (const f of frontier) {
       for (const d of [pctDecode(f, false), pctDecode(f, true), jsonUnescape(f), ...base64Texts(f)]) {
-        if (!out.has(d)) out.add(d), next.push(d);
+        if (out.has(d)) continue;
+        out.add(d);
+        next.push(d);
       }
     }
     frontier = next;
@@ -290,8 +299,9 @@ export function scanSecrets(
         )
         .find(([, m]) => m);
       if (hit) warnings.push(`${path} looks like ${hit[0]} (${hit[1]!.slice(0, 24)}...); check it is public`);
-    } else if (Array.isArray(v)) v.forEach((x, i) => visit(x, `${path}[${i}]`));
-    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) visit(x, `${path}.${k}`);
+    } else if (Array.isArray(v)) {
+      for (const [i, x] of v.entries()) visit(x, `${path}[${i}]`);
+    } else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) visit(x, `${path}.${k}`);
   };
   visit(value, "$");
   return { secrets: [...new Set(secrets)], warnings: [...new Set(warnings)] };

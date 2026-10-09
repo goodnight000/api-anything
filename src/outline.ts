@@ -4,7 +4,7 @@
  * site-specific rules: JSON outlines, JSON embedded in a page (JSON-LD, __NEXT_DATA__, state
  * assignments), and repeated HTML items that carry an example value.
  */
-import { parse as parseHtml, type HTMLElement } from "node-html-parser";
+import { type HTMLElement, parse as parseHtml } from "node-html-parser";
 import { extractEmbedded, getPath, innerJson, parseBody } from "./extract.js";
 import { suggestExtract } from "./learn.js";
 

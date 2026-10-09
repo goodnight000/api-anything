@@ -60,6 +60,7 @@ export function jsonValueEnd(s: string, i: number): number {
 }
 
 /** Visit each member/element of the container at i as (key, valueStart). Return true to stop. */
+// biome-ignore lint/suspicious/noConfusingVoidType: a visitor that never stops returns nothing
 function eachChild(s: string, i: number, fn: (key: string, start: number) => boolean | void): void {
   const obj = s[i] === "{";
   const close = obj ? "}" : "]";
@@ -419,7 +420,9 @@ export function walk(req: Request): Leaf[] {
     if (walkInner(value, at, out)) leaf.container = true;
   };
   const u = splitUrl(req.url);
-  u.segments.forEach((seg, i) => seg && add([`path:${i}`], decode(seg, false)));
+  u.segments.forEach((seg, i) => {
+    if (seg) add([`path:${i}`], decode(seg, false));
+  });
   // A repeated key (tag=a&tag=b) is walked at every occurrence: query:tag, query[1]:tag, ...
   const pairs = (kind: string, raw: string) => {
     const seen = new Map<string, number>();

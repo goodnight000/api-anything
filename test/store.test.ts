@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { Site } from "../src/spec.ts";
 import {
   appendHeal,
   clearStale,
@@ -16,7 +17,6 @@ import {
   staleList,
   staleMark,
 } from "../src/store.ts";
-import type { Site } from "../src/spec.ts";
 
 const site = (description: string): Site => ({
   name: "demo",

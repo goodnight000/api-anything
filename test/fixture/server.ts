@@ -216,7 +216,8 @@ export async function startFixture(): Promise<Fixture> {
         ? json(res, 200, { data: { secret: "only for you" } })
         : html(200, LOGIN_PAGE);
 
-    if ((m = p.match(/^\/api\/graphql\/([^/]+)\/(UserByName|CreatePost)$/))) {
+    m = p.match(/^\/api\/graphql\/([^/]+)\/(UserByName|CreatePost)$/);
+    if (m) {
       const [, qid, op] = m;
       if (qid !== (op === "UserByName" ? state.userQueryId : state.createQueryId))
         return send(res, 404, "text/plain", "");

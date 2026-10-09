@@ -29,7 +29,10 @@ describe("heal", { skip: !chromeAvailable() && "Google Chrome not installed" }, 
   const servers: Server[] = [];
   after(async () => {
     await closeBrowser();
-    for (const s of servers) s.closeAllConnections(), s.close();
+    for (const s of servers) {
+      s.closeAllConnections();
+      s.close();
+    }
     rmSync(HOME, { recursive: true, force: true });
   });
 

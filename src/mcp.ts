@@ -217,7 +217,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
           true,
         );
       }
-      let imported;
+      let imported: Awaited<ReturnType<typeof importSession>>;
       try {
         imported = await importSession(t.site, t.url, { loginCookies: t.loginCookies, profile: source });
       } catch (e) {

@@ -1,14 +1,14 @@
 /** Bundled site specs: their recipes against trimmed copies of the live responses, and their param rules. */
-import { test } from "node:test";
+
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after } from "node:test";
-import { parseSite, type Operation } from "../src/spec.ts";
+import { after, test } from "node:test";
 import { judge } from "../src/classify.ts";
 import { call } from "../src/execute.ts";
 import { buildRequest } from "../src/http.ts";
+import { type Operation, parseSite } from "../src/spec.ts";
 import type { StoredCookie } from "../src/types.ts";
 
 const raw = (site: string) => JSON.parse(readFileSync(new URL(`../sites/${site}.json`, import.meta.url), "utf8"));
@@ -143,7 +143,10 @@ test("google-flights search with a malformed date is input with the param's hint
     "google-flights",
     "search",
     { origin: "SFO", destination: "NYC", date: "tomorrowish-bad" },
-    (async () => (sent++, new Response(""))) as typeof fetch,
+    (async () => {
+      sent++;
+      return new Response("");
+    }) as typeof fetch,
   );
   assert.equal(r.class, "input", JSON.stringify(r));
   assert.match(
@@ -151,12 +154,10 @@ test("google-flights search with a malformed date is input with the param's hint
     /param "date" must be a departure date as YYYY-MM-DD, e\.g\. 2027-04-15, got "tomorrowish-bad"/,
   );
   assert.equal(sent, 0);
-  const kw = await callBundled(
-    "linkedin",
-    "searchCompanies",
-    { keywords: "rust, zurich" },
-    (async () => (sent++, new Response(""))) as typeof fetch,
-  );
+  const kw = await callBundled("linkedin", "searchCompanies", { keywords: "rust, zurich" }, (async () => {
+    sent++;
+    return new Response("");
+  }) as typeof fetch);
   assert.equal(kw.class, "input", JSON.stringify(kw));
   assert.equal(sent, 0);
 });

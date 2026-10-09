@@ -4,9 +4,9 @@
 // Writes bench/video/raw/ (full logs, the .webm and timeline.json; not committed). Rename it to
 // raw-runN before the next race, then render the chosen run with render.mjs.
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { MODEL, TASKS, runTrial, toolCalls } from "../run-agents.mjs";
+import { MODEL, runTrial, TASKS, toolCalls } from "../run-agents.mjs";
 
 const here = import.meta.dirname;
 const { values: v } = parseArgs({ options: { task: { type: "string", default: "flights-5" } } });

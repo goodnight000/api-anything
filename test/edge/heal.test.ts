@@ -17,7 +17,7 @@ import { chromeAvailable, closeBrowser } from "../../src/browser.ts";
 import { call, heal } from "../../src/execute.ts";
 import { addOperation, rescan } from "../../src/heal.ts";
 import { loadSession, saveSession } from "../../src/session.ts";
-import { parseSite, type Operation } from "../../src/spec.ts";
+import { type Operation, parseSite } from "../../src/spec.ts";
 import { BUNDLED_DIR, loadSite, markStale, saveSite, staleMark } from "../../src/store.ts";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-heal-"));
@@ -416,10 +416,14 @@ describe("heal without a browser (maxTier 1)", () => {
             `e.exports={queryId:"${RIGHT}",operationName:"CreateTweet",operationType:"mutation"};`,
         );
       }
-      if (init?.method === "POST" && url.includes(`/graphql/${DOWNVOTE}/`))
-        return executed.push("CreateTweetDownvote"), json({ data: { downvoted: true } });
-      if (init?.method === "POST" && url.includes(`/graphql/${RIGHT}/`))
-        return executed.push("CreateTweet"), json({ data: { create_tweet: { id: "1" } } });
+      if (init?.method === "POST" && url.includes(`/graphql/${DOWNVOTE}/`)) {
+        executed.push("CreateTweetDownvote");
+        return json({ data: { downvoted: true } });
+      }
+      if (init?.method === "POST" && url.includes(`/graphql/${RIGHT}/`)) {
+        executed.push("CreateTweet");
+        return json({ data: { create_tweet: { id: "1" } } });
+      }
       return new Response("", { status: 404 });
     };
     await call("wr", "createTweet", { text: "hi there" }, { ...tier1(h), allowWrites: true });
@@ -695,7 +699,10 @@ describe("heal without a browser (maxTier 1)", () => {
       if (path.includes("[]")) continue;
       const keys = path.split(".");
       let o = body as Record<string, unknown>;
-      for (const k of keys.slice(0, -1)) o = (o[k] ??= {}) as Record<string, unknown>;
+      for (const k of keys.slice(0, -1)) {
+        o[k] ??= {};
+        o = o[k] as Record<string, unknown>;
+      }
       const last = keys.at(-1)!;
       if (o[last] === undefined)
         o[last] =
@@ -808,7 +815,10 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
   const servers: Server[] = [];
   after(async () => {
     await closeBrowser();
-    for (const s of servers) s.closeAllConnections(), s.close();
+    for (const s of servers) {
+      s.closeAllConnections();
+      s.close();
+    }
     rmSync(HOME, { recursive: true, force: true });
   });
   const start = async (h: Parameters<typeof serve>[0]) => {
@@ -1015,8 +1025,10 @@ describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Goo
           `<html><body><input id="t"><button id="go">Post</button><script>document.getElementById("go").onclick=()=>fetch("/api/${qid}/CreatePost",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({text:document.getElementById("t").value})})</script></body></html>`,
         );
       }
-      if (req.method === "POST" && u.pathname === `/api/${qid}/CreatePost`)
-        return executed.push(JSON.parse(body).text), sendJson(res, { ok: 1 });
+      if (req.method === "POST" && u.pathname === `/api/${qid}/CreatePost`) {
+        executed.push(JSON.parse(body).text);
+        return sendJson(res, { ok: 1 });
+      }
       sendJson(res, {}, 404);
     });
     const steps = [

@@ -12,7 +12,7 @@ import { classify } from "../../src/classify.ts";
 import { call } from "../../src/execute.ts";
 import { capOutput, pick } from "../../src/extract.ts";
 import { saveSession } from "../../src/session.ts";
-import { parseSite, type Operation } from "../../src/spec.ts";
+import { type Operation, parseSite } from "../../src/spec.ts";
 import { saveSite } from "../../src/store.ts";
 
 const TMP = mkdtempSync(join(tmpdir(), "aa-round2-"));

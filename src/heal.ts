@@ -4,20 +4,11 @@
  */
 import { join } from "node:path";
 import { chromeAvailable, ProfileInUse, runTrigger } from "./browser.js";
-import { botWall, judge, type Class } from "./classify.js";
+import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
-import {
-  ASSET_EXT,
-  capturePages,
-  checkExamples,
-  hashLike,
-  learnOperation,
-  matches,
-  rankCandidates,
-  type Args,
-} from "./learn.js";
+import { type Args, ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches } from "./learn.js";
 import {
   cookieHeaderFor,
   home,

@@ -7,8 +7,8 @@ import { spawn } from "node:child_process";
 import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
-import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 export const TASKS = {
   "flights-1":
@@ -101,13 +101,12 @@ export function runTrial(task, arm, { log, video, onEvent, seed } = {}) {
       result;
     child.stdout.on("data", (chunk) => {
       buf += chunk;
-      let i;
-      while ((i = buf.indexOf("\n")) >= 0) {
+      for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
         const line = buf.slice(0, i);
         buf = buf.slice(i + 1);
         if (!line.trim()) continue;
         const ev = { t: Date.now() - start, ...JSON.parse(line) };
-        if (log) appendFileSync(log, JSON.stringify(ev) + "\n");
+        if (log) appendFileSync(log, `${JSON.stringify(ev)}\n`);
         if (ev.type === "result") result = ev;
         onEvent?.(ev);
       }

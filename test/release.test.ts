@@ -5,13 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { chromeAvailable, closeBrowser } from "../src/browser.js";
+import { judge } from "../src/classify.js";
 import { call } from "../src/execute.js";
-import { addOperation, healOperation, runOpTrigger, type CaptureFile } from "../src/heal.js";
+import { addOperation, type CaptureFile, healOperation, runOpTrigger } from "../src/heal.js";
 import { buildRequest, send } from "../src/http.js";
 import { learnOperation } from "../src/learn.js";
-import { judge } from "../src/classify.js";
-import { parseSite } from "../src/spec.js";
 import { loadSession } from "../src/session.js";
+import { parseSite } from "../src/spec.js";
 import { loadSite, saveSite } from "../src/store.js";
 import type { Exchange } from "../src/types.js";
 

@@ -10,10 +10,10 @@ import { profileDir } from "./heal.js";
 import {
   belongs,
   cookiesFromFile,
+  type ImportedSession,
+  type ImportPin,
   importFromBrowsers,
   parsePin,
-  type ImportPin,
-  type ImportedSession,
 } from "./import.js";
 import { loadSession, loggedIn, safeName, saveSession, sessionFile, siteOf, withLock } from "./session.js";
 import { listSites, loadSite } from "./store.js";
@@ -82,7 +82,7 @@ export async function importSession(
     const pin = o.profile ? parsePin(o.profile) : undefined;
     imported = importFromBrowsers({ url, loginCookies: o.loginCookies, pin });
   }
-  if (!imported || !imported.cookies.length) return undefined;
+  if (!imported?.cookies.length) return undefined;
   withLock(sessionFile(site), () =>
     saveSession(site, { ...loadSession(site), cookies: imported.cookies, source: imported.source }),
   );

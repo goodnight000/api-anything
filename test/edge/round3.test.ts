@@ -12,8 +12,8 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { after, describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { chromeAvailable, closeBrowser, pageFetch, runTrigger } from "../../src/browser.ts";
@@ -22,8 +22,8 @@ import { call } from "../../src/execute.ts";
 import { addOperation, capturePage, profileDir, runOpTrigger } from "../../src/heal.ts";
 import { buildRequest } from "../../src/http.ts";
 import { learnOperation } from "../../src/learn.ts";
-import { createServer as mcpServer, mcpNext } from "../../src/mcp.ts";
-import { parseSite, type Operation } from "../../src/spec.ts";
+import { mcpNext, createServer as mcpServer } from "../../src/mcp.ts";
+import { type Operation, parseSite } from "../../src/spec.ts";
 import { exportSite, loadSite, saveSite } from "../../src/store.ts";
 import type { Exchange, StoredCookie } from "../../src/types.ts";
 
@@ -442,7 +442,14 @@ describe("input answers", () => {
       "p",
       "op",
       { id: "bob", date: "Oct 21" },
-      { fetchImpl: (async () => (n++, json({ profile: {} }))) as typeof fetch, maxTier: 1, minIntervalMs: 0 },
+      {
+        fetchImpl: (async () => {
+          n++;
+          return json({ profile: {} });
+        }) as typeof fetch,
+        maxTier: 1,
+        minIntervalMs: 0,
+      },
     );
     assert.equal(r.class, "input", JSON.stringify(r));
     assert.match(r.reason ?? "", /param "date" must be a date as YYYY-MM-DD, got "Oct 21"/);

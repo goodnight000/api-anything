@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { parse } from "node-html-parser";
 import { extractEmbedded, extractHtml } from "../src/extract.js";
 import { outline, sig } from "../src/outline.js";
-import { parse } from "node-html-parser";
 
 const row = (id: string, title: string, rating: string, badge = "") =>
   `<li><div class="Book" data-testid="book-item-kca://book/${id}"><a class="BookCard__link" href="/book/show/${id}">cover</a>` +

@@ -74,13 +74,13 @@ const code = await new Promise((done) => {
   let buf = "";
   child.stdout.on("data", (chunk) => {
     buf += chunk;
-    for (let i; (i = buf.indexOf("\n")) >= 0; ) {
+    for (let i = buf.indexOf("\n"); i >= 0; i = buf.indexOf("\n")) {
       const line = buf.slice(0, i);
       buf = buf.slice(i + 1);
       if (!line.trim()) continue;
       const ev = { t: Date.now() - start, ...JSON.parse(line) };
       events.push(ev);
-      appendFileSync(log, JSON.stringify(ev) + "\n");
+      appendFileSync(log, `${JSON.stringify(ev)}\n`);
     }
   });
   child.on("close", done);
@@ -117,7 +117,7 @@ const summary = {
   calls: count(/api-anything call/),
   commandLog: commands,
 };
-writeFileSync(join(out, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
+writeFileSync(join(out, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
 writeFileSync(join(out, "report.md"), `${local(result.result ?? "(no final message)")}\n`);
 if (v.site) {
   // the shareable spec: export strips samples and refuses one holding a live credential

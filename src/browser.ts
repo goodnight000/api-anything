@@ -6,9 +6,9 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import {
-  chromium,
   type BrowserContext,
   type Cookie,
+  chromium,
   type Frame,
   type Page,
   type Request,
@@ -175,7 +175,7 @@ function siteCookies(cookies: Cookie[], url: string): StoredCookie[] {
   return cookies
     .filter((c) => {
       const d = c.domain.replace(/^\./, "");
-      return d === site || d.endsWith("." + site);
+      return d === site || d.endsWith(`.${site}`);
     })
     .map(toStored);
 }
@@ -694,7 +694,9 @@ export async function pageFetch(o: {
             signal: AbortSignal.timeout(timeoutMs),
           });
           const h: Record<string, string> = {};
-          r.headers.forEach((v, k) => (h[k] = v));
+          r.headers.forEach((v, k) => {
+            h[k] = v;
+          });
           const text = await r.text();
           return {
             status: r.status,

@@ -7,7 +7,7 @@ import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { AmbiguousProfile, cookiesFromFile, importFromBrowsers, type BrowserRoot } from "../src/import.ts";
+import { AmbiguousProfile, type BrowserRoot, cookiesFromFile, importFromBrowsers } from "../src/import.ts";
 import { makeChromiumDb, makeFirefoxDb } from "./fixture/cookie-db.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "aa-import-"));
@@ -124,7 +124,7 @@ test("two signed-in profiles: refuses to guess (not the most recently used), lis
   // the human's pick is honoured, and the chosen profile's name comes back for printing
   const r = importFromBrowsers({ url: "https://reddit.com", pin: { browser: "Chrome", profile: "Profile 1" } });
   assert.equal(r?.source, "chrome:Profile 1");
-  assert.equal(r?.cookies[0]!.value, "newsessionvalue2");
+  assert.equal(r?.cookies[0]?.value, "newsessionvalue2");
   assert.equal(r?.name, "Me");
   assert.equal(r?.email, "me@example.com");
 });
@@ -152,7 +152,7 @@ test("--profile pin overrides selection; a missing pin throws", () => {
   inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
 
   assert.equal(
-    importFromBrowsers({ url: "https://linkedin.com", pin: { profile: "Profile 2" } })?.cookies[0]!.value,
+    importFromBrowsers({ url: "https://linkedin.com", pin: { profile: "Profile 2" } })?.cookies[0]?.value,
     "differentprofilexx",
   );
   assert.throws(
@@ -191,8 +191,8 @@ test("Firefox plaintext moz_cookies", () => {
   inject([{ name: "Firefox", family: "firefox", root }]);
   const r = importFromBrowsers({ url: "https://linkedin.com" });
   assert.equal(r?.source, "firefox:abc.default-release");
-  assert.equal(r?.cookies[0]!.value, "firefoxtokenvalue");
-  assert.equal(r?.cookies[0]!.expires, 2000000000);
+  assert.equal(r?.cookies[0]?.value, "firefoxtokenvalue");
+  assert.equal(r?.cookies[0]?.expires, 2000000000);
 });
 
 test("cookiesFromFile parses Netscape and JSON exports", () => {

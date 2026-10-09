@@ -14,11 +14,11 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { chromeAvailable, closeBrowser, openBrowser, runTrigger } from "../src/browser.js";
 import { call } from "../src/execute.js";
 import { addOperation, capturePage, profileDir } from "../src/heal.js";
+import { importSession } from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
 import { rememberedTier, staleMark } from "../src/store.js";
-import { PUBLIC_BEARER, startFixture, type Fixture } from "./fixture/server.js";
 import { makeChromiumDb } from "./fixture/cookie-db.js";
-import { importSession } from "../src/login.js";
+import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-e2e-"));
 process.env.API_ANYTHING_HOME = HOME;

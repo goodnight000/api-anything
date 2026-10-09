@@ -178,7 +178,7 @@ test("Google-Flights style: JSON inside a form field inside JSON; a value in sev
 });
 
 test("persisted-query sha256 in extensions: volatile with the operationName anchor, never in match", () => {
-  const hash = "a".repeat(20) + "0123456789abcdef0123456789abcdef0123456789ab";
+  const hash = `${"a".repeat(20)}0123456789abcdef0123456789abcdef0123456789ab`;
   const ex = xhr({
     url: `https://site.test/graphql?operationName=SearchQuery&variables=${encodeURIComponent('{"q":"nasa"}')}&extensions=${encodeURIComponent(JSON.stringify({ persistedQuery: { version: 1, sha256Hash: hash } }))}`,
   });

@@ -19,7 +19,7 @@ import { addOperation, capturePage, profileDir } from "../../src/heal.js";
 import { createServer } from "../../src/mcp.js";
 import { clearStale, exportSite, loadSite, markStale, scanSecrets, staleMark } from "../../src/store.js";
 import { startFixture } from "../fixture/server.js";
-import { startEdgeFixture, TOKEN, type EdgeFixture } from "./browser-surface.fixture.js";
+import { type EdgeFixture, startEdgeFixture, TOKEN } from "./browser-surface.fixture.js";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const CLI = join(ROOT, "src", "cli.ts");
@@ -340,7 +340,7 @@ describe("tier-3 calls, login walls, and add", { skip: noChrome }, () => {
   test("BUG add on a trigger that redirects to a login page does not silently learn the login page", async () => {
     process.env.API_ANYTHING_HOME = home;
     await (await openBrowser({ profileDir: profileDir() })).clearCookies();
-    let r;
+    let r: Awaited<ReturnType<typeof addOperation>>;
     try {
       r = await addOperation({
         site: "edge",
@@ -575,7 +575,7 @@ describe("two processes sharing the Chrome profile; signals and zombies", { skip
   test("BUG a heal that could not launch Chrome (profile locked) does not mark the op stale for 30 min", async () => {
     const { client } = await mcpHoldingChrome();
     process.env.API_ANYTHING_HOME = home;
-    let first;
+    let first: Awaited<ReturnType<typeof call>>;
     try {
       first = await call("edge", "gone", { name: "zed" }, fast); // same profile, other process: launch fails
     } finally {

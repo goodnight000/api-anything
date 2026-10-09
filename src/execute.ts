@@ -3,23 +3,33 @@
  * the heal-loop guards, and the write rules. Always sends the stored template first; healing is
  * reactive only.
  */
-import { chromeAvailable, pageFetch, profileCookies, ProfileInUse } from "./browser.js";
-import { judge, type Class } from "./classify.js";
+import { chromeAvailable, type PageFetchResult, ProfileInUse, pageFetch, profileCookies } from "./browser.js";
+import { type Class, judge } from "./classify.js";
 import { capOutput } from "./extract.js";
 import {
+  type Attempt,
+  type HealResult,
   healOperation,
   judgeExchange,
   PROFILE_HINT,
   profileDir,
   runOpTrigger,
-  type Attempt,
-  type HealResult,
 } from "./heal.js";
-import { buildRequest, send } from "./http.js";
-import { cookieHeaderFor, loadSession, loggedIn, mergeCapture, saveSession, sessionFile, withLock } from "./session.js";
+import { buildRequest, type Sent, send } from "./http.js";
 import { reimportIfBrowser } from "./login.js";
+import {
+  cookieHeaderFor,
+  loadSession,
+  loggedIn,
+  mergeCapture,
+  type Session,
+  saveSession,
+  sessionFile,
+  withLock,
+} from "./session.js";
 import type { Operation, Site } from "./spec.js";
-import { lastHealAt, loadSite, markStale, rememberTier, rememberedTier, staleMark } from "./store.js";
+import { lastHealAt, loadSite, markStale, rememberedTier, rememberTier, staleMark } from "./store.js";
+import type { StoredCookie } from "./types.js";
 
 export type Tier = 1 | 2 | 3;
 
@@ -129,22 +139,23 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       return { tier, class: "drift", reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` };
     }
     const session = loadSession(ctx.site);
-    let r;
+    let r: Sent | PageFetchResult;
     if (tier === 1) {
-      r = await send(op, ctx.args, session, {
+      const sent = await send(op, ctx.args, session, {
         site: ctx.site,
         fetchImpl: ctx.opts.fetchImpl,
         timeoutMs: ctx.opts.timeoutMs,
         minIntervalMs: ctx.opts.minIntervalMs,
       });
       // A rotating cookie (a rolling session, __cf_bm) must ride on the next call.
-      if (r.setCookies) {
+      if (sent.setCookies) {
         try {
-          mergeCapture(ctx.site, r.setCookies);
+          mergeCapture(ctx.site, sent.setCookies);
         } catch {
           /* a read-only home still answers this call */
         }
       }
+      r = sent;
     } else {
       const req = buildRequest(op, ctx.args, session);
       const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
@@ -170,7 +181,7 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
 /** Replace the jar with the profile's cookies. True when that changes what op's request would carry. */
 async function refreshCookies(site: string, op: Operation): Promise<boolean> {
   if (!chromeAvailable()) return false;
-  let fresh;
+  let fresh: StoredCookie[];
   try {
     fresh = await profileCookies({ url: op.request.url, profileDir: profileDir() });
   } catch {
@@ -298,7 +309,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
 }
 
 function resolve(siteName: string, opName: string): { site: Site; op: Operation } | Result {
-  let r;
+  let r: ReturnType<typeof loadSite>;
   try {
     r = loadSite(siteName);
   } catch (e) {
@@ -361,7 +372,7 @@ export async function call(
       next: nextFor("input", siteName, op),
     });
   }
-  let session;
+  let session: Session;
   try {
     session = loadSession(siteName);
   } catch (e) {

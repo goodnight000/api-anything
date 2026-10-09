@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": { "includes": ["src/**", "test/**", "examples/**/*.mjs", "bench/**/*.mjs"] },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 120 },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        // indexed access is asserted where the surrounding check already proved it
+        "noNonNullAssertion": "off"
+      },
+      "suspicious": {
+        // header and secret scans match control characters on purpose
+        "noControlCharactersInRegex": "off",
+        // `escape` is a spec field name (Slot.escape); the global it shadows is long deprecated
+        "noShadowRestrictedNames": "off"
+      }
+    }
+  }
+}

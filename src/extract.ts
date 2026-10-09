@@ -1,5 +1,5 @@
 /** Turn a response body into the compact value an agent sees: parse, extract, pick, cap. */
-import { parse as parseHtml, type HTMLElement } from "node-html-parser";
+import { type HTMLElement, parse as parseHtml } from "node-html-parser";
 import { jsonValueEnd, parseJson } from "./codec.js";
 import type { ResponseSpec } from "./spec.js";
 

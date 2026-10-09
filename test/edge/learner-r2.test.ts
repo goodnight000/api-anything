@@ -16,11 +16,11 @@ process.env.API_ANYTHING_HOME = HOME;
 
 import { chromeAvailable, closeBrowser } from "../../src/browser.ts";
 import { call } from "../../src/execute.ts";
-import { addOperation, putOperation, rescan, runOpTrigger, templatizeUrl, type CaptureFile } from "../../src/heal.ts";
+import { addOperation, type CaptureFile, putOperation, rescan, runOpTrigger, templatizeUrl } from "../../src/heal.ts";
 import { buildRequest } from "../../src/http.ts";
 import { learnOperation } from "../../src/learn.ts";
 import { loadSession, saveSession } from "../../src/session.ts";
-import { parseSite, type Operation } from "../../src/spec.ts";
+import { type Operation, parseSite } from "../../src/spec.ts";
 import { exportSite, loadSite, saveSite, scanSecrets, updateSite } from "../../src/store.ts";
 import type { Exchange, StoredCookie } from "../../src/types.ts";
 

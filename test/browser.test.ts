@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { chromeAvailable, closeBrowser, pageFetch, runTrigger } from "../src/browser.js";
-import { PUBLIC_BEARER, startFixture, type Fixture } from "./fixture/server.js";
+import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
 describe("fixture site (plain http)", () => {
   let fx: Fixture;

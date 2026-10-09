@@ -15,10 +15,10 @@ import { classify, judge, type Observed } from "../../src/classify.ts";
 import { call } from "../../src/execute.ts";
 import { capOutput } from "../../src/extract.ts";
 import { cookieHeaderFor, cookieValue, loadSession, saveSession } from "../../src/session.ts";
-import { OperationSchema, parseSite, type Operation } from "../../src/spec.ts";
+import { type Operation, OperationSchema, parseSite } from "../../src/spec.ts";
 import { rememberTier, saveSite } from "../../src/store.ts";
 import type { StoredCookie } from "../../src/types.ts";
-import { startFixture, type Fixture } from "./execute-classify.fixture.ts";
+import { type Fixture, startFixture } from "./execute-classify.fixture.ts";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-exec-"));
 process.env.API_ANYTHING_HOME = HOME;

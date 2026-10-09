@@ -12,11 +12,11 @@ import { after, before, describe, test } from "node:test";
 import { chromeAvailable, closeBrowser } from "../../src/browser.ts";
 import { classify } from "../../src/classify.ts";
 import { call } from "../../src/execute.ts";
-import { addOperation, capturePage, type CaptureFile } from "../../src/heal.ts";
+import { addOperation, type CaptureFile, capturePage } from "../../src/heal.ts";
 import { learnOperation, rankCandidates } from "../../src/learn.ts";
 import type { Operation } from "../../src/spec.ts";
 import type { Exchange } from "../../src/types.ts";
-import { startFixture, type Fixture } from "./live-b.fixture.ts";
+import { type Fixture, startFixture } from "./live-b.fixture.ts";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-live-b-"));
 process.env.API_ANYTHING_HOME = HOME;

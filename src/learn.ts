@@ -4,24 +4,24 @@
  */
 import {
   asText,
+  type Escape,
   escapeTemplate,
   escapeValue,
   fillSlotTemplate,
   fillTemplate,
   getAt,
+  type Leaf,
+  type Step,
   setAt,
   templateRefs,
   walk,
-  type Escape,
-  type Leaf,
-  type Step,
 } from "./codec.js";
 import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
 import { loggedIn, parseCookieHeader } from "./session.js";
 import {
-  OperationSchema,
   type Match,
   type Operation,
+  OperationSchema,
   type Param,
   type Request,
   type ResponseSpec,

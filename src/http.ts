@@ -1,8 +1,8 @@
 /** Tier 1: fill the stored template and send it with Node fetch. */
 import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
 import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
-import type { StoredCookie } from "./types.js";
 import type { Operation, Param, Request } from "./spec.js";
+import type { StoredCookie } from "./types.js";
 
 export interface Sent {
   status: number;
@@ -91,9 +91,10 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
 
   let req: Request = { ...op.request, method: op.request.method.toUpperCase(), headers: { ...op.request.headers } };
   let leafTypes: Map<string, string> | undefined;
-  const stringLeaf = (at: string[]) =>
-    (leafTypes ??= new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]))).get(JSON.stringify(at)) ===
-    "string";
+  const stringLeaf = (at: string[]) => {
+    leafTypes ??= new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]));
+    return leafTypes.get(JSON.stringify(at)) === "string";
+  };
   delete req.headers.cookie;
   for (const slot of op.slots) {
     const name = slot.param ?? slot.ref!;

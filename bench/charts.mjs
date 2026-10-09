@@ -1,6 +1,6 @@
 // Summarize bench/results and draw the README charts (light and dark SVG).
 // Usage: node bench/charts.mjs [v0.1.0]   -> bench/results[/v0.1.0]/summary.json, docs/media/*.svg
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const repo = resolve(import.meta.dirname, "..");
@@ -80,7 +80,7 @@ for (const arm of ["browser", "api"]) {
       ...(arm === "browser" ? { requests: stats(ts.map((t) => t.requests)) } : {}),
     };
 }
-writeFileSync(join(res, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
+writeFileSync(join(res, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
 
 // Palette validated with the dataviz validator (categorical slots 1-2, both modes).
 const THEMES = {

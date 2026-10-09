@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { buildRequest, send } from "../src/http.ts";
 import type { Session } from "../src/session.ts";
-import { OperationSchema, type Operation } from "../src/spec.ts";
+import { type Operation, OperationSchema } from "../src/spec.ts";
 import type { StoredCookie } from "../src/types.ts";
 
 const cookie = (name: string, value: string, domain: string): StoredCookie => ({
@@ -132,7 +132,10 @@ test("send against a local server: GET has no body, per-site pacing, timeout", a
     const local: Session = { cookies: [cookie("sid", "abc", "127.0.0.1")], values: {} };
     // pacing is measured where fetch is called, so server/network jitter can't flake it
     const calls: number[] = [];
-    const timed = ((url: string, init: RequestInit) => (calls.push(Date.now()), fetch(url, init))) as typeof fetch;
+    const timed = ((url: string, init: RequestInit) => {
+      calls.push(Date.now());
+      return fetch(url, init);
+    }) as typeof fetch;
     const a = await send(get, { id: "123" }, local, { site: "pace", minIntervalMs: 150, fetchImpl: timed });
     const b = await send(get, { id: "456" }, local, { site: "pace", minIntervalMs: 150, fetchImpl: timed });
     assert.equal(a.body, "GET /items?id=123 sid=abc");

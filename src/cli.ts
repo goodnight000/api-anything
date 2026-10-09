@@ -6,18 +6,18 @@ import { z } from "zod";
 import { chromeAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
 import { botWall } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
+import { capOutput, extract, innerJson, splitPick } from "./extract.js";
 import { addOperation, capturePage, loadCapture, PROFILE_HINT, profileDir } from "./heal.js";
 import { buildRequest } from "./http.js";
-import { capOutput, extract, innerJson, splitPick } from "./extract.js";
-import { capturePages, pageUrls, rankCandidates } from "./learn.js";
-import { outline, type Outline } from "./outline.js";
-import type { Exchange } from "./types.js";
-import { serveStdio, VERSION } from "./mcp.js";
-import { loadSession, loggedIn, saveSession, sessionFile, withLock } from "./session.js";
 import { AmbiguousProfile } from "./import.js";
+import { capturePages, pageUrls, rankCandidates } from "./learn.js";
 import { cookieNames, importSession, logout, resolveLoginTarget } from "./login.js";
-import { MatchSchema, TriggerStepSchema, type Operation } from "./spec.js";
+import { serveStdio, VERSION } from "./mcp.js";
+import { type Outline, outline } from "./outline.js";
+import { loadSession, loggedIn, saveSession, sessionFile, withLock } from "./session.js";
+import { MatchSchema, type Operation, TriggerStepSchema } from "./spec.js";
 import { exportSite, listSites, loadSite, siteNotes } from "./store.js";
+import type { Exchange } from "./types.js";
 
 /** capture/inspect --outline: the scout's summary of one exchange's response. */
 function outlineOf(e: Exchange | undefined, values: string[]): { outline?: Outline } {
@@ -218,12 +218,20 @@ async function run(argv: string[]): Promise<number> {
     },
   });
   const [cmd, ...pos] = positionals;
-  if (v.version) return void process.stdout.write(`${VERSION}\n`), 0;
+  if (v.version) {
+    process.stdout.write(`${VERSION}\n`);
+    return 0;
+  }
   if (!cmd || !HELP[cmd]) {
     process.stdout.write(`${USAGE}\n`);
-    return cmd && !v.help ? (process.stderr.write(`next: unknown command "${cmd}"; see the list above\n`), 1) : 0;
+    if (!cmd || v.help) return 0;
+    process.stderr.write(`next: unknown command "${cmd}"; see the list above\n`);
+    return 1;
   }
-  if (v.help) return void process.stdout.write(`${HELP[cmd]}\n`), 0;
+  if (v.help) {
+    process.stdout.write(`${HELP[cmd]}\n`);
+    return 0;
+  }
   const steps = json(v.steps, z.array(TriggerStepSchema), "steps");
 
   switch (cmd) {
@@ -245,7 +253,7 @@ async function run(argv: string[]): Promise<number> {
       const runWindow = async (reason?: string) => {
         needChrome();
         process.stderr.write(
-          `${reason ? reason + " " : ""}Sign in to ${url} in the Chrome window, then close it or press Enter here.\n`,
+          `${reason ? `${reason} ` : ""}Sign in to ${url} in the Chrome window, then close it or press Enter here.\n`,
         );
         const cookies = await login({ url, profileDir: profileDir() });
         withLock(sessionFile(site), () => saveSession(site, { ...loadSession(site), cookies, source: "window" }));
@@ -261,7 +269,7 @@ async function run(argv: string[]): Promise<number> {
 
       if (v.window) return runWindow();
 
-      let imported;
+      let imported: Awaited<ReturnType<typeof importSession>>;
       try {
         imported = await importSession(site, url, { loginCookies, profile: v.profile, file: v.cookies });
       } catch (e) {
@@ -278,7 +286,7 @@ async function run(argv: string[]): Promise<number> {
         if (v.profile)
           throw new Fail(
             `no importable cookies in profile "${v.profile}"`,
-            "run: api-anything login " + site + " (scans every profile), or --window",
+            `run: api-anything login ${site} (scans every profile), or --window`,
           );
         return runWindow("No signed-in session found in your browsers.");
       }
@@ -383,15 +391,14 @@ async function run(argv: string[]): Promise<number> {
       }
       const e = c.exchanges.find((x) => x.id === Number(reqId));
       if (!e) throw new Fail(`no request ${reqId} in capture ${id}`, `api-anything inspect ${id}`);
-      if (v.outline)
-        return (
-          out({
-            id: e.id,
-            request: { method: e.request.method, url: e.request.url },
-            ...outlineOf(e, Object.values(kv(v.example)).map(String)),
-          }),
-          0
-        );
+      if (v.outline) {
+        out({
+          id: e.id,
+          request: { method: e.request.method, url: e.request.url },
+          ...outlineOf(e, Object.values(kv(v.example)).map(String)),
+        });
+        return 0;
+      }
       const html = json(v.html, z.object({ items: z.string(), fields: z.record(z.string(), z.string()) }), "html");
       const body = e.response?.body ?? "";
       const response = {

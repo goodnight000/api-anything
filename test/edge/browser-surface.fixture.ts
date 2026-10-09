@@ -110,7 +110,7 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
       case "/big-page":
         return html(
           res,
-          `${"<p>" + "lorem ipsum ".repeat(50) + "</p>"}`.repeat(4000) +
+          `${`<p>${"lorem ipsum ".repeat(50)}</p>`}`.repeat(4000) +
             `<script>fetch("/api/big?name=${encodeURIComponent(name)}")</script>`,
         );
       case "/huge-page":

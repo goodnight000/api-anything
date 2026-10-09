@@ -12,10 +12,10 @@
  * hex() plus escaping of binary output.
  */
 import { execFileSync } from "node:child_process";
-import { pbkdf2Sync, createDecipheriv } from "node:crypto";
+import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { AUTH_COOKIE, siteOf } from "./session.js";
@@ -31,10 +31,10 @@ process.emitWarning = ((w: unknown, ...rest: unknown[]) => {
 
 // Loaded on first use, after the filter above: a static import would warn before this module body runs.
 let sqlite: typeof import("node:sqlite") | undefined;
-const openDb = (file: string) =>
-  new (sqlite ??= createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite")).DatabaseSync(file, {
-    readOnly: true,
-  });
+const openDb = (file: string) => {
+  sqlite ??= createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+  return new sqlite.DatabaseSync(file, { readOnly: true });
+};
 
 /** One installed browser to scan. Tests inject these via API_ANYTHING_BROWSER_ROOTS. */
 export interface BrowserRoot {
@@ -216,7 +216,7 @@ function safeReaddir(dir: string): string[] {
 /** true when a cookie's host_key/host belongs to the site's registrable domain. */
 export const belongs = (host: string, site: string) => {
   const h = host.replace(/^\./, "").toLowerCase();
-  return h === site || h.endsWith("." + site) || siteOf(h) === site;
+  return h === site || h.endsWith(`.${site}`) || siteOf(h) === site;
 };
 
 function chromiumNames(dbPath: string, site: string): Set<string> {

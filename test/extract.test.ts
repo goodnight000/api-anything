@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ResponseSchema } from "../src/spec.ts";
 import {
   capOutput,
   extract,
@@ -12,6 +11,7 @@ import {
   pick,
   splitPick,
 } from "../src/extract.ts";
+import { ResponseSchema } from "../src/spec.ts";
 
 test("parseBody strips XSSI and keeps big integers exact", () => {
   assert.deepEqual(parseBody(')]}\'\n{"id":2085462611575857621,"n":3}'), { id: "2085462611575857621", n: 3 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { classify, type Observed } from "../src/classify.ts";
-import { OperationSchema, type Operation } from "../src/spec.ts";
+import { type Operation, OperationSchema } from "../src/spec.ts";
 
 const op = (over: Record<string, unknown> = {}): Operation =>
   OperationSchema.parse({

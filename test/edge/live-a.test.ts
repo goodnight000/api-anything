@@ -15,9 +15,9 @@ import { capOutput } from "../../src/extract.ts";
 import { addOperation, profileDir } from "../../src/heal.ts";
 import { learnOperation } from "../../src/learn.ts";
 import { saveSession } from "../../src/session.ts";
-import { OperationSchema, type Operation } from "../../src/spec.ts";
+import { type Operation, OperationSchema } from "../../src/spec.ts";
 import { loadSite, saveSite } from "../../src/store.ts";
-import { startLiveFixture, type LiveFixture } from "./live-a.fixture.ts";
+import { type LiveFixture, startLiveFixture } from "./live-a.fixture.ts";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-live-a-"));
 process.env.API_ANYTHING_HOME = HOME;
