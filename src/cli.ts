@@ -98,7 +98,9 @@ const HELP: Record<string, string> = {
   --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages;
                   "all:<css>[@attr]" returns every match as a list (genres, tags)
   --embedded <regex>  JSON inside the page: group 1 marks where the JSON value starts; then --extract
-  --public <header,...>  headers holding public constants (a web app's bearer): kept literal, allowed by export
+  --public <name,...>  a header, or a credential-like field such as api_key, whose value is the same for every
+                  visitor (a web app's bearer): kept literal unless the value is in a cookie or the page's
+                  storage. A per-session field (token, csrf) stays a reference. Only when it is not the user's
   --write         the op changes state: it is learned from intercepted, aborted requests only. A request a
                   --write capture aborted, or an existing write learned again, needs --write: neither is
                   ever saved as a read

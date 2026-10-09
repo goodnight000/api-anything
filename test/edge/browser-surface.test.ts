@@ -17,7 +17,8 @@ import { chromeAvailable, closeBrowser, openBrowser, pageFetch, runTrigger } fro
 import { call } from "../../src/execute.js";
 import { addOperation, capturePage, profileDir } from "../../src/heal.js";
 import { createServer } from "../../src/mcp.js";
-import { clearStale, exportSite, loadSite, markStale, scanSecrets, staleMark } from "../../src/store.js";
+import { scanSecrets } from "../../src/secrets.js";
+import { clearStale, exportSite, loadSite, markStale, staleMark } from "../../src/store.js";
 import { startFixture } from "../fixture/server.js";
 import { type EdgeFixture, startEdgeFixture, TOKEN } from "./browser-surface.fixture.js";
 
@@ -227,6 +228,33 @@ describe("runTrigger on awkward pages", { skip: noChrome }, () => {
     assert.ok(r.exchanges.some((e) => e.request.url.includes("/file.csv")));
   });
 
+  test("a run leaves no timer behind that would keep the process alive", async () => {
+    const timers = () => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+    const before = timers();
+    await runTrigger({ url: `${fx.url}/data-page?name=tidy`, profileDir: prof });
+    // the bound on a call into the page is a 5 s timer: one left running would still be counted here
+    assert.ok(await until(() => timers() <= before, 1500), `${timers() - before} timers left behind by the run`);
+  });
+
+  test("a page whose renderer hangs: the run still ends, and the browser is free for the next one", async () => {
+    const t0 = Date.now();
+    const ended = await Promise.race([
+      runTrigger({
+        url: `${fx.url}/stuck-page?name=stuck`,
+        profileDir: prof,
+        timeoutMs: 3000,
+        intercept: (e, acting) => acting && e.request.method !== "GET",
+      }).then(
+        (r) => !!data(r, "stuck"),
+        () => true,
+      ),
+      sleep(45_000).then(() => "hung"),
+    ]);
+    assert.equal(ended, true, `after ${Date.now() - t0} ms with timeoutMs 3000`);
+    const next = await runTrigger({ url: `${fx.url}/data-page?name=after`, profileDir: prof });
+    assert.ok(data(next, "after")?.response?.body);
+  });
+
   test("tier 2 works when the API origin's root redirects to another origin", async () => {
     const fx2 = await startEdgeFixture({ rootRedirect: true });
     try {
@@ -425,6 +453,9 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     ["#submit", "a GET form submission"],
     ["#script", "an injected script (JSONP)"],
     ["#iframe", "an injected iframe"],
+    // routed before Playwright has the new tab's page, so the guard cannot ask whose it is
+    ["#newtab", "a link that opens in a new tab"],
+    ["#open", "window.open"],
     // still retrying while the run ends: the guard has to outlive the page
     ["#retry", "a fetch the page sends again after every failure"],
   ] as const) {
@@ -435,6 +466,222 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
       assert.deepEqual(votes().slice(before), [], "the write was performed while learning it");
     });
   }
+
+  test("capture --write: a write that is a new tab's first navigation is recorded as aborted, so it can be learned", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const r = await capturePage({
+      url: `${fx.url}/vote-page`,
+      steps: [{ action: "click", selector: "#newtab" }],
+      write: true,
+    });
+    const vote = r.exchanges.find((e) => e.request.url.endsWith("/api/vote?how=newtab"));
+    assert.deepEqual([vote?.aborted, vote?.resourceType], [true, "document"]);
+  });
+
+  test("capture --write: a new tab that another run's page opens meanwhile is not stopped by this run's guard", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    let ended = false;
+    // The first step loads a stylesheet, which the write guard lets through: once the server has
+    // seen it the run is in its steps, where every other GET of its own pages is aborted.
+    const steps = [
+      { action: "click" as const, selector: "#css" },
+      { action: "wait" as const, ms: 4000 },
+    ];
+    const run = capturePage({ url: `${fx.url}/vote-page`, steps, write: true }).finally(() => (ended = true));
+    // after the run has started: it holds the browser, which is otherwise closed when idle
+    const ctx = await openBrowser({ profileDir: profileDir() });
+    const other = await ctx.newPage();
+    try {
+      await other.goto(`${fx.url}/vote-page?name=other`);
+      assert.ok(await until(() => fx.calls.slice(seen).includes("/acting.css"), 20_000), "the run reached its steps");
+      const [tab] = await Promise.all([ctx.waitForEvent("page"), other.click("#newtab")]);
+      await tab.waitForLoadState();
+      await tab.close();
+      assert.equal(ended, false, "the run had ended before the other tab opened: nothing was tested");
+      assert.deepEqual(votes().slice(before), ["/api/vote?how=newtab"], "this run's guard stopped another run's tab");
+    } finally {
+      await other.close();
+      await run;
+    }
+  });
+
+  test("another run's new tab still loads after this run's first page has closed while a tab it opened lives on", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    let ended = false;
+    // Guarded like a write from its step on. Its match never answers, so after the step it waits
+    // a few seconds without touching its page, which can be closed under it meanwhile.
+    const run = runTrigger({
+      url: `${fx.url}/popup?name=mine`,
+      steps: [{ action: "click", selector: "#open" }],
+      profileDir: profileDir(),
+      match: () => false,
+      intercept: (_e, acting) => acting,
+    }).then(
+      () => (ended = true),
+      () => (ended = true),
+    );
+    // after the run has started: it holds the browser, which is otherwise closed when idle
+    const ctx = await openBrowser({ profileDir: profileDir() });
+    const opened: { close(): Promise<void> }[] = [];
+    const onPage = (p: { close(): Promise<void> }) => void opened.push(p);
+    ctx.on("page", onPage);
+    const other = await ctx.newPage();
+    try {
+      await other.goto(`${fx.url}/vote-page?name=other`);
+      const mine = () => ctx.pages().find((p) => p.url() === `${fx.url}/popup?name=mine`);
+      let tabbed = false;
+      for (const end = Date.now() + 20_000; !tabbed && Date.now() < end; await sleep(50))
+        for (const p of ctx.pages()) tabbed ||= !!mine() && (await p.opener()) === mine();
+      assert.ok(tabbed, "the run's page opened its tab");
+      await mine()!.close();
+      // A tab is reported once its first navigation is over: at its address, or on Chrome's error
+      // page when the guard aborted it (Chrome reloads that page a second later, which proves
+      // nothing). The run's own tab may be a moment from being held, and a tab opened in that
+      // moment is rightly taken for a possible tab of the run: one opened after it must load.
+      let loaded = false;
+      for (let i = 0; i < 5 && !loaded && !ended; i++) {
+        const [tab] = await Promise.all([ctx.waitForEvent("page"), other.click("#newtab")]);
+        loaded = tab.url() === `${fx.url}/api/vote?how=newtab`;
+        if (!loaded) await sleep(200);
+      }
+      assert.equal(ended, false, "the run had ended before the other tab loaded: nothing was tested");
+      assert.ok(loaded, "this run's guard stopped every tab another run opened once its own first page was gone");
+      assert.ok(votes().length > before);
+    } finally {
+      ctx.off("page", onPage);
+      await run;
+      for (const p of [...opened, other]) await p.close().catch(() => {});
+    }
+  });
+
+  test("the run's only page closes while a tab it opened still has no page: the tab goes with the run, and other runs' tabs load", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    // Guarded like a write, except that the slow tab's own document may be asked for (and then
+    // waits at the server). The match never answers, so the run waits a few seconds without
+    // touching its page.
+    const run = runTrigger({
+      url: `${fx.url}/late-tab-page?name=only`,
+      profileDir: profileDir(),
+      match: () => false,
+      intercept: (e, acting) => acting && !e.request.url.endsWith("/held-vote"),
+    }).catch(() => undefined);
+    // after the run has started: it holds the browser. The interval is another user of it, so
+    // that the browser (and anything the run left behind) is still there once the run is over.
+    const ctx = await openBrowser({ profileDir: profileDir() });
+    const keep = setInterval(() => void openBrowser({ profileDir: profileDir() }), 1000);
+    const other = await ctx.newPage();
+    try {
+      await other.goto(`${fx.url}/vote-page?name=other`);
+      assert.ok(await until(() => fx.calls.slice(seen).includes("/held-vote"), 20_000), "the slow tab was opened");
+      await ctx
+        .pages()
+        .find((p) => p.url() === `${fx.url}/late-tab-page?name=only`)!
+        .close();
+      await run;
+      // A tab is reported once its first navigation is over: at its address, or on Chrome's error
+      // page when a guard aborted it (which Chrome reloads a second later, proving nothing).
+      const [tab] = await Promise.all([ctx.waitForEvent("page"), other.click("#newtab")]);
+      const landed = tab.url();
+      await tab.close();
+      assert.equal(landed, `${fx.url}/api/vote?how=newtab`, "what the run left behind aborted another run's tab");
+      fx.release(); // the slow tab's document, with a script that POSTs: nobody is left to run it
+      await sleep(500);
+      assert.deepEqual(votes().slice(before), ["/api/vote?how=newtab"]);
+      const open = ctx.pages().map((p) => p.url());
+      assert.ok(!open.some((u) => u.includes("/held-vote")), `the run's tab was left open: ${open}`);
+    } finally {
+      clearInterval(keep);
+      await run;
+      await other.close().catch(() => {});
+    }
+  });
+
+  test("a tab the run's page opened that has no page yet when the run ends is closed with it, and never writes", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    // guarded like a tier-3 read: the tab's own document (a GET) may load, what it POSTs may not leave
+    await runTrigger({
+      url: `${fx.url}/late-tab-page`,
+      profileDir: profileDir(),
+      intercept: (e, acting) => acting && e.request.method !== "GET",
+    });
+    assert.ok(fx.calls.slice(seen).includes("/held-vote"), "the slow tab was opened");
+    fx.release(); // the tab's document arrives only now, with a script that POSTs
+    await sleep(1000);
+    assert.deepEqual(votes().slice(before), [], "the tab wrote once the run's guard was lifted");
+    const open = (await openBrowser({ profileDir: profileDir() })).pages().map((p) => p.url());
+    assert.deepEqual(
+      open.filter((u) => u.includes("/held-vote")),
+      [],
+      "the tab was left open",
+    );
+  });
+
+  test("a tab whose opener has closed by the time its page comes is still the run's: what it POSTs mid-run never leaves", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    // mid-run: once the slow tab has asked for its document and the tab between has closed itself
+    const answered = until(() => fx.calls.slice(seen).includes("/held-vote"), 20_000).then(async (asked) => {
+      await sleep(600);
+      fx.release();
+      return asked;
+    });
+    await runTrigger({
+      url: `${fx.url}/chain-page`,
+      steps: [{ action: "wait", ms: 3000 }],
+      profileDir: profileDir(),
+      intercept: (e, acting) => acting && e.request.method !== "GET",
+    });
+    assert.ok(await answered, "the slow tab was opened");
+    await sleep(300);
+    assert.deepEqual(votes().slice(before), [], "a tab of the run wrote: its opener was closed, so nobody claimed it");
+  });
+
+  for (const [how, what] of [
+    ["beacon", "a pagehide beacon"],
+    ["keepalive", "a keepalive fetch on pagehide"],
+    ["hidden", "a beacon when the page is hidden"],
+    ["img", "an image ping on pagehide"],
+    ["slow", "a pagehide handler that takes 400 ms to send"],
+    ["later", "a deferred fetchLater()"],
+  ] as const) {
+    test(`capture --write: ${what} never reaches the server when the run ends`, async (t) => {
+      process.env.API_ANYTHING_HOME = home;
+      const before = votes().length;
+      const r = await capturePage({ url: `${fx.url}/leave-page?how=${how}`, write: true });
+      // nothing arriving proves nothing if the page never registered its deferred request
+      if (how === "later" && !r.exchanges.some((e) => e.request.url.endsWith("/api/data?name=registered")))
+        return t.skip("this Chrome has no fetchLater()");
+      await sleep(300); // what a closing page got out arrives after the run has returned
+      assert.deepEqual(votes().slice(before), [], "the write was performed while learning it");
+    });
+  }
+
+  test("capture --write: a beacon a page sends as the run leaves it for the next is aborted and recorded", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    // the neutral page is left by a plain load (it has no router): its pagehide fires mid-run
+    const r = await capturePage({
+      url: `${fx.url}/data-page`,
+      softFrom: `${fx.url}/leave-page?how=beacon`,
+      write: true,
+    });
+    await sleep(300);
+    assert.deepEqual(votes().slice(before), [], "the write was performed while learning it");
+    const beacon = r.exchanges.find((e) => e.request.url.endsWith("/api/vote?how=beacon"));
+    assert.deepEqual(
+      [beacon?.aborted, beacon?.request.method, beacon?.request.body],
+      [true, "POST", "up"],
+      JSON.stringify(r.exchanges.map((e) => e.request.url)),
+    );
+  });
 
   test("capture --write: a message sent over an already-open WebSocket never reaches the server", async () => {
     process.env.API_ANYTHING_HOME = home;
@@ -449,6 +696,53 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     });
     await sleep(300);
     assert.equal(fx.wsMessages(), before, "the message was sent while learning it");
+  });
+
+  test("a page that will neither empty nor close keeps the socket guard until it is really gone, however long that takes", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = fx.wsMessages();
+    const run = capturePage({ url: `${fx.url}/chat`, steps: [{ action: "wait", ms: 1500 }], write: true });
+    // after the run has started: it holds the browser. The interval is another user of it, so the
+    // browser, and the page the run could not close, are still there once the run is over.
+    const ctx = await openBrowser({ profileDir: profileDir() });
+    const keep = setInterval(() => void openBrowser({ profileDir: profileDir() }), 1000);
+    let close = async () => {};
+    try {
+      // Fault injection: the run's page answers neither the navigation that empties it nor close().
+      let page = ctx.pages().find((p) => p.url() === `${fx.url}/chat`);
+      for (const end = Date.now() + 20_000; !page && Date.now() < end; await sleep(50))
+        page = ctx.pages().find((p) => p.url() === `${fx.url}/chat`);
+      assert.ok(page, "the run's page");
+      const goto = page.goto.bind(page);
+      close = page.close.bind(page);
+      const never = new Promise<never>(() => {});
+      Object.assign(page, {
+        goto: (url: string, o?: Parameters<typeof goto>[1]) => (url === "about:blank" ? never : goto(url, o)),
+        close: () => never,
+      });
+      await run;
+      assert.equal(page.isClosed(), false, "the page is still open, with its socket");
+      // the socket guard used to be dropped 30 s after such a run: time passing does not make a page unable to write
+      await sleep(31_000);
+      await page.click("#send");
+      await sleep(300);
+      assert.equal(fx.wsMessages(), before, "a page the run never managed to close sent over its socket");
+      // once the page is really gone the guard goes too: it drops every run's sends, so it must not stay
+      await close();
+      const other = await ctx.newPage();
+      await other.goto(`${fx.url}/chat`);
+      let sent = false;
+      for (const end = Date.now() + 5000; !sent && Date.now() < end; await sleep(200)) {
+        await other.click("#send");
+        sent = fx.wsMessages() > before;
+      }
+      await other.close();
+      assert.ok(sent, "the socket guard outlived the run's last page");
+    } finally {
+      clearInterval(keep);
+      await run.catch(() => {});
+      await close().catch(() => {});
+    }
   });
 
   test("a tier-2 request that never answers times out instead of hanging the call", async () => {

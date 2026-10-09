@@ -123,7 +123,7 @@ test("stale marks expire after their TTL and carry a reason; tiers are remembere
 });
 
 test("secret scan: exact live values are secrets; heuristics only warn, and URL paths do not trip them", async () => {
-  const { scanSecrets } = await import("../src/store.js");
+  const { scanSecrets } = await import("../src/secrets.js");
   const session = {
     cookies: [
       { name: "sid", value: '"abc123secret"', domain: "x.test", path: "/", expires: -1, httpOnly: true, secure: true },
