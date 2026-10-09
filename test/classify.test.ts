@@ -120,6 +120,20 @@ test("a large legit HTML page that mentions recaptcha is not blocked", () => {
   assert.equal(cls(page, html(200, "<html><p>nothing here</p></html>")), "drift");
 });
 
+test("a sign-in form that embeds a CAPTCHA widget is auth; a CAPTCHA page with no sign-in form is blocked", () => {
+  const widget = `<script src="https://www.google.com/recaptcha/api.js" async defer></script><div class="g-recaptcha" data-sitekey="k"></div>`;
+  const signIn = `<!doctype html><html><head><title>Sign in</title></head><body><form action="/session" method="post"><input name="username"><input type="password" name="password">${widget}<button>Sign in</button></form></body></html>`;
+  const interstitial = `<!doctype html><html><head><title>One more step</title></head><body><form action="/verify" method="post">${widget}</form></body></html>`;
+  const listed = op({ response: { format: "html", html: { items: "li.r", fields: { t: "" } } } });
+  const write = op({ readOnly: false, response: { format: "json" } });
+  for (const o of [op(), listed, write]) {
+    for (const status of [200, 403]) {
+      assert.equal(cls(o, html(status, signIn)), "auth", `${o.response.format} ${status}`);
+      assert.equal(cls(o, html(status, interstitial)), "blocked", `${o.response.format} ${status}`);
+    }
+  }
+});
+
 test("input: 400 naming a param; error: 5xx and unexplained GraphQL errors", () => {
   assert.equal(cls(op(), json(400, { error: "screen_name is invalid" })), "input");
   assert.equal(cls(op(), json(400, { error: "something odd" })), "error");

@@ -95,7 +95,7 @@ function challenge(body: string, status: number): string | undefined {
 
 /**
  * The bot wall this response is, if any ("Cloudflare challenge page (HTTP 403)"). A real HTML page
- * may mention recaptcha in a login form; challenge pages are small, non-2xx, or where data was expected.
+ * may mention recaptcha; challenge pages are small, non-2xx, or where data was expected.
  * `hasData`: the op's recipe finds its data on this page. A title alone ("Robot check-in: how our
  * warehouse robots work") is then an ordinary page; a vendor's interstitial markers still count.
  */
@@ -109,7 +109,8 @@ export function botWall(r: Observed, wantsJson = false, hasData?: () => boolean)
     return `Kasada challenge (HTTP ${r.status})`;
   if (r.status >= 400 || (isHtml && (wantsJson || body.length < 64_000))) {
     const vendor = challenge(body, r.status);
-    if (vendor) return `${vendor} challenge page (HTTP ${r.status})`;
+    // A CAPTCHA widget rides on sign-in forms too: that page asks for a login, which no transport tier gets past.
+    if (vendor && !signInForm(body)) return `${vendor} challenge page (HTTP ${r.status})`;
   }
   if (isHtml && CHALLENGE_TITLE.test(body.slice(0, 20_000)) && !hasData?.()) return `challenge page (HTTP ${r.status})`;
   return undefined;
