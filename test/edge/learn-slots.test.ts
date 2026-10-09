@@ -500,6 +500,17 @@ test("run 2's request is chosen on run 1's evidence: a request that does not ans
   );
 });
 
+test("a read the caller pinned whose own answer is a flag is its own counterpart in run 2", () => {
+  // "is this liked?" answers {"liked":true}: no data by the ranking's lights, and the op all the same
+  const liked = (id: number) => [xhr({ url: `https://site.test/api/liked?id=${id}&v=42` }, { liked: true })];
+  const { operation: op, warnings } = learn(liked(42), [{ id: 42 }, { id: 43 }], {
+    exchanges2: liked(43),
+    match: { path: "/api/liked" },
+  });
+  assert.deepEqual(op.slots, [{ param: "id", at: ["query:id"] }]);
+  assert.ok(!warnings.some((w) => /disproves nothing/.test(w)), warnings.join("\n"));
+});
+
 /* ------------------------------------------------------ short examples */
 
 // The visitor's own country rides along as gl=US on every request, whatever country is asked for.

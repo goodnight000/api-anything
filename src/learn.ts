@@ -1397,6 +1397,7 @@ function diffRuns(
  */
 function twoRunDiff(
   input: LearnInput,
+  first: Exchange,
   request: Request,
   slots: Slot[],
   match: Match,
@@ -1412,13 +1413,14 @@ function twoRunDiff(
   const pool = input.exchanges2.filter((e) => matches(match, e.request));
   const byId = (c: Candidate) => pool.find((e) => e.id === c.id)!;
   const ranked = rankCandidates(pool, args2, { all: true });
-  // Run 2's request is chosen on the evidence run 1's was: what the recipe reads, when there is a
-  // recipe, and for a read an answer that is data. Among those, the one on run 1's own path when it
-  // carries the args: a segment that only looked like a param made the match a wildcard, which a
-  // sibling endpoint (/api/suggest beside /api/search) fits too.
-  const answers = ranked.filter(
-    (c) => (!input.accepts || input.accepts(byId(c))) && !(input.readOnly && dataless(byId(c), args2)),
-  );
+  // Run 2's request is chosen on the evidence run 1's (`first`) was: what the recipe reads, when it
+  // reads run 1's, and for a read an answer that is data, when run 1's is (a pinned read may answer
+  // with a flag). Among those, the one on run 1's own path when it carries the args: a segment that
+  // only looked like a param made the match a wildcard, which a sibling endpoint (/api/suggest
+  // beside /api/search) fits too.
+  const reads = input.accepts?.(first) ? input.accepts : () => true;
+  const data = input.readOnly && !dataless(first, args1);
+  const answers = ranked.filter((c) => reads(byId(c)) && !(data && dataless(byId(c), args2)));
   const path = new URL(request.url).pathname;
   const top = answers.find((c) => c.hits.length && new URL(c.url).pathname === path) ?? answers[0] ?? ranked[0];
   // A short example is placed only where run 2 proves it, so a run 2 that proves nothing fails it.
@@ -1492,7 +1494,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
 
   // 3. two-run diff. A place run 2 disproved was never the param's: learn again without it.
   const found: Disproved = new Map(disproved);
-  const minTier = twoRunDiff(input, request, slots, match, warnings, found, short);
+  const minTier = twoRunDiff(input, exchange, request, slots, match, warnings, found, short);
   if (found.size > disproved.size) return learn(input, found);
 
   // 8. response

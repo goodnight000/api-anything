@@ -130,7 +130,7 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    runs again without it, which makes the leaf a constant to every step (the match names the segment, a credential in
    it is found). A param left with no place is an error, not a warning. Run 2's request is chosen on the evidence
    run 1's was: what the response recipe reads, when there is one, and for a read an answer that is data, not a bare
-   acknowledgement. Among the requests that pass, the one on run 1's own path that carries the args comes first (the
+   acknowledgement (unless run 1's own answer, pinned by the caller, is one). Among the requests that pass, the one on run 1's own path that carries the args comes first (the
    wildcard a false path param puts in the match fits sibling endpoints too). When none passes, run 2 disproves nothing.
 4. **Session references.** A header, query or JSON leaf whose value equals a cookie value (raw,
    quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Capture also snapshots the
