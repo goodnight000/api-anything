@@ -158,6 +158,23 @@ test("a cookie sitting unquoted or URL-decoded next to an arg in one leaf is ref
     assert.ok(!JSON.stringify(op).includes(bare) && !JSON.stringify(op).includes(SID), JSON.stringify(op.slots));
     assert.equal(buildRequest(op, { q: "nasa" }, { cookies, values: {} }).headers["x-ctx"], ctx);
   }
+
+  // another cookie holds the same text as stored: it fills the hole exactly, whatever the jar's order
+  const both = [cookie("quoted", `"${SID}"`), cookie("raw", SID)];
+  const exact = learn(
+    [xhr({ url: "https://api.site.test/v1/search?q=nasa", headers: { "x-ctx": `q=nasa;auth=${SID}` } })],
+    [{ q: "nasa" }],
+    { cookies: both },
+  ).operation;
+  assert.deepEqual(exact.slots.at(-1), {
+    param: "q",
+    at: ["header:x-ctx"],
+    template: "q={q};auth={cookie:raw}",
+  });
+  assert.equal(
+    buildRequest(exact, { q: "mars" }, { cookies: both, values: {} }).headers["x-ctx"],
+    `q=mars;auth=${SID}`,
+  );
 });
 
 /* --------------------------------------------------- one name, one value */

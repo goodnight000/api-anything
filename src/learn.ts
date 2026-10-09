@@ -785,6 +785,9 @@ const sentCookies = (e: Exchange): StoredCookie[] =>
 function liveValues(cookies: StoredCookie[], storage: Record<string, string> = {}): Map<string, Live> {
   const out = new Map<string, Live>();
   const put = (v: string, live: Live) => v.length >= 8 && !out.has(v) && out.set(v, live);
+  // Every cookie as stored first: a text one cookie holds exactly is not another's unquoted or
+  // decoded form, which could not fill a hole.
+  for (const { name, value } of cookies) put(value, { ref: `cookie:${name}` });
   for (const { name, value } of cookies) {
     let decoded = value;
     try {
@@ -792,7 +795,6 @@ function liveValues(cookies: StoredCookie[], storage: Record<string, string> = {
     } catch {
       /* keep raw */
     }
-    put(value, { ref: `cookie:${name}` });
     put(value.replace(/^"|"$/g, ""), { ref: `cookie:${name}`, transform: "strip-quotes" });
     put(decoded, { ref: `cookie:${name}`, transform: "url-decode" });
   }
