@@ -98,6 +98,29 @@ export async function startFixture(): Promise<Fixture> {
       // a same-origin redirect with the status the test asks for
       case "/hop":
         return void res.writeHead(Number(u.searchParams.get("s")), { location: "/landed" }).end();
+      // a redirect to the other origin whose Location copies the token a JSON header carried
+      case "/away-copy":
+        return void res
+          .writeHead(302, {
+            location: `${otherBase}/landing?token=${JSON.parse(String(req.headers["x-session"] ?? "{}")).token}`,
+          })
+          .end();
+      // a POST redirected to an endpoint that turns away a bodiless request still carrying body headers
+      case "/hop-strict":
+        return void res.writeHead(Number(u.searchParams.get("s")), { location: "/strict" }).end();
+      case "/strict": {
+        const kept = ["content-type", "content-language", "content-encoding", "content-location"].filter(
+          (h) => h in req.headers,
+        );
+        return kept.length ? json(res, { error: `body headers: ${kept}` }, 415) : json(res, { items: [{ ok: 1 }] });
+      }
+      // six redirects, then the data
+      case "/chain": {
+        const n = Number(u.searchParams.get("n") ?? 0);
+        return n < 6
+          ? void res.writeHead(302, { location: `/chain?n=${n + 1}` }).end()
+          : json(res, { items: [{ end: n }] });
+      }
       case "/loop":
         return void res.writeHead(302, { location: "/loop" }).end();
       case "/to-login":

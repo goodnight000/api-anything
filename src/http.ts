@@ -190,7 +190,7 @@ export class RedirectRefused extends Error {}
  * would keep a CSRF header from the other origin. A hop that would still carry a session's value
  * there is not taken: a body it re-sends when any ref slot lives in the body (decided from the
  * slots: a value can sit under any number of encoding layers, so searching the bytes misses it), or
- * a Location that copied one from the query.
+ * a Location that repeats the value of any ref slot, wherever the request carried it.
  */
 export function nextHop(op: Operation, session: Session, from: Request, status: number, location: string): Request {
   const next = new URL(location, from.url);
@@ -212,15 +212,31 @@ export function nextHop(op: Operation, session: Session, from: Request, status: 
   const body = toGet ? undefined : from.body;
   if (cross) {
     const inBody = body !== undefined && held.some((h) => h.layer === "body" || h.layer === "form");
-    const carried = held.flatMap(({ s, refs, layer }) =>
-      layer === "header"
-        ? []
-        : refs.flatMap((r) => {
-            const v = resolveRef(r, session, op.request.url);
-            return v && v.length >= 4 ? [s.ref === r ? transform(v, s.transform) : v] : [];
-          }),
+    // every slot's, a header's too: the header is dropped, and the site may still have copied what it held
+    const carried = held.flatMap(({ s, refs }) =>
+      refs.flatMap((r) => {
+        const v = resolveRef(r, session, op.request.url);
+        return v && v.length >= 4 ? [s.ref === r ? transform(v, s.transform) : v] : [];
+      }),
     );
-    if (inBody || carried.some((v) => next.href.includes(v) || next.href.includes(encodeURIComponent(v))))
+    // ponytail: found as it is, form- or percent-encoded up to twice, or in base64; a copy the site
+    // encodes some other way (encrypted, split, base64 at an offset) passes. Refuse every
+    // cross-origin hop of an op with ref slots if that is ever met.
+    const unpct = (u: string) =>
+      u.replace(/(%[0-9a-f]{2})+/gi, (m) => {
+        try {
+          return decodeURIComponent(m);
+        } catch {
+          return m;
+        }
+      });
+    const plain = [next.href, unpct(next.href), unpct(unpct(next.href))].flatMap((u) => [u, u.replaceAll("+", " ")]);
+    const forms = (v: string) => [
+      v,
+      Buffer.from(v).toString("base64").replace(/=+$/, ""),
+      Buffer.from(v).toString("base64url"),
+    ];
+    if (inBody || carried.some((v) => forms(v).some((f) => plain.some((u) => u.includes(f)))))
       throw refused("the request would carry this session's values to another origin");
   }
   return { url: next.href, method: toGet ? "GET" : from.method, headers, body };

@@ -379,8 +379,9 @@ make a bodiless GET; 307/308 keep method and body. On an origin change the crede
 dropped: authorization, cookie, and every header a `cookie:`/`session:` ref fills, at any depth
 (a ref inside a header's JSON too). A hop to another origin is not taken when it would re-send a
 body in which any ref slot lives, which is decided from the slots and not by searching the bytes
-(a value under base64 or any other layer is not found that way), nor when its Location repeats a
-session value the query, path or body carried. The call then fails naming the redirect, and its
+(a value under base64 or any other layer is not found that way), nor when its Location repeats the
+value of any ref slot, a dropped header's too (the site can copy what a header held into the
+address), as it is, form- or percent-encoded up to twice, or in base64. The call then fails naming the redirect, and its
 `next` says not to retry (for a write: to check the site first, since the request the redirect
 answered was sent). At tier 2 a page's own `fetch()` would follow a redirect with every header and
 the body, so the page fetches with `redirect: "manual"`. It is then told nothing about the redirect,

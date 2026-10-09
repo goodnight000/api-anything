@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
-import { buildRequest, send } from "../src/http.js";
+import { buildRequest, nextHop, send } from "../src/http.js";
 import type { Session } from "../src/session.js";
 import { type Operation, OperationSchema } from "../src/spec.js";
 import type { StoredCookie } from "../src/types.js";
@@ -222,4 +222,26 @@ test("send: a cross-origin redirect drops cookie-derived and session headers; sa
       s.close();
     }
   }
+});
+
+test("a redirect to another origin is refused when its Location repeats a header's value, however it is encoded", () => {
+  const get = op({ request: { method: "get", url: "https://x.com/me", headers: { authorization: "" } } });
+  const from = { url: "https://x.com/me", method: "GET", headers: { authorization: "Bearer PUBLIC" } };
+  const v = "Bearer PUBLIC";
+  const copies = [
+    v,
+    encodeURIComponent(v),
+    encodeURIComponent(encodeURIComponent(v)),
+    v.replace(" ", "+"),
+    Buffer.from(v).toString("base64"),
+    Buffer.from(v).toString("base64url"),
+  ];
+  for (const copy of copies)
+    assert.throws(
+      () => nextHop(get, session, from, 302, `https://evil.example/landing?t=${copy}`),
+      /not following the HTTP 302 redirect to https:\/\/evil\.example: /,
+      copy,
+    );
+  assert.equal(nextHop(get, session, from, 302, `/landing?t=${v}`).url, "https://x.com/landing?t=Bearer%20PUBLIC");
+  assert.deepEqual(nextHop(get, session, from, 302, "https://evil.example/landing").headers, {});
 });

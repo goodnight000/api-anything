@@ -816,6 +816,28 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     assert.match(ran.next ?? "", /may have gone through/, "a redirected write is one that ran");
   });
 
+  for (const tier of [1, 2] as const) {
+    const o = { maxTier: tier, minIntervalMs: 0, timeoutMs: 5000 };
+
+    test(`tier ${tier}: a Location that copies a token from inside a header is not followed to another origin`, async () => {
+      site(`copy${tier}`, {
+        ...rd("me", "/away-copy", { minTier: tier }),
+        request: { method: "GET", url: `${fx.base}/away-copy`, headers: { "x-session": '{"token":""}' } },
+        slots: [{ ref: "session:token", at: ["header:x-session", "json:/token"] }],
+        response: { format: "json" },
+      });
+      saveSession(`copy${tier}`, { cookies: [], values: { token: "SECRET-token-1234" } });
+      const r = await call(`copy${tier}`, "me", {}, o);
+      assert.deepEqual(
+        fx.otherHits.filter((h) => h.method !== "OPTIONS").map((h) => h.url),
+        [],
+        "the token reached the other origin in the address",
+      );
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.reason ?? "", /not following the HTTP 302 redirect/);
+    });
+  }
+
   test("tier 2 refuses a redirect it cannot tell from another's: the origin page sent the same request at the same time", async () => {
     const waiting: ServerResponse[] = [];
     const landed: string[] = [];
