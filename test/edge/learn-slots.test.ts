@@ -526,8 +526,8 @@ test("a cookie or stored value is a reference under a persisted-query field name
     assert.deepEqual(jar.operation.slots.at(-1), { ref: "cookie:sid", at, template: "v1:{cookie:sid}" });
     // too short to template: the check refuses it there as anywhere else
     assert.throws(
-      () => learn(body({ [name]: "v1:Ab3dEf9h" }), [{ q: "kittens" }], { storage: { csrf: "Ab3dEf9h" } }),
-      new RegExp(`body > json:/${name} holds the live session value storage:csrf`),
+      () => learn(body({ [name]: "v1:secret123" }), [{ q: "kittens" }], { cookies: [cookie("sess", "secret123")] }),
+      new RegExp(`body > json:/${name} holds the live cookie sess`),
     );
   }
 
@@ -681,20 +681,26 @@ test("the check knows a stored credential that no pass made a reference, and no 
     () => run({ state: b64(T) }, { storage: { cache: JSON.stringify({ user: { id: T } }) } }),
     /body > json:\/state holds the live session value storage:cache\/user\/id\./,
   );
-  // a short per-session value inside a longer leaf, where no pass templates it
-  assert.throws(() => run({ ctx: "v1:Ab3dEf9h" }, { storage: { csrf: "Ab3dEf9h" } }), /storage:csrf/);
-  // a value is a credential when any entry that holds it is one, whichever comes first in storage
+  // A stored value that is one by its storage key's name alone is no ground to refuse a copy no
+  // pass could make a reference: the text stays as captured, whichever entry holds it first. The
+  // line falls at the value: a short token under `csrf` passes with the theme under `token`.
   const orders: Record<string, string>[] = [
     { saved: "ordinary-value", token: "ordinary-value" },
     { token: "ordinary-value", saved: "ordinary-value" },
     { saved: "ordinary-value", auth: JSON.stringify({ token: "ordinary-value" }) },
   ];
-  for (const storage of orders)
-    assert.throws(
-      () => run({ state: b64("ordinary-value") }, { storage }),
-      /holds the live session value storage:/,
-      JSON.stringify(storage),
-    );
+  for (const storage of orders) {
+    const kept = run({ state: b64("ordinary-value") }, { storage });
+    assert.equal(JSON.parse(kept.operation.request.body!).state, b64("ordinary-value"), JSON.stringify(storage));
+  }
+  const short = run({ ctx: "v1:Ab3dEf9h" }, { storage: { csrf: "Ab3dEf9h" } });
+  assert.equal(JSON.parse(short.operation.request.body!).ctx, "v1:Ab3dEf9h");
+  // ...and where the same value can be a reference it is one, as before
+  const referenced = run(
+    { ctx: "ordinary-value", state: b64("ordinary-value") },
+    { storage: { token: "ordinary-value" } },
+  );
+  assert.deepEqual(referenced.operation.slots.at(-1), { ref: "session:op/token", at: ["body", "json:/ctx"] });
 
   // a setting is no credential, wherever else it turns up
   const settings = { theme: "dark-mode", prefs: JSON.stringify({ locale: "en-US-posix", tz: "Europe/Berlin" }) };
@@ -747,6 +753,35 @@ test("the check knows a stored credential that no pass made a reference, and no 
     () => learn([copied], [{ q: "kittens" }]),
     /body > json:\/state holds the live session value x-csrf-token\./,
   );
+});
+
+test("an encoded copy of a setting stored under a credential's key is kept; of a token or a cookie, refused", async () => {
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
+  const sent = (value: string) => xhr({ url: `${local}?q=kittens&ctx=${encodeURIComponent(b64(value))}` });
+  const settings: Record<string, string>[] = [{ token: "solarized-dark" }, { cache: '{"token":"solarized-dark"}' }];
+  for (const storage of settings) {
+    const site = `setting-${nextId}`;
+    const { operation: op } = await add(site, sent("solarized-dark"), [], storage, ["ctx"]);
+    assert.deepEqual(op.slots, [{ param: "q", at: ["query:q"] }]);
+    assert.deepEqual(exportSite(site).secrets, []);
+    assert.equal(
+      buildRequest(op, { q: "puppies" }, noSession).url,
+      `${local}?q=puppies&ctx=${encodeURIComponent(b64("solarized-dark"))}`,
+    );
+  }
+  const before = readdirSync(HOME, { recursive: true }).sort();
+  // the same shape with a value that looks like a credential itself, and with a cookie
+  for (const [value, cookies, storage, what] of [
+    [T, [], { token: T }, "session value storage:token"],
+    [T, [], { cache: JSON.stringify({ token: T }) }, "session value storage:cache/token"],
+    ["solarized-dark", [cookie("theme", "solarized-dark")], undefined, "cookie theme"],
+  ] as const)
+    await assert.rejects(
+      add("setting-refused", sent(value), [...cookies], storage, ["ctx"]),
+      new RegExp(`query:ctx holds the live ${what}\\.`),
+    );
+  assert.deepEqual(readdirSync(HOME, { recursive: true }).sort(), before, "a refused add writes nothing");
 });
 
 /* --------------------------------------------- the text beside a param */
@@ -835,10 +870,8 @@ test("beside a param under an ordinary name, a known live value too short to tem
     () => learn(ctx("secret123"), [{ q: "kittens" }], { cookies: [cookie("sess", "secret123")] }),
     /keep a credential in the spec: header:x-ctx holds the live cookie sess; the template for header:x-ctx holds the live cookie sess\./,
   );
-  assert.throws(
-    () => learn(ctx("Ab3dEf9h"), [{ q: "kittens" }], { storage: { csrf: "Ab3dEf9h" } }),
-    /keep a credential in the spec: the template for header:x-ctx holds the live session value storage:csrf\./,
-  );
+  // a short stored value that is one by its key's name alone stays, as it did before the check existed
+  assert.equal(learn(ctx("Ab3dEf9h"), [{ q: "kittens" }], { storage: { csrf: "Ab3dEf9h" } }).operation.slots.length, 2);
   // control: the same leaf with nothing known in it learns
   assert.equal(learn(ctx("Ab3dEf9h"), [{ q: "kittens" }]).operation.slots.length, 2);
 });

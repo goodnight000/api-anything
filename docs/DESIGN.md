@@ -200,7 +200,12 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    request and the slot templates. It looks for credentials, not for everything live: every cookie (the jar's and
    the request's own Cookie header); the `session:` values that are credentials (found by name or as issued, stored as
    one, or sent under a credential's name), those of refs dropped from inside a container sent whole included; and
-   the stored values that are credentials, whether or not anything made them refs. A stored setting
+   the stored values that are credentials, whether or not anything made them refs. One exception, in this check only: a
+   stored value that is a credential by its storage key's name alone (`token: "solarized-dark"`), neither random-looking
+   nor shaped like a token (a JWT, a bearer, a long hex or base64 blob), does not refuse the learn, since the check
+   fires only for a copy that could not be a ref and the text is then kept as captured; where it can be a ref it still
+   is one. That lets through a short token (under 16 characters) kept under such a key and copied where no pass
+   reaches it. A stored setting
    (a theme, a locale) is not looked for, also when a leaf that equals it made it a ref: a ref keeps a value fresh,
    it does not make it secret. A copy no rule could turn into a ref (too short to template, base64, percent-encoded
    twice) fails the learn, closed, and the error names the leaf that holds it. No name exempts a leaf, one marked

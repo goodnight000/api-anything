@@ -1146,9 +1146,19 @@ function sessionRefs(
 ): { request: Request; slots: Slot[]; sessionValues: Record<string, string>; publicNames: string[] } {
   const cookies = [...input.cookies, ...sentCookies(ex)];
   const live = liveValues(cookies, input.storage);
+  // The final check refuses only a copy no pass could make a ref, so there the choice is to refuse or
+  // to keep the text as captured. A stored value that is a credential by its storage key's name alone,
+  // and neither random-looking nor shaped like a token, is no ground to refuse (a theme under `token`).
+  const nameOnly = new Set(
+    [...live].flatMap(([value, l]) =>
+      l.secret && !highEntropy(value) && !scanSecrets(value, { cookies: [], values: {} }).warnings.length
+        ? [value]
+        : [],
+    ),
+  );
   // Stored credentials, whether or not a pass makes them refs: the final check looks for each one.
   const stored = Object.fromEntries(
-    [...live].flatMap(([value, l]) => (l.secret ? [[`storage:${l.ref.slice(8)}`, value]] : [])),
+    [...live].flatMap(([value, l]) => (l.secret && !nameOnly.has(value) ? [[`storage:${l.ref.slice(8)}`, value]] : [])),
   );
   const held = new Set(live.keys());
   const refs: Refs = {
@@ -1177,7 +1187,7 @@ function sessionRefs(
   // A stored setting a leaf repeated is a ref, so it stays fresh; that does not make it a credential.
   // Taken before a container's inner refs are dropped: what they held is still looked for.
   const values = Object.fromEntries(
-    Object.entries(refs.sessionValues).filter(([, v]) => refs.live.get(v)?.secret !== false),
+    Object.entries(refs.sessionValues).filter(([, v]) => refs.live.get(v)?.secret !== false && !nameOnly.has(v)),
   );
   sentWhole(refs, held);
   refuseRepeatedKeys(leaves, refs.slots);
