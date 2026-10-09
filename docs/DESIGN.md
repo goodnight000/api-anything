@@ -264,13 +264,15 @@ An `auth` answer starts recovery at whichever tier got it (an op with `minTier: 
 remembered escalation starts there), at most once per call. At tier 3 only the re-import applies,
 and only to a read: the page just ran with the profile's own cookies and session values, so there is
 nothing fresher to take, and a write the page sent is never sent again.
-When tier 1 still answers `auth` after that recovery and the site has no login on record (the session
-has no source, the jar has no live login cookie, the op takes no cookie or session value and was not
-learned signed in), a wall that answers 419 or 401 to a client that is not a browser looks the same as
-a login wall. One tier-2 attempt is made, when that tier may run, before the call gives up. If the page
-gets the data, tier 2 is remembered. If it does not, the call ends exactly as it would have without the
-attempt: tier 1's `auth` and the login hint (a write the attempt may have run ends as that attempt's
-own failure). The attempt can only add an answer; its cost is one page fetch per failed call.
+When tier 1 still answers `auth` to a read after that recovery and the site has no login on record
+(the session has no source, the jar has no live login cookie once recovery is done, the op takes no
+cookie or session value and was not learned signed in), a wall that answers 419 or 401 to a client
+that is not a browser looks the same as a login wall. One tier-2 attempt is made, when that tier may
+run, before the call gives up. If the page gets the data, tier 2 is remembered. If it does not, the
+call's answer is tier 1's `auth` and the login hint. The attempt is a tier-2 call like any other:
+Chrome opens the site's origin page, whose own scripts run, and fetches from it. That is its cost on
+every call that fails this way, and why a write never gets it: a write is sent once, and a page can
+send a request again (its own scripts, a retry after a navigation or a connection reset).
 
 ## Browser
 

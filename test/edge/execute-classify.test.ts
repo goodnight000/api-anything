@@ -893,6 +893,42 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     assert.equal(fromPage.length, 1, "one attempt from a page, and no trigger run");
   });
 
+  test("a write is never given the page attempt: it was sent once, and ends as tier 1's auth", async () => {
+    const post = {
+      readOnly: false,
+      request: { method: "POST", url: `${fx.base}/api/picky`, headers: {}, body: "x=1" },
+    };
+    site("pickywrite", rd("save", "/api/picky", post));
+    fx.hits.length = 0;
+    const r = await call("pickywrite", "save", {}, { allowWrites: true, minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.equal(fx.hits.filter((h) => h.url === "/api/picky").length, 1, "the one POST, from plain HTTP");
+    assert.equal(
+      fx.hits.filter((h) => /Chrome\//.test(String(h.headers["user-agent"]))).length,
+      0,
+      "no page was opened",
+    );
+  });
+
+  test("a login that recovery finds counts: with one in the jar by then, auth is the answer and no page is opened", async () => {
+    // nothing on record at the start; the Chrome profile holds a login cookie the wall does not care about
+    site(
+      "pickyin",
+      rd("items", "/api/picky", { request: { method: "GET", url: `${fx.base}/api/picky`, headers: {} } }),
+    );
+    await addCookiesToProfile([cookie("sessionid", "signed-in-elsewhere", "127.0.0.1")], profileDir());
+    fx.hits.length = 0;
+    const r = await call("pickyin", "items", {}, { minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.equal(
+      fx.hits.filter((h) => /Chrome\//.test(String(h.headers["user-agent"]))).length,
+      0,
+      "no page was opened",
+    );
+  });
+
   test("recovery comes before the page attempt: a fresher cookie in the Chrome profile answers at tier 1", async () => {
     // a session with no source (one saved by an older version), an empty jar, and the cookie only in the profile
     site("legacy", rd("me", "/api/me"));
