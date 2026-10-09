@@ -740,6 +740,30 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     }
   });
 
+  test("a tier-3 read's own request may be sent on by a 307, to its own origin or another", async () => {
+    for (const far of [false, true]) {
+      const q = far ? "?far=1" : "";
+      site(`signed${q ? "far" : ""}`, {
+        ...rd("q", `/read${q}`, { minTier: 3, trigger: { url: `${fx.base}/signed-page${q}` } }),
+        request: { method: "POST", url: `${fx.base}/read${q}`, headers: {}, body: "final" },
+        match: { method: "POST", path: "/read" },
+      });
+      fx.hits.length = 0;
+      fx.otherHits.length = 0;
+      const r = await call(`signed${q ? "far" : ""}`, "q", {}, { maxTier: 3, minIntervalMs: 0, timeoutMs: 5000 });
+      const posts = (hits: typeof fx.hits) => hits.filter((h) => h.method === "POST").map((h) => `${h.url} ${h.body}`);
+      // the check is reached, wherever it is, and then the page asks for the data
+      assert.deepEqual(
+        [...posts(fx.hits), ...posts(fx.otherHits)].sort(),
+        ["/answer initial", `/read${q} final`, `/read${q} initial`],
+        JSON.stringify(r),
+      );
+      assert.equal(posts(fx.otherHits).length, far ? 1 : 0);
+      assert.equal(r.tier, 3, JSON.stringify(r));
+      assert.deepEqual(r.data, [{ name: "alice" }]);
+    }
+  });
+
   test("auth at tier 3 re-imports the browser session into the profile and retries once", async () => {
     site(
       "t3auth",

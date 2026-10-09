@@ -39,7 +39,8 @@ export async function startFixture(): Promise<Fixture> {
 
   const other = createServer(async (req, res) => {
     otherHits.push({ method: req.method!, url: req.url!, headers: req.headers, body: await readBody(req) });
-    json(res, { landed: true });
+    // a check that a page on the first origin may read, after a redirect sent it here
+    json(res, { landed: true }, 200, req.url === "/answer" ? { "access-control-allow-origin": "*" } : {});
   });
   await new Promise<void>((r) => other.listen(0, "localhost", r));
   const otherBase = `http://localhost:${(other.address() as AddressInfo).port}`;
@@ -69,6 +70,22 @@ export async function startFixture(): Promise<Fixture> {
       }
       case "/away":
         return void res.writeHead(Number(u.searchParams.get("s") ?? 302), { location: `${otherBase}/landing` }).end();
+      // A read the page asks for twice: first signed, which the server sends on to a check that
+      // keeps the method (307), and then, once that answered, for the data.
+      case "/signed-page":
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end(
+            `<!doctype html><title>signed</title><script>const r="/read${u.search}";fetch(r,{method:"POST",body:"initial"}).then(r=>r.json())` +
+              '.then(()=>fetch(r,{method:"POST",body:"final"}))</script>',
+          );
+      // ?far: the check is on another origin
+      case "/read":
+        return body === "initial"
+          ? void res.writeHead(307, { location: u.searchParams.has("far") ? `${otherBase}/answer` : "/answer" }).end()
+          : json(res, { items: [{ name: "alice" }] });
+      case "/answer":
+        return json(res, { checked: req.method === "POST" && body === "initial" });
       case "/loop":
         return void res.writeHead(302, { location: "/loop" }).end();
       case "/to-login":

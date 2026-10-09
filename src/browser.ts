@@ -298,13 +298,12 @@ const within = <T>(p: Promise<T>, otherwise: T): Promise<T> => {
  * Who opened each tab of a browser, kept on a DevTools session of the browser itself. That session
  * outlives every page, so a tab can be asked about, and closed, after the tab that opened it is
  * gone; and the record is kept as tabs appear, since the browser forgets who opened a tab once the
- * opener is closed (as does Playwright's opener()).
+ * opener is closed (as does Playwright's opener()). It holds open tabs only: when one closes, the
+ * tabs it opened pass to the tab that opened it, so ancestry survives without the dead.
  */
 interface Tabs {
-  /** each tab the browser reported, with the tab that opened it */
+  /** each open tab that another tab opened, with that tab (or, once it closed, the one that opened it) */
   openerOf: Map<string, string>;
-  /** the tabs that have closed */
-  gone: Set<string>;
   /** called whenever a tab closes */
   watchers: Set<() => void>;
   /** resolves with every tab the browser has now in the record */
@@ -313,7 +312,7 @@ interface Tabs {
   close(targetId: string): Promise<unknown>;
 }
 const tabRecords = new WeakMap<BrowserContext, Promise<Tabs>>();
-function tabsOf(ctx: BrowserContext): Promise<Tabs> {
+export function tabsOf(ctx: BrowserContext): Promise<Tabs> {
   let record = tabRecords.get(ctx);
   if (!record) {
     record = (async () => {
@@ -322,7 +321,6 @@ function tabsOf(ctx: BrowserContext): Promise<Tabs> {
       const cdp = await browser.newBrowserCDPSession();
       const tabs: Tabs = {
         openerOf: new Map(),
-        gone: new Set(),
         watchers: new Set(),
         sync: async () => (await cdp.send("Target.getTargets")).targetInfos.forEach(note),
         close: (targetId) => cdp.send("Target.closeTarget", { targetId }),
@@ -330,8 +328,10 @@ function tabsOf(ctx: BrowserContext): Promise<Tabs> {
       const note = (t: { targetId: string; openerId?: string }) =>
         void (t.openerId && tabs.openerOf.set(t.targetId, t.openerId));
       cdp.on("Target.targetCreated", (e) => note(e.targetInfo));
-      cdp.on("Target.targetDestroyed", (e) => {
-        tabs.gone.add(e.targetId);
+      cdp.on("Target.targetDestroyed", ({ targetId }) => {
+        const opener = tabs.openerOf.get(targetId);
+        tabs.openerOf.delete(targetId);
+        if (opener) for (const [id, by] of tabs.openerOf) if (by === targetId) tabs.openerOf.set(id, opener);
         for (const changed of [...tabs.watchers]) changed();
       });
       await cdp.send("Target.setDiscoverTargets", { discover: true });
@@ -345,13 +345,16 @@ function tabsOf(ctx: BrowserContext): Promise<Tabs> {
 
 /**
  * One page's requests as Chrome pauses them, below Playwright's routes, on a DevTools session of
- * our own. A route is not asked about every request: Playwright continues by itself any paused
- * request that has no network id, which is what a document sends as it unloads (a pagehide beacon,
- * a keepalive fetch, an image ping) and a deferred fetchLater(). `drop` is asked about each
- * request, and told whether a route will see it too.
- * ponytail: a frame on another site is a target of its own, and that target is gone before the
- * frame's document unloads: what such a frame sends as it unloads is seen by no session, its own
- * included (tried). Only interception on the browser target would see it, for every run at once.
+ * our own. A route is not asked about every request. Playwright continues by itself, calling no
+ * handler: every hop of a redirect (so an asset the guard allowed can be sent on to a write), and
+ * any paused request that has no network id, which is what a document sends as it unloads (a
+ * pagehide beacon, a keepalive fetch, an image ping) and a deferred fetchLater(). `drop` is asked
+ * about each request, and told whether a route will see it too; a hop keeps the resource type of
+ * the request that was redirected, and `drop` is given the request that started its chain (`via`).
+ * ponytail: a frame on another site is a target of its own. Its redirect hops would need a tap on
+ * the frame; what it sends as it unloads is seen by no session, its own included (tried: the
+ * target is gone before the document unloads), only by interception on the browser target, for
+ * every run at once.
  */
 interface Tap {
   /** the page's DevTools target */
@@ -359,9 +362,15 @@ interface Tap {
   /** resolves once every request paused so far has its answer */
   answered(): Promise<void>;
 }
-async function tap(ctx: BrowserContext, page: Page, drop: (e: Exchange, routed: boolean) => boolean): Promise<Tap> {
+async function tap(
+  ctx: BrowserContext,
+  page: Page,
+  drop: (e: Exchange, routed: boolean, via?: Exchange) => boolean,
+): Promise<Tap> {
   const cdp = await ctx.newCDPSession(page);
   const answers = new Set<Promise<unknown>>();
+  /** the request each chain of redirects started from, by network id */
+  const chains = new Map<string, Exchange>();
   cdp.on("Fetch.requestPaused", (e) => {
     const ex: Exchange = {
       id: 0,
@@ -374,8 +383,12 @@ async function tap(ctx: BrowserContext, page: Page, drop: (e: Exchange, routed: 
       },
     };
     const { requestId } = e;
+    // A hop goes on under its request's network id. Chrome marks it with redirectedRequestId, but
+    // not a cross-origin fetch's: the id seen before is what tells it.
+    const via = e.networkId ? chains.get(e.networkId) : undefined;
+    if (e.networkId && !via) chains.set(e.networkId, ex);
     const answer = (
-      drop(ex, !!e.networkId)
+      drop(ex, !!e.networkId && !via && !e.redirectedRequestId, via)
         ? cdp.send("Fetch.failRequest", { requestId, errorReason: "Aborted" })
         : cdp.send("Fetch.continueRequest", { requestId })
     ).catch(() => {}); // the request or its page is gone
@@ -406,9 +419,9 @@ export interface TriggerOptions {
    * recorded with aborted:true; `acting` is true once the page has loaded and the steps run, and
    * false again while the page is a bot challenge's interstitial (its own verify POSTs must go
    * through, or it never reloads). A WebSocket message the page sends is asked as resourceType
-   * "websocket", method "SEND".
+   * "websocket", method "SEND". For a hop of a redirect, `via` is the request its chain started from.
    */
-  intercept?: (e: Exchange, acting: boolean) => boolean;
+  intercept?: (e: Exchange, acting: boolean, via?: Exchange) => boolean;
   /**
    * the op's own request: the run waits for one to answer (up to the budget), then ends after a
    * short settle instead of waiting for the whole page to go quiet
@@ -496,9 +509,12 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const held = new Set<string>();
   const cover = (p: Page) => {
     if (!intercept || taps.has(p)) return;
-    const drop = (ex: Exchange, routed: boolean) => {
-      if (sealed) return true;
-      if (routed || !intercept(ex, acting)) return false;
+    const drop = (ex: Exchange, routed: boolean, via?: Exchange) => {
+      // What a route will see is the route's to judge, until the run ends: then this is the last word.
+      if (routed && !sealed) return false;
+      // Once sealed everything is stopped, but only what the guard itself stops joins the capture:
+      // a write a page sends as it leaves can be learned, the rest of a closing page's traffic is noise.
+      if (!intercept(ex, acting, via)) return sealed;
       exchanges.push({ ...ex, id: exchanges.length + 1, aborted: true });
       return true;
     };
@@ -523,19 +539,17 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       n = kin.size;
       for (const [id, opener] of tabs.openerOf) if (kin.has(opener)) kin.add(id);
     }
-    return [...kin].filter((id) => !held.has(id) && !tabs.gone.has(id));
+    return [...kin].filter((id) => !held.has(id));
   };
   /**
    * Whether a tab that has no page yet can be this run's, with the record brought up to date first
-   * (so that a tab the browser has only just opened is in it). When the browser cannot be asked, it can.
+   * (so that a tab the browser has only just opened is in it). When the browser cannot be asked, or
+   * does not answer in time, it can: the request is waiting on this, and so is its tab.
    */
-  const mayOwnNewTab = async () =>
-    !tabs ||
-    !(await tabs.sync().then(
-      () => true,
-      () => false,
-    )) ||
-    strays().length > 0;
+  const mayOwnNewTab = async () => {
+    const asked = tabs?.sync().then(() => true);
+    return !asked || !(await within(asked, false)) || strays().length > 0;
+  };
 
   // This run's pages: its own and any popup they open. The context is shared with concurrent runs.
   const own = new Set<Page>([page]);
@@ -767,32 +781,32 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
    * the seal first: its document unloads here, what it sends last fails, and the page that is
    * closed afterwards has nothing left to send. A tab of the run that has no page (Playwright has
    * not reported it, or its opener was closed by the time it did) is closed through the browser.
-   * Pages keep being adopted meanwhile, and this goes round until there is nothing new. Every
-   * step is bounded: a page that will not be emptied or closed does not hold the run.
+   * Pages keep being adopted meanwhile, and this goes round until there is nothing new; no round
+   * starts after 15 s, but one under way runs its waits out. Each wait has its own 5 s: for the adoptions and taps under way, for
+   * a page to be emptied and for its tap's answers, for the browser's list of tabs, for a stray
+   * to close; and after the rounds, for each page's close(). The wait for the guard's requests
+   * in flight ends with the rounds. A page that will not be emptied or closed does not hold the
+   * run: the caller then leaves the guards in place.
    */
   const closePages = async (): Promise<boolean> => {
     if (guard) {
       sealed = true;
+      const tapOf = (p: Page) => within(Promise.resolve(taps.get(p)), undefined);
       const emptied = new Set<Page>();
       for (const end = Date.now() + 3 * SEAL_MS; Date.now() < end; ) {
-        await Promise.all([...adopting, ...taps.values()]);
+        await within(Promise.all([...adopting, ...taps.values()]), []);
         const fresh = [...own].filter((p) => !emptied.has(p) && !p.isClosed());
         for (const p of fresh) {
           emptied.add(p);
-          const tapped = await taps.get(p);
           // A round trip through the new document, then (in `answered`) through the browser:
           // whatever the old one sent as it unloaded has been paused and failed before either returns.
-          if (
-            await within(
-              p.goto("about:blank", { timeout: SEAL_MS }).then(() => true),
-              false,
-            )
-          )
+          const blank = p.goto("about:blank", { timeout: SEAL_MS }).then(() => true);
+          if (await within(blank, false))
             await within(
               p.evaluate(() => 0),
               0,
             );
-          if (tapped) await within(tapped.answered(), undefined);
+          await within(Promise.resolve((await tapOf(p))?.answered()), undefined);
         }
         while (deciding > 0 && Date.now() < end) await sleep(20);
         // Through the browser's own session: a stray has no page to close it by, and the page
@@ -814,7 +828,8 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     if (intercept) dropSocketSends = await guardSockets(ctx, (ex) => intercept(ex, acting));
     // in place before the first document, so that what it defers (fetchLater) passes through it
     cover(page);
-    if (intercept && !(await taps.get(page))) throw new Error("could not attach the request guard to the page");
+    if (intercept && !(await within(Promise.resolve(taps.get(page)), undefined)))
+      throw new Error("could not attach the request guard to the page");
     if (o.softFrom) {
       await goto(page, o.softFrom);
       await idle(5000);

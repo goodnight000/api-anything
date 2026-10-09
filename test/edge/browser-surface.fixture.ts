@@ -131,6 +131,8 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
             // the write is a new tab's first navigation
             `<a id="newtab" target="_blank" href="/api/vote?how=newtab">vote in a tab</a>` +
             `<button id="open" onclick="window.open('/api/vote?how=open')">open</button>` +
+            // an asset the write guard allows, answered with a redirect to the write
+            `<button id="hop" onclick="const l=document.createElement('link');l.rel='stylesheet';l.href='/safe.css';document.head.appendChild(l)">hop</button>` +
             // an asset load the write guard allows during the steps: the server seeing it shows they have started
             `<button id="css" onclick="const l=document.createElement('link');l.rel='stylesheet';l.href='/acting.css';document.head.appendChild(l)">css</button>` +
             // a client that sends a failed request again (axios-retry, Apollo's RetryLink), here with no backoff
@@ -155,6 +157,18 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
       case "/late-tab-page":
         // opens a tab whose document is slow: the tab has no page yet when the run that opened it ends
         return html(res, `<script>window.open("/held-vote")</script>${dataFetch(name)}`);
+      // an app that starts only once its shared worker has answered (a session kept across tabs)
+      case "/worker-app":
+        return html(
+          res,
+          `<script>const w=new SharedWorker("/app-worker.js?"+Math.random());w.port.onmessage=e=>{${dataFetch(name).replace(/^.*<script>|<\/script>$/g, "")}};w.port.start()</script><div id="out"></div>`,
+        );
+      case "/app-worker.js":
+        res.writeHead(200, { "content-type": "application/javascript" });
+        return res.end(`onconnect=e=>fetch("/api/data?name=from-worker").then(()=>e.ports[0].postMessage("ready"))`);
+      case "/safe.css":
+        res.writeHead(302, { location: "/api/vote?how=hop" });
+        return res.end();
       case "/stuck-page":
         // the renderer hangs for good shortly after load: nothing run in the page ever answers again
         return html(res, `${dataFetch(name)}<script>setTimeout(()=>{for(;;){}},300)</script>`);

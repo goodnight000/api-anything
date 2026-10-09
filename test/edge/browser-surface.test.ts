@@ -13,9 +13,9 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { chromeAvailable, closeBrowser, openBrowser, pageFetch, runTrigger } from "../../src/browser.js";
+import { chromeAvailable, closeBrowser, openBrowser, pageFetch, runTrigger, tabsOf } from "../../src/browser.js";
 import { call } from "../../src/execute.js";
-import { addOperation, capturePage, profileDir } from "../../src/heal.js";
+import { addOperation, capturePage, loadCapture, profileDir } from "../../src/heal.js";
 import { createServer } from "../../src/mcp.js";
 import { scanSecrets } from "../../src/secrets.js";
 import { clearStale, exportSite, loadSite, markStale, staleMark } from "../../src/store.js";
@@ -467,6 +467,28 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     });
   }
 
+  test("capture --write: a stylesheet the guard allows that is redirected to the write is stopped at the redirect", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    const r = await capturePage({
+      url: `${fx.url}/vote-page`,
+      steps: [{ action: "click", selector: "#hop" }],
+      write: true,
+    });
+    assert.ok(
+      fx.calls.slice(seen).includes("/safe.css"),
+      "the stylesheet itself was allowed, so the redirect happened",
+    );
+    assert.deepEqual(votes().slice(before), [], "the redirect carried the request to the write");
+    const hops = r.exchanges.filter((e) => e.request.url.endsWith("/api/vote?how=hop"));
+    assert.deepEqual(
+      hops.map((e) => [e.aborted, e.resourceType]),
+      [[true, "stylesheet"]],
+      "recorded once, as aborted",
+    );
+  });
+
   test("capture --write: a write that is a new tab's first navigation is recorded as aborted, so it can be learned", async () => {
     process.env.API_ANYTHING_HOME = home;
     const r = await capturePage({
@@ -601,6 +623,52 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     }
   });
 
+  test("when the browser does not say whose a new tab is, its first navigation is still judged, as the run's own", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    const steps = [
+      { action: "click" as const, selector: "#css" }, // the server sees this stylesheet once the steps run
+      { action: "wait" as const, ms: 1500 },
+      { action: "click" as const, selector: "#newtab" },
+    ];
+    const run = capturePage({ url: `${fx.url}/vote-page`, steps, write: true });
+    const tabs = await tabsOf(await openBrowser({ profileDir: profileDir() }));
+    const sync = tabs.sync;
+    try {
+      assert.ok(await until(() => fx.calls.slice(seen).includes("/acting.css"), 20_000), "the run reached its steps");
+      // fault injection: from here on, asking the browser for its tabs never answers
+      tabs.sync = () => new Promise<void>(() => {});
+      const r = await run;
+      assert.deepEqual(votes().slice(before), [], "the write was performed while learning it");
+      // decided, not left waiting for an answer that never comes: stopped, and in the capture
+      const tab = r.exchanges.filter((e) => e.request.url.endsWith("/api/vote?how=newtab"));
+      assert.equal(tab[0]?.aborted, true, `the new tab's navigation was never judged: ${JSON.stringify(tab)}`);
+    } finally {
+      tabs.sync = sync;
+      await run.catch(() => {});
+    }
+  });
+
+  test("the record of who opened which tab keeps nothing of tabs that have closed", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    for (let i = 0; i < 3; i++)
+      await capturePage({ url: `${fx.url}/vote-page`, steps: [{ action: "click", selector: "#newtab" }], write: true });
+    // the record lives as long as the browser does: a long-lived server would grow it with every tab
+    const tabs = await tabsOf(await openBrowser({ profileDir: profileDir() }));
+    assert.ok(await until(() => tabs.openerOf.size === 0, 2000), `${tabs.openerOf.size} closed tabs still on record`);
+    assert.deepEqual(Object.keys(tabs).sort(), ["close", "openerOf", "sync", "watchers"], "and no other history");
+  });
+
+  test("an app that waits for its shared worker starts, guarded or not", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    for (const intercept of [undefined, (e: { request: { method: string } }) => e.request.method !== "GET"]) {
+      const r = await runTrigger({ url: `${fx.url}/worker-app?name=app`, profileDir: profileDir(), intercept });
+      const urls = r.exchanges.map((e) => new URL(e.request.url).pathname + new URL(e.request.url).search);
+      assert.ok(urls.includes("/api/data?name=app"), `${intercept ? "guarded" : "unguarded"}: ${urls}`);
+    }
+  });
+
   test("a tab the run's page opened that has no page yet when the run ends is closed with it, and never writes", async () => {
     process.env.API_ANYTHING_HOME = home;
     const before = votes().length;
@@ -652,7 +720,7 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     ["slow", "a pagehide handler that takes 400 ms to send"],
     ["later", "a deferred fetchLater()"],
   ] as const) {
-    test(`capture --write: ${what} never reaches the server when the run ends`, async (t) => {
+    test(`capture --write: ${what} never reaches the server when the run ends, and is in the capture`, async (t) => {
       process.env.API_ANYTHING_HOME = home;
       const before = votes().length;
       const r = await capturePage({ url: `${fx.url}/leave-page?how=${how}`, write: true });
@@ -661,6 +729,12 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
         return t.skip("this Chrome has no fetchLater()");
       await sleep(300); // what a closing page got out arrives after the run has returned
       assert.deepEqual(votes().slice(before), [], "the write was performed while learning it");
+      // stopped as the run ended, and still learnable: a write that is only ever sent on leaving
+      const stopped = loadCapture(r.id).exchanges.filter((e) => e.request.url.endsWith(`/api/vote?how=${how}`));
+      assert.deepEqual(
+        stopped.map((e) => e.aborted),
+        [true],
+      );
     });
   }
 

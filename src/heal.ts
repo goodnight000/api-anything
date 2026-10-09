@@ -111,15 +111,23 @@ export const writeGuard = (m?: Match, o: { url?: string; args?: Args } = {}) => 
 
 /**
  * A read's trigger must not write either: a shared spec that says "read" but clicks a button that
- * POSTs. Once the steps run, unsafe requests other than the op's own are aborted.
+ * POSTs. Once the steps run, unsafe requests other than the op's own are aborted. Every hop of a
+ * redirect chain that started with the op's own unsafe request (`via`) is the op's own too, on any
+ * origin, as Chrome itself would follow it (a signed read the server checks elsewhere with a 307).
+ * The hops of any other chain are judged by their own address: an asset sent on to a write stops.
+ * ponytail: that includes a 307 of the op's own read to a write on its own site; the server chose
+ * it, and nothing in the spec tells it from a check.
  */
-const readGuard =
-  (m: Match) =>
-  (e: Exchange, acting: boolean): boolean =>
+const readGuard = (m: Match) => {
+  const own = (e: Exchange) =>
+    !SAFE_METHODS.has(e.request.method.toUpperCase()) && Object.keys(m).length > 0 && matches(m, e.request);
+  return (e: Exchange, acting: boolean, via?: Exchange): boolean =>
     acting &&
     e.resourceType !== "websocket" &&
     !SAFE_METHODS.has(e.request.method.toUpperCase()) &&
-    !(Object.keys(m).length > 0 && matches(m, e.request));
+    !own(e) &&
+    !(via && own(via));
+};
 
 /** Values of the op's session: refs as the browser just sent them. */
 function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {

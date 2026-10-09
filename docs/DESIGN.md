@@ -269,7 +269,8 @@ route is context-wide) are dropped too. A new tab's first navigation (a `target=
 navigation commits, so the guard cannot ask whose request it is. The browser reports each new tab
 with the tab that opened it, and that is recorded as it happens (the browser forgets it once
 the opener is closed, as does Playwright's `opener()`), on a DevTools session of the browser itself,
-which outlives every page; the record is brought up to date before each such decision. The request
+which outlives every page. The record holds open tabs only (when one closes, the tabs it opened
+pass to the tab that opened it), and is brought up to date before each such decision. The request
 is judged as the run's own
 unless the run has no stray tab, one its pages opened that it does not hold yet, and
 an aborted one joins the capture once its page shows the tab was the run's. Two runs that open a
@@ -280,25 +281,40 @@ would load, and write, after the guards were lifted) is closed through that sess
 not any page of the run is still open. The guards are lifted only after the run's pages are closed:
 an open page still sends (a client's retry; Chrome reloads an aborted navigation's error page after
 about a second), and removing a route releases the requests paused in it. A route is not asked about
-every request: Playwright continues by itself any paused request that has no network id, which is
-what a document sends as it unloads (a pagehide beacon, a keepalive fetch, an image ping) and a
-deferred `fetchLater()`. So each guarded page also has a DevTools session of the run's own, where the
-same guard decides those. Not covered: a frame on another site. It is a DevTools target of its own,
-and that target is gone before the frame's document unloads, so what the frame sends as it unloads
+every request. Playwright continues by itself every hop of a redirect (a stylesheet the guard
+allowed, answered with a redirect to the write, would be sent on to it) and any paused request that
+has no network id, which is what a document sends as it unloads (a pagehide beacon, a keepalive
+fetch, an image ping) and a deferred `fetchLater()`. So each guarded page also has a DevTools
+session of the run's own, where the same guard decides those; a hop is judged at its own address
+with the resource type of the request that was redirected, and is told by its network id (Chrome
+marks a cross-origin fetch's hop with no `redirectedRequestId`). One exception, for reads: every hop
+of a chain that started with the op's own unsafe request is the op's own, on any origin, as Chrome
+would follow it (a signed read the server checks elsewhere with a 307). The hops of any other chain
+(an asset, a request let through for another reason) are judged at their address, so a stylesheet
+sent on to a write is still aborted. Not covered: the op's own read sent on by a 307 to a write
+endpoint, which passes as the read did before hops were judged. Not covered: a frame on another site. It is a
+DevTools target of its own: its redirect hops would need a session on the frame, and that target is
+gone before the frame's document unloads, so what the frame sends as it unloads
 is seen by no session, one attached to the frame included (tried); what it sends while the page is
 up is routed like any request. Only interception on the browser target would see it, for every run.
 Closing a page is not atomic either: its unload handlers send, Playwright calls no route handler for
 a page once `close()` was called, and Chrome sends a request paused in a session on to the network
 when that session detaches. So when a guarded run ends, each of its pages is first taken to
 `about:blank` with its session and the guards still live, and everything it sends from then on
-fails; what is closed afterwards has nothing left to send. Emptying a page and closing it each
-have a bound (5 s: a hung renderer answers nothing, and neither `evaluate()` nor `close()` has a
-timeout of its own), and the guards are lifted only when every page of the run and every stray tab
+fails; what is closed afterwards has nothing left to send. What the guard itself would stop is
+still recorded as aborted then, so a write a page only sends on leaving can be learned; the rest of
+a closing page's traffic is stopped without a record. Every wait in that sequence has a bound,
+since a hung renderer answers nothing and neither `evaluate()` nor `close()` has a timeout of its
+own: 5 s each for a page to be emptied, for its session to answer, for the browser's list of tabs
+(also when a new tab's owner is decided: no answer counts as a possible owner) and for a page or a
+stray tab to close. No new round starts after 15 s, but a round under way runs its waits out, each
+to its own 5 s, so with a page that answers nothing the end of a run can take longer (two such
+pages took about 21 s). The guards are lifted only when every page of the run and every stray tab
 is known to be closed. If one is not, the browser is still released, and both guards stay until the
 last of them is gone: the route, which acts on the run's pages only, and the socket guard, although
 it drops every run's sends. A page that is still open can still write, and time passing is no sign
-that it cannot. Service workers are
-blocked in the profile, since their fetches bypass routing. The op is learned from the intercepted
+that it cannot. Service workers are blocked in the profile, since their fetches bypass routing (a
+dedicated worker's are routed). Not covered: a shared worker's writes (see Browser below). The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
 run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the
 steps are not running yet: its own verify POSTs (AWS WAF's `mp_verify`, Cloudflare's
@@ -422,6 +438,13 @@ send a request again (its own scripts, a retry after a navigation or a connectio
   to. Only if nothing fired does it load the URL. An injected `<a>` is not routed by React Router,
   TanStack or Comet, so it would be a second full page load that fires no data XHR.
 - Service workers are blocked in the profile: their fetches bypass routing and capture.
+- Known gap: shared workers are not guarded. A shared worker's requests reach no route, no page's
+  tap and no capture, so a write a guarded page hands to one (started from a URL, a blob: or data:
+  URL, or one an unguarded page started earlier and the guarded page joins) is sent, and is not
+  recorded. They are left running because sites need them (a sign-in or start-up can wait on one):
+  removing the constructor broke those, and guarding them through the browser's session judged
+  every run's workers by every guarded run's guard, covering only a URL worker started by a
+  guarded page. Closing it needs per-run ownership of a worker.
 - A per-site minimum interval between network requests (default 1 s) keeps usage at human scale.
 
 ## Response extraction and token efficiency
