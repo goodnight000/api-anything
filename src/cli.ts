@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { chromeAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
-import { botWall, emptyResults, judge, type Observed } from "./classify.js";
+import { botWall, emptyResults, loginPath, signInForm } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
 import {
@@ -25,7 +25,7 @@ import { cookieNames, importSession, logout, resolveLoginTarget } from "./login.
 import { serveStdio, VERSION } from "./mcp.js";
 import { type Outline, outline } from "./outline.js";
 import { loadSession, loggedIn, saveSession, sessionFile, withLock } from "./session.js";
-import { HtmlRecipeSchema, MatchSchema, type Operation, OperationSchema, TriggerStepSchema } from "./spec.js";
+import { HtmlRecipeSchema, MatchSchema, type Operation, TriggerStepSchema } from "./spec.js";
 import { exportSite, listSites, loadSite, siteNotes } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
 
@@ -326,52 +326,39 @@ function positive(text: string | undefined, flag: string): number | undefined {
 }
 
 /**
- * What the page a capture ended on says about learning from it. `stop`: nothing to learn here, it
- * is a sign-in page or an HTTP error. `also`: it shows a sign-in form, as a public page may too, so
- * that is said next to the recommendation and not instead of it. `status`: its HTTP error, when a
- * request it loaded is recommended all the same.
- * "Sign-in page" takes direct evidence, never the look of the page: the navigation landed on a login
- * path, or example values were given, no answer in the capture holds one, and the page shows the form.
+ * What the page a capture ended on says about learning from it. `stop`: nothing to learn here, the
+ * navigation ended on a login path or the page itself answered an HTTP error. `also`: the page shows
+ * a sign-in form, as a public page may too, so that is said next to the recommendation and never
+ * instead of it. `status`: the page's HTTP error, when a request it loaded is recommended all the same.
  */
 function pageSays(
   c: CaptureFile,
-  url: string,
   ranked: Candidate[],
   values: string[],
 ): { stop?: string; also?: string; status?: number } {
-  const wall = "the page is a sign-in page: ask the user to run api-anything login <site>, then capture again";
-  // what the classifier makes of a page nothing was learned from yet: a read whose recipe finds nothing
-  const unlearned = OperationSchema.parse({
-    name: "page",
-    readOnly: true,
-    request: { method: "GET", url },
-    trigger: { url },
-    response: { format: "embedded" },
-  });
-  const signIn = (seen: Observed) => judge(unlearned, { ...seen, url: c.finalUrl }).class === "auth";
-  // Shown neither markup nor status, the classifier can only go by where the navigation landed: a login path.
-  if (signIn({ status: 200, headers: {}, body: "" })) return { stop: wall };
+  if (loginPath(c.finalUrl))
+    return { stop: "the page is a sign-in page: ask the user to run api-anything login <site>, then capture again" };
   const pages = capturePages(c).map((u) => u.split("#")[0]);
   // the main frame's last document: a widget's iframe is a document too
   const page = c.exchanges
     .filter((e) => e.resourceType === "document" && e.response && pages.includes(e.request.url))
     .at(-1);
   if (!page?.response) return {};
-  const { status, headers, body = "" } = page.response;
-  const form = signIn({ status, headers, body });
+  const { status, body = "" } = page.response;
+  // What would be learned from: the candidates' answers. A beacon that echoes the page is not one.
   const asked = values.filter((x) => x.length >= 3).map((x) => x.toLowerCase());
-  const answers = () => c.exchanges.map((e) => (e.response?.body ?? "").toLowerCase());
-  // The values may simply be wrong, so say what was seen and let the agent rule that out before asking for a login.
-  const missing =
-    "none of the example values is in what the page loaded, and the page shows a sign-in form: check the example values; if they are right the data needs an account, so ask the user to run api-anything login <site>, then capture again";
-  if (form && asked.length && !answers().some((a) => asked.some((x) => a.includes(x)))) return { stop: missing };
-  const also =
-    "the page also shows a sign-in form: if the data you want is missing, ask the user to run api-anything login <site> first";
+  const answers = ranked.map((r) => (c.exchanges.find((e) => e.id === r.id)?.response?.body ?? "").toLowerCase());
+  const unseen = asked.length > 0 && !answers.some((a) => asked.some((x) => a.includes(x)));
+  const also = !signInForm(body)
+    ? undefined
+    : unseen
+      ? `none of the example values is in what these requests returned, and the page shows a sign-in form: check the example values (api-anything inspect ${c.id} <id> shows a response); if the data is missing, ask the user to run api-anything login <site>, then capture again`
+      : "the page also shows a sign-in form: if the data you want is missing, ask the user to run api-anything login <site> first";
   // An error is a dead end when the erroring page is itself what would be recommended, not when a
   // data request it loaded is (a static host's 404 fallback serving the app).
   if (status >= 400 && (ranked[0]?.id ?? page.id) === page.id)
-    return { stop: `the page answered HTTP ${status}: check the URL, then capture again${form ? `; ${also}` : ""}` };
-  return { ...(form ? { also } : {}), ...(status >= 400 ? { status } : {}) };
+    return { stop: `the page answered HTTP ${status}: check the URL, then capture again${also ? `; ${also}` : ""}` };
+  return { ...(also ? { also } : {}), ...(status >= 400 ? { status } : {}) };
 }
 
 async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
@@ -411,7 +398,7 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
         e?.response && botWall({ status: e.response.status, headers: e.response.headers, body: e.response.body ?? "" }),
     )
     .find(Boolean);
-  const page: ReturnType<typeof pageSays> = wall ? {} : pageSays(c, url, ranked, values);
+  const page: ReturnType<typeof pageSays> = wall ? {} : pageSays(c, ranked, values);
   const learn = html
     ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
     : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`;

@@ -425,6 +425,13 @@ describe("add from a saved capture", () => {
     assert.deepEqual(await carol("described"), { name: "carol" }, "extract and pick are still there");
     const ops = JSON.parse((await cli("ops", "fixture")).stdout).operations;
     assert.equal(ops.find((o: { name: string }) => o.name === "described").description, "A user's name");
+
+    // an empty one clears it, and still leaves the recipe alone
+    const cleared = await cli("add", "fixture", "described", "--from", "calice", "--description", "");
+    assert.match(JSON.parse(cleared.stdout).repaired, /description/, cleared.stdout);
+    assert.deepEqual(await carol("described"), { name: "carol" }, "extract and pick are still there");
+    const after = JSON.parse((await cli("ops", "fixture")).stdout).operations;
+    assert.equal(after.find((o: { name: string }) => o.name === "described").description, undefined);
   });
 
   test("a repair keeps a param that has no stored example", async () => {
@@ -470,6 +477,20 @@ describe("add from a saved capture", () => {
     const full = await add("mine2", "--from", "csigned", "--pick-request", "1", "--example", "name=alice");
     assert.equal(full.code, 1, full.stdout);
     assert.match(full.out.error, /credential/);
+
+    // a credential the captured request carries in a header the op has no slot for counts too
+    const TOKEN = "NewPrivateSession9876543210";
+    const guest = await answered(1, "fetch", "/api/mine?name=alice");
+    seed("cheader", {
+      url: `${fx.url}/mine?name=alice`,
+      exchanges: [
+        { ...guest, request: { ...guest.request, headers: { ...guest.request.headers, "x-auth-token": TOKEN } } },
+      ],
+    });
+    const header = await add("mine", "--from", "cheader", "--extract", TOKEN);
+    assert.equal(header.code, 1, header.stdout);
+    assert.match(header.out.error, /credential/);
+    assert.doesNotMatch(readFileSync(join(HOME, "sites", "fixture.json"), "utf8"), new RegExp(TOKEN));
   });
 
   test("a request a --write capture aborted is learned as a write or not at all, whatever its name", async () => {
@@ -487,6 +508,15 @@ describe("add from a saved capture", () => {
     const search = await add("search", "3", "q=kittens");
     assert.equal(search.code, 0, search.stdout);
     assert.equal(search.out.readOnly, true);
+    assert.equal(posts(), 0, "no POST reached the site");
+
+    // as the second capture of a pair it is refused before anything is replayed against it
+    const pair = await cli(
+      ...["add", "demo", "search2", "--from", "cpost", "--pick-request", "3", "--example", "q=kittens"],
+      ...["--from2", "cpost", "--example2", "q=puppies"],
+    );
+    assert.equal(pair.code, 1, pair.stdout);
+    assert.match(JSON.parse(pair.stdout).error, /made with --write.*needs --write/);
     assert.equal(posts(), 0, "no POST reached the site");
   });
 
@@ -541,15 +571,25 @@ describe("capture's next hint", { skip: noChrome }, () => {
   const learn = /\badd <site> <op> --from c/;
   const alsoForm = /sign-in form.*api-anything login/;
 
-  test("'sign-in page' takes direct evidence: a login path, or example values that no answer holds", async () => {
-    // the navigation landed on /signin
-    const landed = (await capture("/account")).next;
-    assert.match(landed, signInPage);
-    assert.doesNotMatch(landed, learn);
-    // a sign-in form, and alice is in no response of the capture: the values may be wrong, so that is said first
-    const missing = (await capture("/private", "--example", "name=alice")).next;
-    assert.match(missing, /example values.*sign-in form.*check the example values.*api-anything login/);
-    assert.doesNotMatch(missing, learn);
+  test("'sign-in page' is said only when the navigation ended on a login path, asked for or redirected to", async () => {
+    for (const path of ["/account", "/signin"]) {
+      const { next } = await capture(path);
+      assert.match(next, signInPage, path);
+      assert.doesNotMatch(next, learn, path);
+    }
+  });
+
+  test("example values that no candidate returned, on a page with a sign-in form, are a stronger caveat, not a stop", async () => {
+    const { next } = await capture("/private", "--example", "name=alice");
+    assert.match(next, learn);
+    assert.match(next, /none of the example values.*sign-in form.*check the example values.*api-anything login/);
+    assert.doesNotMatch(next, signInPage);
+  });
+
+  test("login wording with no sign-in form on the page adds nothing to the recommendation", async () => {
+    const { next } = await capture("/notice", "--example", "name=zelda");
+    assert.match(next, learn);
+    assert.doesNotMatch(next, /sign-in/);
   });
 
   test("a sign-in form with nothing to say the data is missing is said beside the recommendation", async () => {

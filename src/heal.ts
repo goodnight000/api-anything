@@ -14,6 +14,8 @@ import {
   capturePages,
   checkExamples,
   hashLike,
+  isCredential,
+  leafName,
   learnOperation,
   learnResponse,
   matches,
@@ -586,6 +588,13 @@ function saveOperation(
   return { operation, warnings, path, ...(preview ? { preview } : {}), replaced };
 }
 
+/** The op with the description given: an empty one clears it, none given leaves it. */
+function described(op: Operation, description: string | undefined): Operation {
+  if (description === undefined) return op;
+  const { description: _old, ...rest } = op;
+  return description ? { ...rest, description } : rest;
+}
+
 /**
  * A recipe repair: the op stays as it is (request, slots, params, match, trigger, readOnly) and only
  * its `response` is learned again, from the answer its own match finds in the capture. The request
@@ -600,8 +609,8 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
   const now = loadSession(site);
   const live: Session = { ...now, cookies: [...now.cookies, ...capture.cookies] };
   // A description with no recipe flag is metadata: nothing is learned again, and the recipe stays.
-  if (i.description && !Object.values(r).some((x) => x !== undefined)) {
-    const saved = saveOperation(site, { ...old, description: i.description }, undefined, [], live, undefined);
+  if (i.description !== undefined && !Object.values(r).some((x) => x !== undefined)) {
+    const saved = saveOperation(site, described(old, i.description), undefined, [], live, undefined);
     return { ...saved, captures: [], repaired: "description" };
   }
   const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
@@ -629,8 +638,16 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
     warnings.push(
       `the recipe was not checked: capture ${capture.id} holds no answer for request ${exchange.id}${exchange.aborted ? " (it was aborted, as a --write capture aborts a write)" : ""}`,
     );
-  const operation: Operation = { ...old, ...(i.description ? { description: i.description } : {}), response };
-  live.values = { ...now.values, ...sessionValuesOf(old, exchange) };
+  const operation: Operation = { ...described(old, i.description), response };
+  // A credential the request carries where the op has no slot (a new header, a moved field) is live too.
+  const carried = walk(exchange.request).flatMap((l) =>
+    l.type === "string" && !l.container && isCredential(leafName(l.at), l.value) ? [l.value] : [],
+  );
+  live.values = {
+    ...now.values,
+    ...Object.fromEntries(carried.map((v, n) => [`capture:${n}`, v])),
+    ...sessionValuesOf(old, exchange),
+  };
   const saved = saveOperation(site, operation, exchange, warnings, live, capture.id);
   return { ...saved, captures: [], repaired: "recipe" };
 }
@@ -657,6 +674,11 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   if (old && !old.readOnly && !i.write)
     throw new Error(
       `${i.op} is a write: learning it again needs --write${i.from ? ", and a capture made with --write" : ""}`,
+    );
+  // A read is checked by replaying run 1's template with run 2's values: never against a capture that held a write back.
+  if (i.from2?.write && !i.write)
+    throw new Error(
+      `capture ${i.from2.id} was made with --write, which holds writes back: learning from it needs --write. For a read, capture the second example without --write`,
     );
   // before any browser run: a too-short or duplicate example would only fail after it
   if (ex1) checkExamples(ex1, "example");

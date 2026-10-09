@@ -236,6 +236,12 @@ export async function startFixture(): Promise<Fixture> {
     // it. The member list is in the markup (/community redirects to it); a member's page fetches
     // their posts as JSON; a member's card keeps the profile in the page's state JSON.
     if (p === "/community") return send(res, 302, "text/plain", "", { location: "/forum" });
+    // public content that mentions logging in, with no form anywhere
+    if (p === "/notice")
+      return html(
+        200,
+        `<!doctype html><html><body><p>Please log in to comment.</p><ul>${LIST_USERS.map((n) => `<li>${n}</li>`).join("")}</ul></body></html>`,
+      );
     // ...and its catalog, where the whole listing sits inside the search form (as a server-side
     // forms framework wraps a page in one).
     if (p === "/catalog")
