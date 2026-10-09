@@ -316,12 +316,7 @@ export function nextHop(
         Buffer.from(v).toString("base64url"),
       ];
     };
-    // A short value ("test") turns up inside ordinary words ("contest"): only one standing on its own counts.
-    const found = (u: string, f: string) =>
-      f.length >= 16
-        ? u.includes(f)
-        : new RegExp(`(?<![A-Za-z0-9])${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`).test(u);
-    if (inBody || carried.some((v) => forms(v).some((f) => [...readings].some((u) => found(u, f)))))
+    if (inBody || carried.some((v) => forms(v).some((f) => [...readings].some((u) => u.includes(f)))))
       throw refused("the request would carry this session's values to another origin");
   }
   return { url: next.href, method, headers, body };

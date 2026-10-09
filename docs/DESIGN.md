@@ -399,8 +399,7 @@ body in which any ref slot lives, which is decided from the slots and not by sea
 value of any ref slot, a dropped header's too (the site can copy what a header held into the
 address). That is a search and not a proof: the address is percent- and form-decoded until nothing
 changes (a return address inside a return address opens), and the value is looked for as it is, as
-a JSON string's contents and in base64 (a value under 16 characters only standing on its own, so
-`test` is not found in `contest`); an encrypted, hashed or split copy is not found. The call then fails naming the redirect, and its
+a JSON string's contents and in base64; an encrypted, hashed or split copy is not found. The call then fails naming the redirect, and its
 `next` says not to retry (for a write: to check the site first, since the request the redirect
 answered was sent). At tier 2 a page's own `fetch()` would follow a redirect with every header and
 the body, so the page fetches with `redirect: "manual"`. It is then told nothing about the redirect,
