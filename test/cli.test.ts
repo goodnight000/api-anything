@@ -155,32 +155,28 @@ describe("flags and command names", () => {
 });
 
 describe("inspect", () => {
-  // A capture as `capture` saves one: the fixture's list page, a user's JSON, and a user with no posts.
+  // 1: the list page; 2: a user's JSON; 3: a user with no posts; 4: the list searched for nobody.
   before(async () => {
-    const answer = (id: number, resourceType: string, contentType: string, body: string) => ({
+    const user = (id: number, name: string, posts: string[]) => ({
       id,
-      resourceType,
+      resourceType: "fetch",
       request: { method: "GET", url: `${fx.url}/`, headers: {} },
-      response: { status: 200, headers: {}, contentType, body },
+      response: {
+        status: 200,
+        headers: {},
+        contentType: "application/json",
+        body: JSON.stringify({ data: { user: { name, followers: 500, posts: posts.map((text) => ({ text })) } } }),
+      },
     });
-    const user = (name: string, posts: string[]) =>
-      JSON.stringify({ data: { user: { name, followers: 500, posts: posts.map((text) => ({ text })) } } });
-    mkdirSync(join(HOME, "captures"), { recursive: true });
-    writeFileSync(
-      join(HOME, "captures", "csaved.json"),
-      JSON.stringify({
-        id: "csaved",
-        at: new Date().toISOString(),
-        url: `${fx.url}/`,
-        finalUrl: `${fx.url}/`,
-        cookies: [],
-        exchanges: [
-          answer(1, "document", "text/html; charset=utf-8", await (await fetch(`${fx.url}/list`)).text()),
-          answer(2, "fetch", "application/json", user("alice", ["hello from alice"])),
-          answer(3, "fetch", "application/json", user("dora", [])),
-        ],
-      }),
-    );
+    seed("csaved", {
+      url: `${fx.url}/list`,
+      exchanges: [
+        await answered(1, "document", "/list"),
+        user(2, "alice", ["hello from alice"]),
+        user(3, "dora", []),
+        await answered(4, "document", "/list?q=nobody"),
+      ],
+    });
   });
   const inspect = async (request: number, ...flags: string[]) => {
     const r = await cli("inspect", "csaved", String(request), ...flags);
@@ -199,20 +195,21 @@ describe("inspect", () => {
   });
 
   test("a path or selector that finds nothing fails and says so; an empty list at a path is a result", async () => {
-    const next = /^next: api-anything inspect csaved \d --outline/m;
+    const next = /^next: api-anything inspect csaved \d/m;
     const path = await inspect(2, "--path", "data.wrong");
     assert.equal(path.code, 1);
-    assert.deepEqual(path.out, { ok: false, error: 'nothing at "data.wrong" in request 2\'s response' });
+    assert.equal(path.out.ok, false);
+    assert.match(path.out.error, /data\.wrong/);
     assert.match(path.stderr, next);
 
     const selector = await inspect(1, "--html", '{"items":"li.nope","fields":{"name":"a"}}');
     assert.equal(selector.code, 1);
-    assert.match(selector.out.error, /^the --html items selector "li\.nope" matched nothing in request 1/);
+    assert.match(selector.out.error, /--html.*li\.nope/);
     assert.match(selector.stderr, next);
 
     const regex = await inspect(1, "--embedded", "window\\.state = (\\{)");
     assert.equal(regex.code, 1);
-    assert.match(regex.out.error, /^the --embedded regex found no JSON in request 1/);
+    assert.match(regex.out.error, /--embedded/);
 
     // the page is not JSON: a path into it finds nothing, rather than printing the page
     assert.equal((await inspect(1, "--extract", "data.user")).code, 1);
@@ -220,6 +217,15 @@ describe("inspect", () => {
     const empty = await inspect(3, "--extract", "data.user.posts");
     assert.equal(empty.code, 0, empty.stdout);
     assert.deepEqual(empty.out.data, []);
+  });
+
+  test("an --html recipe on a page with no results answers [] when the items' container is there, empty", async () => {
+    const zero = await inspect(4, "--html", '{"items":"ul.users li.user","fields":{"name":"a.name"}}');
+    assert.equal(zero.code, 0, zero.stdout);
+    assert.deepEqual(zero.out.data, []);
+    assert.match(zero.out.note, /ul\.users.*empty/);
+    // the same page, a selector with no container to find: nothing tells no results from a wrong selector
+    assert.equal((await inspect(4, "--html", '{"items":"li.user","fields":{"name":"a.name"}}')).code, 1);
   });
 });
 

@@ -371,7 +371,8 @@ independent alternative.
   - `call <site> <op> [k=v ...] [--allow-writes]`
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
     flags (`--extract`, `--pick`, `--html`, `--embedded`): what the recipe would return, or a failure
-    when a path or selector finds nothing (an empty list at a path is a result); JSON inside strings (batchexecute
+    when a path or selector finds nothing (an empty list at a path is a result, and so is an `--html`
+    items container that is on the page with no item in it, as the classifier judges a call); JSON inside strings (batchexecute
     payloads, a form's `f.req`) is shown decoded, in the response and the request body. Every `add` saves its trigger runs as
     captures, so a recipe is repaired without Chrome: `add --from <id>` on an existing op with recipe
     flags only (no `--example`, and nothing that shapes the request: `--trigger`, `--match`, `--public`,

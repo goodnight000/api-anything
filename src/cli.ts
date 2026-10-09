@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 import { parse as parseHtml } from "node-html-parser";
 import { z } from "zod";
 import { chromeAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
-import { botWall, judge, type Observed } from "./classify.js";
+import { botWall, emptyResults, judge, type Observed } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
 import {
@@ -73,8 +73,9 @@ const HELP: Record<string, string> = {
   inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline --example k=v]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
   response through add's recipe flags, so a recipe is tried here first: --extract (also spelled --path),
-  --pick, --html, --embedded. A path, selector or regex that finds nothing fails (exit 1); an empty
-  list at a path is a result.
+  --pick, --html, --embedded. A path, selector or regex that finds nothing fails (exit 1). An empty
+  list at a path is a result, and so is an --html items selector "<container> <item>" whose container
+  is on the page with no item in it (data: [], with a note).
   --outline summarizes the response (as capture --outline does) instead of printing it.`,
   add: `api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
   Runs the trigger twice in Chrome (with --example, then --example2 or --example again), picks the request
@@ -488,9 +489,14 @@ function cmdInspect({ v, pos }: Parsed): number {
       `api-anything inspect ${id} ${e.id} --outline --example k=v suggests a recipe; with no recipe flag it prints the whole response`,
     );
   let data: unknown = body;
+  let note: string | undefined;
   if (html) {
     data = extract({ format: "html", html }, body);
-    if (!(data as unknown[]).length) throw nothing(`the --html items selector "${html.items}" matched nothing`);
+    if (!(data as unknown[]).length) {
+      // a results page with no results is an answer, as a call would give it; a selector that is not there is not
+      if (!emptyResults(body, html.items)) throw nothing(`the --html items selector "${html.items}" matched nothing`);
+      note = `no items: the container of "${html.items}" is on the page and empty, so this is a page with no results`;
+    }
   } else if (v.embedded) {
     data = extract({ format: "embedded", embedded: { regex: v.embedded } }, body);
     if (data === undefined) throw nothing("the --embedded regex found no JSON");
@@ -523,6 +529,7 @@ function cmdInspect({ v, pos }: Parsed): number {
     },
     ...(e.response ? { status: e.response.status, type: e.response.contentType } : { aborted: !!e.aborted }),
     ...capOutput(unlayer(data)),
+    ...(note ? { note } : {}),
   });
   return 0;
 }

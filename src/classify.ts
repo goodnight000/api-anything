@@ -161,7 +161,7 @@ function containerOf(selector: string): { container: string; item: string } | un
  * items' tag (any element, when the selector names no tag). Items there under another class
  * are a renamed selector (drift), not zero results.
  */
-function emptyResults(body: string, items: string): boolean {
+export function emptyResults(body: string, items: string): boolean {
   const parts = containerOf(items);
   if (!parts) return false;
   try {

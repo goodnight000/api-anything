@@ -195,13 +195,18 @@ export async function startFixture(): Promise<Fixture> {
         "self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('fetch',e=>e.respondWith(fetch(e.request)));",
       );
     }
+    // ?q= searches the list: no match leaves the list there, empty
     if (p === "/list")
       return html(
         200,
-        `<!doctype html><html><body><ul class="users">${LIST_USERS.map(
-          (n) =>
-            `<li class="user"><a class="name" href="/u/${n}">${n}</a> <span class="followers">${n.length * 100}</span></li>`,
-        ).join("")}</ul></body></html>`,
+        `<!doctype html><html><body><ul class="users">${LIST_USERS.filter((n) =>
+          n.includes(u.searchParams.get("q") ?? ""),
+        )
+          .map(
+            (n) =>
+              `<li class="user"><a class="name" href="/u/${n}">${n}</a> <span class="followers">${n.length * 100}</span></li>`,
+          )
+          .join("")}</ul></body></html>`,
       );
     if (p === `/static/app.${state.build}.js`) return send(res, 200, "application/javascript", appJs(state));
 
