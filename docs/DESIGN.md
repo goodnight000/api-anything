@@ -67,8 +67,8 @@ A JSON leaf replaced by a param keeps the arg's native type, except that a leaf 
 string stays a string (`"id":"123"` next to `ids:[123]`). Params default to type `string`.
 A param may declare `pattern` (a regex the whole value must match) and `hint` (what a valid value
 is, "a date as YYYY-MM-DD"): an arg that fails it is `input`, named with the hint, and nothing is sent.
-Numbers are never rounded: past 2^53, plain digits are sent exactly, and any other form (an exponent, a
-decimal point: `9007199254740993e0`) is `input`, saying so, with nothing sent. `"false"` is false.
+A numeric string past 2^53 is never rounded: plain digits are sent exactly, and any other form (an
+exponent, a decimal point: `9007199254740993e0`) is `input`, saying so, with nothing sent. `"false"` is false.
 
 ## Learning (`learn.ts`)
 
@@ -184,7 +184,8 @@ sign-in form (a password field next to a username field, or a form posting to a 
 the op's answer is not a page is `auth`: the session was gone and nothing ran. An explicit JSON `ok: false` or `success: false` rejects a write even with HTTP 200.
 A write executes exactly
 once per call. Retry only on a definite non-execution (400/401/403/404 answered to the request
-itself: after a redirect, as in Post/Redirect/Get, it ran); timeouts, 5xx and network errors are
+itself: after a redirect, as in Post/Redirect/Get, it ran; at tier 3 the page sent it, and the
+answer judged may be a redirect's follow-up, so a tier-3 write is never retried); timeouts, 5xx and network errors are
 ambiguous and are never retried. Writes need `allowWrites` at every entry point (CLI flag, MCP
 server flag, library option).
 
@@ -196,7 +197,7 @@ Every response is classified, never by status code alone:
 |---|---|---|
 | `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`; for an html recipe whose items selector is `<container> <item>`, the container present with no element of the item's tag), no GraphQL `errors` with null `data` or next to a null extract target; any 2xx to a write | return |
 | `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once |
-| `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, a sign-in form whatever CAPTCHA widget it embeds (reCAPTCHA on a login page is not a bot wall), an html/embedded op's page without its data that says "sign in" or shows a sign-in form (a mere Sign-in link, like Google's ServiceLogin button, is not one), a redirect to a login path, `require_login: true`, a trigger that lands on a sign-in page | once per call, at tier 1 or 2 (a write only when it certainly did not run): re-import a browser-imported session; else refresh the jar's cookies from the profile, retrying if that changes the request (a tier-2 page sends the profile's cookies itself, so there only a `cookie:` ref counts: an `x-csrf-token` header); for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
+| `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, a sign-in form that embeds a CAPTCHA widget or a vendor script that also rides on ordinary pages (reCAPTCHA on a login page guards the login; an interstitial's own markers still make the page `blocked`), an html/embedded op's page without its data that says "sign in" or shows a sign-in form (a mere Sign-in link, like Google's ServiceLogin button, is not one), a redirect to a login path, `require_login: true`, a trigger that lands on a sign-in page | once per call, at any tier (a write only when it certainly did not run, so never at tier 3): re-import a browser-imported session; else refresh the jar's cookies from the profile, retrying if that changes the request (a tier-2 page sends the profile's cookies itself, so there only a `cookie:` ref counts: an `x-csrf-token` header); for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429 (with the server's Retry-After), "please wait", "rate limit" | back off, report; no heal |
 | `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers. A page showing a sign-in form is never a wall: it is `auth` | escalate transport tier; then diagnostic `gated`. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
@@ -257,8 +258,9 @@ materialized call, including short and structured values, and whose response jud
 A param's default is filled into the args once, before the first tier, so every tier runs with the
 same values: the tier-3 trigger opens `?count=20`, never a literal `{count}`.
 An `auth` answer starts recovery at whichever tier got it (an op with `minTier: 2` or `3`, or one a
-remembered escalation starts there), at most once per call. At tier 3 only the re-import applies:
-the page just ran with the profile's own cookies and session values, so there is nothing fresher to take.
+remembered escalation starts there), at most once per call. At tier 3 only the re-import applies,
+and only to a read: the page just ran with the profile's own cookies and session values, so there is
+nothing fresher to take, and a write the page sent is never sent again.
 
 ## Browser
 

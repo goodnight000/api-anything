@@ -166,6 +166,19 @@ export async function startFixture(): Promise<Fixture> {
               .end(
                 '<!doctype html><title>Log in</title><form action="/login"><input name="user"><input type="password" name="pw"></form>',
               );
+      // a write that runs, then bounces the POST to a login check that refuses it
+      case "/api/save":
+        return u.searchParams.has("login")
+          ? void res
+              .writeHead(403, { "content-type": "text/html" })
+              .end(
+                '<!doctype html><title>Log in</title><form action="/login"><input name="user"><input type="password" name="pw"></form>',
+              )
+          : void res.writeHead(307, { location: "/api/save?login=1" }).end();
+      case "/save-page":
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end('<!doctype html><title>save</title><script>fetch("/api/save",{method:"POST",body:"x=1"})</script>');
       // a page whose script asks for the signed-in data
       case "/me-page":
         return void res

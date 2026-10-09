@@ -126,10 +126,13 @@ test("a sign-in form that embeds a CAPTCHA widget is auth; a CAPTCHA page with n
   const interstitial = `<!doctype html><html><head><title>One more step</title></head><body><form action="/verify" method="post">${widget}</form></body></html>`;
   const listed = op({ response: { format: "html", html: { items: "li.r", fields: { t: "" } } } });
   const write = op({ readOnly: false, response: { format: "json" } });
+  // an interstitial's own markers win over any form on the page (a hidden or unrelated login form)
+  const walled = `<!doctype html><html><head><title>One more step</title></head><body><script src="https://geo.captcha-delivery.com/captcha/"></script><form name="js_challenge"><input name="username"><input type="password" name="password"></form></body></html>`;
   for (const o of [op(), listed, write]) {
     for (const status of [200, 403]) {
       assert.equal(cls(o, html(status, signIn)), "auth", `${o.response.format} ${status}`);
       assert.equal(cls(o, html(status, interstitial)), "blocked", `${o.response.format} ${status}`);
+      assert.equal(cls(o, html(status, walled)), "blocked", `walled ${o.response.format} ${status}`);
     }
   }
 });

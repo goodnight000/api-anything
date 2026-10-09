@@ -46,8 +46,10 @@ const CHALLENGES: [string, RegExp | undefined, RegExp?][] = [
   ["Kasada", undefined, /\/[0-9a-f]{8}-[0-9a-f-]{27}\/[0-9a-f]{8}-[0-9a-f-]{27}\/ips\.js/i],
   // a proof-of-work page that solves itself and resubmits (Reddit)
   ["JS challenge", /name=["']?js_challenge|[?&]js_challenge=1/i],
-  ["reCAPTCHA", /google\.com\/recaptcha|g-recaptcha|hcaptcha\.com|Prove your humanity/i],
+  ["reCAPTCHA", /Prove your humanity/i],
 ];
+// A CAPTCHA widget is the challenge on a bare page, and a guard on the login when it sits in a sign-in form.
+const CAPTCHA_WIDGET = /google\.com\/recaptcha|g-recaptcha|hcaptcha\.com/i;
 // What bot walls answer with: 202 (AWS WAF's JS challenge), 403, 405 (AWS WAF's CAPTCHA), 429, 503.
 const CHALLENGE_STATUS = new Set([202, 403, 405, 429, 503]);
 // An interstitial's title gives it away even when the page is too big for the body scan.
@@ -86,11 +88,14 @@ const CSRF_FAILED =
 const REQUIRE_LOGIN = /"require_login"\s*:\s*true|login_required/i;
 const snippet = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 160);
 
-function challenge(body: string, status: number): string | undefined {
+/** The vendor challenging here. `rides`: the marker also sits on ordinary pages, so a sign-in form explains it. */
+function challenge(body: string, status: number): { vendor: string; rides: boolean } | undefined {
   const head = body.slice(0, 200_000);
-  return CHALLENGES.find(
-    ([, page, sdk]) => !!page?.test(head) || (CHALLENGE_STATUS.has(status) && !!sdk?.test(head)),
-  )?.[0];
+  for (const [vendor, page, sdk] of CHALLENGES) {
+    if (page?.test(head)) return { vendor, rides: false };
+    if (CHALLENGE_STATUS.has(status) && sdk?.test(head)) return { vendor, rides: true };
+  }
+  return CAPTCHA_WIDGET.test(head) ? { vendor: "reCAPTCHA", rides: true } : undefined;
 }
 
 /**
@@ -108,9 +113,10 @@ export function botWall(r: Observed, wantsJson = false, hasData?: () => boolean)
   if (CHALLENGE_STATUS.has(r.status) && Object.keys(r.headers).some((k) => k.toLowerCase().startsWith("x-kpsdk")))
     return `Kasada challenge (HTTP ${r.status})`;
   if (r.status >= 400 || (isHtml && (wantsJson || body.length < 64_000))) {
-    const vendor = challenge(body, r.status);
-    // A CAPTCHA widget rides on sign-in forms too: that page asks for a login, which no transport tier gets past.
-    if (vendor && !signInForm(body)) return `${vendor} challenge page (HTTP ${r.status})`;
+    const c = challenge(body, r.status);
+    // A widget on a sign-in form asks for a login, which no transport tier gets past. An interstitial's
+    // own markers are a wall whatever form the page carries.
+    if (c && !(c.rides && signInForm(body))) return `${c.vendor} challenge page (HTTP ${r.status})`;
   }
   if (isHtml && CHALLENGE_TITLE.test(body.slice(0, 20_000)) && !hasData?.()) return `challenge page (HTTP ${r.status})`;
   return undefined;

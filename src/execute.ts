@@ -54,8 +54,12 @@ type Result = Omit<CallResult, "ms">;
 const HEAL_GUARD_MS = 10 * 60_000;
 // A write is retried only when the server certainly did not run it; timeouts and 5xx are ambiguous.
 const NOT_EXECUTED = new Set([400, 401, 403, 404]);
-/** Certainly not run: a 400/401/403/404 answered to the request itself. After a redirect (Post/Redirect/Get) it ran. */
-const notRun = (a?: Attempt) => a?.status !== undefined && NOT_EXECUTED.has(a.status) && !a.redirected;
+/**
+ * Certainly not run: a 400/401/403/404 answered to the request itself. After a redirect
+ * (Post/Redirect/Get) it ran. At tier 3 the page sent it and the answer judged may be a redirect's
+ * follow-up, with nothing to tell the two apart: never proof.
+ */
+const notRun = (a?: Attempt) => a?.status !== undefined && NOT_EXECUTED.has(a.status) && !a.redirected && a.tier !== 3;
 
 interface Ctx {
   site: string;
@@ -184,9 +188,13 @@ async function refreshCookies(ctx: Ctx, op: Operation, tier: Tier): Promise<bool
   return withLock(sessionFile(ctx.site), () => {
     const s = loadSession(ctx.site);
     const sent = (cookies: StoredCookie[]) => {
-      const req = buildRequest(op, ctx.args, { ...s, cookies });
-      if (tier > 1) delete req.headers.cookie;
-      return JSON.stringify(req);
+      try {
+        const req = buildRequest(op, ctx.args, { ...s, cookies });
+        if (tier > 1) delete req.headers.cookie;
+        return JSON.stringify(req);
+      } catch {
+        return undefined; // a cookie: ref with nowhere to go; the retry reports it like any failed attempt
+      }
     };
     const before = sent(s.cookies);
     saveSession(ctx.site, { ...s, cookies: fresh });

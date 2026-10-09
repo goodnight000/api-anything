@@ -20,7 +20,8 @@ export function parseBody(body: string, xssiPrefix?: string): unknown {
   const prefix = xssiPrefix ?? xssiOf(text) ?? "";
   if (prefix && text.startsWith(prefix)) text = text.slice(prefix.length);
   text = text.trim();
-  if (/^\d+[ \t]*\r?\n/.test(text)) return parseChunks(text);
+  const chunks = /^\d+[ \t]*\r?\n/.test(text) ? parseChunks(text) : undefined;
+  if (chunks) return chunks;
   const parts = prefix ? text.split(prefix) : [text];
   if (parts.length > 1) return parts.map((p) => parseJson(p.trim()));
   try {
@@ -55,19 +56,24 @@ function parseLines(text: string): unknown[] | undefined {
   return out.length ? out : undefined;
 }
 
-function parseChunks(text: string): unknown[] {
+/** Length-prefixed chunks, each a JSON value. Undefined unless that framing covers the whole text (numbers on lines of their own are NDJSON). */
+function parseChunks(text: string): unknown[] | undefined {
   const out: unknown[] = [];
   const head = /\s*\d+[ \t]*\r?\n\s*/y;
   let i = 0;
   while (i < text.length) {
     head.lastIndex = i;
     const m = head.exec(text);
-    if (!m) break;
+    if (!m) return undefined;
     i += m[0].length;
     // Chunk lengths count bytes or UTF-16 units depending on the server; scanning the JSON is exact.
-    const end = jsonValueEnd(text, i);
-    out.push(parseJson(text.slice(i, end)));
-    i = end;
+    try {
+      const end = jsonValueEnd(text, i);
+      out.push(parseJson(text.slice(i, end)));
+      i = end;
+    } catch {
+      return undefined;
+    }
   }
   return out;
 }

@@ -764,6 +764,36 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     }
   });
 
+  test("a tier-3 write that ran and was then redirected to a refusal is not sent again by auth recovery", async () => {
+    site("t3write", {
+      ...rd("save", "/api/save", {
+        minTier: 3,
+        trigger: { url: `${fx.base}/save-page` },
+        match: { method: "POST", path: "/api/save" },
+      }),
+      readOnly: false,
+      request: { method: "POST", url: `${fx.base}/api/save`, headers: {}, body: "x=1" },
+    });
+    // a session to re-import, so recovery would have something to retry with
+    const root = mkdtempSync(join(HOME, "everyday-browser-"));
+    makeChromiumDb(join(root, "Default"), [{ host_key: "127.0.0.1", name: "sid", value: "any" }], { password: "pw" });
+    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([
+      { name: "Chrome", family: "chromium", root, password: "pw" },
+    ]);
+    try {
+      assert.equal((await importSession("t3write", `${fx.base}/`))?.source, "chrome:Default");
+      fx.hits.length = 0;
+      const r = await call("t3write", "save", {}, { allowWrites: true, minIntervalMs: 0, timeoutMs: 5000 });
+      const saves = fx.hits.filter((h) => h.method === "POST" && h.url === "/api/save").length;
+      assert.equal(saves, 1, `the write was sent ${saves} times; result ${JSON.stringify(r)}`);
+      assert.equal(r.ok, false);
+      assert.match(r.next ?? "", /check the site/);
+      assert.doesNotMatch(r.next ?? "", /retry once/);
+    } finally {
+      delete process.env.API_ANYTHING_BROWSER_ROOTS;
+    }
+  });
+
   test("auth at tier 2 from a stale cookie behind a header ref: the jar is refreshed from the profile, one retry", async () => {
     site(
       "t2csrf",
@@ -781,6 +811,23 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     assert.equal(r.tier, 2);
     assert.deepEqual(r.data, [{ ct: "fresh" }]);
     assert.equal(fx.hits.filter((h) => h.url === "/api/csrf").length, 2, "one retry");
+  });
+
+  test("auth at tier 2: a cookie: ref the refreshed jar cannot place is a failed call, not a thrown one", async () => {
+    site(
+      "t2wrap",
+      rd("items", "/api/csrf", {
+        minTier: 2,
+        request: { method: "GET", url: `${fx.base}/api/csrf`, headers: { "x-wrap": "{}" } },
+        slots: [{ ref: "cookie:ct", at: ["header:x-wrap", "json:/token"] }],
+      }),
+    );
+    // with no ct in the jar the slot is skipped; the profile has one, and it has nowhere to go in "{}"
+    await addCookiesToProfile([cookie("ct", "fresh", "127.0.0.1")], profileDir());
+    saveSession("t2wrap", { cookies: [], values: {} });
+    const r = await call("t2wrap", "items", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.match(r.reason ?? "", /JSON pointer/);
   });
 
   test("auth at tier 2 for a read with a session: ref: one trigger run refreshes the value and answers", async () => {

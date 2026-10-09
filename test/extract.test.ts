@@ -159,6 +159,9 @@ test("parseBody: newline-delimited JSON and a finite event stream give an array 
     'event: delta\nid: 1\ndata: {"text":"He"}\n\n: keep-alive\n\ndata:{"text":"llo"}\r\n\r\ndata: [DONE]\n\n';
   assert.deepEqual(parseBody(stream), [{ text: "He" }, { text: "llo" }]);
   assert.deepEqual(parseBody('data: {"only":1}\n\n'), [{ only: 1 }], "one event is still a list");
+  // lines that start with a number are not a length prefix: every record is kept
+  assert.deepEqual(parseBody("1\n2\n3"), [1, 2, 3]);
+  assert.deepEqual(parseBody('0\n{"id":1}\n{"id":2}'), [0, { id: 1 }, { id: 2 }]);
   assert.deepEqual(extract(ResponseSchema.parse({ extract: "[*].text" }), stream), ["He", "llo"]);
   assert.deepEqual(extract(ResponseSchema.parse({ pick: ["id"] }), '{"id":1,"x":0}\n{"id":2,"x":0}'), [
     { id: 1 },
