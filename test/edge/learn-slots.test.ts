@@ -77,7 +77,17 @@ test("a JSON object that repeats a key is refused: its later occurrence could no
   // the later occurrence is an object: its leaves are not at the first one's path either
   assert.throws(
     () => learn([post(`{"q":"nasa","auth":1,"auth":{"token":"${B}"}}`)], [{ q: "nasa" }]),
-    /repeats a key \(body > json:\/auth\/token\)/,
+    /repeats a key \(body > json:\/auth\)/,
+  );
+  // the repeat is seen in the object itself, so one that holds no leaf at all counts too
+  assert.throws(
+    () => learn([post('{"q":"nasa","meta":{},"meta":{}}')], [{ q: "nasa" }]),
+    /repeats a key \(body > json:\/meta\)/,
+  );
+  // and so does one in JSON inside a string
+  assert.throws(
+    () => learn([post(JSON.stringify({ q: "nasa", vars: '{"a":[],"a":[]}' }))], [{ q: "nasa" }]),
+    /repeats a key \(body > json:\/vars > json:\/a\)/,
   );
   // control: a repeated query key has a position of its own
   const { operation: op } = learn(

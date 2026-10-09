@@ -557,10 +557,10 @@ function pickRequest(input: LearnInput, args: Args, warnings: string[]): { excha
  * neither blanked nor filled. JSON.stringify never writes one, so a frontend's own request has none.
  */
 function refuseRepeatedKeys(leaves: Leaf[]): void {
-  const leaf = leaves.find((l) => l.repeated);
-  if (!leaf) return;
+  const at = leaves.find((l) => l.repeated)?.repeated;
+  if (!at) return;
   throw new Error(
-    `the request has a JSON object that repeats a key (${leaf.at.join(" > ")}): only the key's first occurrence can be read or filled, ` +
+    `the request has a JSON object that repeats a key (${at.join(" > ")}): only the key's first occurrence can be read or filled, ` +
       "so a value in a later one would stay in the spec as captured. Not learned; pick a request without the repeated key",
   );
 }
