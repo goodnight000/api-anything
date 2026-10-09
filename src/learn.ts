@@ -965,7 +965,7 @@ function issuedRefs(refs: Refs, leaves: Leaf[], issued: string[]): void {
 function refuseHole(l: Live, at: Step[]): never {
   throw new Error(
     `${at.join(" > ")} holds ${l.ref} ${l.transform === "strip-quotes" ? "without its quotes" : "URL-decoded"} beside other text filled at call time, ` +
-      "where a credential can only be refilled as stored: it would stay in the spec. Not learned",
+      `where a credential can only be refilled as stored: it would stay in the spec. Not learned: ${ANOTHER_REQUEST}`,
   );
 }
 

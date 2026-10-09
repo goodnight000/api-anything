@@ -140,7 +140,7 @@ test("a cookie sitting unquoted or URL-decoded next to an arg in one leaf is ref
 
   assert.throws(
     () => run(`user=nasa;auth=${bare}`),
-    /header:x-ctx holds cookie:JSESSIONID without its quotes.*credential/,
+    /header:x-ctx holds cookie:JSESSIONID without its quotes.*credential.*Not learned: learn another request .*--pick-request/,
   );
   assert.throws(
     () => run(`user=nasa;xsrf=${decodeURIComponent(encoded)}`),
