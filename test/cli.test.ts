@@ -492,6 +492,8 @@ describe("add from a saved capture", () => {
 
     const repaired = await send("--extract", "data.create_post");
     assert.equal(repaired.out.readOnly, false, "a repair does not relabel the write as a read");
+    // the aborted POST has no answer in the capture, so the new recipe was tried on nothing
+    assert.match(repaired.out.warnings.join("\n"), /not checked.*no answer/);
     const refused = JSON.parse((await cli("call", "demo", "send", "text=never asked for")).stdout);
     assert.equal(refused.class, "refused", JSON.stringify(refused));
 

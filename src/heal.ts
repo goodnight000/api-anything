@@ -625,6 +625,10 @@ function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["
     warnings.push(
       `request ${exchange.id} is not one ${old.name}'s match finds, and the request was not learned from it: only the recipe was, from its answer. To learn the request too, pass --example`,
     );
+  if (!exchange.response)
+    warnings.push(
+      `the recipe was not checked: capture ${capture.id} holds no answer for request ${exchange.id}${exchange.aborted ? " (it was aborted, as a --write capture aborts a write)" : ""}`,
+    );
   const operation: Operation = { ...old, ...(i.description ? { description: i.description } : {}), response };
   live.values = { ...now.values, ...sessionValuesOf(old, exchange) };
   const saved = saveOperation(site, operation, exchange, warnings, live, capture.id);
