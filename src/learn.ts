@@ -21,6 +21,7 @@ import {
   credentialName,
   headerName,
   highEntropy,
+  isCredential,
   lastToken,
   leafName,
   SESSION_FIELD,
@@ -736,7 +737,13 @@ interface Live {
   transform?: Slot["transform"];
   /** a session: ref's value, for the session store */
   value?: string;
+  /** a stored value that is a credential by the rules in secrets.ts, not a setting the page happens to keep */
+  secret?: boolean;
 }
+
+// What to do instead when a request cannot be learned without keeping a credential.
+const ANOTHER_REQUEST =
+  "learn another request for this data (capture, then add --from <id> --pick-request <n>), or the page itself with --html or --embedded";
 
 /** The cookies the request itself sent, in the jar's shape: live even where the capture's jar lacks them. */
 const sentCookies = (e: Exchange): StoredCookie[] =>
@@ -769,13 +776,19 @@ function liveValues(cookies: StoredCookie[], storage: Record<string, string> = {
     put(value.replace(/^"|"$/g, ""), { ref: `cookie:${name}`, transform: "strip-quotes" });
     put(decoded, { ref: `cookie:${name}`, transform: "url-decode" });
   }
+  // Apps keep settings and saved requests in storage too. A stored value is a credential under a
+  // credential's name or when it is random-looking; a JSON text is judged by its key and its leaves.
+  const json = (v: string) => /^\s*[[{]/.test(v);
+  const secret = (v: string, ...names: string[]) =>
+    names.some((n) => isCredential(n, v)) || (!json(v) && highEntropy(v));
   for (const [name, value] of Object.entries(storage)) {
-    put(value, { ref: `session:${name}`, value });
+    put(value, { ref: `session:${name}`, value, secret: secret(value, name) });
     const visit = (v: unknown, k: string): void => {
-      if (typeof v === "string") put(v, { ref: `session:${name}/${k}`, value: v });
+      if (typeof v === "string")
+        put(v, { ref: `session:${name}/${k}`, value: v, secret: secret(v, name, k.slice(k.lastIndexOf("/") + 1)) });
       else if (v && typeof v === "object") for (const [kk, c] of Object.entries(v)) visit(c, k ? `${k}/${kk}` : kk);
     };
-    if (/^\s*[[{]/.test(value)) visit(tryParse(value), "");
+    if (json(value)) visit(tryParse(value), "");
   }
   return out;
 }
@@ -795,6 +808,8 @@ interface Refs {
   live: Map<string, Live>;
   /** literal values of session: refs by name, for the session store */
   sessionValues: Record<string, string>;
+  /** positions whose ref is a stored value that is no credential by itself (a setting, a saved request) */
+  plain: Set<string>;
 }
 
 /**
@@ -808,7 +823,9 @@ function sessionRef(refs: Refs, ref: string, value: string, at: Step[]): string 
     name = `${base}@${encodeURIComponent(key(at))}${n > 1 ? `.${n}` : ""}`;
   refs.sessionValues[name] = value;
   // Newly discovered credentials need the same compound-copy cleanup as cookies/storage.
-  if (!refs.live.get(value)?.ref.startsWith("cookie:")) refs.live.set(value, { ref: `session:${name}`, value });
+  const known = refs.live.get(value);
+  if (!known?.ref.startsWith("cookie:"))
+    refs.live.set(value, { ref: `session:${name}`, value, secret: known?.secret ?? true });
   return `session:${name}`;
 }
 
@@ -837,6 +854,7 @@ function liveRefs(refs: Refs, leaves: Leaf[]): void {
     // string leaves only: a ref is filled with a string, which would retype a JSON number
     if (!l || leaf.type !== "string" || refs.taken.has(key(leaf.at)) || cachedHash(leaf, l)) continue;
     addRef(refs, leaf.at, { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}) }, l.value);
+    if (l.value !== undefined && !l.secret) refs.plain.add(key(leaf.at));
   }
 }
 
@@ -989,16 +1007,40 @@ function embeddedRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
 }
 
 /**
- * Slots do not overlap. A ref for a whole container (a JSON body the app saved in storage, a JSON
- * header) yields to the params and refs inside it: blanking the whole would take their positions
- * away. Its value then has no ref left and is not stored.
+ * Slots do not overlap. A ref for a whole container (a JSON header, a JSON body the app saved in
+ * storage) yields to the params and refs inside it: blanking the whole would take their positions
+ * away. A container that is a credential stays one in every part, so each of its other leaves
+ * becomes a ref of its own, named by its position; one that cannot (a number, a leaf that is only
+ * partly a slot) refuses the learn. A saved request is no credential: its other leaves stay.
  */
-function innerWins(refs: Refs): void {
-  const holds = (s: Slot) =>
-    refs.slots.some((o) => o.at.length > s.at.length && s.at.every((step, i) => o.at[i] === step));
-  refs.slots = refs.slots.filter((s) => !(s.ref && holds(s)));
+function innerWins(refs: Refs, leaves: Leaf[]): void {
+  const under = (outer: Step[], at: Step[]) => at.length > outer.length && outer.every((step, i) => at[i] === step);
+  const outer = refs.slots.filter((s) => s.ref && refs.slots.some((o) => under(s.at, o.at)));
+  refs.slots = refs.slots.filter((s) => !outer.includes(s));
+  const credentials = outer.filter((o) => !refs.plain.has(key(o.at)));
+  for (const leaf of leaves) {
+    const whole = credentials.find((o) => under(o.at, leaf.at));
+    if (!whole || leaf.container || leaf.value === "") continue;
+    const slot = refs.slots.find((s) => key(s.at) === key(leaf.at));
+    // a slot that takes the whole leaf, or a leaf inside one (an object example, a container's own ref)
+    if (slot ? slot.template === undefined : refs.slots.some((s) => covers(s.at, leaf.at))) continue;
+    if (slot || leaf.type !== "string")
+      throw new Error(
+        `${leaf.at.join(" > ")} is ${slot ? "only partly a slot" : `a ${leaf.type}`} inside the credential ${whole.at.join(" > ")}, ` +
+          `so it cannot be a reference and would stay in the spec. Not learned: ${ANOTHER_REQUEST}`,
+      );
+    addRef(refs, leaf.at, { ref: `session:${leafName(leaf.at)}@${encodeURIComponent(key(leaf.at))}` }, leaf.value);
+  }
   const used = new Set(refs.slots.flatMap((s) => [s.ref, ...templateRefs(s.template ?? "")]));
   for (const name of Object.keys(refs.sessionValues)) if (!used.has(`session:${name}`)) delete refs.sessionValues[name];
+}
+
+/** A slot at `at` takes in the leaf: the leaf is deeper in its layers, or below its JSON pointer. */
+function covers(at: Step[], leaf: Step[]): boolean {
+  const last = at.length - 1;
+  const deeper = leaf[last] === at[last] && leaf.length > at.length;
+  const below = at[last]!.startsWith("json:") && !!leaf[last]?.startsWith(`${at[last]}/`);
+  return at.slice(0, last).every((step, i) => leaf[i] === step) && (deeper || below);
 }
 
 /**
@@ -1022,6 +1064,7 @@ function sessionRefs(
     taken: new Set(params.map((s) => key(s.at))),
     live: liveValues(cookies, input.storage),
     sessionValues: {},
+    plain: new Set(),
   };
   // A name the caller marked public is a constant: no pass sees its leaf.
   const publicNames = new Set((input.public ?? []).map((h) => h.toLowerCase()));
@@ -1035,7 +1078,7 @@ function sessionRefs(
   );
   issuedRefs(refs, open, issued);
   let request = embeddedRefs(refs, open, captured);
-  innerWins(refs);
+  innerWins(refs, open);
   // The spec never holds a credential: blank every ref'd leaf.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
   const listed = [...new Set([...publicNames, ...shipped])];

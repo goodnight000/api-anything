@@ -158,7 +158,12 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. A capture refreshes a
    templated `session:` value from its place in the leaf. Slots never overlap: a ref for a whole container
    (a JSON body the app saved in storage, a JSON-valued header) yields to the params and refs inside it,
-   since blanking the whole would take their positions away. Newly learned session references are scoped by operation, with distinct request positions
+   since blanking the whole would take their positions away. A container that is a credential (by its header's name, a
+   cookie, a stored value that is one) stays one in every part: each of its other leaves becomes a `session:` ref of
+   its own, named by its position, and a leaf that cannot be one (a number or flag, a leaf that is only partly a slot)
+   refuses the learn. A request the app saved under an ordinary storage key is no credential: its other leaves stay as
+   captured. A stored value counts as a credential under a credential's name or when it is random-looking; a stored
+   JSON text by its key, and each string in it on its own. Newly learned session references are scoped by operation, with distinct request positions
    for different tokens that share a name: one name never means two values, wherever the second was
    found (a storage entry called `token` inside `v1:<value>`, next to a `token` field holding another). All discovered credentials participate in compound-copy
    removal. Learning ends with one check behind all of these rules: the save-time secret scan, run over the stored

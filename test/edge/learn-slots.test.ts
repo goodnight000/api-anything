@@ -193,18 +193,6 @@ test("a ref for a whole container yields to the params and refs inside it", () =
   assert.deepEqual(onlyParam.operation.slots, [{ param: "q", at: ["body", "json:/q"] }]);
   assert.equal(send(onlyParam.operation).body, '{"q":"puppies","page":1}');
 
-  // a session header that is JSON, holding the cookie
-  const header = learn(
-    [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-csrf-token": `["${SID}",1]` } })],
-    [{ q: "kittens" }],
-    jar,
-  );
-  assert.deepEqual(
-    header.operation.slots.filter((s) => s.ref),
-    [{ ref: "cookie:sid", at: ["header:x-csrf-token", "json:/0"] }],
-  );
-  assert.equal(send(header.operation).headers["x-csrf-token"], `["${SID}",1]`);
-
   // control: nothing inside has a slot, so the whole container is one ref
   const state = '{"tab":"all","n":3}';
   const whole = learn(
@@ -217,6 +205,53 @@ test("a ref for a whole container yields to the params and refs inside it", () =
     [{ ref: "session:op/state", at: ["header:x-state"] }],
   );
   assert.deepEqual(whole.sessionValues, { "op/state": state });
+});
+
+test("a credential container that yields to a slot inside it keeps nothing else of itself in the spec", () => {
+  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
+  const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
+  const cookies = [cookie("sid", SID)];
+  // x-csrf-token is a credential by its name, and its value is JSON
+  const run = (value: unknown) =>
+    learn(
+      [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-csrf-token": JSON.stringify(value) } })],
+      [{ q: "kittens" }],
+      { cookies },
+    );
+  const slotsOf = (op: ReturnType<typeof learn>["operation"]) =>
+    op.slots.map((s) => [s.param ?? s.ref!.replace(/@.*/, ""), s.at.join(" > ")]);
+
+  // a param inside: the opaque token beside it is still the credential
+  const header = { q: "kittens", opaque: T, v: "v1" };
+  const { operation: op, sessionValues } = run(header);
+  assert.ok(!JSON.stringify(op).includes(T), "the token stayed in the spec");
+  assert.deepEqual(slotsOf(op), [
+    ["q", "query:q"],
+    ["q", "header:x-csrf-token > json:/q"],
+    ["session:op/x-csrf-token", "header:x-csrf-token > json:/opaque"],
+    ["session:op/x-csrf-token", "header:x-csrf-token > json:/v"],
+  ]);
+  assert.deepEqual(Object.values(sessionValues).sort(), [T, "v1"].sort());
+  const sent = buildRequest(op, { q: "puppies" }, { cookies, values: sessionValues });
+  assert.deepEqual(JSON.parse(sent.headers["x-csrf-token"]!), { ...header, q: "puppies" });
+
+  // a cookie inside: the same for what sits beside it
+  const list = run([SID, "v1"]).operation;
+  assert.deepEqual(slotsOf(list), [
+    ["q", "query:q"],
+    ["cookie:sid", "header:x-csrf-token > json:/0"],
+    ["session:op/x-csrf-token", "header:x-csrf-token > json:/1"],
+  ]);
+
+  // what cannot be a reference refuses the learn: a number, and a leaf that is only partly a slot
+  assert.throws(
+    () => run({ q: "kittens", opaque: T, n: 17 }),
+    /header:x-csrf-token > json:\/n is a number inside the credential header:x-csrf-token/,
+  );
+  assert.throws(
+    () => run({ sig: `kittens.${T}` }),
+    /header:x-csrf-token > json:\/sig is only partly a slot inside the credential header:x-csrf-token/,
+  );
 });
 
 /* -------------------------------------------------- cached query hashes */
