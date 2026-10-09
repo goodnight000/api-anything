@@ -853,6 +853,19 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
       }
     });
 
+    test(`tier ${tier}: a GET answered 303 goes on as it was, headers and all`, async () => {
+      site(`told${tier}`, {
+        ...rd("q", "/hop?s=303&to=/told", { minTier: tier }),
+        request: {
+          method: "GET",
+          url: `${fx.base}/hop?s=303&to=/told`,
+          headers: { "content-language": "fr", "content-type": "application/json" },
+        },
+      });
+      const r = await call(`told${tier}`, "q", {}, o);
+      assert.deepEqual(r.data, [{ language: "fr", type: "application/json" }], JSON.stringify(r));
+    });
+
     test(`tier ${tier}: six redirects are followed to the data; a loop ends saying so, and how to go on`, async () => {
       site(`chain${tier}`, rd("far", "/chain", { minTier: tier }), rd("round", "/loop", { minTier: tier }));
       const far = await call(`chain${tier}`, "far", {}, o);

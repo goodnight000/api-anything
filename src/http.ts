@@ -204,7 +204,7 @@ export class RedirectRefused extends Error {
 
 /**
  * The redirect policy of tiers 1 and 2: the request a redirect asks for next, or a refusal.
- * 303, and 301/302 after a POST, make a bodiless GET. On an origin change the credential headers go
+ * 303 after anything but a GET or HEAD, and 301/302 after a POST, make a bodiless GET. On an origin change the credential headers go
  * (authorization, cookie, every header a ref fills), since neither undici nor a page's fetch()
  * would keep a CSRF header from the other origin. A hop that would still carry a session's value
  * there is not taken: a body it re-sends when any ref slot lives in the body (decided from the
@@ -226,7 +226,10 @@ export function nextHop(
   const refused = (why: string) =>
     new RedirectRefused(`not following the HTTP ${status} redirect to ${next.origin}: ${why}`);
   if (!/^https?:$/.test(next.protocol)) throw refused("it is not an http(s) address");
-  const toGet = status === 303 || ((status === 301 || status === 302) && from.method === "POST");
+  // The Fetch standard's two cases; a GET stays what it was, headers and all.
+  const toGet =
+    (status === 303 && from.method !== "GET" && from.method !== "HEAD") ||
+    ((status === 301 || status === 302) && from.method === "POST");
   const cross = next.origin !== new URL(from.url).origin;
   // The slots that hold a cookie:/session: value, by the layer their path starts in ("header:x-csrf", "form[1]:tok").
   const held = op.slots.filter(holdsRef).map((s) => ({

@@ -376,9 +376,10 @@ the browser profile) stops at once and marks nothing stale.
 
 One redirect policy, for tiers 1 and 2 (`nextHop`), at most 20 redirects as in a browser's own
 fetch (one more fails the call saying that the limit was reached, and its `next` says not to retry
-but to learn the operation where the site now answers): 303, and 301/302 after a POST,
+but to learn the operation where the site now answers): 303 after anything but a GET or HEAD, and 301/302 after a POST,
 make a bodiless GET, without the headers that described the body (Content-Type, -Language,
--Encoding, -Location, -Length), as a browser's own redirect does; 307/308 keep method and body. On an origin change the credential headers are
+-Encoding, -Location, -Length), as a browser's own redirect does; every other redirect sends the
+request on as it was, so a GET answered 303 keeps its headers. On an origin change the credential headers are
 dropped: authorization, cookie, and every header a `cookie:`/`session:` ref fills, at any depth
 (a ref inside a header's JSON too). A hop to another origin is not taken when it would re-send a
 body in which any ref slot lives, which is decided from the slots and not by searching the bytes

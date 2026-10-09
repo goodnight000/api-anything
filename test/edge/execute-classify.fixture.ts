@@ -97,7 +97,9 @@ export async function startFixture(): Promise<Fixture> {
         return json(res, { checked: req.method === "POST" && body === "initial" });
       // a same-origin redirect with the status the test asks for
       case "/hop":
-        return void res.writeHead(Number(u.searchParams.get("s")), { location: "/landed" }).end();
+        return void res
+          .writeHead(Number(u.searchParams.get("s")), { location: u.searchParams.get("to") ?? "/landed" })
+          .end();
       // a redirect to the other origin whose Location copies the token a JSON header carried
       case "/away-copy":
         return void res
@@ -114,6 +116,14 @@ export async function startFixture(): Promise<Fixture> {
         );
         return kept.length ? json(res, { error: `body headers: ${kept}` }, 415) : json(res, { items: [{ ok: 1 }] });
       }
+      // answers with the body headers the request arrived with
+      case "/told":
+        return json(res, {
+          items: [{ language: req.headers["content-language"] ?? "en", type: req.headers["content-type"] ?? "" }],
+        });
+      // a write that is passed on, with its method and body, for as long as it is followed
+      case "/again":
+        return void res.writeHead(Number(u.searchParams.get("s")), { location: req.url! }).end();
       // six redirects, then the data
       case "/chain": {
         const n = Number(u.searchParams.get("n") ?? 0);
