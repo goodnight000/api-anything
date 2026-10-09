@@ -779,26 +779,22 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const closePages = async (): Promise<boolean> => {
     if (guard) {
       sealed = true;
+      const tapOf = (p: Page) => within(Promise.resolve(taps.get(p)), undefined);
       const emptied = new Set<Page>();
       for (const end = Date.now() + 3 * SEAL_MS; Date.now() < end; ) {
-        await Promise.all([...adopting, ...taps.values()]);
+        await within(Promise.all([...adopting, ...taps.values()]), []);
         const fresh = [...own].filter((p) => !emptied.has(p) && !p.isClosed());
         for (const p of fresh) {
           emptied.add(p);
-          const tapped = await taps.get(p);
           // A round trip through the new document, then (in `answered`) through the browser:
           // whatever the old one sent as it unloaded has been paused and failed before either returns.
-          if (
-            await within(
-              p.goto("about:blank", { timeout: SEAL_MS }).then(() => true),
-              false,
-            )
-          )
+          const blank = p.goto("about:blank", { timeout: SEAL_MS }).then(() => true);
+          if (await within(blank, false))
             await within(
               p.evaluate(() => 0),
               0,
             );
-          if (tapped) await within(tapped.answered(), undefined);
+          await within(Promise.resolve((await tapOf(p))?.answered()), undefined);
         }
         while (deciding > 0 && Date.now() < end) await sleep(20);
         // Through the browser's own session: a stray has no page to close it by, and the page
@@ -820,7 +816,8 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     if (intercept) dropSocketSends = await guardSockets(ctx, (ex) => intercept(ex, acting));
     // in place before the first document, so that what it defers (fetchLater) passes through it
     cover(page);
-    if (intercept && !(await taps.get(page))) throw new Error("could not attach the request guard to the page");
+    if (intercept && !(await within(Promise.resolve(taps.get(page)), undefined)))
+      throw new Error("could not attach the request guard to the page");
     if (o.softFrom) {
       await goto(page, o.softFrom);
       await idle(5000);
