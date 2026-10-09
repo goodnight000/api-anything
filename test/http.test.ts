@@ -82,6 +82,30 @@ test("buildRequest: defaults, missing required params, bad types, missing sessio
   assert.throws(() => buildRequest(op(), { text: "a", tweet_id: "1", dark: "yes" }, session), /must be boolean/);
 });
 
+test("a number past 2^53 goes exactly as plain digits; a form that would be rounded is refused, saying why", () => {
+  const sent = (count: string) =>
+    /"count":([^,]+),/.exec(buildRequest(op(), { text: "a", tweet_id: "5", count }, session).body!)?.[1];
+  assert.equal(sent("9007199254740993"), "9007199254740993");
+  assert.equal(sent("1.5e3"), "1500");
+  assert.equal(sent("-0.25"), "-0.25");
+  for (const v of ["9007199254740993e0", "-9007199254740993e0", "9007199254740993.0", "1e400"]) {
+    assert.throws(() => sent(v), /param "count" would lose precision: .* past 2\^53.* plain digits/, v);
+  }
+  // the boundary is decided on the digits: a hair past the limit rounds down to it in a double
+  for (const v of ["9007199254740991.1", "90071992547409911e-1", "-9007199254740991.1", "9007199254740992e0"]) {
+    assert.throws(() => sent(v), /would lose precision/, v);
+  }
+  // exactly at the limit, in any form, is sent as the limit
+  for (const v of ["9007199254740991", "9007199254740991.0", "9007199254740991e0", "90071992547409910e-1"]) {
+    assert.equal(sent(v), "9007199254740991", v);
+  }
+  assert.equal(sent("-9007199254740991"), "-9007199254740991");
+  assert.equal(sent("1e-400"), "0");
+  // a mantissa longer than any number is still judged by its value, not its length
+  assert.equal(sent(`0.${"0".repeat(500)}1`), "0");
+  assert.throws(() => sent(`1${"0".repeat(500)}e-401`), /would lose precision/);
+});
+
 test("template slots fill a substring of the leaf", () => {
   const search = OperationSchema.parse({
     name: "search",

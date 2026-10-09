@@ -46,8 +46,10 @@ const CHALLENGES: [string, RegExp | undefined, RegExp?][] = [
   ["Kasada", undefined, /\/[0-9a-f]{8}-[0-9a-f-]{27}\/[0-9a-f]{8}-[0-9a-f-]{27}\/ips\.js/i],
   // a proof-of-work page that solves itself and resubmits (Reddit)
   ["JS challenge", /name=["']?js_challenge|[?&]js_challenge=1/i],
-  ["reCAPTCHA", /google\.com\/recaptcha|g-recaptcha|hcaptcha\.com|Prove your humanity/i],
+  ["reCAPTCHA", /Prove your humanity/i],
 ];
+// A CAPTCHA widget is the challenge on a bare page, and a guard on the login when it sits in a sign-in form.
+const CAPTCHA_WIDGET = /google\.com\/recaptcha|g-recaptcha|hcaptcha\.com/i;
 // What bot walls answer with: 202 (AWS WAF's JS challenge), 403, 405 (AWS WAF's CAPTCHA), 429, 503.
 const CHALLENGE_STATUS = new Set([202, 403, 405, 429, 503]);
 // An interstitial's title gives it away even when the page is too big for the body scan.
@@ -86,16 +88,20 @@ const CSRF_FAILED =
 const REQUIRE_LOGIN = /"require_login"\s*:\s*true|login_required/i;
 const snippet = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 160);
 
-function challenge(body: string, status: number): string | undefined {
+/** The vendor challenging here. `rides`: the marker also sits on ordinary pages, so a sign-in form explains it. */
+function challenge(body: string, status: number): { vendor: string; rides: boolean } | undefined {
   const head = body.slice(0, 200_000);
-  return CHALLENGES.find(
+  const first = CHALLENGES.find(
     ([, page, sdk]) => !!page?.test(head) || (CHALLENGE_STATUS.has(status) && !!sdk?.test(head)),
-  )?.[0];
+  );
+  // one interstitial marker anywhere on the page settles it, whichever vendor is named first
+  if (first) return { vendor: first[0], rides: !CHALLENGES.some(([, page]) => page?.test(head)) };
+  return CAPTCHA_WIDGET.test(head) ? { vendor: "reCAPTCHA", rides: true } : undefined;
 }
 
 /**
  * The bot wall this response is, if any ("Cloudflare challenge page (HTTP 403)"). A real HTML page
- * may mention recaptcha in a login form; challenge pages are small, non-2xx, or where data was expected.
+ * may mention recaptcha; challenge pages are small, non-2xx, or where data was expected.
  * `hasData`: the op's recipe finds its data on this page. A title alone ("Robot check-in: how our
  * warehouse robots work") is then an ordinary page; a vendor's interstitial markers still count.
  */
@@ -104,12 +110,15 @@ export function botWall(r: Observed, wantsJson = false, hasData?: () => boolean)
   const ct = (r.headers["content-type"] ?? "").toLowerCase();
   const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
   if (r.headers["cf-mitigated"] === "challenge") return "Cloudflare challenge (cf-mitigated)";
-  // Kasada's headers ride on its sites' ordinary answers too; only its challenge status is a wall.
-  if (CHALLENGE_STATUS.has(r.status) && Object.keys(r.headers).some((k) => k.toLowerCase().startsWith("x-kpsdk")))
-    return `Kasada challenge (HTTP ${r.status})`;
+  // Kasada's headers ride on its sites' ordinary answers too: only its challenge status is a wall, and
+  // not on a sign-in form (an interstitial's markers on that page are still caught below).
+  const kasada = Object.keys(r.headers).some((k) => k.toLowerCase().startsWith("x-kpsdk"));
+  if (kasada && CHALLENGE_STATUS.has(r.status) && !signInForm(body)) return `Kasada challenge (HTTP ${r.status})`;
   if (r.status >= 400 || (isHtml && (wantsJson || body.length < 64_000))) {
-    const vendor = challenge(body, r.status);
-    if (vendor) return `${vendor} challenge page (HTTP ${r.status})`;
+    const c = challenge(body, r.status);
+    // A widget on a sign-in form asks for a login, which no transport tier gets past. An interstitial's
+    // own markers are a wall whatever form the page carries.
+    if (c && !(c.rides && signInForm(body))) return `${c.vendor} challenge page (HTTP ${r.status})`;
   }
   if (isHtml && CHALLENGE_TITLE.test(body.slice(0, 20_000)) && !hasData?.()) return `challenge page (HTTP ${r.status})`;
   return undefined;
@@ -294,13 +303,11 @@ export function classify(op: Operation, r: Observed): Classified {
       ? missing(`HTTP ${r.status}`)
       : is("input", `HTTP ${r.status}: not found`);
   }
-  if (r.status === 400) {
-    if (DRIFT.test(body)) return is("drift", `HTTP 400 schema error: ${snippet(body)}`);
-    // a 400 form page (a signup's "username taken") shows a password field; only the wording counts
-    if (LOGIN_SAID.test(body)) return is("auth", `HTTP 400 with login markers: ${snippet(body)}`);
-    if (mentionsParam(op, body)) return is("input", `HTTP 400: ${snippet(body)}`);
-    return is("error", `HTTP 400: ${snippet(body)}`);
-  }
+  if (r.status === 400 && DRIFT.test(body)) return is("drift", `HTTP 400 schema error: ${snippet(body)}`);
+  // a 400/422 form page (a signup's "username taken") shows a password field; only the wording counts
+  if ((r.status === 400 || r.status === 422) && LOGIN_SAID.test(body))
+    return is("auth", `HTTP ${r.status} with login markers: ${snippet(body)}`);
+  if (r.status === 400 && mentionsParam(op, body)) return is("input", `HTTP 400: ${snippet(body)}`);
   if (r.status < 200 || r.status >= 300) return is("error", `HTTP ${r.status}: ${snippet(body)}`);
 
   let data: unknown;

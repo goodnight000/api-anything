@@ -10,14 +10,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chromeAvailable, closeBrowser } from "../../src/browser.js";
+import { addCookiesToProfile, chromeAvailable, closeBrowser } from "../../src/browser.js";
 import { classify, judge, type Observed } from "../../src/classify.js";
 import { call } from "../../src/execute.js";
 import { capOutput } from "../../src/extract.js";
+import { profileDir } from "../../src/heal.js";
+import { importSession } from "../../src/login.js";
 import { cookieHeaderFor, cookieValue, loadSession, saveSession } from "../../src/session.js";
 import { type Operation, OperationSchema, parseSite } from "../../src/spec.js";
 import { rememberTier, saveSite } from "../../src/store.js";
 import type { StoredCookie } from "../../src/types.js";
+import { makeChromiumDb } from "../fixture/cookie-db.js";
 import { type Fixture, startFixture } from "./execute-classify.fixture.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-exec-"));
@@ -509,6 +512,21 @@ describe("execution ladder", () => {
     assert.equal(fx.hits.length, 0, "nothing sent");
   });
 
+  test("a numeric arg in a form that would be rounded past 2^53 is input, and nothing is sent", async () => {
+    site("big", {
+      ...rd("items", "/api/items?page=1"),
+      slots: [{ param: "page", at: ["query:page"] }],
+      params: [{ name: "page", type: "number" }],
+    });
+    const r = await call("big", "items", { page: "9007199254740993e0" }, t1);
+    assert.equal(r.class, "input", JSON.stringify(r));
+    assert.match(r.reason ?? "", /would lose precision/);
+    assert.equal(fx.hits.length, 0, "nothing sent");
+    assert.deepEqual((await call("big", "items", { page: "9007199254740993" }, t1)).data, [
+      { page: "9007199254740993" },
+    ]);
+  });
+
   test("a corrupt session or state file is reported as such: not 'check the args', and call() does not throw", async () => {
     site("corrupt", rd("l", "/plain"));
     const { mkdirSync, writeFileSync } = await import("node:fs");
@@ -641,6 +659,194 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     const r = await call("prg", "follow", {}, { allowWrites: true, maxTier: 2, minIntervalMs: 0, timeoutMs: 5000 });
     const posts = fx.hits.filter((h) => h.method === "POST" && h.url === "/api/follow").length;
     assert.equal(posts, 1, `POST sent ${posts} times; result ${JSON.stringify(r)}`);
+  });
+
+  test("a param's default reaches the tier-3 trigger: the page opens with it, not with a literal {page}", async () => {
+    site("deftrig", {
+      ...rd("items", "/api/items?page=1", { minTier: 3 }),
+      slots: [{ param: "page", at: ["query:page"] }],
+      params: [{ name: "page", default: "7", required: false }],
+      trigger: { url: `${fx.base}/paged?page={page}` },
+      match: { path: "/api/items" },
+    });
+    const r = await call("deftrig", "items", {}, { minIntervalMs: 0, timeoutMs: 5000 });
+    const pages = fx.hits.filter((h) => h.url.startsWith("/paged")).map((h) => h.url);
+    assert.deepEqual(pages, ["/paged?page=7"], JSON.stringify(r));
+    assert.equal(r.tier, 3, JSON.stringify(r));
+    assert.deepEqual(r.data, [{ page: "7" }]);
+  });
+
+  test("auth at tier 2 re-imports the browser session into the profile and retries once; a write is not resent", async () => {
+    site("t2auth", rd("me", "/api/me", { minTier: 2 }), {
+      ...rd("save", "/api/me", { minTier: 2 }),
+      readOnly: false,
+      request: { method: "POST", url: `${fx.base}/api/me`, headers: {}, body: "x=1" },
+    });
+    const root = mkdtempSync(join(HOME, "everyday-browser-"));
+    // the human signs in in their everyday browser; the server honours only that session
+    const signIn = (sid: string) => {
+      fx.state.sid = sid;
+      makeChromiumDb(join(root, "Default"), [{ host_key: "127.0.0.1", name: "sid", value: sid }], { password: "pw" });
+    };
+    const me = () => fx.hits.filter((h) => h.url === "/api/me").length;
+    const o = { maxTier: 2 as const, minIntervalMs: 0, timeoutMs: 5000 };
+    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([
+      { name: "Chrome", family: "chromium", root, password: "pw" },
+    ]);
+    try {
+      signIn("first");
+      assert.equal((await importSession("t2auth", `${fx.base}/`))?.source, "chrome:Default");
+      assert.deepEqual((await call("t2auth", "me", {}, o)).data, [{ me: "first" }]);
+
+      signIn("second");
+      fx.hits.length = 0;
+      const r = await call("t2auth", "me", {}, o);
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.tier, 2);
+      assert.deepEqual(r.data, [{ me: "second" }]);
+      assert.equal(me(), 2, "one retry");
+
+      // logged out with nothing new to import: one retry, then the login hint
+      fx.state.sid = "third";
+      fx.hits.length = 0;
+      const out = await call("t2auth", "me", {}, o);
+      assert.equal(out.class, "auth", JSON.stringify(out));
+      assert.match(out.next ?? "", /api-anything login t2auth/);
+      assert.equal(me(), 2, "at most once per call");
+
+      // a write answered 200 with the login page may have run: never resent
+      fx.hits.length = 0;
+      const w = await call("t2auth", "save", {}, { ...o, allowWrites: true });
+      assert.equal(w.class, "auth", JSON.stringify(w));
+      assert.equal(me(), 1, "the write was sent once");
+    } finally {
+      delete process.env.API_ANYTHING_BROWSER_ROOTS;
+    }
+  });
+
+  test("auth at tier 3 re-imports the browser session into the profile and retries once", async () => {
+    site(
+      "t3auth",
+      rd("me", "/api/me", { minTier: 3, trigger: { url: `${fx.base}/me-page` }, match: { path: "/api/me" } }),
+    );
+    const root = mkdtempSync(join(HOME, "everyday-browser-"));
+    const signIn = (sid: string) => {
+      fx.state.sid = sid;
+      makeChromiumDb(join(root, "Default"), [{ host_key: "127.0.0.1", name: "sid", value: sid }], { password: "pw" });
+    };
+    const me = () => fx.hits.filter((h) => h.url === "/api/me").length;
+    const o = { minIntervalMs: 0, timeoutMs: 5000 };
+    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([
+      { name: "Chrome", family: "chromium", root, password: "pw" },
+    ]);
+    try {
+      signIn("first");
+      assert.equal((await importSession("t3auth", `${fx.base}/`))?.source, "chrome:Default");
+      assert.deepEqual((await call("t3auth", "me", {}, o)).data, [{ me: "first" }]);
+
+      signIn("second");
+      fx.hits.length = 0;
+      const r = await call("t3auth", "me", {}, o);
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.tier, 3);
+      assert.deepEqual(r.data, [{ me: "second" }]);
+      assert.equal(me(), 2, "one retry");
+
+      // logged out with nothing new to import: one retry, then the login hint
+      fx.state.sid = "third";
+      fx.hits.length = 0;
+      const out = await call("t3auth", "me", {}, o);
+      assert.equal(out.class, "auth", JSON.stringify(out));
+      assert.match(out.next ?? "", /api-anything login t3auth/);
+      assert.equal(me(), 2, "at most once per call");
+    } finally {
+      delete process.env.API_ANYTHING_BROWSER_ROOTS;
+    }
+  });
+
+  test("a tier-3 write that ran and was then redirected to a refusal is not sent again by auth recovery", async () => {
+    site("t3write", {
+      ...rd("save", "/api/save", {
+        minTier: 3,
+        trigger: { url: `${fx.base}/save-page` },
+        match: { method: "POST", path: "/api/save" },
+      }),
+      readOnly: false,
+      request: { method: "POST", url: `${fx.base}/api/save`, headers: {}, body: "x=1" },
+    });
+    // a session to re-import, so recovery would have something to retry with
+    const root = mkdtempSync(join(HOME, "everyday-browser-"));
+    makeChromiumDb(join(root, "Default"), [{ host_key: "127.0.0.1", name: "sid", value: "any" }], { password: "pw" });
+    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([
+      { name: "Chrome", family: "chromium", root, password: "pw" },
+    ]);
+    try {
+      assert.equal((await importSession("t3write", `${fx.base}/`))?.source, "chrome:Default");
+      fx.hits.length = 0;
+      const r = await call("t3write", "save", {}, { allowWrites: true, minIntervalMs: 0, timeoutMs: 5000 });
+      const saves = fx.hits.filter((h) => h.method === "POST" && h.url === "/api/save").length;
+      assert.equal(saves, 1, `the write was sent ${saves} times; result ${JSON.stringify(r)}`);
+      assert.equal(r.ok, false);
+      assert.match(r.next ?? "", /check the site/);
+      assert.doesNotMatch(r.next ?? "", /retry once/);
+    } finally {
+      delete process.env.API_ANYTHING_BROWSER_ROOTS;
+    }
+  });
+
+  test("auth at tier 2 from a stale cookie behind a header ref: the jar is refreshed from the profile, one retry", async () => {
+    site(
+      "t2csrf",
+      rd("items", "/api/csrf", {
+        minTier: 2,
+        request: { method: "GET", url: `${fx.base}/api/csrf`, headers: { "x-csrf": "" } },
+        slots: [{ ref: "cookie:ct", at: ["header:x-csrf"] }],
+      }),
+    );
+    // the site rotated its token in the profile; the jar still holds the old one
+    await addCookiesToProfile([cookie("ct", "fresh", "127.0.0.1")], profileDir());
+    saveSession("t2csrf", { cookies: [cookie("ct", "stale", "127.0.0.1")], values: {} });
+    const r = await call("t2csrf", "items", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 2);
+    assert.deepEqual(r.data, [{ ct: "fresh" }]);
+    assert.equal(fx.hits.filter((h) => h.url === "/api/csrf").length, 2, "one retry");
+  });
+
+  test("auth at tier 2: a cookie: ref the refreshed jar cannot place is a failed call, not a thrown one", async () => {
+    site(
+      "t2wrap",
+      rd("items", "/api/csrf", {
+        minTier: 2,
+        request: { method: "GET", url: `${fx.base}/api/csrf`, headers: { "x-wrap": "{}" } },
+        slots: [{ ref: "cookie:ct", at: ["header:x-wrap", "json:/token"] }],
+      }),
+    );
+    // with no ct in the jar the slot is skipped; the profile has one, and it has nowhere to go in "{}"
+    await addCookiesToProfile([cookie("ct", "fresh", "127.0.0.1")], profileDir());
+    saveSession("t2wrap", { cookies: [], values: {} });
+    const r = await call("t2wrap", "items", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.match(r.reason ?? "", /JSON pointer/);
+  });
+
+  test("auth at tier 2 for a read with a session: ref: one trigger run refreshes the value and answers", async () => {
+    site(
+      "t2token",
+      rd("items", "/api/token", {
+        minTier: 2,
+        request: { method: "GET", url: `${fx.base}/api/token`, headers: { "x-token": "" } },
+        slots: [{ ref: "session:x-token", at: ["header:x-token"] }],
+        trigger: { url: `${fx.base}/tokened` },
+        match: { path: "/api/token" },
+      }),
+    );
+    const o = { minIntervalMs: 0, timeoutMs: 5000 };
+    const r = await call("t2token", "items", {}, o);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 3);
+    assert.match(r.reason ?? "", /^tier 2 said auth .*refreshed the session/);
+    assert.equal((await call("t2token", "items", {}, o)).tier, 2, "the refreshed value serves tier 2");
   });
 
   test("tier 2 honours timeoutMs", async () => {
