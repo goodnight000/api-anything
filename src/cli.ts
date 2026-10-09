@@ -83,9 +83,11 @@ const HELP: Record<string, string> = {
   --steps <json>  UI steps after load; {param} is filled in selector/value
   --soft-from     neutral page to load first, then navigate in-page to the trigger
   --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON)
-  --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser);
-                  every add saves its own runs as captures, so a wrong --extract is fixed this way:
-                  re-added with no --example, an op keeps its stored example values (and so its params)
+  --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser).
+                  Every add saves its own runs as captures, so a wrong recipe is repaired this way: for an
+                  existing op, --from with recipe flags only (--extract, --pick, --html, --embedded) replaces
+                  what it returns and keeps its request, params and trigger. With --example the whole op is
+                  learned again
   --from2 <id>    a second capture, made with the --example2 values, for the two-run diff; with --from,
                   --example2 needs it: capture the page again with those values
   --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
@@ -577,7 +579,11 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     ok: true,
     site,
     op: op.name,
-    ...(r.replaced ? { replaced: true } : {}),
+    ...(r.repaired
+      ? { repaired: "only what it returns changed: the request, params and trigger are as they were" }
+      : r.replaced
+        ? { replaced: true }
+        : {}),
     request: `${op.request.method} ${op.request.url.split("?")[0]}`,
     params: op.params.map((p) => `${p.name}:${p.type}`),
     readOnly: op.readOnly,

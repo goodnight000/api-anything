@@ -8,7 +8,16 @@ import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, send } from "./http.js";
-import { type Args, ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches } from "./learn.js";
+import {
+  type Args,
+  ASSET_EXT,
+  capturePages,
+  checkExamples,
+  hashLike,
+  learnOperation,
+  learnResponse,
+  matches,
+} from "./learn.js";
 import {
   cookieHeaderFor,
   home,
@@ -17,6 +26,7 @@ import {
   parseCookieHeader,
   pruneCaptures,
   readJson,
+  type Session,
   safeName,
   siteOf,
   writePrivate,
@@ -371,6 +381,8 @@ export interface AddResult {
   preview?: { count?: number; first: unknown };
   /** an op of that name existed and was overwritten */
   replaced: boolean;
+  /** only the op's response recipe was replaced: its request, params and trigger are as they were */
+  repaired?: boolean;
 }
 
 /** Put `{name}` back where an example value sits in a literal step (a typed value, a selector). */
@@ -510,6 +522,105 @@ function previewOf(data: unknown): AddResult["preview"] {
   return { ...(Array.isArray(data) ? { count: data.length } : {}), first: cut.data };
 }
 
+type Recipe = NonNullable<AddInput["response"]>;
+
+/** A learned response spec with the caller's recipe on top; an html or embedded recipe sets the format. */
+const withRecipe = (learned: ResponseSpec, r: Recipe): ResponseSpec => ({
+  ...learned,
+  ...r,
+  ...(r.html ? { format: "html" as const } : {}),
+  ...(r.embedded ? { format: "embedded" as const } : {}),
+});
+
+/** Learning's warnings, minus "the response is HTML: add a recipe" when one was given. */
+const recipeWarnings = (warnings: string[], r: Recipe) =>
+  warnings.filter((w) => !((r.html ?? r.embedded) && w.startsWith("response is HTML")));
+
+/**
+ * The end of every add: judge the op on the answer it was learned from (a preview, or a warning that
+ * says what to fix), then save it. `again`: the capture a fixed recipe can be tried on.
+ */
+function saveOperation(
+  site: string,
+  operation: Operation,
+  exchange: Exchange,
+  warnings: string[],
+  session: Session,
+  again: string | undefined,
+): Omit<AddResult, "captures"> {
+  let preview: AddResult["preview"];
+  const res = exchange.response;
+  if (res) {
+    const j = judge(operation, {
+      status: res.status,
+      headers: res.headers,
+      body: res.body ?? "",
+      url: exchange.request.url,
+    });
+    if (j.class === "ok") preview = previewOf(j.data);
+    else if (j.class === "blocked" || j.class === "auth" || j.class === "rate") {
+      // a bot wall or a login page is not fixed by editing the recipe
+      warnings.push(
+        `the captured response is ${j.class}: ${j.reason}. The op was learned from ${j.class === "rate" ? "a throttled answer" : "a challenge or sign-in page"}: ` +
+          (j.class === "rate"
+            ? "wait a few minutes, then add again"
+            : `ask the user to run api-anything login ${site} (and clear any challenge), then add again`),
+      );
+    } else
+      warnings.push(
+        `on the captured response this op says ${j.class}: ${j.reason}. Fix --extract/--pick/--html/--embedded and re-run add --from ${again} (no browser needed)`,
+      );
+  }
+
+  const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
+  const secrets = scanSecrets(operation, session, allowed).secrets;
+  if (secrets.length) throw new Error(`refusing to save a spec containing a credential: ${secrets.join("; ")}`);
+  // Re-read under the lock: another add or a heal may have saved this site since we started.
+  let replaced = false;
+  const path = updateSite(site, (current) => {
+    replaced = !!current?.operations.some((o) => o.name === operation.name);
+    const fresh = { name: site, baseUrl: new URL(operation.trigger.url).origin, operations: [] };
+    return putOperation(current ?? fresh, operation);
+  });
+  clearStale(site, operation.name);
+  return { operation, warnings, path, ...(preview ? { preview } : {}), replaced };
+}
+
+/**
+ * A recipe repair: the op stays as it is (request, slots, params, match, trigger, readOnly) and only
+ * its `response` is learned again, from the answer its own match finds in the capture. The request
+ * is not learned, so no example is needed: none can be bound to the wrong field or go missing, and
+ * a write stays a write.
+ */
+function repairRecipe(site: string, old: Operation, from: NonNullable<AddInput["from"]>, i: AddInput): AddResult {
+  const { capture, id } = from;
+  const r = i.response ?? {};
+  const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
+  const own = Object.keys(old.match).length > 0;
+  const pool = capture.exchanges.filter((e) => (id !== undefined ? e.id === id : own && matches(old.match, e.request)));
+  const answers = pool.filter((e) => e.response);
+  // The answer the recipe finds data in (a challenge page, or a soft navigation's first page, may match too).
+  const exchange = answers.findLast((e) => resolves(spec, e.response?.body)) ?? answers.at(-1) ?? pool.at(-1);
+  if (!exchange)
+    throw new Error(
+      id !== undefined
+        ? `no captured request with id ${id}`
+        : `capture ${capture.id} has no request that ${old.name}'s match finds (${JSON.stringify(old.match)}): name it with --pick-request <id>; api-anything inspect ${capture.id} lists them`,
+    );
+  // the stored examples only steer the suggested extract, as the examples do in a full add
+  const values = old.params.flatMap((p) => (p.example === undefined ? [] : [String(p.example).toLowerCase()]));
+  const learned: string[] = [];
+  const response = withRecipe(learnResponse(exchange, values, learned), r);
+  const warnings = recipeWarnings(learned, r);
+  if (own && !matches(old.match, exchange.request))
+    warnings.push(
+      `request ${exchange.id} is not one ${old.name}'s match finds, and the request was not learned from it: only the recipe was, from its answer. To learn the request too, pass --example`,
+    );
+  const operation: Operation = { ...old, ...(i.description ? { description: i.description } : {}), response };
+  const saved = saveOperation(site, operation, exchange, warnings, loadSession(site), capture.id);
+  return { ...saved, captures: [], repaired: true };
+}
+
 /**
  * Learn an op and save it to the user spec dir. Without `from`, the trigger runs twice (with
  * example 2, or example 1 again) so nonces show up. A write is learned from aborted requests only.
@@ -517,14 +628,17 @@ function previewOf(data: unknown): AddResult["preview"] {
 export async function addOperation(input: AddInput): Promise<AddResult> {
   const i = { ...input, site: safeName(input.site) };
   const existing = loadSite(i.site)?.site;
-  // Re-adding an op from a capture to repair its recipe: with no example it would lose its params,
-  // so the example values stored with it stand in.
-  const stored = existing?.operations.find((o) => o.name === i.op)?.params.filter((p) => p.example !== undefined) ?? [];
-  const reused =
-    i.from && !Object.keys(i.examples[0]).length && stored.length
-      ? `no example was given, so ${i.op}'s stored one (${stored.map((p) => `${p.name}=${asText(p.example)}`).join(", ")}) stands in`
-      : undefined;
-  const [ex1, ex2] = reused ? [Object.fromEntries(stored.map((p) => [p.name, p.example])), i.examples[1]] : i.examples;
+  const old = existing?.operations.find((o) => o.name === i.op);
+  const [ex1, ex2] = i.examples;
+  if (old && i.from && !Object.keys(ex1).length) {
+    // An existing op, a capture, no example: a repair, unless something given shapes the request.
+    if (!(i.trigger || i.match || i.public?.length || ex2 || i.from2 || i.write))
+      return repairRecipe(i.site, old, i.from, i);
+    if (old.params.length)
+      throw new Error(
+        `${i.op} takes ${old.params.map((p) => p.name).join(", ")}: learning its request again (--trigger, --match, --public, --example2, --from2 or --write does that) needs --example with the values capture ${i.from.capture.id} was made with. To change only what it returns, pass the recipe flags alone`,
+      );
+  }
   // before any browser run: a too-short or duplicate example would only fail after it
   if (ex1) checkExamples(ex1, "example");
   if (ex2) checkExamples(ex2, "example 2");
@@ -570,32 +684,24 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   }
   const r = i.response ?? {};
   const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
-  let learned: ReturnType<typeof learnOperation>;
-  try {
-    learned = learnOrExplain(i.site, run1, {
-      exchanges: run1.exchanges,
-      pages: capturePages(run1),
-      exchanges2: run2?.exchanges,
-      examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
-      cookies: (run2 ?? run1).cookies,
-      storage: { ...run2?.storage, ...run1.storage },
-      match: i.match,
-      id: i.from?.id,
-      name: i.op,
-      trigger,
-      readOnly: !i.write,
-      loginCookies: existing?.loginCookies,
-      public: i.public,
-      // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
-      ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
-    });
-  } catch (e) {
-    // the capture may have been made with other values than the stored ones
-    throw reused ? new Error(`${(e as Error).message}; ${reused}: pass --example with this capture's values`) : e;
-  }
-  const recipe = r.html ?? r.embedded;
-  const warnings = learned.warnings.filter((w) => !(recipe && w.startsWith("response is HTML")));
-  if (reused) warnings.push(reused);
+  const learned = learnOrExplain(i.site, run1, {
+    exchanges: run1.exchanges,
+    pages: capturePages(run1),
+    exchanges2: run2?.exchanges,
+    examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
+    cookies: (run2 ?? run1).cookies,
+    storage: { ...run2?.storage, ...run1.storage },
+    match: i.match,
+    id: i.from?.id,
+    name: i.op,
+    trigger,
+    readOnly: !i.write,
+    loginCookies: existing?.loginCookies,
+    public: i.public,
+    // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
+    ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
+  });
+  const warnings = recipeWarnings(learned.warnings, r);
   if (missing.length)
     warnings.push(
       `the trigger has no {${missing.join("}, {")}}: tier-3 runs and heals would load the example's page; put the param in --trigger`,
@@ -603,12 +709,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   let operation: Operation = {
     ...learned.operation,
     ...(i.description ? { description: i.description } : {}),
-    response: {
-      ...learned.operation.response,
-      ...r,
-      ...(r.html ? { format: "html" as const } : {}),
-      ...(r.embedded ? { format: "embedded" as const } : {}),
-    },
+    response: withRecipe(learned.operation.response, r),
   };
   const session = mergeCapture(i.site, (run2 ?? run1).cookies, learned.sessionValues);
 
@@ -628,43 +729,10 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     }
   }
 
-  let preview: AddResult["preview"];
-  const res = learned.exchange.response;
-  if (res) {
-    const j = judge(operation, {
-      status: res.status,
-      headers: res.headers,
-      body: res.body ?? "",
-      url: learned.exchange.request.url,
-    });
-    const again = captures[0] ?? i.from?.capture.id;
-    if (j.class === "ok") preview = previewOf(j.data);
-    else if (j.class === "blocked" || j.class === "auth" || j.class === "rate") {
-      // a bot wall or a login page is not fixed by editing the recipe
-      warnings.push(
-        `the captured response is ${j.class}: ${j.reason}. The op was learned from ${j.class === "rate" ? "a throttled answer" : "a challenge or sign-in page"}: ` +
-          (j.class === "rate"
-            ? "wait a few minutes, then add again"
-            : `ask the user to run api-anything login ${i.site} (and clear any challenge), then add again`),
-      );
-    } else
-      warnings.push(
-        `on the captured response this op says ${j.class}: ${j.reason}. Fix --extract/--pick/--html/--embedded and re-run add --from ${again} (no browser needed)`,
-      );
-  }
-
-  const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
-  const secrets = scanSecrets(operation, session, allowed).secrets;
-  if (secrets.length) throw new Error(`refusing to save a spec containing a credential: ${secrets.join("; ")}`);
-  // Re-read under the lock: another add or a heal may have saved this site since we started.
-  let replaced = false;
-  const path = updateSite(i.site, (current) => {
-    replaced = !!current?.operations.some((o) => o.name === operation.name);
-    return putOperation(current ?? { name: i.site, baseUrl: new URL(trigger.url).origin, operations: [] }, operation);
-  });
+  const again = captures[0] ?? i.from?.capture.id;
+  const saved = saveOperation(i.site, operation, learned.exchange, warnings, session, again);
   rememberTier(i.site, operation.name, undefined);
-  clearStale(i.site, operation.name);
-  return { operation, warnings, path, captures, ...(preview ? { preview } : {}), replaced };
+  return { ...saved, captures };
 }
 
 /* ---------------------------------------------------------------- rescan */

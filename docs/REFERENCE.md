@@ -42,9 +42,11 @@ The `add` and `call` output is real, from 2026-09-27, shortened; the `capture` l
 shape (ids and sizes vary). `--pick`
 accepts `name=path` to rename a field, `name=path~regex` to keep the part of a string the
 regex's group 1 finds (`publicId=navigationUrl~/in/([^/?]+)`), and `[*]` in a path collects from every array item
-(`sections[*].items` joins each section's items); items with none of the picked fields are dropped. If the preview is wrong, fix `--extract`/`--pick` and
-re-run `add --from <the first of the captures>`: no browser needed, and the operation keeps its
-example values unless you pass `--example`. For a server-rendered page, use
+(`sections[*].items` joins each section's items); items with none of the picked fields are dropped. If the preview is wrong, repair the recipe: re-run
+`add <site> <op> --from <one of the captures>` with only the recipe flags (`--extract`, `--pick`,
+`--html`, `--embedded`). No browser is needed, and only what the operation returns changes: its
+request, params and trigger are kept. With `--example`, `add` learns the whole operation again.
+For a server-rendered page, use
 `--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page.
 `inspect` accepts the same recipe flags (`--extract`, `--pick`, `--html`, `--embedded`), so you can
 try a recipe first: it exits non-zero when a path or selector finds nothing.

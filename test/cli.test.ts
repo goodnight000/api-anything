@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -235,6 +235,11 @@ describe("add from a saved capture", () => {
       });
     }
   });
+  /** The steps that post a text on /compose. */
+  const steps = (text: string) => [
+    { action: "fill", selector: "#text", value: text },
+    { action: "click", selector: "#post" },
+  ];
   /** add fixture <op> from the capture of that user's page; `flags` are split on spaces. */
   const add = async (op: string, from: string, flags: string) => {
     const r = await cli("add", "fixture", op, "--from", `c${from}`, "--pick-request", "2", ...flags.split(" "));
@@ -261,10 +266,6 @@ describe("add from a saved capture", () => {
       return r.stderr;
     };
     // a write captured with --write: type the text, click Post
-    const steps = (text: string) => [
-      { action: "fill", selector: "#text", value: text },
-      { action: "click", selector: "#post" },
-    ];
     seed("cwrite", { url: `${fx.url}/compose`, write: true, steps: steps("hello alice"), exchanges: [] });
     assert.deepEqual(
       shellArgv(await refused("cwrite", "--write", "--example", "text=hello alice", "--example2", "text=hello bob")),
@@ -298,33 +299,107 @@ describe("add from a saved capture", () => {
     assert.match(words, /--from2/);
   });
 
-  test("repairing a recipe from a capture keeps the op's params: its stored examples stand in", async () => {
+  const carol = async (op: string) => JSON.parse((await cli("call", "fixture", op, "name=carol")).stdout).data;
+
+  test("a recipe repair (add --from with recipe flags only) replaces the recipe and says so", async () => {
     const wrong = await add("getUser", "alice", "--example name=alice --extract data.wrong");
     assert.deepEqual(wrong.out.params, ["name:string"]);
-    assert.match(wrong.out.warnings.join("\n"), /Fix --extract.* and re-run add --from/);
+    assert.match(wrong.out.warnings.join("\n"), /re-run add --from calice/);
 
-    // that advice, followed to the letter: no --example this time
-    const fixed = await add("getUser", "alice", "--extract data.user --pick name");
-    assert.equal(fixed.code, 0, fixed.stdout);
-    assert.deepEqual(fixed.out.params, ["name:string"]);
-    assert.match(
-      fixed.out.warnings.join("\n"),
-      /no example was given, so getUser's stored one \(name=alice\) stands in/,
-    );
-    const carol = JSON.parse((await cli("call", "fixture", "getUser", "name=carol")).stdout);
-    assert.deepEqual(carol.data, { name: "carol" }, JSON.stringify(carol));
+    // that advice, followed: no example, and the op's own match finds the request in the capture
+    const r = await cli("add", "fixture", "getUser", "--from", "calice", "--extract", "data.user", "--pick", "name");
+    const fixed = JSON.parse(r.stdout);
+    assert.equal(r.code, 0, r.stdout);
+    assert.match(fixed.repaired, /request/, "the output says the request was kept");
+    assert.deepEqual(fixed.params, ["name:string"]);
+    assert.deepEqual(fixed.preview, { first: { name: "alice" } });
+    assert.deepEqual(await carol("getUser"), { name: "carol" });
 
-    // an --example still wins, and is the stored one from then on
-    const bob = await add("getUser", "bob", "--example name=bob --extract data.user --pick name");
-    assert.deepEqual(bob.out.preview, { first: { name: "bob" } });
-    assert.doesNotMatch(bob.out.warnings.join("\n"), /stored/);
-    // a capture made with other values than the stored ones: the failure says which were tried
-    const other = await add("getUser", "alice", "--extract data.user");
-    assert.equal(other.code, 1, other.stdout);
-    assert.match(
-      other.out.error,
-      /no example was given, so getUser's stored one \(name=bob\) stands in: pass --example/,
-    );
+    // the new recipe is judged on the captured answer, as add judges one
+    const still = await add("getUser", "alice", "--extract data.nope");
+    assert.equal(still.out.preview, undefined);
+    assert.match(still.out.warnings.join("\n"), /data\.nope.*re-run add --from calice/);
+
+    // a flag that shapes the request makes it a re-learn, which needs the example: nothing is saved
+    const relearn = await add("getUser", "alice", "--match path=/api/graphql/*/UserByName --extract data.user");
+    assert.equal(relearn.code, 1, relearn.stdout);
+    assert.match(relearn.out.error, /--example/);
+    const ops = JSON.parse((await cli("ops", "fixture")).stdout).operations;
+    assert.equal(ops.find((o: { name: string }) => o.name === "getUser").params.length, 1, "nothing was saved");
+
+    // --pick-request names the answer to read; when it is not the op's request, the output says so
+    const page = await cli("add", "fixture", "getUser", "--from", "calice", "--pick-request", "1");
+    assert.match(JSON.parse(page.stdout).warnings.join("\n"), /request 1 is not one getUser's match finds/);
+  });
+
+  test("a repair from a capture made with other values binds no param anew", async () => {
+    await add("viewed", "alice", "--example name=alice --extract data.user --pick name");
+    // bob's page, where the stored example (alice) is the viewer in the same request
+    const variables = encodeURIComponent(JSON.stringify({ name: "bob", withExtras: true }));
+    seed("cviewer", {
+      url: `${fx.url}/u/bob`,
+      exchanges: [
+        await answered(1, "document", "/u/bob"),
+        await answered(
+          2,
+          "fetch",
+          `/api/graphql/${fx.state.userQueryId}/UserByName?variables=${variables}&viewer=alice`,
+        ),
+      ],
+    });
+    const repaired = await add("viewed", "viewer", "--extract data.user --pick name,followers");
+    assert.deepEqual(repaired.out.preview, { first: { name: "bob", followers: 300 } });
+    assert.deepEqual(await carol("viewed"), { name: "carol", followers: 500 }, "name still fills the user asked for");
+  });
+
+  test("a repair keeps a param that has no stored example", async () => {
+    await add("bare", "alice", "--example name=alice --extract data.wrong");
+    // a shared spec is exported without its example values
+    const file = join(HOME, "sites", "fixture.json");
+    const spec = JSON.parse(readFileSync(file, "utf8"));
+    for (const op of spec.operations) for (const p of op.params) delete p.example;
+    writeFileSync(file, JSON.stringify(spec));
+
+    const repaired = await add("bare", "alice", "--extract data.user --pick name");
+    assert.deepEqual(repaired.out.params, ["name:string"]);
+    assert.deepEqual(await carol("bare"), { name: "carol" });
+  });
+
+  test("a write stays a write through a repair", async () => {
+    const post = `/api/graphql/${fx.state.createQueryId}/CreatePost`;
+    const posts = () => fx.calls.filter((c) => c.path === post).length;
+    // /compose captured with --write: the POST was aborted in the browser, so it has no answer
+    seed("cpost", {
+      url: `${fx.url}/compose`,
+      write: true,
+      steps: steps("hello alice"),
+      exchanges: [
+        await answered(1, "document", "/compose"),
+        {
+          id: 2,
+          resourceType: "fetch",
+          request: {
+            method: "POST",
+            url: `${fx.url}${post}`,
+            headers: { "x-csrf-token": CSRF, authorization: PUBLIC_BEARER, "content-type": "application/json" },
+            body: JSON.stringify({ variables: { text: "hello alice" }, queryId: fx.state.createQueryId }),
+          },
+          aborted: true,
+        },
+      ],
+    });
+    const send = async (...flags: string[]) => {
+      const r = await cli("add", "demo", "send", "--from", "cpost", ...flags);
+      return { ...r, out: JSON.parse(r.stdout) };
+    };
+    const learned = await send("--write", "--example", "text=hello alice");
+    assert.equal(learned.out.readOnly, false, learned.stdout);
+
+    const repaired = await send("--extract", "data.create_post");
+    assert.equal(repaired.out.readOnly, false, "a repair does not relabel the write as a read");
+    const refused = JSON.parse((await cli("call", "demo", "send", "text=never asked for")).stdout);
+    assert.equal(refused.class, "refused", JSON.stringify(refused));
+    assert.equal(posts(), 0, "no POST reached the site");
   });
 });
 
