@@ -388,7 +388,8 @@ independent alternative.
   window is allowed (a human signs in). MCP cannot create operations: capture and add are CLI only. Writes are hidden unless
   it is started with `--allow-writes`. `list_operations` carries the site's notes and each param's
   `hint`/`pattern`. A `next` served over MCP names the tools (`list_operations {"site":"x"}`, the
-  `login` tool) instead of CLI commands, and marks a CLI-only one (heal, add) as the user's to run.
+  `login` tool) instead of CLI commands, and tells the agent to run a CLI-only one (heal, add) in its
+  own shell, or to hand it to the user when it has none.
   `call_operation` sends `data` that is a list of two or more records as `{columns, rows}` (a
   missing field is null): the keys, repeated in every item, were half of a flight search's tokens.
 - **Skill** `skills/api-anything/SKILL.md`: the create loop (capture → add → call → verify), the

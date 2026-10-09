@@ -145,6 +145,28 @@ caveats.
 
 [Details](docs/REFERENCE.md#replay-fallback-and-repair) · [design](docs/DESIGN.md)
 
+## Sessions and logins
+
+For a site that needs an account, `api-anything login <site>` first tries to import that
+site's cookies from a browser profile you are already signed in to, so there is usually no
+password to type. If several profiles are signed in it asks which one, and if none can be
+imported it opens a Chrome window to sign in by hand. A saved operation holds references to
+cookies and tokens, never their values, so a refreshed session works without re-learning anything.
+
+A session is kept current where that is possible. Cookies a site sets on a plain-HTTP response,
+or while API Anything runs the site's page in Chrome, are saved. When a plain-HTTP call comes back
+unauthorized, API Anything makes one recovery attempt, the first of these that applies:
+
+1. re-import from the browser profile you chose at login;
+2. take the cookies from its own Chrome profile, if they differ from the saved ones;
+3. for a read that uses session tokens, reload the page so the site issues fresh ones.
+
+If the call is still unauthorized, it returns `class: "auth"` with the `login` command to run.
+
+Import reads Chrome, Arc, Brave, Edge, Chromium and Firefox profiles on macOS and Linux (on
+Linux, not cookies encrypted with the desktop keyring). On Windows, `login` opens the Chrome
+window. [Details](docs/REFERENCE.md#logging-in)
+
 ## Limits
 
 - It is a local tool, not a hosted API. It uses your machine, your network and your sessions.

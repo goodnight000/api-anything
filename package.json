@@ -22,7 +22,8 @@
     "README.md",
     "LICENSE",
     "examples",
-    "docs/QUICKSTART.md"
+    "docs/*.md",
+    "CONTRIBUTING.md"
   ],
   "engines": {
     "node": ">=22.13.0"
