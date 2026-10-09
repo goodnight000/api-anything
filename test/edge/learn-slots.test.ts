@@ -355,6 +355,43 @@ test("a credential that is a key of a yielding container refuses the learn: a ke
   );
 });
 
+test("a key of a yielding credential container is held against every cookie and stored value, however short", () => {
+  const run = (value: unknown, extra: Parameters<typeof learn>[2] = {}) =>
+    learn(
+      [xhr({ url: "http://127.0.0.1/api/search?q=kittens", headers: { "x-csrf-token": JSON.stringify(value) } })],
+      [{ q: "kittens" }],
+      extra,
+    );
+  // the refusal says the way out: the caller's word that the whole header is public
+  const refusal = /header:x-csrf-token has an object key that is itself a credential .* --public x-csrf-token/;
+  // Five characters are under every other threshold. Without the yield the whole header is blanked,
+  // so no text of it may come back as a key: as it is, percent-encoded or in base64.
+  const sess = { cookies: [cookie("sess", "aB3dE")] };
+  for (const k of ["aB3dE", "%61%42%33%64%45", "YUIzZEU=", "YUIzZEU"])
+    assert.throws(() => run({ q: "kittens", [k]: "v1" }, sess), refusal, k);
+  assert.throws(() => run({ q: "kittens", inner: { aB3dE: {} } }, sess), refusal, "nested, holding no leaf");
+  assert.throws(() => run({ q: "kittens", aB3dE: "v1" }, { cookies: [cookie("sess", '"aB3dE"')] }), refusal);
+  // a stored value, whatever it is stored as, and a single character
+  assert.throws(() => run({ q: "kittens", dark: "v1" }, { storage: { theme: "dark" } }), refusal);
+  const prefs = { prefs: JSON.stringify({ user: { id: "u7" } }) };
+  assert.throws(() => run({ q: "kittens", u7: "v1" }, { storage: prefs }), refusal);
+  assert.throws(() => run({ q: "kittens", "1": "v1" }, { cookies: [cookie("v", "1")] }), refusal);
+
+  // control: an array's index is no key, and a key that only contains a short value is another name
+  const list = run(["kittens", "v1"], { cookies: [cookie("v", "1")] }).operation;
+  assert.deepEqual(
+    list.slots.map((s) => s.at.join(" > ")),
+    ["query:q", "header:x-csrf-token > json:/0", "header:x-csrf-token > json:/1"],
+  );
+  assert.equal(run({ q: "kittens", v1: "x" }, { cookies: [cookie("v", "1")] }).operation.slots.length, 3);
+  // the way out works: the header marked public stays as captured and still takes the arg
+  const marked = run({ q: "kittens", aB3dE: "v1" }, { ...sess, public: ["x-csrf-token"] }).operation;
+  assert.equal(
+    buildRequest(marked, { q: "puppies" }, noSession).headers["x-csrf-token"],
+    '{"q":"puppies","aB3dE":"v1"}',
+  );
+});
+
 test("a path segment that is a reference is a wildcard in the match, as a param's is", () => {
   // the session id rides in the path, with a dot so it does not look like a hash on its own
   const first = "u1.q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";

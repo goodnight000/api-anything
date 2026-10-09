@@ -22,6 +22,7 @@ import {
   headerName,
   highEntropy,
   isCredential,
+  isLiveValue,
   lastToken,
   leafName,
   opaqueToken,
@@ -1093,27 +1094,30 @@ function refuseLeftoverText(slots: Slot[], leaves: Leaf[]): void {
  * leaves becomes a ref of its own, named by its position: an empty one too, which the page may
  * fill on a later load. A leaf that cannot be one (a number, a flag, a leaf that is only partly a
  * slot) refuses the learn, and so does a key that is itself a credential: its text would stay in
- * the container, in a slot's pointer and in a ref's name. A saved request is no credential: its
- * other leaves stay.
+ * the container, in a slot's pointer and in a ref's name. Without the yield none of the container
+ * would be in the spec, so a key is held against every cookie and stored value (`known`), however
+ * short. A saved request is no credential: its other leaves stay.
  */
-function innerWins(refs: Refs, leaves: Leaf[]): void {
+function innerWins(refs: Refs, leaves: Leaf[], known: string[]): void {
   const under = (outer: Step[], at: Step[]) => at.length > outer.length && outer.every((step, i) => at[i] === step);
   const outer = refs.slots.filter((s) => s.ref && refs.slots.some((o) => under(s.at, o.at)));
   refs.slots = refs.slots.filter((s) => !outer.includes(s));
   const credentials = outer.filter((o) => !refs.plain.has(key(o.at)));
-  // a known live value, or random-looking and no name (includePromotedContent is one)
-  const secret = (k: string) =>
-    refs.live.get(k)?.secret !== false && (refs.live.has(k) || (highEntropy(k) && !wordy(k)));
+  // a known value, in any form the scan reads, or random-looking and no name (includePromotedContent is one)
+  const values = [...known, ...Object.values(refs.sessionValues)];
+  const secret = (k: string) => isLiveValue(k, values) || (highEntropy(k) && !wordy(k));
   for (const whole of credentials) {
+    // the container's own JSON and the JSON inside its strings: a key may hold no leaf
     const inside = leaves.filter((l) => key(l.at) === key(whole.at) || under(whole.at, l.at));
-    // the keys on the way to each leaf, and those of the container's own JSON: a key may hold no leaf
-    const keys = inside.flatMap((l) => [...l.at.slice(whole.at.length).flatMap(pointerKeys), ...jsonKeys(l.value)]);
-    const bad = keys.find(secret);
-    if (bad !== undefined)
+    const bad = inside.flatMap((l) => jsonKeys(l.value)).find(secret);
+    if (bad !== undefined) {
+      const [where, name] = [whole.at.join(" > "), leafName(whole.at)];
       throw new Error(
-        `${whole.at.join(" > ")} has an object key that is itself a credential (${bad.length} characters), and a key cannot be a reference: ` +
-          `its text would stay in the spec. Not learned: ${ANOTHER_REQUEST}`,
+        `${where} has an object key that is itself a credential (${bad.length} characters), and a key cannot be a reference: ` +
+          `its text would stay in the spec. Not learned. If the whole of ${where} is the same for every visitor, ` +
+          `mark it with --public ${name}; otherwise ${ANOTHER_REQUEST}`,
       );
+    }
   }
   for (const leaf of leaves) {
     const whole = credentials.find((o) => under(o.at, leaf.at));
@@ -1137,18 +1141,12 @@ function innerWins(refs: Refs, leaves: Leaf[]): void {
   }
 }
 
-/** The object keys (and array indexes) a json: step passes through. */
-const pointerKeys = (step: Step) =>
-  step.startsWith("json:")
-    ? step
-        .slice(5)
-        .split("/")
-        .slice(1)
-        .map((t) => t.replace(/~1/g, "/").replace(/~0/g, "~"))
-    : [];
-
-/** Every object key of a JSON text, at any depth. A text that is not JSON has none. */
+/**
+ * Every object key of a JSON text, at any depth: an array's indexes are no keys. The text may be
+ * base64 of JSON, a layer the codec walks too. A text that is neither has none.
+ */
 function jsonKeys(text: string): string[] {
+  const json = /^\s*[[{]/.test(text) ? text : Buffer.from(text, "base64").toString("utf8");
   const keys: string[] = [];
   const visit = (v: unknown): void => {
     if (!v || typeof v !== "object") return;
@@ -1157,8 +1155,22 @@ function jsonKeys(text: string): string[] {
       visit(child);
     }
   };
-  if (/^\s*[[{]/.test(text)) visit(tryParse(text));
+  if (/^\s*[[{]/.test(json)) visit(tryParse(json));
   return keys;
+}
+
+/** Every text the page's storage holds, whatever its length: each entry, and each string inside a JSON entry. */
+function storedStrings(storage: Record<string, string> = {}): string[] {
+  const out: string[] = [];
+  const visit = (v: unknown): void => {
+    if (typeof v === "string") out.push(v);
+    else if (v && typeof v === "object") Object.values(v).forEach(visit);
+  };
+  for (const value of Object.values(storage)) {
+    out.push(value);
+    if (/^\s*[[{]/.test(value)) visit(tryParse(value));
+  }
+  return out;
 }
 
 /** A slot at `at` takes in the leaf: the leaf is deeper in its layers, or below its JSON pointer. */
@@ -1211,7 +1223,7 @@ function sessionRefs(
   issuedRefs(refs, open, issued);
   let request = embeddedRefs(refs, open, captured);
   refuseLeftoverText(refs.slots, open);
-  innerWins(refs, open);
+  innerWins(refs, open, [...cookies.map((c) => c.value), ...storedStrings(input.storage)]);
   // A ref'd leaf's value lives in the session, not the spec: blank it.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
   const listed = new Set([...publicNames, ...shipped]);

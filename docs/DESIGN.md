@@ -184,8 +184,12 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    ref of its own, named by its position. An empty string is one too: the page may fill it on a later load, and only a
    ref there is refreshed. A leaf that cannot be a ref (a number, a flag, a null, a leaf that is only partly a slot)
    refuses the learn; a leaf under a name marked public stays as captured. An object key in the container that is
-   itself a credential (a known live value, or random-looking and not a name like `includePromotedContent`) refuses
-   it too: a key cannot be a ref, and its text would stay in the container, in a slot's pointer and in a ref's name. A request the app saved under an ordinary storage key is no credential: its other leaves stay as
+   itself a credential refuses it too: a key cannot be a ref, and its text would stay in the container, in a slot's
+   pointer and in a ref's name. A key is one when it is random-looking and not a name like `includePromotedContent`,
+   or when it is any cookie or stored value, whole, as it is or percent-encoded or in base64. No length floor applies
+   here, since without the yield no text of the container would be in the spec at all; so a one-character cookie
+   that equals an ordinary key refuses as well, and marking the container public (`--public x-csrf-token`) is the way
+   past it when the whole of it is the same for every visitor. A request the app saved under an ordinary storage key is no credential: its other leaves stay as
    captured. A stored value counts as a credential under a credential's name or when it is random-looking, in any
    entry that holds it and whatever the entries' order; a stored JSON text by its key, and each string in it on its
    own. A stored setting sent under a credential's name in the request (`token=<it>`) counts too. Newly learned session references are scoped by operation, with distinct request positions
