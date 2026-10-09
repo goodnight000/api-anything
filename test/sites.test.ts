@@ -1,4 +1,4 @@
-/** Bundled site specs: their recipes against trimmed copies of the live responses, and their param rules. */
+/** Bundled site specs: their recipes against trimmed copies of the live responses, their param rules, and their notes. */
 
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -9,6 +9,7 @@ import { judge } from "../src/classify.js";
 import { call } from "../src/execute.js";
 import { buildRequest } from "../src/http.js";
 import { type Operation, parseSite } from "../src/spec.js";
+import { listSites, siteNotes } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 
 const raw = (site: string) => JSON.parse(readFileSync(new URL(`../sites/${site}.json`, import.meta.url), "utf8"));
@@ -287,5 +288,18 @@ test("linkedin search keywords are percent-encoded once inside the Rest.li query
     assert.ok(accepts(kw!, "conan o'brien") && accepts(kw!, "Noah Hüsser"));
     for (const v of ["rust engineer, zurich", "a:b", "x (y)"])
       assert.ok(!accepts(kw!, v), `${v} would break the Rest.li query`);
+  }
+});
+
+// ---------------------------------------------------------------- notes
+
+test("bundled notes: what every ops and list_operations call sends for a site stays short", () => {
+  process.env.API_ANYTHING_HOME = HOME;
+  for (const site of listSites()) {
+    const sent = siteNotes(site) ?? "";
+    assert.ok(
+      sent.length <= 2000,
+      `${site}.md sends ${sent.length} characters to every caller: move what only a maintainer needs under "## Maintainer notes"`,
+    );
   }
 });

@@ -377,8 +377,11 @@ independent alternative.
     Deterministic and site-agnostic; the agent reads it instead of inspecting bodies. Paths through
     id-like keys (Apollo's `Book:kca://...`) are flagged, since they don't generalize.
   - `verify [site]` (health-checks every read op with its example, healing as needed)
-  - `sites`, `ops <site>` (params with their format, and the site's notes: `<site>.md` beside its
-    spec, the user's copy first), `heal <site> <op>`, `export <site>`, `mcp`
+  - `sites`, `ops <site>` (params with their description and format, `returns` where the recipe names them: the keys a result item
+    can carry, read from the op's `pick`, else from an HTML recipe's fields when no `extract` reshapes its
+    items, so it cannot disagree with the recipe; a key the site leaves out is absent, and the site's notes: `<site>.md` beside its
+    spec, the user's copy first, up to its `## Maintainer notes` heading; the rest of the file is
+    for people working on the spec), `heal <site> <op>`, `export <site>`, `mcp`
   - All output is JSON-first, compact, and ends with a `next` hint on failure.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `list_operations`,
   `call_operation`, and `login` (so an agent can fix an `auth` failure itself), so the tool list
@@ -386,7 +389,7 @@ independent alternative.
   only refreshes a site that has a spec and a browser source a human chose with the CLI, from that
   same profile; anything else answers `next`: ask the user to run `api-anything login <site>`. Mode
   window is allowed (a human signs in). MCP cannot create operations: capture and add are CLI only. Writes are hidden unless
-  it is started with `--allow-writes`. `list_operations` carries the site's notes and each param's
+  it is started with `--allow-writes`. `list_operations` carries each op's `returns`, the site's notes and each param's
   `hint`/`pattern`. A `next` served over MCP names the tools (`list_operations {"site":"x"}`, the
   `login` tool) instead of CLI commands, and tells the agent to run a CLI-only one (heal, add) in its
   own shell, or to hand it to the user when it has none.

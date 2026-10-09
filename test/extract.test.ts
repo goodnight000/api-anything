@@ -9,9 +9,23 @@ import {
   inferShape,
   parseBody,
   pick,
+  returnedFields,
   splitPick,
 } from "../src/extract.js";
 import { ResponseSchema } from "../src/spec.js";
+
+test("returnedFields: the keys a result item carries, from the pick or an HTML recipe's fields", () => {
+  assert.deepEqual(
+    returnedFields({ format: "json", pick: ["bookId", "author=author.name", "id=url~/show/(\\d+)", "node.code"] }),
+    ["bookId", "author", "id", "node.code"],
+  );
+  const html = { items: "li", fields: { title: "a", url: "a@href" } };
+  assert.deepEqual(returnedFields({ format: "html", html }), ["title", "url"]);
+  // an extract path reshapes the items, and a JSON op ignores an HTML recipe: neither returns those fields
+  assert.equal(returnedFields({ format: "html", html, extract: "[0].title" }), undefined);
+  assert.equal(returnedFields({ format: "json", html }), undefined);
+  assert.equal(returnedFields({ format: "json" }), undefined);
+});
 
 test("parseBody strips XSSI and keeps big integers exact", () => {
   assert.deepEqual(parseBody(')]}\'\n{"id":2085462611575857621,"n":3}'), { id: "2085462611575857621", n: 3 });

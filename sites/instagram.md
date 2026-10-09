@@ -1,8 +1,17 @@
-# instagram
+No account is needed.
+
+- Logged out, `getPosts` gives only the first 12 posts. There is no pagination, and posts have no
+  timestamp or like and comment counts.
+- Post fields are flat dotted keys (`"node.code"`). `node.code` is the shortcode, so the post is
+  `instagram.com/p/<code>/`.
+- `profile_pic_url` and `display_uri` are signed CDN URLs that expire (`oe=` parameter).
+- A username that doesn't exist returns `input`.
+- Heavy use may bring up Instagram's login wall. A call would then return `auth`.
+
+## Maintainer notes
 
 Verified 2026-09-27, logged out. `api-anything verify instagram` passes, and both ops were called
-from a clean `API_ANYTHING_HOME` using only this bundled spec: tier 1, no cookies, no browser. No
-account is needed.
+from a clean `API_ANYTHING_HOME` using only this bundled spec: tier 1, no cookies, no browser.
 
 | op | args | returns | tier |
 |---|---|---|---|
@@ -14,7 +23,7 @@ api-anything call instagram getProfile username=spacex
 api-anything call instagram getPosts username=natgeo
 ```
 
-## How it works
+### How it works
 
 A logged-out hard load of `https://www.instagram.com/<username>/` server-renders the Relay
 preloads for `PolarisLoggedOutDesktopWWWProfileRootContentQuery` (profile) and
@@ -26,16 +35,13 @@ send that GET and use `response.format: "embedded"`, with a regex that anchors o
 has nothing to heal. If Instagram changes the embedded shape, a call returns `drift`, and the
 fix is to update the regex.
 
-## Known limits
+### Known limits
 
 - Profile and posts come in two separate script chunks, and an op extracts one JSON value, so
   they are two ops. Getting both costs two page GETs.
-- Logged out, you get only the first 12 posts. There is no pagination, and posts have no
-  timestamp or like and comment counts.
-- Post fields are flat dotted keys (`"node.code"`). `pick` can rename them now
-  (`code=node.code`); the bundled spec keeps the dotted keys.
+- `pick` can rename the posts' dotted keys now (`code=node.code`); the bundled spec keeps the
+  dotted keys.
 - A username that doesn't exist returns a page without the data. api-anything replays the example
   username, which still answers, and returns `input` in about 1.5 s, with no heal and no browser.
-- `profile_pic_url` and `display_uri` are signed CDN URLs that expire (`oe=` parameter).
 - Only verified logged out, from a US IP. Heavy use may bring up Instagram's login wall.
   Tier 1 would then return `auth` ("login page instead of content").

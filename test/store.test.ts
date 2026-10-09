@@ -14,6 +14,7 @@ import {
   rememberedTier,
   rememberTier,
   saveSite,
+  siteNotes,
   staleList,
   staleMark,
 } from "../src/store.js";
@@ -67,6 +68,28 @@ test("resolution: user copy wins over bundled; save writes a user copy", () => {
   mkdirSync(join(home, "sites"), { recursive: true });
   writeFileSync(join(home, "sites", "bad.json"), JSON.stringify({ name: "bad" }));
   assert.throws(() => loadSite("bad", bundled), /bad\.json: invalid site spec/);
+});
+
+test("site notes stop at the Maintainer notes heading; the user's copy wins", () => {
+  const { home, bundled } = fresh();
+  writeFileSync(
+    join(bundled, "demo.md"),
+    "Airport codes only.\n\n- First page only.\n\n## Maintainer notes\n\nVerified 2026-09-27.\n\n## How it works\n\nA POST.\n",
+  );
+  assert.equal(siteNotes("demo", bundled), "Airport codes only.\n\n- First page only.");
+  // only that heading on a line of its own ends the notes
+  const whole =
+    "See ## Maintainer notes below.\n\n## Maintainer notes for callers\n\n## Known limits\n\nFirst page only.";
+  writeFileSync(join(bundled, "whole.md"), `${whole}\n`);
+  assert.equal(siteNotes("whole", bundled), whole);
+  writeFileSync(join(bundled, "internal.md"), "## Maintainer notes\n\nNothing for callers.\n");
+  assert.equal(siteNotes("internal", bundled), "");
+  assert.equal(siteNotes("missing", bundled), undefined);
+
+  // a user's own file, with the heading capitalized another way
+  mkdirSync(join(home, "sites"), { recursive: true });
+  writeFileSync(join(home, "sites", "demo.md"), "Mine.\n\n## Maintainer Notes\n\nMy own history.\n");
+  assert.equal(siteNotes("demo", bundled), "Mine.");
 });
 
 test("heal log appends JSONL and records the heal time", () => {

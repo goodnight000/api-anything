@@ -10,6 +10,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { closeBrowser, login } from "./browser.js";
 import { call } from "./execute.js";
+import { returnedFields } from "./extract.js";
 import { profileDir } from "./heal.js";
 import { browserSource, cookieNames, importSession, loggedIn, resolveLoginTarget } from "./login.js";
 import { loadSession, saveSession, sessionFile, withLock } from "./session.js";
@@ -111,7 +112,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     "list_operations",
     {
       description:
-        "List a site's operations with their params, and the site's notes (caveats, arg formats). Call this before call_operation.",
+        "List a site's operations with their params and the keys a result item can carry (returns; one the site leaves out is absent), and the site's notes (caveats, arg formats). Call this before call_operation.",
       inputSchema: { site: z.string().describe("site name from list_sites") },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -127,6 +128,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
             name: o.name,
             ...(o.description ? { description: o.description } : {}),
             ...(o.readOnly ? {} : { write: true }),
+            ...(returnedFields(o.response) ? { returns: returnedFields(o.response) } : {}),
             params: o.params.map((p) => ({
               name: p.name,
               type: p.type,
