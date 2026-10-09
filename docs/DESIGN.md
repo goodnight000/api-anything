@@ -465,7 +465,9 @@ send a request again (its own scripts, a retry after a navigation or a connectio
   replaced by `Chrome`. Asking Chrome for that user agent means starting it once more (about 3 s of
   a cold call), so the answer is kept in `~/.api-anything/chrome-ua.json`, by the Chrome binary's
   path, modification time and size: an update changes those. A file that cannot be read, or that
-  names another Chrome, is not believed, and Chrome is asked again. `login` runs headed.
+  names another Chrome, is not believed, and Chrome is asked again. A wrong user agent under the right key is believed:
+  delete `chrome-ua.json` and start again (a running process, an MCP server too, keeps the one it
+  read). `login` runs headed.
 - Capture listens on the context, keeps the run's own pages and the popups they open (closed
   afterwards), and reads bodies **inside the response handler** (bodies vanish after navigation).
   The document body is kept raw. Pages load to `domcontentloaded` (a hung tracker or a download URL
