@@ -474,6 +474,85 @@ describe("heal without a browser (maxTier 1)", () => {
     assert.match(r.next ?? "", /may have (gone through|run)/);
   });
 
+  // Was a bug: the rescan looks for clues by fetching the trigger page with plain fetch. When the trigger is the
+  // write's own address (a GET vote link), that fetch is the write: performed before any validation, uncounted,
+  // with none of the browser's interception.
+  const voteOp = (base: string, trigger: string) => ({
+    name: "vote",
+    readOnly: false,
+    request: { method: "GET", url: `${base}/vote?id=1&auth=${OLD}`, headers: {} },
+    slots: [{ param: "id", at: ["query:id"] }],
+    volatile: [{ at: ["query:auth"], shape: { charset: "base64url" as const, length: 22 }, anchor: "auth" }],
+    trigger: { url: `${base}${trigger}` },
+    match: { method: "GET", path: "/vote" },
+    params: [{ name: "id", example: "1" }],
+  });
+
+  test("write heal: the rescan does not fetch a page that is the write itself (a GET vote link as its own trigger)", async () => {
+    saveSite(
+      parseSite({ name: "wget", baseUrl: "https://w.test", operations: [voteOp("https://w.test", "/vote?id={id}")] }),
+    );
+    const votes: string[] = [];
+    const h: Handler = (url) => {
+      const u = new URL(url);
+      if (u.pathname !== "/vote" || u.searchParams.get("auth") === OLD) return new Response("", { status: 404 });
+      votes.push(u.search);
+      return html("<p>voted</p>");
+    };
+    const r = await call("wget", "vote", { id: "7" }, { ...tier1(h), allowWrites: true });
+    assert.deepEqual(votes, [], "the heal performed the write while looking for clues");
+    assert.equal(r.ok, false);
+    assert.deepEqual(
+      seen.map((s) => new URL(s.url).search),
+      [`?id=7&auth=${OLD}`],
+      "only the stored template was sent",
+    );
+  });
+
+  test("write heal: the rescan does not follow a redirect to the write itself; a read's still follows", async () => {
+    let votes = 0;
+    const server = createServer((req, res) => {
+      const p = new URL(req.url!, "http://x").pathname;
+      if (p === "/go") return void res.writeHead(302, { location: "/vote?id=7" }).end();
+      if (p !== "/vote") return void res.writeHead(404).end();
+      votes++;
+      res.writeHead(200, { "content-type": "text/html" }).end(`<script>x={auth:"${NEW}"}</script>`);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const op = parseSite({ name: "wgo", baseUrl: base, operations: [voteOp(base, "/go?id={id}")] }).operations[0]!;
+      assert.equal(await rescan("wgo", op, { id: "7" }), undefined);
+      assert.equal(votes, 0, "the heal performed the write by following a redirect to it");
+      // the same pages for a read are only pages: fetched, redirect and all
+      const read = await rescan("wgo", { ...op, readOnly: true }, { id: "7" });
+      assert.equal(read?.diff, `query:auth: ${OLD} -> ${NEW}`);
+    } finally {
+      server.close();
+    }
+  });
+
+  test("a read's rescan follows a long chain of redirects, and takes only a redirect status for one", async () => {
+    const server = createServer((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      const n = Number(u.searchParams.get("n") ?? 0);
+      const page = `<script>x={queryId:"${NEW}",operationName:"User"}</script>`;
+      if (u.pathname === "/u/far" && n < 6) return void res.writeHead(302, { location: `/u/far?n=${n + 1}` }).end();
+      // not a redirect, whatever its Location says
+      if (u.pathname === "/u/cached") return void res.writeHead(304, { location: "/u/far?n=6" }).end();
+      res.writeHead(200, { "content-type": "text/html" }).end(page);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const op = { ...userSite("far6").operations[0]!, trigger: { url: `${base}/u/{name}` } };
+      assert.equal((await rescan("far6", op, { name: "far" }))?.diff, `path:1: ${OLD} -> ${NEW}`);
+      assert.equal(await rescan("far6", op, { name: "cached" }), undefined);
+    } finally {
+      server.close();
+    }
+  });
+
   // Was a bug: a write whose heal failed is marked stale; the next drift's `next` tells the agent to
   // force `api-anything heal`, which refuses every write.
   test("a stale write's next hint does not point at `api-anything heal` (which refuses writes)", async () => {

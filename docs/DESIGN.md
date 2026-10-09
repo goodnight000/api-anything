@@ -248,7 +248,9 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    user-agent) minus `:pseudo`, host, content-length, connection, cookie, conditional headers
    (`if-none-match` and co., which would turn every replay into a 304), and content-encoding (a
    gzip-compressed request body is captured and stored decoded). Never promote headers to
-   site-global: a globally promoted x-twitter-auth-type broke every X guest read.
+   site-global: a globally promoted x-twitter-auth-type broke every X guest read. At call time a
+   filled header whose value holds a line break or a NUL is not sent: the call fails naming the
+   header, never the value (fetch's own error would quote a session's token into the result).
 7. Record `learnedLoggedIn` (whether the session had auth cookies). If an op learned signed in comes
    back without its data and the jar has no login cookie, the call is `auth`, not drift.
 8. **Response.** Store the content type, the XSSI prefix to strip (`)]}'`), a suggested `extract` path (the
@@ -327,7 +329,20 @@ A write executes exactly
 once per call. Retry only on a definite non-execution (400/401/403/404 answered to the request
 itself: after a redirect, as in Post/Redirect/Get, it ran; at tier 3 the page sent it, and the
 answer judged may be a redirect's follow-up, so a tier-3 write is never retried); timeouts, 5xx and network errors are
-ambiguous and are never retried. Writes need `allowWrites` at every entry point (CLI flag, MCP
+ambiguous and are never retried. A redirect does not send it a second time either: at tiers 1 and 2
+one that keeps the method and body (307, 308; 301/302 after a PUT or DELETE), or that leads back to
+the op's own request (a GET write redirected to itself), is not followed. The write was sent once;
+the call fails naming the redirect and the origin it pointed to, and its `next` says to check the
+site and, if the operation moved, to learn it at its new address. A 301/302/303 that turns it into a
+GET (Post/Redirect/Get) is followed: nothing is sent again. At tier 3 the page can also send it twice by itself (a handler
+bound twice, a client that sends again), so the run has a budget: the op's own request, by its
+`match`, leaves once, every further request matching it is aborted, and the result's `reason` says
+a repeat was stopped. The server's redirect of the one that left is held to the same rule as at
+tiers 1 and 2: a hop that would send the write on (an unsafe method kept, or the op's own request
+again) is aborted in the browser, and the result says so; a hop that became a GET passes. What else the
+trigger sends passes (a real write often needs companion requests, and what a trigger does besides
+is its author's choice) until the run ends, when, as in every guarded run, its pages send nothing
+more. An op with no `match` has no request to count. Writes need `allowWrites` at every entry point (CLI flag, MCP
 server flag, library option).
 
 ## Failure classifier (`classify.ts`)
@@ -364,9 +379,34 @@ the browser profile) stops at once and marks nothing stale.
 
 | tier | transport | when |
 |---|---|---|
-| 1 | Node `fetch` + domain/path-scoped cookie jar + session values; redirects followed by hand (cookies set on a hop ride on the next; credential headers dropped on an origin change; a hop to another origin that would carry a `session:`/`cookie:` value in its body or URL is not taken, and the call fails naming the redirect); Set-Cookie answers are merged into the jar; the body is decoded with its declared charset | default |
-| 2 | `fetch()` inside a real page on the site origin (real TLS, cookies, sec-fetch) | tier 1 `blocked`, or op `minTier: 2` |
+| 1 | Node `fetch` + domain/path-scoped cookie jar + session values; redirects followed by hand under the redirect policy below (cookies set on a hop ride on the next); Set-Cookie answers are merged into the jar; the body is decoded with its declared charset | default |
+| 2 | `fetch()` inside a real page on the site origin (real TLS, cookies, sec-fetch); redirects one hop at a time under the same policy | tier 1 `blocked`, or op `minTier: 2` |
 | 3 | run the trigger in the browser, capture the matched response | op `minTier: 3`, or after a heal fails for reads |
+
+One redirect policy, for tiers 1 and 2 (`nextHop`). A write follows no redirect that would send it
+again (see writes above), so a write behind a 307/308 fails where it worked before. A request is taken
+through as many redirects as its tier took before redirects were followed by hand: 5 at tier 1, 20
+at tier 2 as in a browser's own fetch (more at tier 1 would send a GET write that moves on at each
+hop, or carry a copied value, further than it ever went). One more fails the call saying that the limit was reached, and its `next` says not to retry
+but to learn the operation where the site now answers): 303 after anything but a GET or HEAD, and 301/302 after a POST,
+make a bodiless GET, without the headers that described the body (Content-Type, -Language,
+-Encoding, -Location, -Length), as a browser's own redirect does; every other redirect sends the
+request on as it was, so a GET answered 303 keeps its headers. On an origin change the credential headers are
+dropped: authorization, cookie, and every header a `cookie:`/`session:` ref fills, at any depth
+(a ref inside a header's JSON too). A hop to another origin is not taken when it would re-send a
+body in which any ref slot lives, which is decided from the slots and not by searching the bytes
+(a value under base64 or any other layer is not found that way), nor when its Location repeats the
+value of any ref slot, a dropped header's too (the site can copy what a header held into the
+address). That is a search and not a proof: the address is percent- and form-decoded until nothing
+changes (a return address inside a return address opens), and the value is looked for as it is, as
+a JSON string's contents and in base64; an encrypted, hashed or split copy is not found. The call then fails naming the redirect, and its
+`next` says not to retry (for a write: to check the site first, since the request the redirect
+answered was sent). At tier 2 a page's own `fetch()` would follow a redirect with every header and
+the body, so the page fetches with `redirect: "manual"`. It is then told nothing about the redirect,
+not even its status, so each hop's status and Location are read from what Playwright saw of the
+request. The origin page or another call may have sent the same request at the same moment (same
+method, address and body): if their redirects differ, this call's cannot be told apart and it fails
+saying so. Cookies a hop sets are in the profile for the next, as with a browser's own redirect.
 
 Heal strategies, cheapest first:
 - **rescan**: no browser. Fetch the trigger document and the JS bundles it references (resolved
@@ -376,7 +416,12 @@ Heal strategies, cheapest first:
   it, a log message). A token in the anchor's own group beats a nearer one outside it: between them
   no bracket closes the group and no `;` ends a statement at that level (Meta's previous module
   ends in `}),null);`, while its own `"use strict";` is nested); a tie is no answer. For a write, whose validation
-  is a real send, only a token that is the single candidate is tried.
+  is a real send, only a token that is the single candidate is tried. And for a write, the pages the
+  rescan fetches must not be the write: a trigger that is the write's own address (a GET vote link)
+  would be performed by a plain fetch, before any validation and with nothing to intercept it. So
+  redirects (301, 302, 303, 307, 308 only; at most 20, as the plain fetch it replaced) are taken by hand, and no address matching the op's `match` as a GET (or, for an op with
+  no `match`, its template's own address) is fetched, at first or at any hop. The rescan then finds
+  nothing and the recapture, which intercepts, does the work.
 - **recapture**: run the trigger in the browser, match, re-learn, and validate by replaying at the op's
   tier (at most 2: at tier 3 the site's own request would answer, validating nothing) with the current
   args (classifier must say `ok` and the extract must resolve). It learns from the call's args with
@@ -391,8 +436,10 @@ appended to `~/.api-anything/heals.jsonl` (op, strategy, diff summary). A tier a
 its own tier), and a call that ran above tier 1 says why in `reason`. The jar, `state.json` and a
 spec (every add and heal, re-read under the lock) are read-modify-written under a lock file, so
 concurrent processes and calls lose nothing.
-Tier 2 honours `timeoutMs` (the wait for the site's answer, as at tier 1; starting Chrome is not
-counted); when the origin's root redirects to another origin, it fetches from a
+At tier 2 `timeoutMs` is one deadline for the whole call, counted from the moment Chrome is up
+(starting it, seconds on a busy machine, is not counted): the first load of the origin page, every
+hop of the fetch, and the wait and second fetch after the page navigated all draw on it. When the
+origin's root redirects to another origin, it fetches from a
 blank stand-in page on the request's origin. When the origin page navigates mid-fetch (its own
 challenge or redirect destroys the context), a read waits for the new document and fetches once
 more; a write is never resent. The tier-3 answer is the matching request whose declared parameter positions equal the
@@ -417,7 +464,12 @@ send a request again (its own scripts, a retry after a navigation or a connectio
 
 - playwright-core, `channel: "chrome"` (the installed Chrome; no browser download). A persistent
   profile at `~/.api-anything/profile`. Headless by default, with the user agent's `HeadlessChrome`
-  replaced by `Chrome`. `login` runs headed.
+  replaced by `Chrome`. Asking Chrome for that user agent means starting it once more (about 3 s of
+  a cold call), so the answer is kept in `~/.api-anything/chrome-ua.json`, by the Chrome binary's
+  path, modification time and size: an update changes those. A file that cannot be read, or that
+  names another Chrome, is not believed, and Chrome is asked again. A wrong user agent under the right key is believed:
+  delete `chrome-ua.json` and start again (a running process, an MCP server too, keeps the one it
+  read). `login` runs headed.
 - Capture listens on the context, keeps the run's own pages and the popups they open (closed
   afterwards), and reads bodies **inside the response handler** (bodies vanish after navigation).
   The document body is kept raw. Pages load to `domcontentloaded` (a hung tracker or a download URL

@@ -2,7 +2,7 @@
  * The browser layer: installed Chrome via playwright-core, one persistent profile per process.
  * Produces raw Exchanges for the learner (tier 3 / create / heal) and runs tier-2 page fetches.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import {
@@ -16,7 +16,8 @@ import {
   type Route,
 } from "playwright-core";
 import { botWall } from "./classify.js";
-import { siteOf } from "./session.js";
+import { home, siteOf, writePrivate } from "./session.js";
+import type { Request as Hop } from "./spec.js";
 import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
 
 let current: { profileDir: string; headless: boolean; ctx: Promise<BrowserContext> } | undefined;
@@ -75,8 +76,8 @@ async function launch(
   }
 }
 
-/** Paths Playwright's "chrome" channel launches; checked up front so callers can skip cleanly. */
-export function chromeAvailable(): boolean {
+/** The installed Chrome: the paths Playwright's "chrome" channel launches. */
+function chromePath(): string | undefined {
   const env = process.env;
   const candidates =
     process.platform === "darwin"
@@ -86,8 +87,11 @@ export function chromeAvailable(): boolean {
             .filter((d): d is string => !!d)
             .map((d) => join(d, "Google", "Chrome", "Application", "chrome.exe"))
         : ["/opt/google/chrome/chrome"];
-  return candidates.some((p) => existsSync(p));
+  return candidates.find((p) => existsSync(p));
 }
+
+/** Checked up front so callers can skip cleanly. */
+export const chromeAvailable = (): boolean => !!chromePath();
 
 // Default headless UA says "HeadlessChrome/<v>" and x.com answers 403. sec-ch-ua already
 // carries "Google Chrome", so only the UA string needs the fix.
@@ -99,6 +103,33 @@ async function probeHeadlessUA(): Promise<string> {
   } finally {
     await b.close();
   }
+}
+
+/**
+ * The user agent a headless Chrome is given. Asking Chrome means starting it once more (most of a
+ * cold call's time), so the answer is kept under the home, by the binary's path, modification time
+ * and size: an update changes those, and then, or when the file cannot be read, Chrome is asked again.
+ */
+export async function headlessUserAgent(): Promise<string> {
+  const file = join(home(), "chrome-ua.json");
+  let key: string | undefined;
+  try {
+    const bin = chromePath();
+    const s = statSync(bin!);
+    key = `${bin}:${s.mtimeMs}:${s.size}`;
+    const kept = JSON.parse(readFileSync(file, "utf8")) as { key?: unknown; ua?: unknown };
+    if (kept.key === key && typeof kept.ua === "string" && /Chrome\/\d/.test(kept.ua) && !/Headless/.test(kept.ua))
+      return kept.ua;
+  } catch {
+    /* nothing kept, or nothing usable */
+  }
+  const ua = await probeHeadlessUA();
+  try {
+    if (key) writePrivate(file, JSON.stringify({ key, ua }));
+  } catch {
+    /* a home that cannot be written: asked again next time */
+  }
+  return ua;
 }
 
 /**
@@ -117,7 +148,7 @@ export function openBrowser({
   const prev = current;
   const ctx = (async () => {
     if (prev) await closeContext(prev.ctx);
-    if (headless) headlessUA ??= await probeHeadlessUA();
+    if (headless) headlessUA ??= await headlessUserAgent();
     const c = await launch(profileDir, {
       channel: "chrome",
       headless,
@@ -931,16 +962,42 @@ export interface PageFetchResult {
   body: string;
   url: string;
   ms: number;
-  /** the fetch followed a redirect */
+  /** the first answer was a redirect */
   redirected?: boolean;
 }
 
+/**
+ * The redirect a page's manual fetch() got, read from what Playwright saw of it: the page itself is
+ * told nothing, not even the status. The page (or another call) may have sent the same request at
+ * the same moment; when their redirects differ, which one is this call's cannot be told.
+ */
+async function redirectOf(seen: Response[], hop: Hop, url: string) {
+  const bare = (u: string) => u.split("#")[0];
+  const mine = () =>
+    seen.filter((res) => {
+      const req = res.request();
+      return req.method() === hop.method && bare(req.url()) === bare(url) && (req.postData() ?? hop.body) === hop.body;
+    });
+  for (const end = Date.now() + 1000; !mine().length && Date.now() < end; ) await sleep(20);
+  const answers = await Promise.all(
+    mine().map(async (res) => ({ status: res.status(), headers: await res.allHeaders().catch(() => res.headers()) })),
+  );
+  if (new Set(answers.map((a) => `${a.status} ${a.headers.location ?? ""}`)).size !== 1) {
+    const why = answers.length
+      ? "the page sent the same request at the same time and their redirects differ, so this one's cannot be told apart"
+      : "its answer was not seen, so where it leads is unknown";
+    // the origin only: the address is the filled request's, and can hold a session's value
+    throw new Error(`not following a redirect from ${new URL(url).origin}: ${why}`);
+  }
+  return { ...answers[0]!, body: "", url, location: answers[0]!.headers.location };
+}
+
 /** A page on `origin` to fetch from: its root, or a blank stand-in when the root redirects elsewhere (api.* to www). */
-async function originPage(ctx: BrowserContext, origin: string, timeout: number): Promise<Page> {
+async function originPage(ctx: BrowserContext, origin: string, left: () => number): Promise<Page> {
   let page = originPages.get(origin);
   if (page && !page.isClosed()) return page;
   page = await ctx.newPage();
-  await page.goto(origin, { waitUntil: "domcontentloaded", timeout }).catch(() => {});
+  await page.goto(origin, { waitUntil: "domcontentloaded", timeout: left() }).catch(() => {});
   let here = "";
   try {
     here = new URL(page.url()).origin;
@@ -953,7 +1010,7 @@ async function originPage(ctx: BrowserContext, origin: string, timeout: number):
     await page.route(blank, (r) =>
       r.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title></title>" }),
     );
-    await page.goto(blank, { waitUntil: "domcontentloaded", timeout });
+    await page.goto(blank, { waitUntil: "domcontentloaded", timeout: left() });
   }
   originPages.set(origin, page);
   return page;
@@ -974,77 +1031,100 @@ export async function pageFetch(o: {
    * context), wait for it to load and fetch once more. A write is never resent: it may have left.
    */
   retryOnNavigation?: boolean;
+  /**
+   * The request a redirect asks for next, or a throw refusing it. The page takes one hop at a time
+   * so that this is asked about each: left to itself, a page's fetch() follows a redirect to
+   * another origin with every header and the body. `taken`: the redirects before this one, for
+   * the caller's limit. Without it no redirect is followed, and the redirect itself is the answer.
+   */
+  redirect?: (from: Hop, status: number, location: string, taken: number) => Hop;
 }): Promise<PageFetchResult> {
   const timeoutMs = o.timeoutMs ?? 30_000;
   const release = hold();
   try {
     const ctx = await openBrowser(o);
-    // Pseudo-headers are invalid names for fetch(); forbidden ones (cookie, host, ...) the browser drops itself.
-    const headers = Object.fromEntries(Object.entries(o.headers).filter(([k]) => !k.startsWith(":")));
-    const body = o.method === "GET" || o.method === "HEAD" ? undefined : o.body;
-    const once = async (page: Page) => {
+    const once = async (page: Page, hop: Hop, left: number) => {
+      const redirects: Response[] = [];
+      const onResponse = (res: Response) => void (res.status() >= 300 && res.status() < 400 && redirects.push(res));
+      page.on("response", onResponse);
       const run = page.evaluate(
-        async ({ url, method, headers, body, timeoutMs }) => {
-          const t = performance.now();
+        async ({ url, method, headers, body, left }) => {
           const r = await fetch(url, {
             method,
             headers,
             body,
             credentials: "include",
-            signal: AbortSignal.timeout(timeoutMs),
+            redirect: "manual",
+            signal: AbortSignal.timeout(left),
           });
+          if (r.type === "opaqueredirect") return { opaque: true as const, url: r.url };
           const h: Record<string, string> = {};
           r.headers.forEach((v, k) => {
             h[k] = v;
           });
-          const text = await r.text();
-          return {
-            status: r.status,
-            headers: h,
-            body: text,
-            url: r.url,
-            ms: Math.round(performance.now() - t),
-            redirected: r.redirected,
-          };
+          return { opaque: false as const, status: r.status, headers: h, body: await r.text(), url: r.url };
         },
-        { url: o.url, method: o.method, headers, body, timeoutMs },
+        { ...hop, left },
       );
       // the page itself can hang (a stuck renderer): the budget holds either way
       let timer: NodeJS.Timeout | undefined;
       const late = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`no response within ${timeoutMs} ms`)), timeoutMs + 1000);
+        timer = setTimeout(() => reject(new Error(`no response within ${timeoutMs} ms`)), left + 1000);
       });
       try {
-        return await Promise.race([run, late]);
+        const r = await Promise.race([run, late]);
+        return r.opaque ? await redirectOf(redirects, hop, r.url) : { ...r, location: undefined };
       } catch (e) {
         if (/TimeoutError|timed out|signal timed out/i.test((e as Error).message))
           throw new Error(`no response within ${timeoutMs} ms`);
         throw e;
       } finally {
         clearTimeout(timer);
+        page.off("response", onResponse);
       }
     };
-    const page = await originPage(ctx, o.origin, timeoutMs);
-    try {
-      return await once(page);
-    } catch (e) {
-      if (!o.retryOnNavigation || !/Execution context was destroyed|navigat/i.test((e as Error).message)) throw e;
-      // waitForFunction outlives a context swap (a bare load-state wait can resolve on the old document)
-      await page
-        .waitForFunction(() => document.readyState !== "loading", undefined, { timeout: timeoutMs })
-        .catch(() => {});
-      // it may have landed on another origin (a challenge's redirect): start from a fresh page on ours
-      let here = "";
+    // One deadline for the whole call from here, with Chrome up: the origin page's load, every hop
+    // of the fetch and a recovery after the page navigated all draw on it.
+    const deadline = Date.now() + timeoutMs;
+    const left = () => Math.max(1, deadline - Date.now());
+    let page = await originPage(ctx, o.origin, left);
+    const fetchHop = async (hop: Hop) => {
       try {
-        here = new URL(page.url()).origin;
-      } catch {
-        /* about:blank */
+        return await once(page, hop, left());
+      } catch (e) {
+        if (!o.retryOnNavigation || !/Execution context was destroyed|navigat/i.test((e as Error).message)) throw e;
+        // waitForFunction outlives a context swap (a bare load-state wait can resolve on the old document)
+        await page
+          .waitForFunction(() => document.readyState !== "loading", undefined, { timeout: left() })
+          .catch(() => {});
+        // it may have landed on another origin (a challenge's redirect): start from a fresh page on ours
+        let here = "";
+        try {
+          here = new URL(page.url()).origin;
+        } catch {
+          /* about:blank */
+        }
+        if (here !== o.origin) {
+          originPages.delete(o.origin);
+          await page.close().catch(() => {});
+          page = await originPage(ctx, o.origin, left);
+        }
+        return await once(page, hop, left());
       }
-      if (here !== o.origin) {
-        originPages.delete(o.origin);
-        await page.close().catch(() => {});
-      }
-      return await once(here === o.origin ? page : await originPage(ctx, o.origin, timeoutMs));
+    };
+    // Pseudo-headers are invalid names for fetch(); forbidden ones (cookie, host, ...) the browser drops itself.
+    const headers = Object.fromEntries(Object.entries(o.headers).filter(([k]) => !k.startsWith(":")));
+    const body = o.method === "GET" || o.method === "HEAD" ? undefined : o.body;
+    let hop: Hop = { url: o.url, method: o.method, headers, body };
+    const t0 = performance.now();
+    let redirected = false;
+    // Redirects are taken by hand, as at tier 1; how many is the policy's to say.
+    for (let hops = 0; ; hops++) {
+      const { location, ...r } = await fetchHop(hop);
+      redirected ||= !!location;
+      if (!location || !o.redirect)
+        return { ...r, ms: Math.round(performance.now() - t0), ...(redirected ? { redirected } : {}) };
+      hop = o.redirect(hop, r.status, location, hops);
     }
   } finally {
     release();

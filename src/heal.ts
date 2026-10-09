@@ -7,7 +7,7 @@ import { chromeAvailable, ProfileInUse, runTrigger } from "./browser.js";
 import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
-import { buildRequest, send } from "./http.js";
+import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, send } from "./http.js";
 import { type Args, ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches } from "./learn.js";
 import { scanSecrets } from "./secrets.js";
 import {
@@ -43,6 +43,8 @@ export interface Attempt {
   redirected?: boolean;
   /** a specific `next` for the agent (a local problem, not the site's) */
   hint?: string;
+  /** what the caller should know whatever the outcome (a repeat of the write was stopped) */
+  note?: string;
 }
 
 export const PROFILE_HINT =
@@ -129,6 +131,35 @@ const readGuard = (m: Match) => {
     !(via && own(via));
 };
 
+/**
+ * A write's tier-3 run is the page sending it for real, so its own request may leave once: a
+ * handler bound twice, or a client that sends again, would perform the write again, and every
+ * further request matching the op is aborted. So is the server's redirect of the one that left
+ * (`via`: what a hop was redirected from) when it would send the write on: a hop that keeps an
+ * unsafe method (307, 308), or leads back to the op's own request. A hop that became a GET of
+ * another address (Post/Redirect/Get) passes. What else the trigger sends is the op author's choice
+ * and passes. An op with no `match` has no request to count. `stopped`: what was aborted.
+ */
+const sendOnce = (m: Match) => {
+  let sent = false;
+  const stopped = { repeats: 0, resends: 0 };
+  const guard = (e: Exchange, _acting: boolean, via?: Exchange): boolean => {
+    if (e.resourceType === "websocket" || !Object.keys(m).length) return false;
+    const own = matches(m, e.request);
+    if (via && matches(m, via.request)) {
+      if (!own && SAFE_METHODS.has(e.request.method.toUpperCase())) return false;
+      stopped.resends++;
+      return true;
+    }
+    if (!own) return false;
+    if (sent) stopped.repeats++;
+    const repeat = sent;
+    sent = true;
+    return repeat;
+  };
+  return Object.assign(guard, { stopped });
+};
+
 /** Values of the op's session: refs as the browser just sent them. */
 function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
   const out: Record<string, string> = {};
@@ -191,6 +222,10 @@ export interface TriggerRun {
   matched?: Exchange;
   /** the trigger landed on a sign-in page instead of the content */
   loginWall?: string;
+  /** a write's own request was sent again by the page this many times, and stopped each time */
+  repeats?: number;
+  /** a write's own request was answered with a redirect that would have sent it again, and was stopped */
+  resends?: number;
 }
 
 /**
@@ -262,21 +297,27 @@ export async function runOpTrigger(
 ): Promise<TriggerRun> {
   const t = fillTrigger(op.trigger, args);
   const isHit = (e: Exchange) => matches(op.match, e.request);
-  // A write's tier-3 run is the UI sending it for real; learning or healing one intercepts it.
-  const intercept = o.intercept
-    ? writeGuard(op.match, { url: t.url, args })
-    : op.readOnly
-      ? readGuard(op.match)
-      : undefined;
+  // A write's tier-3 run is the UI sending it for real, once; learning or healing one intercepts it.
+  const once = !o.intercept && !op.readOnly ? sendOnce(op.match) : undefined;
+  const intercept = once ?? (o.intercept ? writeGuard(op.match, { url: t.url, args }) : readGuard(op.match));
   const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit });
   const hits = capture.exchanges.filter(isHit);
-  const matched = pickHit(op, hits, args);
+  // a real write's answer is a request that left: a repeat that was stopped answers nothing
+  const sent = o.intercept || op.readOnly ? hits : hits.filter((e) => !e.aborted);
+  const matched = pickHit(op, sent, args);
   // Session values (a site-wide API key, a guest token) don't depend on the args: refresh them from
   // the op's own request even when the page asked for other args, whose answer is never returned.
   const source = matched ?? hits.find((e) => e.response && e.response.status < 400);
   mergeCapture(site, capture.cookies, source ? sessionValuesOf(op, source) : {});
   const wall = matched?.response ? undefined : loginWall(capture, t.url);
-  return { capture, matched, ...(wall ? { loginWall: wall } : {}) };
+  const { repeats, resends } = once?.stopped ?? {};
+  return {
+    capture,
+    matched,
+    ...(wall ? { loginWall: wall } : {}),
+    ...(repeats ? { repeats } : {}),
+    ...(resends ? { resends } : {}),
+  };
 }
 
 /** A tier-3 result: the site's own request, answered. */
@@ -818,22 +859,38 @@ function nearestToken(texts: string[], v: Volatile, strict = false): string | un
   return tied.size === 1 ? [...tied][0] : undefined;
 }
 
+/**
+ * A page's text and where it ended up, for the rescan. Redirects are taken by hand (as many as a plain fetch would follow) so
+ * that `off` is asked about every address before it is fetched: one it rules out is not fetched,
+ * and the text is empty.
+ */
 async function fetchText(
   url: string,
-  headers: Record<string, string>,
+  headers: (url: string) => Record<string, string>,
   fetchImpl: typeof fetch,
+  off: (url: string) => boolean,
 ): Promise<{ text: string; url: string }> {
   try {
-    const r = await fetchImpl(url, { headers, redirect: "follow", signal: AbortSignal.timeout(15_000) });
-    return { text: r.ok ? await r.text() : "", url: r.url || url };
+    const signal = AbortSignal.timeout(15_000);
+    for (let hops = 0; hops <= MAX_REDIRECTS && !off(url); hops++) {
+      const r = await fetchImpl(url, { headers: headers(url), redirect: "manual", signal });
+      const location = REDIRECT.has(r.status) ? r.headers.get("location") : null;
+      if (!location) return { text: r.ok ? await r.text() : "", url };
+      await r.body?.cancel();
+      url = new URL(location, url).href;
+    }
   } catch {
-    return { text: "", url };
+    /* unreachable, or too slow: no clues from it */
   }
+  return { text: "", url };
 }
 
 /**
  * Browserless heal: fetch the trigger document and the scripts it references, and swap in the
  * token of each volatile's shape nearest its anchor. Undefined when nothing new was found.
+ * For a write, no address that is the write itself is fetched, at first or after a redirect (a GET
+ * vote link is its own trigger): a plain fetch would perform it, with nothing to intercept it. The
+ * rescan then finds nothing, and the recapture, which intercepts, does the work.
  */
 export async function rescan(
   site: string,
@@ -852,7 +909,8 @@ export async function rescan(
     if (cookie) h.cookie = cookie;
     return h;
   };
-  const { text: doc, url: docUrl } = await fetchText(url, headers(url), fetchImpl);
+  const theWrite = (u: string) => !op.readOnly && matches(ownMatch(op), { method: "GET", url: u, headers: {} });
+  const { text: doc, url: docUrl } = await fetchText(url, headers, fetchImpl, theWrite);
   if (!doc) return undefined;
   // relative to the document's final URL: a redirect (a locale prefix) moves where "../static" points
   const refs = [
@@ -861,7 +919,7 @@ export async function rescan(
   ].map((m) => new URL(m[1]!, docUrl).href);
   // ponytail: only scripts the document references directly; ids in lazily loaded chunks need recapture.
   const scripts = await Promise.all(
-    [...new Set(refs)].slice(0, 40).map(async (s) => (await fetchText(s, headers(s), fetchImpl)).text),
+    [...new Set(refs)].slice(0, 40).map(async (s) => (await fetchText(s, headers, fetchImpl, theWrite)).text),
   );
   const texts = [doc, ...scripts];
 

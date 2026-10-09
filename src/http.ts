@@ -1,8 +1,9 @@
 /** Tier 1: fill the stored template and send it with Node fetch. */
 import * as zlib from "node:zlib";
 import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
+import { matches } from "./learn.js";
 import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
-import type { Operation, Param, Request } from "./spec.js";
+import type { Match, Operation, Param, Request } from "./spec.js";
 import type { StoredCookie } from "./types.js";
 
 export interface Sent {
@@ -165,7 +166,16 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
     if (/[^\x00-\x7f]/.test(h)) req.headers[k] = h.replace(/[^\x00-\x7f]+/g, encodeURIComponent);
   const cookie = cookieHeaderFor(session.cookies, req.url);
   if (cookie) req.headers.cookie = cookie;
+  // fetch would refuse it quoting the value, which may be a session's: name the header only
+  for (const [k, h] of Object.entries(req.headers)) if (/[\r\n\0]/.test(h)) throw new BadHeader(k);
   return req;
+}
+
+/** A filled header whose value holds a line break or a NUL: no request can carry it, so none was sent. */
+export class BadHeader extends Error {
+  constructor(name: string) {
+    super(`the ${name} header was filled with a value that holds a line break, which no request can carry`);
+  }
 }
 
 const lastSend = new Map<string, number>();
@@ -178,13 +188,141 @@ async function pace(site: string, minIntervalMs: number): Promise<void> {
   if (at > now) await new Promise((r) => setTimeout(r, at - now));
 }
 
-const REDIRECT = new Set([301, 302, 303, 307, 308]);
+export const REDIRECT = new Set([301, 302, 303, 307, 308]);
+// What describes a body, and goes with it when a redirect makes the request a GET: the Fetch
+// standard's request-body header names, and the length.
+const BODY_HEADERS = new Set([
+  "content-encoding",
+  "content-language",
+  "content-length",
+  "content-location",
+  "content-type",
+]);
 
 /**
- * Send the filled template. Redirects are followed by hand (at most 5): on an origin change the
- * credential headers (every ref'd header, authorization, cookie) are dropped, since undici only
- * strips authorization and cookie and would hand a CSRF header to the other origin.
+ * How many redirects one request is taken through, per tier: what each took before redirects were
+ * followed by hand. Tier 1 stopped after 5 (more would send a GET write, or carry a value, further
+ * than it ever did); a page's fetch, and the rescan's, follow 20.
  */
+export const TIER1_REDIRECTS = 5;
+export const MAX_REDIRECTS = 20;
+
+/**
+ * A redirect the policy does not take: nothing was sent to its target. `kind`: it was one too many
+ * ("limit"), or it would have sent a write a second time ("again").
+ */
+export class RedirectRefused extends Error {
+  constructor(
+    message: string,
+    readonly kind?: "limit" | "again",
+  ) {
+    super(message);
+  }
+}
+
+/** What tells an op's own request: its `match`, or with none its template's method and address. */
+export const ownMatch = (op: Operation): Match =>
+  Object.keys(op.match).length
+    ? op.match
+    : { method: op.request.method, host: new URL(op.request.url).hostname, path: new URL(op.request.url).pathname };
+
+/**
+ * The redirect policy of tiers 1 and 2: the request a redirect asks for next, or a refusal.
+ * 303 after anything but a GET or HEAD, and 301/302 after a POST, make a bodiless GET. A write is
+ * sent once, so no redirect is taken that would send it again: one that keeps its method and body
+ * (307, 308; 301/302 after a PUT), or one that leads back to the op's own request. On an origin
+ * change the credential headers go (authorization, cookie, every header a ref fills), since neither
+ * undici nor a page's fetch() would keep a CSRF header from the other origin. A hop that would
+ * still carry a session's value there is not taken: a body it re-sends when any ref slot lives in
+ * the body (decided from the slots: a value can sit under any number of encoding layers, so
+ * searching the bytes misses it), or a Location that repeats the value of any ref slot, wherever
+ * the request carried it. `taken`: the redirects before this one; one past `limit` is refused
+ * too, saying that it is the limit.
+ */
+export function nextHop(
+  op: Operation,
+  session: Session,
+  from: Request,
+  status: number,
+  location: string,
+  taken = 0,
+  limit = MAX_REDIRECTS,
+): Request {
+  const next = new URL(location, from.url);
+  if (taken >= limit)
+    throw new RedirectRefused(`stopped after ${limit} redirects, the last one to ${next.origin}`, "limit");
+  const refused = (why: string) =>
+    new RedirectRefused(`not following the HTTP ${status} redirect to ${next.origin}: ${why}`);
+  if (!/^https?:$/.test(next.protocol)) throw refused("it is not an http(s) address");
+  // The Fetch standard's two cases; a GET stays what it was, headers and all.
+  const toGet =
+    (status === 303 && from.method !== "GET" && from.method !== "HEAD") ||
+    ((status === 301 || status === 302) && from.method === "POST");
+  const method = toGet ? "GET" : from.method;
+  const carriesOn = !toGet && from.method !== "GET" && from.method !== "HEAD";
+  if (!op.readOnly && (carriesOn || matches(ownMatch(op), { url: next.href, method, headers: {} })))
+    throw new RedirectRefused(
+      `not following the HTTP ${status} redirect to ${next.origin}: it would send this write again`,
+      "again",
+    );
+  const cross = next.origin !== new URL(from.url).origin;
+  // The slots that hold a cookie:/session: value, by the layer their path starts in ("header:x-csrf", "form[1]:tok").
+  const held = op.slots.filter(holdsRef).map((s) => ({
+    s,
+    refs: [...(s.ref ? [s.ref] : []), ...templateRefs(s.template ?? "")],
+    layer: /^[a-z]+/.exec(s.at[0]!)?.[0],
+  }));
+  const secret = new Set(["authorization", "cookie"]);
+  for (const h of held) if (h.layer === "header") secret.add(h.s.at[0]!.slice(7).toLowerCase());
+  const drop = (name: string) => (toGet && BODY_HEADERS.has(name)) || (cross && secret.has(name));
+  const headers = Object.fromEntries(Object.entries(from.headers).filter(([k]) => !drop(k.toLowerCase())));
+  const body = toGet ? undefined : from.body;
+  if (cross) {
+    const inBody = body !== undefined && held.some((h) => h.layer === "body" || h.layer === "form");
+    // every slot's, a header's too: the header is dropped, and the site may still have copied what it held
+    const carried = held.flatMap(({ s, refs }) =>
+      refs.flatMap((r) => {
+        const v = resolveRef(r, session, op.request.url);
+        return v && v.length >= 4 ? [s.ref === r ? transform(v, s.transform) : v] : [];
+      }),
+    );
+    // ponytail: a search, not a proof. The address is percent- and form-decoded (a `+` is a space
+    // only before its level is decoded, or a literal %2B would become one) until nothing changes,
+    // every reading kept, so nested return addresses open; the value is looked for as it is, as a
+    // JSON string's contents, and in base64. What still passes: a copy that is encrypted, hashed,
+    // split, hex or \u-escaped, base64 at an offset or of an escaped form. Refuse every
+    // cross-origin hop of an op with ref slots if one is ever met.
+    const unpct = (u: string) =>
+      u.replace(/(%[0-9a-f]{2})+/gi, (m) => {
+        try {
+          return decodeURIComponent(m);
+        } catch {
+          return m;
+        }
+      });
+    const readings = new Set([next.href]);
+    // a Set is walked through what is added to it: each reading is decoded in turn, to a bound
+    for (const u of readings) {
+      if (readings.size > 64) break;
+      readings.add(unpct(u)).add(unpct(u.replaceAll("+", " ")));
+    }
+    const forms = (v: string) => {
+      const json = JSON.stringify(v).slice(1, -1);
+      return [
+        v,
+        json,
+        json.replaceAll("/", "\\/"),
+        Buffer.from(v).toString("base64").replace(/=+$/, ""),
+        Buffer.from(v).toString("base64url"),
+      ];
+    };
+    if (inBody || carried.some((v) => forms(v).some((f) => [...readings].some((u) => u.includes(f)))))
+      throw refused("the request would carry this session's values to another origin");
+  }
+  return { url: next.href, method, headers, body };
+}
+
+/** Send the filled template. Redirects are followed by hand, each hop decided by `nextHop`. */
 export async function send(
   op: Operation,
   args: Record<string, unknown>,
@@ -195,30 +333,7 @@ export async function send(
   await pace(opts.site, opts.minIntervalMs ?? 1000);
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const signal = AbortSignal.timeout(timeoutMs);
-  const inHeader = (s: Operation["slots"][number]) => s.at.length === 1 && s.at[0]!.startsWith("header:");
-  const secret = new Set([
-    "authorization",
-    "cookie",
-    ...op.slots.flatMap((s) => (holdsRef(s) && inHeader(s) ? [s.at[0]!.slice(7).toLowerCase()] : [])),
-  ]);
-  // session/cookie values the body or query carry: no other origin may receive them
-  const carried = op.slots.flatMap((s) => {
-    if (inHeader(s)) return [];
-    const refs =
-      s.template !== undefined
-        ? [...new Set([...(s.ref ? [s.ref] : []), ...templateRefs(s.template)])]
-        : s.ref
-          ? [s.ref]
-          : [];
-    return refs.flatMap((r) => {
-      const v = resolveRef(r, session, op.request.url);
-      return v && v.length >= 4 ? [s.ref === r ? transform(v, s.transform) : v] : [];
-    });
-  });
-  const leaks = (target: string, sentBody?: string) =>
-    carried.some((v) => [v, encodeURIComponent(v)].some((x) => target.includes(x) || !!sentBody?.includes(x)));
-  let { url, method, headers } = req;
-  let body = method === "GET" || method === "HEAD" ? undefined : req.body;
+  let hop: Request = { ...req, body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body };
   const t0 = performance.now();
   // Cookies set along the way (a consent or session bootstrap hop) ride on the next hop, as in a browser.
   let jar = session.cookies;
@@ -226,7 +341,8 @@ export async function send(
   let redirected: boolean | undefined;
   try {
     for (let hops = 0; ; hops++) {
-      const res = await (opts.fetchImpl ?? fetch)(url, { method, headers, body, redirect: "manual", signal });
+      const { url, ...init } = hop;
+      const res = await (opts.fetchImpl ?? fetch)(url, { ...init, redirect: "manual", signal });
       for (const line of res.headers.getSetCookie?.() ?? []) {
         const c = parseSetCookie(line, url);
         if (!c) continue;
@@ -240,27 +356,13 @@ export async function send(
       }
       const location = res.headers.get("location");
       redirected ??= REDIRECT.has(res.status) && !!location;
-      if (REDIRECT.has(res.status) && location && hops < 5) {
+      if (REDIRECT.has(res.status) && location) {
         await res.body?.cancel();
-        const next = new URL(location, url);
-        const cross = next.origin !== new URL(url).origin;
-        headers = Object.fromEntries(
-          Object.entries(headers).filter(([k]) => k !== "cookie" && !(cross && secret.has(k.toLowerCase()))),
-        );
-        const cookie = cookieHeaderFor(jar, next.href);
-        if (cookie) headers.cookie = cookie;
-        if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === "POST")) {
-          method = "GET";
-          body = undefined;
-          headers = Object.fromEntries(Object.entries(headers).filter(([k]) => k.toLowerCase() !== "content-type"));
-        }
-        // A 307/308 resends the body; a location may copy the query. Neither may carry a credential elsewhere.
-        if (cross && leaks(next.href, body)) {
-          throw new Error(
-            `not following the HTTP ${res.status} redirect to ${next.origin}: the request would carry this session's values to another origin`,
-          );
-        }
-        url = next.href;
+        hop = nextHop(op, session, hop, res.status, location, hops, TIER1_REDIRECTS);
+        // the jar's cookies for the new address, whichever origin it is
+        const { cookie: _sent, ...headers } = hop.headers;
+        const cookie = cookieHeaderFor(jar, hop.url);
+        hop.headers = cookie ? { ...headers, cookie } : headers;
         continue;
       }
       const raw = unzstd(new Uint8Array(await res.arrayBuffer()), res.headers.get("content-encoding"));

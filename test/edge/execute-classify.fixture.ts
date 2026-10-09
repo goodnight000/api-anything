@@ -37,10 +37,19 @@ export async function startFixture(): Promise<Fixture> {
   const otherHits: Hit[] = [];
   const state = { rotate: 0, sid: "none" };
 
+  // The other origin takes anything from anywhere, credentials included: what a hostile redirect target does.
   const other = createServer(async (req, res) => {
     otherHits.push({ method: req.method!, url: req.url!, headers: req.headers, body: await readBody(req) });
-    // a check that a page on the first origin may read, after a redirect sent it here
-    json(res, { landed: true }, 200, req.url === "/answer" ? { "access-control-allow-origin": "*" } : {});
+    const cors = {
+      // /answer is a check a page on the first origin reads after a redirect sent it here, which the
+      // browser then checks against origin "null"
+      "access-control-allow-origin": req.url === "/answer" ? "*" : (req.headers.origin ?? "*"),
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": req.headers["access-control-request-headers"] ?? "",
+      "access-control-allow-methods": req.headers["access-control-request-method"] ?? "",
+    };
+    if (req.method === "OPTIONS") return void res.writeHead(204, cors).end();
+    json(res, { landed: true }, 200, cors);
   });
   await new Promise<void>((r) => other.listen(0, "localhost", r));
   const otherBase = `http://localhost:${(other.address() as AddressInfo).port}`;
@@ -50,6 +59,9 @@ export async function startFixture(): Promise<Fixture> {
     hits.push({ method: req.method!, url: req.url!, headers: req.headers, body });
     const u = new URL(req.url!, "http://x");
     const cookie = req.headers.cookie ?? "";
+    // a GET write that counts a vote at each address and sends the browser on to the next one
+    const vote = /^\/vote\/(\d+)$/.exec(u.pathname);
+    if (vote) return void res.writeHead(302, { location: `/vote/${Number(vote[1]) + 1}` }).end();
     switch (u.pathname) {
       // a consent/session bootstrap: the cookie set on the redirect is required on the next hop
       case "/bootstrap":
@@ -86,6 +98,43 @@ export async function startFixture(): Promise<Fixture> {
           : json(res, { items: [{ name: "alice" }] });
       case "/answer":
         return json(res, { checked: req.method === "POST" && body === "initial" });
+      // a same-origin redirect with the status the test asks for
+      case "/hop":
+        return void res
+          .writeHead(Number(u.searchParams.get("s")), { location: u.searchParams.get("to") ?? "/landed" })
+          .end();
+      // a redirect to the other origin whose Location copies the token a JSON header carried
+      case "/away-copy":
+        return void res
+          .writeHead(302, {
+            location: `${otherBase}/landing?token=${JSON.parse(String(req.headers["x-session"] ?? "{}")).token}`,
+          })
+          .end();
+      // a POST redirected to an endpoint that turns away a bodiless request still carrying body headers
+      case "/hop-strict":
+        return void res.writeHead(Number(u.searchParams.get("s")), { location: "/strict" }).end();
+      case "/strict": {
+        const kept = ["content-type", "content-language", "content-encoding", "content-location"].filter(
+          (h) => h in req.headers,
+        );
+        return kept.length ? json(res, { error: `body headers: ${kept}` }, 415) : json(res, { items: [{ ok: 1 }] });
+      }
+      // answers with the body headers the request arrived with
+      case "/told":
+        return json(res, {
+          items: [{ language: req.headers["content-language"] ?? "en", type: req.headers["content-type"] ?? "" }],
+        });
+      // a write that is passed on, with its method and body, for as long as it is followed
+      case "/again":
+        return void res.writeHead(Number(u.searchParams.get("s")), { location: req.url! }).end();
+      // a GET write that counts a vote at each address and sends the browser on to the next one
+      // six redirects, then the data
+      case "/chain": {
+        const n = Number(u.searchParams.get("n") ?? 0);
+        return n < 6
+          ? void res.writeHead(302, { location: `/chain?n=${n + 1}` }).end()
+          : json(res, { items: [{ end: n }] });
+      }
       case "/loop":
         return void res.writeHead(302, { location: "/loop" }).end();
       case "/to-login":
@@ -192,6 +241,15 @@ export async function startFixture(): Promise<Fixture> {
                 '<!doctype html><title>Log in</title><form action="/login"><input name="user"><input type="password" name="pw"></form>',
               )
           : void res.writeHead(307, { location: "/api/save?login=1" }).end();
+      // a button whose handler fires twice (a double-bound listener), next to a request that belongs with the write
+      case "/double-page":
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end(
+            '<!doctype html><title>double</title><button id="go">go</button><script>document.getElementById("go").onclick=()=>{' +
+              'fetch("/api/companion",{method:"POST",body:"c=1"});' +
+              'for(let i=0;i<2;i++)fetch("/api/double",{method:"POST",body:"x=1"})}</script>',
+          );
       case "/save-page":
         return void res
           .writeHead(200, { "content-type": "text/html" })
