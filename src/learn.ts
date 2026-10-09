@@ -899,6 +899,8 @@ function liveRefs(refs: Refs, leaves: Leaf[]): void {
     const l = refs.live.get(leaf.value);
     // string leaves only: a ref is filled with a string, which would retype a JSON number
     if (!l || leaf.type !== "string" || refs.taken.has(key(leaf.at)) || cachedHash(leaf, l)) continue;
+    // a stored setting is a credential after all where the request sends it under a credential's name
+    if (l.value !== undefined && isCredential(leafName(leaf.at), leaf.value)) l.secret = true;
     addRef(refs, leaf.at, { ref: l.ref, ...(l.transform ? { transform: l.transform } : {}) }, l.value);
     if (l.value !== undefined && !l.secret) refs.plain.add(key(leaf.at));
   }
@@ -1162,15 +1164,18 @@ function sessionRefs(
   // A ref'd leaf's value lives in the session, not the spec: blank it.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
   const listed = new Set([...publicNames, ...shipped]);
-  const known = { cookies, values: refs.sessionValues, stored, yielded: refs.yielded };
-  refuseLeftover(request, refs.slots, known, listed);
+  // A stored setting a leaf repeated is a ref, so it stays fresh; that does not make it a credential.
+  const values = Object.fromEntries(
+    Object.entries(refs.sessionValues).filter(([, v]) => refs.live.get(v)?.secret !== false),
+  );
+  refuseLeftover(request, refs.slots, { cookies, values, stored, yielded: refs.yielded }, listed);
   return { request, slots: refs.slots, sessionValues: refs.sessionValues, publicNames: [...listed] };
 }
 
 /** What the final check looks for. */
 interface Known {
   cookies: StoredCookie[];
-  /** values the passes recorded as session: refs, by name */
+  /** the session: values that are credentials (found by name or issue, or stored as one), by name */
   values: Record<string, string>;
   /** stored values that are credentials by the rules in secrets.ts, whether or not a pass made them refs */
   stored: Record<string, string>;
@@ -1178,8 +1183,8 @@ interface Known {
 }
 
 /**
- * The check behind every pass. What it looks for does not depend on which refs survived: every
- * cookie, every value a pass recorded, every stored credential, and the value of a credential
+ * The check behind every pass. What it looks for are credentials, whichever refs survived: every
+ * cookie, every value a pass recorded as one, every stored credential, and the value of a credential
  * container whose ref yielded. None may be left in the stored request or a slot template, in any
  * encoding the save-time scan reads: a copy no pass could turn into a ref (base64, encoded twice,
  * too short to template) fails closed here. What is exempt is a position, never a value: a name

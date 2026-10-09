@@ -479,6 +479,19 @@ test("the check knows a stored credential that no pass made a reference, and no 
   const settings = { theme: "dark-mode", prefs: JSON.stringify({ locale: "en-US-posix", tz: "Europe/Berlin" }) };
   const plain = run({ style: "dark-mode-v2", state: b64("en-US-posix|Europe/Berlin") }, { storage: settings });
   assert.deepEqual(plain.operation.slots, [{ param: "q", at: ["body", "json:/q"] }]);
+  // ...also once a leaf that equals it has made it a reference: refreshable is not the same as secret
+  const locale = "europe-berlin-posix";
+  const sent = run({ locale, state: b64(locale) }, { storage: { locale } });
+  assert.deepEqual(sent.operation.slots, [
+    { param: "q", at: ["body", "json:/q"] },
+    { ref: "session:op/locale", at: ["body", "json:/locale"] },
+  ]);
+  assert.equal(JSON.parse(sent.operation.request.body!).state, b64(locale));
+  // but under a credential's name in the request the same stored text is one
+  assert.throws(
+    () => run({ token: locale, state: b64(locale) }, { storage: { locale } }),
+    /holds the live session value locale/,
+  );
 
   // exempt by position: a name the caller marked public, the caller's own example, a cached query hash
   assert.equal(
