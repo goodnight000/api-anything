@@ -922,8 +922,9 @@ function embeddedRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
 /**
  * Step 4: session refs: live cookie/storage values anywhere, per-session fields, credential-named
  * values, auth headers. Takes the captured template and the param slots; returns the template with
- * every credential blanked, the slots with the refs appended, the session: values for the session
- * store, and the names whose values stay literal (marked public, or shipped to every visitor).
+ * every ref'd leaf blanked and the live values the passes found inside longer leaves cut out, the
+ * slots with the refs appended, the session: values for the session store, and the names the op
+ * lists as public (marked so by the caller, or shipped to every visitor).
  */
 function sessionRefs(
   input: LearnInput,
@@ -1180,8 +1181,9 @@ function twoRunDiff(
  */
 export function learnOperation(input: LearnInput): Learned {
   const warnings: string[] = [];
-  const [args1, args2] = input.examples;
-  checkExampleSets(input.examples, warnings);
+  const { examples } = input;
+  const [args1, args2] = examples;
+  checkExampleSets(examples, warnings);
 
   // 1. pick the request (6: its headers are kept, minus the ones a replay must not send)
   const { exchange, pages } = pickRequest(input, args1, warnings);
