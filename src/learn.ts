@@ -245,22 +245,37 @@ type Second = { exchanges: Exchange[]; args: Args };
 
 /**
  * Whether a request carries a short example: only as a whole leaf, and with a second run only
- * where a request to the same host holds the other example at the same place (gl=US rides on
- * every request, whatever country is asked for).
+ * where the same endpoint holds the other example at the same place there. gl=US rides on every
+ * request, whatever country is asked for, and another endpoint's country=CA says nothing about
+ * this one. The same endpoint is the same method, host and path, where a segment may differ the
+ * way the examples do (a param in the path). `examples` and `short` are [param, text] of this run.
  */
-function shortCarrier(short: [string, string][], second?: Second) {
-  const place = (e: Exchange, l: Leaf, v: string) => {
-    const host = URL.canParse(e.request.url) ? new URL(e.request.url).host : "";
-    return `${e.request.method.toUpperCase()} ${host}\0${key(l.at)}\0${v}`;
+function shortCarrier(examples: [string, string][], short: [string, string][], second?: Second) {
+  const other = new Map(examples.map(([k]) => [k, exampleText(second?.args[k])]));
+  const endpoint = (e: Exchange) => {
+    const u = URL.canParse(e.request.url) ? new URL(e.request.url) : undefined;
+    return { head: `${e.request.method.toUpperCase()} ${u?.host}`, segs: (u?.pathname ?? "").split("/").map(norm) };
   };
-  const other = new Map(short.map(([k]) => [k, exampleText(second?.args[k])]));
-  const values = new Set(other.values());
-  const seen = new Set<string>();
-  for (const e of short.length ? (second?.exchanges ?? []) : [])
-    for (const l of walk(e.request))
-      if (values.has(l.value.toLowerCase())) seen.add(place(e, l, l.value.toLowerCase()));
-  return (e: Exchange, leaves: Leaf[], k: string, v: string) =>
-    leaves.some((l) => l.value.toLowerCase() === v && (!second || seen.has(place(e, l, other.get(k)!))));
+  // a short example is the whole segment, a longer one may sit inside it (/@nasa)
+  const follows = (a: string, b: string) =>
+    a === b ||
+    examples.some(([k, x]) => {
+      const y = other.get(k)!;
+      return x.length < 3 || y.length < 3 ? a === x && b === y : a.split(x).join(y) === b;
+    });
+  const run2 = (short.length ? (second?.exchanges ?? []) : []).map((e) => ({
+    ...endpoint(e),
+    leaves: new Map(walk(e.request).map((l) => [key(l.at), l.value.toLowerCase()])),
+  }));
+  return (e: Exchange, leaves: Leaf[], k: string, v: string) => {
+    const whole = leaves.filter((l) => l.value.toLowerCase() === v);
+    if (!second) return whole.length > 0;
+    const { head, segs } = endpoint(e);
+    const same = run2.filter(
+      (r) => r.head === head && r.segs.length === segs.length && segs.every((s, i) => follows(s, r.segs[i]!)),
+    );
+    return whole.some((l) => same.some((r) => r.leaves.get(key(l.at)) === other.get(k)));
+  };
 }
 
 function tryParse(body: string | undefined): unknown {
@@ -287,6 +302,7 @@ export function rankCandidates(
   const examples = exampleValues(args);
   const values = examples.filter(([, v]) => v.length >= 3);
   const carriesShort = shortCarrier(
+    examples,
     examples.filter(([, v]) => v.length < 3),
     o.second,
   );

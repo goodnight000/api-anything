@@ -98,7 +98,9 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    A shorter value (`US`, `page=2`, a small enum) is accepted only with a second example that differs, and its
    run. It is then placed only where a whole decoded leaf equals it in run 1 and equals the other example at the
    same place in run 2, never inside a longer leaf; a leaf that equals it and does not follow (`gl=US` on every
-   request, `size: 2` beside `page: 2`) is no slot. The same both-runs match says which request carries it.
+   request, `size: 2` beside `page: 2`) is no slot. The same both-runs match says which request carries it, endpoint by endpoint:
+   run 2's evidence counts for the request with the same method, host and path (a path segment may differ the way the
+   examples do), so another endpoint's `country=CA` does not vouch for a feed that always asks for `US`.
    Without that evidence the example is refused, with a hint to pass a second one. If a value appears in several unrelated places,
    record all of them but warn. (Google Flights reuses the destination as the return-leg origin.)
    A short example (4 chars or fewer, "SFO") inside a random-looking leaf counts only where it

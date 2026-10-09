@@ -486,6 +486,40 @@ test("a short example is placed where a whole leaf equals it and follows a diffe
   assert.equal(paged.operation.minTier, 1, paged.warnings.join("\n"));
 });
 
+test("the evidence for a short example is the same endpoint in run 2, not any request to the host", () => {
+  const records = (n: number, of: string) => ({ items: Array.from({ length: n }, (_, i) => ({ id: i, of })) });
+  // the feed always asks for US and answers with more; only /top follows the example
+  const run = (c: string) => [
+    xhr({ url: "https://api.site.test/api/feed?country=US" }, records(100, "US")),
+    xhr({ url: `https://api.site.test/api/top?country=${c}` }, records(2, c)),
+  ];
+  const { operation: op, exchange } = learn(run("US"), [{ country: "US" }, { country: "CA" }], {
+    exchanges2: run("CA"),
+  });
+  assert.equal(new URL(exchange.request.url).pathname, "/api/top");
+  assert.deepEqual(op.slots, [{ param: "country", at: ["query:country"] }]);
+
+  // the same endpoint, allowing for path segments that are params themselves
+  const posts = (user: string, page: number) => [
+    xhr({ url: `https://api.site.test/v1/users/${user}/posts?page=${page}` }, records(3, user)),
+  ];
+  const paged = learn(
+    posts("alice", 2),
+    [
+      { user: "alice", page: 2 },
+      { user: "bobby", page: 3 },
+    ],
+    { exchanges2: posts("bobby", 3) },
+  );
+  assert.deepEqual(paged.operation.slots, [
+    { param: "user", at: ["path:2"] },
+    { param: "page", at: ["query:page"] },
+  ]);
+  const top = (c: string) => [xhr({ url: `https://api.site.test/v1/top/${c}` }, records(3, c))];
+  const segment = learn(top("US"), [{ country: "US" }, { country: "CA" }], { exchanges2: top("CA") });
+  assert.deepEqual(segment.operation.slots, [{ param: "country", at: ["path:2"] }]);
+});
+
 test("a short example without that evidence is refused, with a hint to pass a second one", () => {
   const hint = /q="US": example values need at least 3 characters.*second example/;
   assert.throws(() => learn(byCountry("US"), [{ q: "US" }]), hint);
