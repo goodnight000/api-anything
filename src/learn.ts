@@ -411,17 +411,18 @@ export function matches(m: Match, req: Request): boolean {
   return true;
 }
 
-/** Stable identity, with param and hash-like path segments wildcarded. */
+/**
+ * Stable identity, with filled and hash-like path segments wildcarded. A segment a ref fills is
+ * blank in the template and another value on every run, like a param's.
+ */
 function buildMatch(req: Request, slots: Slot[]): Match {
-  const paramSegments = new Set(
-    slots
-      .filter((s) => s.param && s.at.length === 1 && s.at[0]!.startsWith("path:"))
-      .map((s) => Number(s.at[0]!.slice(5))),
+  const filled = new Set(
+    slots.filter((s) => s.at.length === 1 && s.at[0]!.startsWith("path:")).map((s) => Number(s.at[0]!.slice(5))),
   );
   const u = new URL(req.url);
   const path = u.pathname
     .split("/")
-    .map((seg, i) => (i > 0 && (paramSegments.has(i - 1) || hashLike(seg) || /^\d{6,}$/.test(seg)) ? "*" : seg))
+    .map((seg, i) => (i > 0 && (filled.has(i - 1) || hashLike(seg) || /^\d{6,}$/.test(seg)) ? "*" : seg))
     .join("/");
   const operationName = operationNameOf(req);
   return { method: req.method.toUpperCase(), host: u.hostname, path, ...(operationName ? { operationName } : {}) };

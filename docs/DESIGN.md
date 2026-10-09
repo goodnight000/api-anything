@@ -17,7 +17,7 @@ Each operation stores, besides its request template:
 - **trigger**: how to make the site's own frontend fire the request. It is a URL template
   (`https://x.com/{screen_name}`), optionally with UI steps or a soft navigation from a neutral page.
 - **match**: how to recognize that request in captured traffic, using stable identity only:
-  method, host, path with hash-like segments wildcarded, and GraphQL operationName.
+  method, host, path with hash-like segments and the segments a param or a ref fills wildcarded, and GraphQL operationName.
   **Never a queryId/doc_id/hash**; putting those in the matcher is what makes rotation unhealable
   (as happened to unbrowse).
 

@@ -14,7 +14,7 @@ after(() => rmSync(HOME, { recursive: true, force: true }));
 
 import { addOperation, type CaptureFile } from "../../src/heal.js";
 import { buildRequest } from "../../src/http.js";
-import { learnOperation } from "../../src/learn.js";
+import { learnOperation, matches } from "../../src/learn.js";
 import type { Exchange, StoredCookie } from "../../src/types.js";
 
 const A = "Zx81kLmN0pQrStUv2wXyZ3aBcD";
@@ -278,6 +278,31 @@ test("a credential container that yields to a slot inside it keeps nothing else 
   assert.throws(
     () => run({ sig: `kittens.${T}` }),
     /header:x-csrf-token > json:\/sig is only partly a slot inside the credential header:x-csrf-token/,
+  );
+});
+
+test("a path segment that is a reference is a wildcard in the match, as a param's is", () => {
+  // the session id rides in the path, with a dot so it does not look like a hash on its own
+  const first = "u1.q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
+  const next = "u1.Zx9Qw8vLm7Kj6HgF5dS4aP3oI2uY1tRe";
+  const run = (sid: string, q: string) => [
+    xhr({ url: `https://api.site.test/api/${sid}/search?q=${q}`, headers: { cookie: `sid=${sid}` } }),
+  ];
+  const captured = run(first, "kittens");
+  const { operation: op, warnings } = learn(captured, [{ q: "kittens" }, { q: "puppies" }], {
+    cookies: [cookie("sid", first)],
+    exchanges2: run(next, "puppies"),
+  });
+  assert.deepEqual(
+    op.slots.find((s) => s.ref),
+    { ref: "cookie:sid", at: ["path:1"] },
+  );
+  assert.equal(op.match.path, "/api/*/search");
+  assert.ok(matches(op.match, captured[0]!.request), "the match must fit the request it was learned from");
+  assert.ok(!warnings.some((w) => /no matching request/.test(w)), warnings.join("\n"));
+  assert.equal(
+    buildRequest(op, { q: "cats" }, { cookies: [cookie("sid", next)], values: {} }).url,
+    `https://api.site.test/api/${next}/search?q=cats`,
   );
 });
 
