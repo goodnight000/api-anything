@@ -29,8 +29,8 @@ function outlineOf(e: Exchange | undefined, values: string[]): { outline?: Outli
 /** A multi-line error (a zod report) on one line, so JSON output keeps all of it. */
 const oneLine = (m: string) =>
   m
-    .replace(/\s*\n\s*(✖\s*)?/g, " ")
-    .replace(/\s*→\s*/g, " at ")
+    .replace(/(^|\s*\n\s*)(✖\s*)?/g, " ")
+    .replace(/\s*→\s*(at\s+)?/g, " at ")
     .trim();
 
 const HELP: Record<string, string> = {
@@ -140,8 +140,25 @@ function json<T>(text: string | undefined, schema: z.ZodType<T>, flag: string): 
   try {
     return schema.parse(JSON.parse(text));
   } catch (e) {
-    throw new Fail(`--${flag}: ${oneLine((e as Error).message)}`, `api-anything --help shows the --${flag} format`);
+    // a ZodError's own message is its issue list as JSON
+    const why = e instanceof z.ZodError ? z.prettifyError(e) : (e as Error).message;
+    throw new Fail(`--${flag}: ${oneLine(why)}`, `api-anything --help shows the --${flag} format`);
   }
+}
+
+/** --steps. An unknown action is named here, with the ones that exist: the schema's report would not say which it was. */
+function stepsOf(text: string | undefined): TriggerStep[] | undefined {
+  const actions: readonly string[] = TriggerStepSchema.shape.action.options;
+  const given = json(text, z.unknown(), "steps");
+  const bad = (Array.isArray(given) ? given : [])
+    .map((s) => s?.action)
+    .find((a) => typeof a === "string" && !actions.includes(a));
+  if (bad)
+    throw new Fail(
+      `--steps: unknown action "${bad}"${/upload/i.test(bad) ? " (file uploads are not supported)" : ""}; the actions are ${actions.join(", ")}`,
+      "api-anything capture --help shows the --steps format",
+    );
+  return json(text, z.array(TriggerStepSchema), "steps");
 }
 
 const needChrome = () => {
@@ -687,8 +704,7 @@ async function run(argv: string[]): Promise<number> {
   const extra = Object.keys(v).filter((k) => !c.flags.includes(k as Flag));
   if (extra.length)
     throw new Fail(`${cmd} does not take --${extra.join(", --")}`, `api-anything ${cmd} --help lists its flags`);
-  const steps = json(v.steps, z.array(TriggerStepSchema), "steps");
-  return c.run({ v, pos, steps });
+  return c.run({ v, pos, steps: stepsOf(v.steps) });
 }
 
 try {

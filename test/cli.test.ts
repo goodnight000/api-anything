@@ -85,4 +85,29 @@ describe("flags and command names", () => {
       assert.equal((await cli(name, "--help")).stdout, usage, `${name} --help`);
     }
   });
+
+  test("a step --steps cannot run is one short line: the action, and the actions there are", async () => {
+    const step = (action: string) => JSON.stringify([{ action, selector: "#file", value: "file.pdf" }]);
+    const upload = await cli("capture", `${fx.url}/list`, "--steps", step("upload"));
+    assert.equal(upload.code, 1);
+    assert.deepEqual(JSON.parse(upload.stdout), {
+      ok: false,
+      error:
+        '--steps: unknown action "upload" (file uploads are not supported); the actions are click, fill, press, wait, goto',
+    });
+    assert.match(upload.stderr, /^next: api-anything capture --help/m);
+
+    const hover = await cli("add", "plain", "x", "--trigger", `${fx.url}/list`, "--steps", step("hover"));
+    assert.equal(
+      JSON.parse(hover.stdout).error,
+      '--steps: unknown action "hover"; the actions are click, fill, press, wait, goto',
+    );
+
+    // any other malformed step: what is wrong and where, not the validator's JSON report
+    const typed = await cli("capture", `${fx.url}/list`, "--steps", '[{"action":"click","selector":5}]');
+    assert.equal(
+      JSON.parse(typed.stdout).error,
+      "--steps: Invalid input: expected string, received number at [0].selector",
+    );
+  });
 });
