@@ -2,7 +2,7 @@
  * The browser layer: installed Chrome via playwright-core, one persistent profile per process.
  * Produces raw Exchanges for the learner (tier 3 / create / heal) and runs tier-2 page fetches.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import {
@@ -16,7 +16,7 @@ import {
   type Route,
 } from "playwright-core";
 import { botWall } from "./classify.js";
-import { siteOf } from "./session.js";
+import { home, siteOf, writePrivate } from "./session.js";
 import type { Request as Hop } from "./spec.js";
 import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
 
@@ -76,8 +76,8 @@ async function launch(
   }
 }
 
-/** Paths Playwright's "chrome" channel launches; checked up front so callers can skip cleanly. */
-export function chromeAvailable(): boolean {
+/** The installed Chrome: the paths Playwright's "chrome" channel launches. */
+function chromePath(): string | undefined {
   const env = process.env;
   const candidates =
     process.platform === "darwin"
@@ -87,8 +87,11 @@ export function chromeAvailable(): boolean {
             .filter((d): d is string => !!d)
             .map((d) => join(d, "Google", "Chrome", "Application", "chrome.exe"))
         : ["/opt/google/chrome/chrome"];
-  return candidates.some((p) => existsSync(p));
+  return candidates.find((p) => existsSync(p));
 }
+
+/** Checked up front so callers can skip cleanly. */
+export const chromeAvailable = (): boolean => !!chromePath();
 
 // Default headless UA says "HeadlessChrome/<v>" and x.com answers 403. sec-ch-ua already
 // carries "Google Chrome", so only the UA string needs the fix.
@@ -100,6 +103,33 @@ async function probeHeadlessUA(): Promise<string> {
   } finally {
     await b.close();
   }
+}
+
+/**
+ * The user agent a headless Chrome is given. Asking Chrome means starting it once more (most of a
+ * cold call's time), so the answer is kept under the home, by the binary's path, modification time
+ * and size: an update changes those, and then, or when the file cannot be read, Chrome is asked again.
+ */
+export async function headlessUserAgent(): Promise<string> {
+  const file = join(home(), "chrome-ua.json");
+  let key: string | undefined;
+  try {
+    const bin = chromePath();
+    const s = statSync(bin!);
+    key = `${bin}:${s.mtimeMs}:${s.size}`;
+    const kept = JSON.parse(readFileSync(file, "utf8")) as { key?: unknown; ua?: unknown };
+    if (kept.key === key && typeof kept.ua === "string" && /Chrome\/\d/.test(kept.ua) && !/Headless/.test(kept.ua))
+      return kept.ua;
+  } catch {
+    /* nothing kept, or nothing usable */
+  }
+  const ua = await probeHeadlessUA();
+  try {
+    if (key) writePrivate(file, JSON.stringify({ key, ua }));
+  } catch {
+    /* a home that cannot be written: asked again next time */
+  }
+  return ua;
 }
 
 /**
@@ -118,7 +148,7 @@ export function openBrowser({
   const prev = current;
   const ctx = (async () => {
     if (prev) await closeContext(prev.ctx);
-    if (headless) headlessUA ??= await probeHeadlessUA();
+    if (headless) headlessUA ??= await headlessUserAgent();
     const c = await launch(profileDir, {
       channel: "chrome",
       headless,

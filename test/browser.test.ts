@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
-import { chromeAvailable, closeBrowser, pageFetch, runTrigger } from "../src/browser.js";
+import { chromeAvailable, closeBrowser, headlessUserAgent, pageFetch, runTrigger } from "../src/browser.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
+
+// the browser keeps what it learned about the installed Chrome under the home: not the user's own
+const HOME = mkdtempSync(join(tmpdir(), "api-anything-browser-"));
+process.env.API_ANYTHING_HOME = HOME;
+after(() => rmSync(HOME, { recursive: true, force: true }));
 
 describe("fixture site (plain http)", () => {
   let fx: Fixture;
@@ -170,5 +176,28 @@ describe("browser", { skip: !chromeAvailable() && "Google Chrome not installed" 
     assert.equal(typeof r.ms, "number");
     const call = fx.calls.at(-1);
     assert.doesNotMatch(String(call?.headers["user-agent"]), /HeadlessChrome/);
+  });
+
+  test("the headless user agent is asked of Chrome once per installed Chrome, then read from disk", async () => {
+    const file = join(HOME, "chrome-ua.json");
+    rmSync(file, { force: true });
+    // nothing on disk: Chrome is started to ask, and the answer is kept
+    const probed = await headlessUserAgent();
+    assert.match(probed, /Chrome\/\d/);
+    assert.doesNotMatch(probed, /Headless/);
+    const kept = JSON.parse(readFileSync(file, "utf8")) as { key: string; ua: string };
+    assert.equal(kept.ua, probed);
+    // what is on disk answers next: a marked copy comes back, which no Chrome would have said
+    writeFileSync(file, JSON.stringify({ ...kept, ua: `${probed} marked` }));
+    assert.equal(await headlessUserAgent(), `${probed} marked`);
+    // one that names another Chrome (an update changes the binary) is not believed, and is replaced
+    writeFileSync(file, JSON.stringify({ key: `${kept.key}0`, ua: `${probed} marked` }));
+    assert.equal(await headlessUserAgent(), probed);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), kept);
+    // nor is one that cannot be read, or that does not hold a user agent
+    for (const junk of ["{not json", JSON.stringify({ key: kept.key, ua: "HeadlessChrome/1" })]) {
+      writeFileSync(file, junk);
+      assert.equal(await headlessUserAgent(), probed, junk);
+    }
   });
 });
