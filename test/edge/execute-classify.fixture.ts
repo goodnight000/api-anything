@@ -166,6 +166,11 @@ export async function startFixture(): Promise<Fixture> {
               .end(
                 '<!doctype html><title>Log in</title><form action="/login"><input name="user"><input type="password" name="pw"></form>',
               );
+      // a page whose script asks for the signed-in data
+      case "/me-page":
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end('<!doctype html><title>me</title><script>fetch("/api/me")</script>');
       // double-submit CSRF: the header must repeat the ct cookie
       case "/api/csrf": {
         const ct = /(?:^|; )ct=([^;]+)/.exec(cookie)?.[1];

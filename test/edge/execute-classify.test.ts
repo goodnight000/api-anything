@@ -724,6 +724,46 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     }
   });
 
+  test("auth at tier 3 re-imports the browser session into the profile and retries once", async () => {
+    site(
+      "t3auth",
+      rd("me", "/api/me", { minTier: 3, trigger: { url: `${fx.base}/me-page` }, match: { path: "/api/me" } }),
+    );
+    const root = mkdtempSync(join(HOME, "everyday-browser-"));
+    const signIn = (sid: string) => {
+      fx.state.sid = sid;
+      makeChromiumDb(join(root, "Default"), [{ host_key: "127.0.0.1", name: "sid", value: sid }], { password: "pw" });
+    };
+    const me = () => fx.hits.filter((h) => h.url === "/api/me").length;
+    const o = { minIntervalMs: 0, timeoutMs: 5000 };
+    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([
+      { name: "Chrome", family: "chromium", root, password: "pw" },
+    ]);
+    try {
+      signIn("first");
+      assert.equal((await importSession("t3auth", `${fx.base}/`))?.source, "chrome:Default");
+      assert.deepEqual((await call("t3auth", "me", {}, o)).data, [{ me: "first" }]);
+
+      signIn("second");
+      fx.hits.length = 0;
+      const r = await call("t3auth", "me", {}, o);
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.tier, 3);
+      assert.deepEqual(r.data, [{ me: "second" }]);
+      assert.equal(me(), 2, "one retry");
+
+      // logged out with nothing new to import: one retry, then the login hint
+      fx.state.sid = "third";
+      fx.hits.length = 0;
+      const out = await call("t3auth", "me", {}, o);
+      assert.equal(out.class, "auth", JSON.stringify(out));
+      assert.match(out.next ?? "", /api-anything login t3auth/);
+      assert.equal(me(), 2, "at most once per call");
+    } finally {
+      delete process.env.API_ANYTHING_BROWSER_ROOTS;
+    }
+  });
+
   test("auth at tier 2 from a stale cookie behind a header ref: the jar is refreshed from the profile, one retry", async () => {
     site(
       "t2csrf",

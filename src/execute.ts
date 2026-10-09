@@ -452,14 +452,15 @@ export async function call(
       tier++;
       continue;
     }
-    // Once per call, from tier 1 or 2. A write gets here only when it certainly did not run.
-    if (a.class === "auth" && tier < 3 && !authTried) {
+    // Once per call, at any tier. A write gets here only when it certainly did not run.
+    if (a.class === "auth" && !authTried) {
       authTried = true;
       // An imported session is a mirror of the everyday browser: silently re-import from the same
       // profile once (browserless), in case the human re-signed in there. It lands in the jar and
-      // in the Chrome profile tier 2 sends from. Then retry.
+      // in the Chrome profile tiers 2 and 3 send from. Then retry.
       if (await reimportIfBrowser(siteName, op.request.url, site.loginCookies)) continue;
-      if (ctx.maxTier <= 1) return fail();
+      // tier 3 ran the site's own page: the profile's cookies and session values are what it just used
+      if (tier === 3 || ctx.maxTier <= 1) return fail();
       if (await refreshCookies(ctx, op, tier)) continue;
       // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
       // refreshes them, and for a read its answer is this call's answer.

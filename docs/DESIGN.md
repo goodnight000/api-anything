@@ -256,8 +256,9 @@ more; a write is never resent. The tier-3 answer is the matching request whose d
 materialized call, including short and structured values, and whose response judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
 A param's default is filled into the args once, before the first tier, so every tier runs with the
 same values: the tier-3 trigger opens `?count=20`, never a literal `{count}`.
-An `auth` answer starts the same recovery whether the tier that got it is 1 or 2 (an op with
-`minTier: 2`, or one a remembered escalation starts there), at most once per call.
+An `auth` answer starts recovery at whichever tier got it (an op with `minTier: 2` or `3`, or one a
+remembered escalation starts there), at most once per call. At tier 3 only the re-import applies:
+the page just ran with the profile's own cookies and session values, so there is nothing fresher to take.
 
 ## Browser
 
@@ -357,8 +358,8 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
   export, for servers/CI with no browser.
 - **Self-healing auth**: when a call classifies `auth` and the session came from a browser import,
   exactly the recorded profile is silently re-imported once (browserless) and the call retried; only if it is
-  still `auth` does the result carry the "run `api-anything login`" hint. This runs at tier 2 as at
-  tier 1: the import also lands in the Chrome profile a tier-2 page sends its cookies from.
+  still `auth` does the result carry the "run `api-anything login`" hint. This runs at tiers 2 and 3 as at
+  tier 1: the import also lands in the Chrome profile those tiers send their cookies from.
 - **`logout <site>`** clears the jar and that site's cookies in the profile.
 
 `node:sqlite` is chosen over the `sqlite3` CLI: it is built in (no dependency, present on every
