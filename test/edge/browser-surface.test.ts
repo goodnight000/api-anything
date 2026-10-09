@@ -227,6 +227,14 @@ describe("runTrigger on awkward pages", { skip: noChrome }, () => {
     assert.ok(r.exchanges.some((e) => e.request.url.includes("/file.csv")));
   });
 
+  test("a run leaves no timer behind that would keep the process alive", async () => {
+    const timers = () => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+    const before = timers();
+    await runTrigger({ url: `${fx.url}/data-page?name=tidy`, profileDir: prof });
+    // the bound on a call into the page is a 5 s timer: one left running would still be counted here
+    assert.ok(await until(() => timers() <= before, 1500), `${timers() - before} timers left behind by the run`);
+  });
+
   test("a page whose renderer hangs: the run still ends, and the browser is free for the next one", async () => {
     const t0 = Date.now();
     const ended = await Promise.race([

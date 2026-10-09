@@ -285,8 +285,14 @@ async function guardSockets(ctx: BrowserContext, guard: SocketGuard): Promise<()
 // How long a page gets to be emptied, and then to close, before the run ends without waiting for it.
 const SEAL_MS = 5000;
 /** A call into a page, given up on after a while: a hung renderer answers nothing, and evaluate() and close() have no timeout. */
-const within = <T>(p: Promise<T>, otherwise: T): Promise<T> =>
-  Promise.race([p.catch(() => otherwise), sleep(SEAL_MS).then(() => otherwise)]);
+const within = <T>(p: Promise<T>, otherwise: T): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<T>((r) => {
+    timer = setTimeout(() => r(otherwise), SEAL_MS);
+  });
+  // cleared when the call settles first: a timer left running keeps the process alive for its 5 s
+  return Promise.race([p.catch(() => otherwise), late]).finally(() => clearTimeout(timer));
+};
 
 /**
  * One page's requests as Chrome pauses them, below Playwright's routes, on a DevTools session of
