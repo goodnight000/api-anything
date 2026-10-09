@@ -36,6 +36,9 @@ test("parseBody strips XSSI and keeps big integers exact", () => {
 test("parseBody reads Google rt=c length-prefixed chunks", () => {
   const body = ')]}\'\n\n27\n[["wrb.fr",null,"[1,2]"]]\n12\n[["di",42]]\n';
   assert.deepEqual(parseBody(body), [[["wrb.fr", null, "[1,2]"]], [["di", 42]]]);
+  // a final empty chunk ends the framing: its length is not data, on one line or after a multi-line value
+  assert.deepEqual(parseBody(')]}\'\n7\n{"a":1}\n0\n'), [{ a: 1 }]);
+  assert.deepEqual(parseBody(')]}\'\n12\n{\n "a": 1\n}\n0\n'), [{ a: 1 }]);
 });
 
 test("getPath: dots, brackets, index-only paths, dashed keys, quoted keys", () => {
