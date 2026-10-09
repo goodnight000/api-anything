@@ -640,6 +640,22 @@ describe("allowWrites at every entry point", () => {
   });
 });
 
+test("auth stays at tier 1 when no browser tier may run, and when a login is on record", async () => {
+  site("pickyoff", rd("items", "/api/picky"));
+  // capped at tier 1: the answer is the site's, with the login hint, not "needs tier 2"
+  const capped = await call("pickyoff", "items", {}, t1);
+  assert.equal(capped.class, "auth", JSON.stringify(capped));
+  assert.equal(capped.tier, 1);
+  assert.match(capped.next ?? "", /api-anything login pickyoff/);
+  // a login was run for this site (its source is recorded, though its cookies are gone): recovery, not a probe
+  saveSession("pickyoff", { cookies: [], values: {}, source: "window" });
+  fx.hits.length = 0;
+  const known = await call("pickyoff", "items", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 3000 });
+  assert.equal(known.class, "auth", JSON.stringify(known));
+  assert.equal(known.tier, 1);
+  assert.equal(fx.hits.filter((h) => h.url === "/api/picky").length, 1, "one request, no page fetch");
+});
+
 /* ----------------------------------------------------------------- Chrome-only */
 
 describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
@@ -847,6 +863,87 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     assert.equal(r.tier, 3);
     assert.match(r.reason ?? "", /^tier 2 said auth .*refreshed the session/);
     assert.equal((await call("t2token", "items", {}, o)).tier, 2, "the refreshed value serves tier 2");
+  });
+
+  test("auth with no login on record gets one attempt from a real page before giving up, and the tier that answers is remembered", async () => {
+    site("picky", rd("items", "/api/picky"));
+    const o = { minIntervalMs: 0, timeoutMs: 5000 };
+    fx.hits.length = 0;
+    const r = await call("picky", "items", {}, o);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 2);
+    assert.deepEqual(r.data, [{ picky: "ok" }]);
+    assert.match(r.reason ?? "", /tier 1 said auth with no login on record/);
+    // the next call starts where this one got through
+    fx.hits.length = 0;
+    assert.equal((await call("picky", "items", {}, o)).tier, 2);
+    assert.equal(fx.hits.filter((h) => h.url === "/api/picky").length, 1, "tier 1 was not tried again");
+  });
+
+  test("when the page says auth too, the call ends exactly as it would have: tier 1's auth and the login hint", async () => {
+    // /api/me answers its login page to everyone but the one session it honours
+    site("walled", rd("me", "/api/me"));
+    fx.state.sid = "nobody-has-this";
+    fx.hits.length = 0;
+    const r = await call("walled", "me", {}, { minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.match(r.next ?? "", /api-anything login walled/);
+    const fromPage = fx.hits.filter((h) => h.url === "/api/me" && /Chrome\//.test(String(h.headers["user-agent"])));
+    assert.equal(fromPage.length, 1, "one attempt from a page, and no trigger run");
+  });
+
+  test("a write is never given the page attempt: it ends as tier 1's auth, and no page sent it", async () => {
+    // 401 is an answer a write may be retried after, so only the read-only rule keeps this one from the page
+    const url = `${fx.base}/api/picky?status=401`;
+    site(
+      "pickywrite",
+      rd("save", "/api/picky", { readOnly: false, request: { method: "POST", url, headers: {}, body: "x=1" } }),
+    );
+    fx.hits.length = 0;
+    const r = await call("pickywrite", "save", {}, { allowWrites: true, minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    // recovery may send it once more after a 401, with the profile's cookies: that is plain HTTP too
+    assert.ok(fx.hits.filter((h) => h.method === "POST").length <= 2);
+    assert.equal(
+      fx.hits.filter((h) => /Chrome\//.test(String(h.headers["user-agent"]))).length,
+      0,
+      "no page was opened",
+    );
+  });
+
+  test("a login that recovery finds counts: with one in the jar by then, auth is the answer and no page is opened", async () => {
+    // nothing on record at the start; the Chrome profile holds a login cookie the wall does not care about
+    site(
+      "pickyin",
+      rd("items", "/api/picky", { request: { method: "GET", url: `${fx.base}/api/picky`, headers: {} } }),
+    );
+    await addCookiesToProfile([cookie("sessionid", "signed-in-elsewhere", "127.0.0.1")], profileDir());
+    fx.hits.length = 0;
+    const r = await call("pickyin", "items", {}, { minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.equal(
+      fx.hits.filter((h) => /Chrome\//.test(String(h.headers["user-agent"]))).length,
+      0,
+      "no page was opened",
+    );
+  });
+
+  test("recovery comes before the page attempt: a fresher cookie in the Chrome profile answers at tier 1", async () => {
+    // a session with no source (one saved by an older version), an empty jar, and the cookie only in the profile
+    site("legacy", rd("me", "/api/me"));
+    fx.state.sid = "profile-only";
+    await addCookiesToProfile([cookie("sid", "profile-only", "127.0.0.1")], profileDir());
+    saveSession("legacy", { cookies: [], values: {} });
+    fx.hits.length = 0;
+    const r = await call("legacy", "me", {}, { minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.deepEqual(r.data, [{ me: "profile-only" }]);
+    const fromPage = fx.hits.filter((h) => h.url === "/api/me" && /Chrome\//.test(String(h.headers["user-agent"])));
+    assert.equal(fromPage.length, 0, "the jar was refreshed from the profile and plain HTTP answered");
   });
 
   test("tier 2 honours timeoutMs", async () => {

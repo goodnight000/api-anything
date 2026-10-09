@@ -15,7 +15,7 @@ import {
   profileDir,
   runOpTrigger,
 } from "./heal.js";
-import { buildRequest, type Sent, send, withDefaults } from "./http.js";
+import { buildRequest, holdsRef, type Sent, send, withDefaults } from "./http.js";
 import { reimportIfBrowser } from "./login.js";
 import { loadSession, loggedIn, mergeCapture, type Session, saveSession, sessionFile, withLock } from "./session.js";
 import type { Operation, Site } from "./spec.js";
@@ -403,6 +403,18 @@ export async function call(
     return done({ ok: false, class: "input", reason: (e as Error).message, next: nextFor("input", siteName, op) });
   }
 
+  // No login on record for this site: the session has no source (a login records one, logout clears it),
+  // the jar has no live login cookie, and the op neither takes a credential nor was learned signed in.
+  // Asked when it matters, not at the start: recovery may have put a login in the jar by then.
+  const noLogin = () => {
+    if (op.slots.some(holdsRef) || op.learnedLoggedIn) return false;
+    try {
+      const s = loadSession(siteName);
+      return !s.source && !loggedIn(s.cookies, site.loginCookies);
+    } catch {
+      return false;
+    }
+  };
   const ctx: Ctx = { site: siteName, args, opts, maxTier: opts.maxTier ?? 3 };
   const remembered = rememberedTier(siteName, op.name);
   // A remembered escalation is a speed hint, not a requirement: under a lower cap, start at the op's own tier.
@@ -488,6 +500,19 @@ export async function call(
       }
     }
     if (a.class === "drift") return done(await onDrift(ctx, site, op, a));
+    // Recovery is spent, plain HTTP still says auth, and the site has no login on record that could
+    // have run out: a wall that answers 419 or 401 to what is not a browser looks the same. One tier-2
+    // attempt tells them apart, for a read only: a page can send a request more than once (its own
+    // scripts, a retry after a navigation or a reset), and a write is sent once. When the attempt does
+    // not get the data, the call ends with tier 1's answer.
+    if (a.class === "auth" && tier === 1 && !write && ctx.maxTier >= 2 && chromeAvailable() && noLogin()) {
+      const b = await attempt(ctx, op, 2);
+      if (b.class === "ok") {
+        rememberTier(siteName, op.name, 2);
+        const why = `tier 1 said auth with no login on record for this site (${a.reason}); a real page got the answer`;
+        return done(success(b, { reason: why }));
+      }
+    }
     return fail();
   }
 }

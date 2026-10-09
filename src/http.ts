@@ -92,6 +92,10 @@ function transform(v: string, t: "strip-quotes" | "url-decode" | undefined): str
   return v;
 }
 
+/** A slot a cookie or session value fills, whole or as a hole in its template. */
+export const holdsRef = (s: Operation["slots"][number]) =>
+  !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0);
+
 /** The args a call runs with at every tier: a param the caller left out takes its default. */
 export function withDefaults(op: Operation, args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -192,8 +196,6 @@ export async function send(
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const signal = AbortSignal.timeout(timeoutMs);
   const inHeader = (s: Operation["slots"][number]) => s.at.length === 1 && s.at[0]!.startsWith("header:");
-  const holdsRef = (s: Operation["slots"][number]) =>
-    !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0);
   const secret = new Set([
     "authorization",
     "cookie",
