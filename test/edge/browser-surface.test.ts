@@ -473,6 +473,49 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     }
   });
 
+  test("a tab the run's page opened that has no page yet when the run ends is closed with it, and never writes", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    // guarded like a tier-3 read: the tab's own document (a GET) may load, what it POSTs may not leave
+    await runTrigger({
+      url: `${fx.url}/late-tab-page`,
+      profileDir: profileDir(),
+      intercept: (e, acting) => acting && e.request.method !== "GET",
+    });
+    assert.ok(fx.calls.slice(seen).includes("/held-vote"), "the slow tab was opened");
+    fx.release(); // the tab's document arrives only now, with a script that POSTs
+    await sleep(1000);
+    assert.deepEqual(votes().slice(before), [], "the tab wrote once the run's guard was lifted");
+    const open = (await openBrowser({ profileDir: profileDir() })).pages().map((p) => p.url());
+    assert.deepEqual(
+      open.filter((u) => u.includes("/held-vote")),
+      [],
+      "the tab was left open",
+    );
+  });
+
+  test("a tab whose opener has closed by the time its page comes is still the run's: what it POSTs mid-run never leaves", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    // mid-run: once the slow tab has asked for its document and the tab between has closed itself
+    const answered = until(() => fx.calls.slice(seen).includes("/held-vote"), 20_000).then(async (asked) => {
+      await sleep(600);
+      fx.release();
+      return asked;
+    });
+    await runTrigger({
+      url: `${fx.url}/chain-page`,
+      steps: [{ action: "wait", ms: 3000 }],
+      profileDir: profileDir(),
+      intercept: (e, acting) => acting && e.request.method !== "GET",
+    });
+    assert.ok(await answered, "the slow tab was opened");
+    await sleep(300);
+    assert.deepEqual(votes().slice(before), [], "a tab of the run wrote: its opener was closed, so nobody claimed it");
+  });
+
   for (const [how, what] of [
     ["beacon", "a pagehide beacon"],
     ["keepalive", "a keepalive fetch on pagehide"],

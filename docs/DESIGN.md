@@ -174,17 +174,24 @@ example value: `<link rel=stylesheet href=/api/vote?id=..>`), and anything match
 known write's `match`; WebSocket messages any of the run's pages sends (a popup's too: the socket
 route is context-wide) are dropped too. A new tab's first navigation (a `target=_blank` link,
 `window.open`) is routed before Playwright has the tab's page, which it reports only once that
-navigation commits, so the guard cannot ask whose request it is. The browser's target list names
-each tab's opener: the request is judged as the run's own unless the run has no unreported tab, and
+navigation commits, so the guard cannot ask whose request it is. The browser reports each new tab
+with the tab that opened it, and the run records that as it happens (the browser forgets it once
+the opener is closed, as does Playwright's `opener()`): the request is judged as the run's own
+unless the run has no stray tab, one its pages opened that it does not hold yet, and
 an aborted one joins the capture once its page shows the tab was the run's. Two runs that open a
 tab at the same moment cannot be told apart, and the guard then applies to both tabs: one run's
-tab fails to load rather than a write going out. The guards are lifted only after the run's pages are closed:
+tab fails to load rather than a write going out. A tab whose page arrives after its opener closed
+is adopted by that record, and one that still has no page when the run ends (a slow document that
+would load, and write, after the guards were lifted) is closed through the browser. The guards are lifted only after the run's pages are closed:
 an open page still sends (a client's retry; Chrome reloads an aborted navigation's error page after
 about a second), and removing a route releases the requests paused in it. A route is not asked about
 every request: Playwright continues by itself any paused request that has no network id, which is
 what a document sends as it unloads (a pagehide beacon, a keepalive fetch, an image ping) and a
 deferred `fetchLater()`. So each guarded page also has a DevTools session of the run's own, where the
-same guard decides those (the page's own target: a cross-origin iframe's unload is not covered).
+same guard decides those. Not covered: a frame on another site. It is a DevTools target of its own,
+and that target is gone before the frame's document unloads, so what the frame sends as it unloads
+is seen by no session, one attached to the frame included (tried); what it sends while the page is
+up is routed like any request. Only interception on the browser target would see it, for every run.
 Closing a page is not atomic either: its unload handlers send, Playwright calls no route handler for
 a page once `close()` was called, and Chrome sends a request paused in a session on to the network
 when that session detaches. So when a guarded run ends, each of its pages is first taken to

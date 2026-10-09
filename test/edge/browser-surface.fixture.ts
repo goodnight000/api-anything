@@ -13,6 +13,8 @@ export interface EdgeFixture {
   calls: string[];
   /** text frames received over /ws (each one a message the page sent: a write over a WebSocket) */
   wsMessages(): number;
+  /** answer the /held-vote requests that have been waiting */
+  release(): void;
   close(): Promise<void>;
 }
 
@@ -33,6 +35,7 @@ export const TOKEN = "q2Fz/9kLmT0vX+Yb7NcW1pRe/Hs3JuQa8Df+Lg6ZoVy4=";
 export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Promise<EdgeFixture> {
   const calls: string[] = [];
   const hanging = new Set<ServerResponse>();
+  const held: ServerResponse[] = [];
   let port = 0;
   const server = createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://x");
@@ -147,6 +150,17 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
         };
         return html(res, `<script>${send[u.searchParams.get("how") ?? ""] ?? ""}</script>${dataFetch(name)}`);
       }
+      case "/late-tab-page":
+        // opens a tab whose document is slow: the tab has no page yet when the run that opened it ends
+        return html(res, `<script>window.open("/held-vote")</script>${dataFetch(name)}`);
+      case "/chain-page":
+        // opens a tab that opens the slow tab and closes itself: the slow tab's opener is gone when its page comes
+        return html(res, `<script>window.open("/chain-tab")</script>${dataFetch(name)}`);
+      case "/chain-tab":
+        return html(res, `<script>window.open("/held-vote");setTimeout(()=>window.close(),200)</script>`);
+      case "/held-vote":
+        held.push(res); // answered by release(), with a page that writes
+        return;
       case "/api/vote":
         res.writeHead(200, { "content-type": "text/plain" });
         return res.end("voted");
@@ -199,8 +213,12 @@ export async function startEdgeFixture(o: { rootRedirect?: boolean } = {}): Prom
     url: `http://127.0.0.1:${port}`,
     calls,
     wsMessages: () => wsMessages,
+    release() {
+      for (const res of held.splice(0))
+        html(res, `<script>fetch("/api/vote?how=latetab",{method:"POST",body:"up"})</script>`);
+    },
     close() {
-      for (const r of hanging) r.destroy();
+      for (const r of [...hanging, ...held]) r.destroy();
       for (const s of sockets) s.destroy();
       server.closeAllConnections();
       return new Promise((resolve) => server.close(() => resolve()));
