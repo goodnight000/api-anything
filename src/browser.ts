@@ -500,8 +500,11 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const cover = (p: Page) => {
     if (!intercept || taps.has(p)) return;
     const drop = (ex: Exchange, routed: boolean) => {
-      if (sealed) return true;
-      if (routed || !intercept(ex, acting)) return false;
+      // What a route will see is the route's to judge, until the run ends: then this is the last word.
+      if (routed && !sealed) return false;
+      // Once sealed everything is stopped, but only what the guard itself stops joins the capture:
+      // a write a page sends as it leaves can be learned, the rest of a closing page's traffic is noise.
+      if (!intercept(ex, acting)) return sealed;
       exchanges.push({ ...ex, id: exchanges.length + 1, aborted: true });
       return true;
     };

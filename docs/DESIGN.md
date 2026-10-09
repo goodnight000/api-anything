@@ -203,7 +203,9 @@ Closing a page is not atomic either: its unload handlers send, Playwright calls 
 a page once `close()` was called, and Chrome sends a request paused in a session on to the network
 when that session detaches. So when a guarded run ends, each of its pages is first taken to
 `about:blank` with its session and the guards still live, and everything it sends from then on
-fails; what is closed afterwards has nothing left to send. Emptying a page and closing it each
+fails; what is closed afterwards has nothing left to send. What the guard itself would stop is
+still recorded as aborted then, so a write a page only sends on leaving can be learned; the rest of
+a closing page's traffic is stopped without a record. Emptying a page and closing it each
 have a bound (5 s: a hung renderer answers nothing, and neither `evaluate()` nor `close()` has a
 timeout of its own), and the guards are lifted only when every page of the run and every stray tab
 is known to be closed. If one is not, the browser is still released, and both guards stay until the

@@ -15,7 +15,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { chromeAvailable, closeBrowser, openBrowser, pageFetch, runTrigger } from "../../src/browser.js";
 import { call } from "../../src/execute.js";
-import { addOperation, capturePage, profileDir } from "../../src/heal.js";
+import { addOperation, capturePage, loadCapture, profileDir } from "../../src/heal.js";
 import { createServer } from "../../src/mcp.js";
 import { clearStale, exportSite, loadSite, markStale, scanSecrets, staleMark } from "../../src/store.js";
 import { startFixture } from "../fixture/server.js";
@@ -673,7 +673,7 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     ["slow", "a pagehide handler that takes 400 ms to send"],
     ["later", "a deferred fetchLater()"],
   ] as const) {
-    test(`capture --write: ${what} never reaches the server when the run ends`, async (t) => {
+    test(`capture --write: ${what} never reaches the server when the run ends, and is in the capture`, async (t) => {
       process.env.API_ANYTHING_HOME = home;
       const before = votes().length;
       const r = await capturePage({ url: `${fx.url}/leave-page?how=${how}`, write: true });
@@ -682,6 +682,12 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
         return t.skip("this Chrome has no fetchLater()");
       await sleep(300); // what a closing page got out arrives after the run has returned
       assert.deepEqual(votes().slice(before), [], "the write was performed while learning it");
+      // stopped as the run ended, and still learnable: a write that is only ever sent on leaving
+      const stopped = loadCapture(r.id).exchanges.filter((e) => e.request.url.endsWith(`/api/vote?how=${how}`));
+      assert.deepEqual(
+        stopped.map((e) => e.aborted),
+        [true],
+      );
     });
   }
 
