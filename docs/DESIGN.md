@@ -174,24 +174,29 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    ref of its own, named by its position. An empty string is one too: the page may fill it on a later load, and only a
    ref there is refreshed. A leaf that cannot be a ref (a number, a flag, a null, a leaf that is only partly a slot)
    refuses the learn; a leaf under a name marked public stays as captured. A request the app saved under an ordinary storage key is no credential: its other leaves stay as
-   captured. A stored value counts as a credential under a credential's name or when it is random-looking; a stored
-   JSON text by its key, and each string in it on its own. Newly learned session references are scoped by operation, with distinct request positions
+   captured. A stored value counts as a credential under a credential's name or when it is random-looking, in any
+   entry that holds it and whatever the entries' order; a stored JSON text by its key, and each string in it on its
+   own. A stored setting sent under a credential's name in the request (`token=<it>`) counts too. Newly learned session references are scoped by operation, with distinct request positions
    for different tokens that share a name: one name never means two values, wherever the second was
    found (a storage entry called `token` inside `v1:<value>`, next to a `token` field holding another). All discovered credentials participate in compound-copy
    removal. Learning ends with one check behind all of these rules: the save-time secret scan, run over the stored
-   request and the slot templates. What it looks for does not depend on which refs were made: every cookie (the
-   jar's and the request's own Cookie header), every value a rule above recorded as a credential (a container's
-   whose ref yielded too), and every stored value that is a credential, whether or not anything made it a ref. A
-   stored setting (a theme, a locale) is not looked for. A copy no rule could turn into a ref (too short to
-   template, base64, percent-encoded twice) fails the learn, closed. What is exempt is a position, never a value: a
-   name marked public, and for stored values the caller's own example and a persisted-query key. Add and heal run the
-   same scan again before saving, against the site's whole session, and refuse to save any spec that still contains a detected live credential.
-   What this covers is a copy of a value the learner knows: a cookie, a value a rule made a ref, a stored credential,
-   6 characters or longer, as it is or unquoted or URL-decoded, under up to three layers of percent-encoding, JSON
-   escaping and base64. It does not prove a spec holds no credential. These can still reach one: a cookie or value under
+   request and the slot templates. It looks for credentials, not for everything live: every cookie (the jar's and
+   the request's own Cookie header); the `session:` values that are credentials (found by name or as issued, stored as
+   one, or sent under a credential's name); the stored values that are credentials, whether or not anything made them
+   refs; and the value of a credential container whose ref yielded, anywhere but in that container. A stored setting
+   (a theme, a locale) is not looked for, also when a leaf that equals it made it a ref: a ref keeps a value fresh,
+   it does not make it secret. A copy no rule could turn into a ref (too short to template, base64, percent-encoded
+   twice) fails the learn, closed, and the error names the leaf that holds it. What is exempt is a position, never a
+   value: a name marked public, and for stored values the caller's own example and a persisted-query key. Add and heal
+   run the scan again before saving, against the site's whole session (every stored session value, settings too), and refuse to save any spec that still contains one.
+   What the scan finds is a copy of a value it is given, 6 characters or longer, as it is or unquoted or URL-decoded:
+   in the text; in what the text decodes to, through up to three layers of percent-encoding, JSON escapes and base64
+   runs of 16 characters or more decoded whole; and as the value's own base64 encoding at any byte offset, in the
+   standard and the URL-safe alphabet (a six-character value's eight characters, an encoding that follows other text).
+   It does not prove a spec holds no credential. These can still reach one: a cookie or value under
    6 characters; a credential that is a number (a number leaf is never a ref, and digits alone are not random-looking, so
-   one is caught only as a copy of a known value); a credential split across two leaves; a copy under four or more
-   layers of encoding; a cookie that only the second run's request carried and the jar does not hold; a value under a
+   one is caught only as a copy of a known value); a credential split across two leaves; a copy behind more encoding
+   than that (four layers, base64 twice after other text, hex); a cookie that only the second run's request carried and the jar does not hold; a value under a
    credential's name that is too plain for the name's rule (under 8 characters for a per-session name, not random-looking
    for a credential-like one), whole or beside a param; and a credential no rule recognizes (not a cookie, not stored,
    not named like one, not issued by an earlier answer), which beside a param in an ordinarily named leaf stays in the
