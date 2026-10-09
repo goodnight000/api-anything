@@ -220,6 +220,13 @@ export async function startFixture(): Promise<Fixture> {
     // The other login wall: a redirect to the sign-in page.
     if (p === "/account") return send(res, 302, "text/plain", "", { location: "/signin?next=%2Faccount" });
     if (p === "/signin") return html(200, LOGIN_PAGE);
+    // A single-page app on a static host: a deep link answers 404 with the app's shell (the host's
+    // 404.html fallback), and the shell loads the data all the same.
+    if (p.startsWith("/app/"))
+      return html(
+        404,
+        `<!doctype html><html><body><div id="app"></div><script>fetch("/api/scoped?q="+location.pathname.slice(5))</script></body></html>`,
+      );
     // A forum as a guest sees it: a quick-login box in every page's header, the public content under
     // it. The member list is in the markup (/community redirects to it); a member's page fetches
     // their posts as JSON; a member's card keeps the profile in the page's state JSON.

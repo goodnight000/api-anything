@@ -360,8 +360,10 @@ independent alternative.
 - **CLI** `api-anything`:
   - `login <site|url> [--profile "Chrome/Profile 1"] [--window] [--cookies <file>]`, `logout <site>`
   - `capture <url> [--steps ...] [--interactive]` prints a compact, noise-filtered list of candidate
-    requests with ids. Its `next` recommends the learn step, unless the page is a bot challenge or a
-    sign-in page. "Sign-in page" takes strong evidence: the navigation landed on a login path, or the
+    requests with ids. Its `next` recommends the learn step, unless the page is a bot challenge, a
+    sign-in page, or an HTTP error that is itself the best candidate (an erroring document that loaded
+    a usable data request is reported as `pageStatus`, and the request is recommended). "Sign-in page"
+    takes strong evidence: the navigation landed on a login path, or the
     final document is a sign-in form and nothing else (no other candidate, none of the example values,
     no text outside its forms). A sign-in form beside content or data requests (a public page's login
     box) is said next to the recommendation, not instead of it, redirect or not

@@ -327,14 +327,15 @@ function textOutsideForms(html: string): string {
 /**
  * What the page a capture ended on says about learning from it. `stop`: nothing to learn here, it
  * is a sign-in page or an HTTP error. `also`: it shows a sign-in form beside content or data, as a
- * public page may, so that is said next to the recommendation and not instead of it.
+ * public page may, so that is said next to the recommendation and not instead of it. `status`: its
+ * HTTP error, when a request it loaded is recommended all the same.
  */
 function pageSays(
   c: CaptureFile,
   url: string,
   ranked: Candidate[],
   values: string[],
-): { stop?: string; also?: string } {
+): { stop?: string; also?: string; status?: number } {
   const pages = capturePages(c).map((u) => u.split("#")[0]);
   // the main frame's last document: a widget's iframe is a document too
   const page = c.exchanges
@@ -357,14 +358,20 @@ function pageSays(
   const shown = values.some((x) => x.length >= 3 && body.toLowerCase().includes(x.toLowerCase()));
   // The page is the form and nothing else: no other candidate, no example value, no text outside its forms.
   const bare = form && ranked.every((x) => x.id === page.id) && !shown && !textOutsideForms(body);
-  if (landed || bare || (form && status >= 400))
+  // An error is a dead end when the erroring page is itself what would be recommended, not when a
+  // data request it loaded is (a static host's 404 fallback serving the app).
+  const failed = status >= 400 && (ranked[0]?.id ?? page.id) === page.id;
+  if (landed || bare || (form && failed))
     return { stop: "the page is a sign-in page: ask the user to run api-anything login <site>, then capture again" };
-  if (status >= 400) return { stop: `the page answered HTTP ${status}: check the URL, then capture again` };
-  return form
-    ? {
-        also: "the page also shows a sign-in form: if the data you want is missing, ask the user to run api-anything login <site> first",
-      }
-    : {};
+  if (failed) return { stop: `the page answered HTTP ${status}: check the URL, then capture again` };
+  return {
+    ...(form
+      ? {
+          also: "the page also shows a sign-in form: if the data you want is missing, ask the user to run api-anything login <site> first",
+        }
+      : {}),
+    ...(status >= 400 ? { status } : {}),
+  };
 }
 
 async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
@@ -414,6 +421,7 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     requests: c.exchanges.length,
     candidates,
     ...(wall ? { blocked: wall } : {}),
+    ...(page.status ? { pageStatus: page.status } : {}),
     next: wall
       ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> (clear the challenge in the window), then capture again`
       : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),

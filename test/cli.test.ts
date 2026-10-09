@@ -436,6 +436,15 @@ describe("capture's next hint", { skip: noChrome }, () => {
     assert.doesNotMatch(gone, learn);
   });
 
+  test("an erroring document does not hide the data request it loaded", async () => {
+    // a static host's 404 fallback serving the app, which fetches the user's JSON
+    const out = await capture("/app/alice", "--example", "name=alice");
+    assert.equal(out.candidates[0].kind, "fetch");
+    assert.match(out.next, learn);
+    assert.doesNotMatch(out.next, /check the URL/);
+    assert.equal(out.pageStatus, 404, "the document's status is reported on its own");
+  });
+
   test("a sign-in form on a page with content or data is said beside the recommendation, not instead", async () => {
     const pages = [
       ["/forum"], // the member list under a login box, no example given
