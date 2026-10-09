@@ -596,6 +596,28 @@ test("a short example without that evidence is refused, with a hint to pass a se
   );
 });
 
+test("a short example in either set asks whole-leaf evidence of both", () => {
+  // only the second example is short: it must not be placed inside en-US by way of the first
+  const lang = (c: string) => [xhr({ url: `https://api.site.test/v1/top?lang=en-${c}` })];
+  assert.throws(
+    () => learn(lang("USA"), [{ q: "USA" }, { q: "US" }], { exchanges2: lang("US") }),
+    /no captured request carries the example values/,
+  );
+  assert.throws(
+    () => learn(lang("USA"), [{ q: "USA" }, { q: "US" }], { exchanges2: lang("US"), match: { path: "/v1/top" } }),
+    /"q" \("USA"\) is not in the learned request.*whole leaf/,
+  );
+  assert.throws(
+    () => learn(lang("USA"), [{ q: "USA" }, { q: "US" }]),
+    /example 2 q="US": example values need at least 3 characters.*second example/,
+    "a short second example needs its run too",
+  );
+  // control: whole leaves in both runs
+  const whole = (c: string) => [xhr({ url: `https://api.site.test/v1/top?country=${c}&lang=en-${c}` })];
+  const { operation: op } = learn(whole("USA"), [{ q: "USA" }, { q: "US" }], { exchanges2: whole("US") });
+  assert.deepEqual(op.slots, [{ param: "q", at: ["query:country"] }]);
+});
+
 test("add checks a short example before any browser run, and learns one from two captures", async () => {
   const capture = (c: string): CaptureFile => ({
     id: `slots-${c}`,

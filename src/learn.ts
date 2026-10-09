@@ -240,6 +240,13 @@ function exampleValues(args: Args): [string, string][] {
 /** Under 3 characters: found by substring in one capture, such a value is ambiguous ("US", page 2). */
 const isShort = (v: unknown) => asText(v).length < 3;
 
+/**
+ * The params placed by whole leaf only: those with a short example in either set. A short second
+ * example is not to end up inside a longer leaf by way of a long first one (en-USA, then en-US).
+ */
+const shortParams = (args: Args, other?: Args) =>
+  new Set(Object.keys(args).filter((p) => isShort(args[p]) || (other?.[p] !== undefined && isShort(other[p]))));
+
 /** The second trigger run and the example it was made with. */
 type Second = { exchanges: Exchange[]; args: Args };
 
@@ -300,10 +307,11 @@ export function rankCandidates(
   o: { all?: boolean; pages?: string[]; second?: Second } = {},
 ): Candidate[] {
   const examples = exampleValues(args);
-  const values = examples.filter(([, v]) => v.length >= 3);
+  const short = shortParams(args, o.second?.args);
+  const values = examples.filter(([k]) => !short.has(k));
   const carriesShort = shortCarrier(
     examples,
-    examples.filter(([, v]) => v.length < 3),
+    examples.filter(([k]) => short.has(k)),
     o.second,
   );
   const locs = locations(o.pages ?? pageUrls(exchanges));
@@ -316,7 +324,7 @@ export function rankCandidates(
       // a URL-valued example (a link preview's ?url=) is evidence in a URL-valued leaf
       const direct = (v: string) => leaves(v).filter((l) => !l.container && (!URLISH.test(l.value) || URLISH.test(v)));
       const hits = examples
-        .filter(([k, v]) => (v.length >= 3 ? has(v, direct(v)) : carriesShort(e, direct(v), k, v)))
+        .filter(([k, v]) => (short.has(k) ? carriesShort(e, direct(v), k, v) : has(v, direct(v))))
         .map(([k]) => k);
       const urlHits = values.filter(([k, v]) => !hits.includes(k) && has(v, leaves(v))).length;
       const body = e.response?.body ?? "";
@@ -473,7 +481,7 @@ function checkExampleSets({ examples: [args1, args2], exchanges2 }: LearnInput, 
   // a second example without its run proves nothing about a short value
   checkExamples(args1, "example", exchanges2 && args2);
   if (!args2) return;
-  checkExamples(args2, "example 2", args1);
+  checkExamples(args2, "example 2", exchanges2 && args1);
   const k1 = Object.keys(args1).sort().join();
   if (Object.keys(args2).sort().join() !== k1) warnings.push("example 2 names different params than example 1");
 }
@@ -601,7 +609,7 @@ function escapeOf(leaf: Leaf, hits: Hit[]): Escape | undefined {
  * Where a scalar example sits: the leaves equal to it, and the string leaves holding it (raw or
  * percent-encoded) inside other text.
  */
-function scalarHits(name: string, raw: unknown, leaves: Leaf[]): { exact: Leaf[]; part: Hit[] } {
+function scalarHits(name: string, raw: unknown, leaves: Leaf[], whole: boolean): { exact: Leaf[]; part: Hit[] } {
   const v = asText(raw).toLowerCase();
   const literal = /^(true|false|null)$/.test(v);
   const digits = /^\d+$/.test(v);
@@ -621,7 +629,7 @@ function scalarHits(name: string, raw: unknown, leaves: Leaf[]): { exact: Leaf[]
       continue;
     }
     // a short value is never a part of a leaf: only the whole-leaf match the second run can prove
-    if (leaf.container || leaf.type !== "string" || literal || isShort(raw)) continue;
+    if (leaf.container || leaf.type !== "string" || literal || whole) continue;
     if (header && !URL_HEADER.has(leaf.at[0]!) && !header.startsWith("x-")) continue;
     // a short example ("SFO") turns up by chance inside a random token: there it must stand alone
     const within =
@@ -678,6 +686,7 @@ function paramSlots(
   locs: Locations,
   warnings: string[],
   disproved: Disproved,
+  short: Set<string>,
 ): { slots: Slot[]; types: Map<string, Param["type"]> } {
   const slots: Slot[] = [];
   const types = new Map<string, Param["type"]>();
@@ -695,7 +704,7 @@ function paramSlots(
       types.set(name, Array.isArray(raw) ? "array" : "object");
       continue;
     }
-    const { exact, part } = scalarHits(name, raw, leaves);
+    const { exact, part } = scalarHits(name, raw, leaves, short.has(name));
     found.set(name, { exact: exact.filter(open(name)), part: part.filter((h) => open(name)(h.leaf)) });
   }
   // A leaf that equals one param's value belongs to that param, even if another's value is inside it.
@@ -707,7 +716,7 @@ function paramSlots(
     const places = [...f.exact, ...part.map((h) => h.leaf)]
       .filter((l) => !NOT_EVIDENCE.has(l.at[0]!) && !echoes(l.value, v, locs))
       .map((l) => l.at.join(" > "));
-    if (!places.length) throw notFound(name, args[name], disprovedFor(disproved, name));
+    if (!places.length) throw notFound(name, args[name], disprovedFor(disproved, name), short.has(name));
     if (places.length > 1)
       warnings.push(`"${name}" appears in ${places.length} places, all will be filled: ${places.join("; ")}`);
     for (const leaf of f.exact) {
@@ -722,12 +731,12 @@ function paramSlots(
   return { slots, types };
 }
 
-const notFound = (name: string, raw: unknown, disproved: string[] = []) =>
+const notFound = (name: string, raw: unknown, disproved: string[] = [], whole = false) =>
   new Error(
     (disproved.length
       ? `example 2 disproves "${name}": ${disproved.slice(0, 4).join("; ")}${disproved.length > 4 ? `; and ${disproved.length - 4} more` : ""}. ` +
         "Nothing else in the learned request holds it, so the param would change nothing. "
-      : `example value for "${name}" (${JSON.stringify(raw)}) is not in the learned request${isShort(raw) ? " as a whole leaf (a value under 3 characters is never placed inside a longer one)" : ""}, so the param would change nothing. `) +
+      : `example value for "${name}" (${JSON.stringify(raw)}) is not in the learned request${whole ? " as a whole leaf (with an example under 3 characters, a param is never placed inside a longer one)" : ""}, so the param would change nothing. `) +
       "Pick the request that carries it (capture, then add --from <id> --pick-request <n>), or drop the param",
   );
 
@@ -1297,6 +1306,7 @@ function diffRuns(
   [args1, args2]: [Args, Args],
   warnings: string[],
   disproved: Disproved,
+  shortParams: Set<string>,
 ): string[] {
   const bySlot = new Map(slots.map((s) => [key(s.at), s]));
   const second = new Map(walk(req2).map((l) => [key(l.at), l]));
@@ -1314,7 +1324,7 @@ function diffRuns(
     const header = headerName(leaf.at);
     if (header && BROWSER_HEADER.test(header)) continue;
     // A short example is placed only where run 2 proves it: a whole leaf holding example 2's value.
-    const short = slot?.param !== undefined && slot.template === undefined && isShort(args1[slot.param]);
+    const short = slot?.param !== undefined && slot.template === undefined && shortParams.has(slot.param);
     if (!other) {
       if (short) disproved.set(pairKey(slot.param!, leaf.at), `${leaf.at.join(" > ")} is not in run 2's request`);
       missing.push(leaf.at.join(" > "));
@@ -1392,6 +1402,7 @@ function twoRunDiff(
   match: Match,
   warnings: string[],
   disproved: Disproved,
+  short: Set<string>,
 ): 1 | 3 {
   const [args1, args2] = input.examples;
   if (!input.exchanges2 || !args2) {
@@ -1412,10 +1423,9 @@ function twoRunDiff(
   const top = answers.find((c) => c.hits.length && new URL(c.url).pathname === path) ?? answers[0] ?? ranked[0];
   // A short example is placed only where run 2 proves it, so a run 2 that proves nothing fails it.
   const unproven = (why: string) => {
-    const short = Object.keys(args1).filter((p) => isShort(args1[p]));
-    if (short.length)
+    if (short.size)
       throw new Error(
-        `${why}, so nothing confirms where the short example of ${short.join(", ")} goes. ` +
+        `${why}, so nothing confirms where the short example of ${[...short].join(", ")} goes. ` +
           "Check that the second example loads the same kind of page, or pass --match",
       );
   };
@@ -1432,7 +1442,8 @@ function twoRunDiff(
   }
   const req2 = { ...byId(top).request, headers: headersOf(byId(top)) };
   // a request that is not run 1's counterpart still shows nonces, but is no evidence against a slot
-  const nonces = diffRuns(request, req2, slots, [args1, args2], warnings, answers.length ? disproved : new Map());
+  const proof = answers.length ? disproved : new Map();
+  const nonces = diffRuns(request, req2, slots, [args1, args2], warnings, proof, short);
   if (!nonces.length) return 1;
   warnings.push(`changes between runs without an arg change (nonce/signature), so minTier 3: ${nonces.join("; ")}`);
   return 3;
@@ -1453,8 +1464,9 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   const { examples } = input;
   const [args1] = examples;
   // a short example is expected to equal leaves that are not its own: only the other disproofs are news
+  const short = shortParams(args1, examples[1]);
   const warnings = [...disproved]
-    .filter(([pair]) => !isShort(args1[pair.slice(0, pair.indexOf("\0"))]))
+    .filter(([pair]) => !short.has(pair.slice(0, pair.indexOf("\0"))))
     .map(([, why]) => `${why}: kept constant, not filled`);
   checkExampleSets(input, warnings);
 
@@ -1467,7 +1479,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
   const locs = input.id !== undefined ? { abs: [], rel: [] } : locations(pages);
-  const param = paramSlots(leaves, args1, locs, warnings, disproved);
+  const param = paramSlots(leaves, args1, locs, warnings, disproved, short);
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
   const { request, slots, sessionValues, publicNames } = sessionRefs(input, exchange, captured, leaves, param.slots);
@@ -1480,7 +1492,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
 
   // 3. two-run diff. A place run 2 disproved was never the param's: learn again without it.
   const found: Disproved = new Map(disproved);
-  const minTier = twoRunDiff(input, request, slots, match, warnings, found);
+  const minTier = twoRunDiff(input, request, slots, match, warnings, found, short);
   if (found.size > disproved.size) return learn(input, found);
 
   // 8. response

@@ -96,7 +96,7 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    leaf named like the param, even when it is the only such flag. An array or object example binds to the equal JSON container. Example
    values must be distinct and at least 3 chars: a shorter one found by substring in one capture is ambiguous.
    A shorter value (`US`, `page=2`, a small enum) is accepted only with a second example that differs, and its
-   run. It is then placed only where a whole decoded leaf equals it in run 1 and equals the other example at the
+   run. A param with a short value in either example (`USA`, then `US`) is then placed only where a whole decoded leaf equals its value in run 1 and equals the other example at the
    same place in run 2, never inside a longer leaf; a leaf that equals it and does not follow (`gl=US` on every
    request, `size: 2` beside `page: 2`) is no slot. The same both-runs match says which request carries it, endpoint by endpoint:
    run 2's evidence counts for the request with the same method, host and path (a path segment may differ the way the
