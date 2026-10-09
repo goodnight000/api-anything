@@ -622,6 +622,33 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
     }
   });
 
+  test("when the browser does not say whose a new tab is, its first navigation is still judged, as the run's own", async () => {
+    process.env.API_ANYTHING_HOME = home;
+    const before = votes().length;
+    const seen = fx.calls.length;
+    const steps = [
+      { action: "click" as const, selector: "#css" }, // the server sees this stylesheet once the steps run
+      { action: "wait" as const, ms: 1500 },
+      { action: "click" as const, selector: "#newtab" },
+    ];
+    const run = capturePage({ url: `${fx.url}/vote-page`, steps, write: true });
+    const tabs = await tabsOf(await openBrowser({ profileDir: profileDir() }));
+    const sync = tabs.sync;
+    try {
+      assert.ok(await until(() => fx.calls.slice(seen).includes("/acting.css"), 20_000), "the run reached its steps");
+      // fault injection: from here on, asking the browser for its tabs never answers
+      tabs.sync = () => new Promise<void>(() => {});
+      const r = await run;
+      assert.deepEqual(votes().slice(before), [], "the write was performed while learning it");
+      // decided, not left waiting for an answer that never comes: stopped, and in the capture
+      const tab = r.exchanges.filter((e) => e.request.url.endsWith("/api/vote?how=newtab"));
+      assert.equal(tab[0]?.aborted, true, `the new tab's navigation was never judged: ${JSON.stringify(tab)}`);
+    } finally {
+      tabs.sync = sync;
+      await run.catch(() => {});
+    }
+  });
+
   test("the record of who opened which tab keeps nothing of tabs that have closed", async () => {
     process.env.API_ANYTHING_HOME = home;
     for (let i = 0; i < 3; i++)

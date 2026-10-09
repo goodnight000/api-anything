@@ -540,15 +540,13 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   };
   /**
    * Whether a tab that has no page yet can be this run's, with the record brought up to date first
-   * (so that a tab the browser has only just opened is in it). When the browser cannot be asked, it can.
+   * (so that a tab the browser has only just opened is in it). When the browser cannot be asked, or
+   * does not answer in time, it can: the request is waiting on this, and so is its tab.
    */
-  const mayOwnNewTab = async () =>
-    !tabs ||
-    !(await tabs.sync().then(
-      () => true,
-      () => false,
-    )) ||
-    strays().length > 0;
+  const mayOwnNewTab = async () => {
+    const asked = tabs?.sync().then(() => true);
+    return !asked || !(await within(asked, false)) || strays().length > 0;
+  };
 
   // This run's pages: its own and any popup they open. The context is shared with concurrent runs.
   const own = new Set<Page>([page]);
