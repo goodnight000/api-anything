@@ -17,8 +17,8 @@ export interface Fixture {
   other: string;
   hits: Hit[];
   otherHits: Hit[];
-  /** shared counter the /rotate route bumps */
-  state: { rotate: number };
+  /** `rotate`: a counter the /rotate route bumps. `sid`: the session cookie value /api/me honours. */
+  state: { rotate: number; sid: string };
   close(): void;
 }
 
@@ -35,7 +35,7 @@ const json = (res: ServerResponse, v: unknown, status = 200, headers: Record<str
 export async function startFixture(): Promise<Fixture> {
   const hits: Hit[] = [];
   const otherHits: Hit[] = [];
-  const state = { rotate: 0 };
+  const state = { rotate: 0, sid: "none" };
 
   const other = createServer(async (req, res) => {
     otherHits.push({ method: req.method!, url: req.url!, headers: req.headers, body: await readBody(req) });
@@ -157,6 +157,33 @@ export async function startFixture(): Promise<Fixture> {
       }
       case "/api/items":
         return json(res, { items: [{ page: u.searchParams.get("page") }] });
+      // signed-in data: answers the one session the server honours, else its login page as 200 HTML
+      case "/api/me":
+        return cookie.includes(`sid=${state.sid}`)
+          ? json(res, { items: [{ me: state.sid }] })
+          : void res
+              .writeHead(200, { "content-type": "text/html" })
+              .end(
+                '<!doctype html><title>Log in</title><form action="/login"><input name="user"><input type="password" name="pw"></form>',
+              );
+      // double-submit CSRF: the header must repeat the ct cookie
+      case "/api/csrf": {
+        const ct = /(?:^|; )ct=([^;]+)/.exec(cookie)?.[1];
+        return ct && req.headers["x-csrf"] === ct
+          ? json(res, { items: [{ ct }] })
+          : json(res, { error: "CSRF token mismatch" }, 403);
+      }
+      // an API behind a header only the page's own script knows (a guest token)
+      case "/api/token":
+        return req.headers["x-token"] === "guest-token-1"
+          ? json(res, { items: [{ token: "ok" }] })
+          : json(res, { error: "Bad guest token" }, 401);
+      case "/tokened":
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end(
+            '<!doctype html><title>tokened</title><script>fetch("/api/token",{headers:{"x-token":"guest-token-1"}})</script>',
+          );
       // a page whose script asks the API for its own ?page=
       case "/paged":
         return void res

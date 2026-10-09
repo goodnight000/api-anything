@@ -196,7 +196,7 @@ Every response is classified, never by status code alone:
 |---|---|---|
 | `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`; for an html recipe whose items selector is `<container> <item>`, the container present with no element of the item's tag), no GraphQL `errors` with null `data` or next to a null extract target; any 2xx to a write | return |
 | `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once |
-| `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, a sign-in form whatever CAPTCHA widget it embeds (reCAPTCHA on a login page is not a bot wall), an html/embedded op's page without its data that says "sign in" or shows a sign-in form (a mere Sign-in link, like Google's ServiceLogin button, is not one), a redirect to a login path, `require_login: true`, a trigger that lands on a sign-in page | refresh cookies from the profile; for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
+| `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, a sign-in form whatever CAPTCHA widget it embeds (reCAPTCHA on a login page is not a bot wall), an html/embedded op's page without its data that says "sign in" or shows a sign-in form (a mere Sign-in link, like Google's ServiceLogin button, is not one), a redirect to a login path, `require_login: true`, a trigger that lands on a sign-in page | once per call, at tier 1 or 2 (a write only when it certainly did not run): re-import a browser-imported session; else refresh the jar's cookies from the profile, retrying if that changes the request (a tier-2 page sends the profile's cookies itself, so there only a `cookie:` ref counts: an `x-csrf-token` header); for a read with `session:` refs, one trigger run refreshes them and answers; then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429 (with the server's Retry-After), "please wait", "rate limit" | back off, report; no heal |
 | `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers. A page showing a sign-in form is never a wall: it is `auth` | escalate transport tier; then diagnostic `gated`. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
@@ -256,6 +256,8 @@ more; a write is never resent. The tier-3 answer is the matching request whose d
 materialized call, including short and structured values, and whose response judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
 A param's default is filled into the args once, before the first tier, so every tier runs with the
 same values: the tier-3 trigger opens `?count=20`, never a literal `{count}`.
+An `auth` answer starts the same recovery whether the tier that got it is 1 or 2 (an op with
+`minTier: 2`, or one a remembered escalation starts there), at most once per call.
 
 ## Browser
 
@@ -355,7 +357,8 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
   export, for servers/CI with no browser.
 - **Self-healing auth**: when a call classifies `auth` and the session came from a browser import,
   exactly the recorded profile is silently re-imported once (browserless) and the call retried; only if it is
-  still `auth` does the result carry the "run `api-anything login`" hint.
+  still `auth` does the result carry the "run `api-anything login`" hint. This runs at tier 2 as at
+  tier 1: the import also lands in the Chrome profile a tier-2 page sends its cookies from.
 - **`logout <site>`** clears the jar and that site's cookies in the profile.
 
 `node:sqlite` is chosen over the `sqlite3` CLI: it is built in (no dependency, present on every

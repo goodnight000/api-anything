@@ -17,16 +17,7 @@ import {
 } from "./heal.js";
 import { buildRequest, type Sent, send, withDefaults } from "./http.js";
 import { reimportIfBrowser } from "./login.js";
-import {
-  cookieHeaderFor,
-  loadSession,
-  loggedIn,
-  mergeCapture,
-  type Session,
-  saveSession,
-  sessionFile,
-  withLock,
-} from "./session.js";
+import { loadSession, loggedIn, mergeCapture, type Session, saveSession, sessionFile, withLock } from "./session.js";
 import type { Operation, Site } from "./spec.js";
 import { lastHealAt, loadSite, markStale, rememberedTier, rememberTier, staleMark } from "./store.js";
 import type { StoredCookie } from "./types.js";
@@ -178,8 +169,11 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   }
 }
 
-/** Replace the jar with the profile's cookies. True when that changes what op's request would carry. */
-async function refreshCookies(site: string, op: Operation): Promise<boolean> {
+/**
+ * Replace the jar with the profile's cookies. True when that changes the request this tier sends:
+ * a tier-2 page sends the profile's own cookies, so there the jar only fills `cookie:` refs.
+ */
+async function refreshCookies(ctx: Ctx, op: Operation, tier: Tier): Promise<boolean> {
   if (!chromeAvailable()) return false;
   let fresh: StoredCookie[];
   try {
@@ -187,11 +181,16 @@ async function refreshCookies(site: string, op: Operation): Promise<boolean> {
   } catch {
     return false;
   }
-  return withLock(sessionFile(site), () => {
-    const s = loadSession(site);
-    const before = cookieHeaderFor(s.cookies, op.request.url);
-    saveSession(site, { ...s, cookies: fresh });
-    return cookieHeaderFor(fresh, op.request.url) !== before;
+  return withLock(sessionFile(ctx.site), () => {
+    const s = loadSession(ctx.site);
+    const sent = (cookies: StoredCookie[]) => {
+      const req = buildRequest(op, ctx.args, { ...s, cookies });
+      if (tier > 1) delete req.headers.cookie;
+      return JSON.stringify(req);
+    };
+    const before = sent(s.cookies);
+    saveSession(ctx.site, { ...s, cookies: fresh });
+    return sent(fresh) !== before;
   });
 }
 
@@ -453,23 +452,23 @@ export async function call(
       tier++;
       continue;
     }
-    if (a.class === "auth" && tier === 1 && !authTried) {
+    // Once per call, from tier 1 or 2. A write gets here only when it certainly did not run.
+    if (a.class === "auth" && tier < 3 && !authTried) {
       authTried = true;
       // An imported session is a mirror of the everyday browser: silently re-import from the same
-      // profile once (browserless), in case the human re-signed in there. Then retry.
+      // profile once (browserless), in case the human re-signed in there. It lands in the jar and
+      // in the Chrome profile tier 2 sends from. Then retry.
       if (await reimportIfBrowser(siteName, op.request.url, site.loginCookies)) continue;
       if (ctx.maxTier <= 1) return fail();
-      if (await refreshCookies(siteName, op)) continue;
+      if (await refreshCookies(ctx, op, tier)) continue;
       // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
       // refreshes them, and for a read its answer is this call's answer.
       if (op.readOnly && ctx.maxTier >= 3 && chromeAvailable() && op.slots.some((s) => s.ref?.startsWith("session:"))) {
         const b = await attempt(ctx, op, 3);
-        if (b.class === "ok")
-          return done(
-            success(b, {
-              reason: `tier 1 said ${a.class} (${a.reason}); refreshed the session through the site's own request`,
-            }),
-          );
+        if (b.class === "ok") {
+          const why = [...notes, `tier ${tier} said ${a.class} (${a.reason})`].join("; ");
+          return done(success(b, { reason: `${why}; refreshed the session through the site's own request` }));
+        }
         // The run answered other args (a trigger fixed to one page), but it refreshed the session values: retry once.
         continue;
       }
