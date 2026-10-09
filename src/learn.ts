@@ -941,6 +941,19 @@ function embeddedRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
 }
 
 /**
+ * Slots do not overlap. A ref for a whole container (a JSON body the app saved in storage, a JSON
+ * header) yields to the params and refs inside it: blanking the whole would take their positions
+ * away. Its value then has no ref left and is not stored.
+ */
+function innerWins(refs: Refs): void {
+  const holds = (s: Slot) =>
+    refs.slots.some((o) => o.at.length > s.at.length && s.at.every((step, i) => o.at[i] === step));
+  refs.slots = refs.slots.filter((s) => !(s.ref && holds(s)));
+  const used = new Set(refs.slots.flatMap((s) => [s.ref, ...templateRefs(s.template ?? "")]));
+  for (const name of Object.keys(refs.sessionValues)) if (!used.has(`session:${name}`)) delete refs.sessionValues[name];
+}
+
+/**
  * Step 4: session refs: live cookie/storage values anywhere, per-session fields, credential-named
  * values, auth headers. Takes the captured template and the param slots; returns the template with
  * every ref'd leaf blanked and the live values the passes found inside longer leaves cut out, the
@@ -973,6 +986,7 @@ function sessionRefs(
   );
   issuedRefs(refs, open, issued);
   let request = embeddedRefs(refs, open, captured);
+  innerWins(refs);
   // The spec never holds a credential: blank every ref'd leaf.
   for (const s of refs.slots) if (s.ref) request = setAt(request, s.at, "");
   return {

@@ -144,7 +144,9 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    re-encodes it the same way; in a leaf that also holds an arg (`next=/search?q={q}&auth=<cookie>`)
    it is a `{cookie:x}` hole in the param's template, filled at call time. When that slot has no
    escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. A capture refreshes a
-   templated `session:` value from its place in the leaf. Newly learned session references are scoped by operation, with distinct request positions
+   templated `session:` value from its place in the leaf. Slots never overlap: a ref for a whole container
+   (a JSON body the app saved in storage, a JSON-valued header) yields to the params and refs inside it,
+   since blanking the whole would take their positions away. Newly learned session references are scoped by operation, with distinct request positions
    for different tokens that share a name: one name never means two values, wherever the second was
    found (a storage entry called `token` inside `v1:<value>`, next to a `token` field holding another). All discovered credentials participate in compound-copy
    removal. Add and heal refuse to save any spec that still contains a detected live credential.

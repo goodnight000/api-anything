@@ -128,6 +128,56 @@ test("a stored value found inside a longer leaf never takes over another credent
   }
 });
 
+/* ------------------------------------------------------- 6: no overlapping */
+
+test("a ref for a whole container yields to the params and refs inside it", () => {
+  const SID = "q2Fz9kLmT0vXYb7NcW1pReHs3JuQa8Df";
+  const session = { cookies: [cookie("sid", SID)], values: {} };
+  const jar = { cookies: session.cookies };
+  const send = (op: ReturnType<typeof learn>["operation"]) => buildRequest(op, { q: "puppies" }, session);
+
+  // the app saved its last request in localStorage, and a field inside it is the session cookie
+  const body = JSON.stringify({ q: "kittens", token: SID, page: 1 });
+  const saved = learn([post(body)], [{ q: "kittens" }], { ...jar, storage: { lastRequest: body } });
+  assert.deepEqual(saved.operation.slots, [
+    { param: "q", at: ["body", "json:/q"] },
+    { ref: "cookie:sid", at: ["body", "json:/token"] },
+  ]);
+  assert.deepEqual(saved.sessionValues, {});
+  assert.deepEqual(JSON.parse(send(saved.operation).body!), { q: "puppies", token: SID, page: 1 });
+
+  // only a param inside: the body is still filled, not blanked whole
+  const plain = JSON.stringify({ q: "kittens", page: 1 });
+  const onlyParam = learn([post(plain)], [{ q: "kittens" }], { storage: { lastRequest: plain } });
+  assert.deepEqual(onlyParam.operation.slots, [{ param: "q", at: ["body", "json:/q"] }]);
+  assert.equal(send(onlyParam.operation).body, '{"q":"puppies","page":1}');
+
+  // a session header that is JSON, holding the cookie
+  const header = learn(
+    [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-csrf-token": `["${SID}",1]` } })],
+    [{ q: "kittens" }],
+    jar,
+  );
+  assert.deepEqual(
+    header.operation.slots.filter((s) => s.ref),
+    [{ ref: "cookie:sid", at: ["header:x-csrf-token", "json:/0"] }],
+  );
+  assert.equal(send(header.operation).headers["x-csrf-token"], `["${SID}",1]`);
+
+  // control: nothing inside has a slot, so the whole container is one ref
+  const state = '{"tab":"all","n":3}';
+  const whole = learn(
+    [xhr({ url: "https://api.site.test/v1/search?q=kittens", headers: { "x-state": state } })],
+    [{ q: "kittens" }],
+    { storage: { state } },
+  );
+  assert.deepEqual(
+    whole.operation.slots.filter((s) => s.ref),
+    [{ ref: "session:op/state", at: ["header:x-state"] }],
+  );
+  assert.deepEqual(whole.sessionValues, { "op/state": state });
+});
+
 /* -------------------------------------------------- 4: cached query hashes */
 
 test("a persisted-query hash the app caches in storage stays a volatile anchor at any length", () => {
