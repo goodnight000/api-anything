@@ -865,7 +865,7 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     assert.equal((await call("t2token", "items", {}, o)).tier, 2, "the refreshed value serves tier 2");
   });
 
-  test("auth with no login on record is tried once from a real page, and the tier that answers is remembered", async () => {
+  test("auth with no login on record gets one attempt from a real page before giving up, and the tier that answers is remembered", async () => {
     site("picky", rd("items", "/api/picky"));
     const o = { minIntervalMs: 0, timeoutMs: 5000 };
     fx.hits.length = 0;
@@ -880,20 +880,32 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     assert.equal(fx.hits.filter((h) => h.url === "/api/picky").length, 1, "tier 1 was not tried again");
   });
 
-  test("when the page says auth too, the call ends as auth with the login hint, after one browser attempt", async () => {
+  test("when the page says auth too, the call ends exactly as it would have: tier 1's auth and the login hint", async () => {
     // /api/me answers its login page to everyone but the one session it honours
     site("walled", rd("me", "/api/me"));
     fx.state.sid = "nobody-has-this";
     fx.hits.length = 0;
     const r = await call("walled", "me", {}, { minIntervalMs: 0, timeoutMs: 5000 });
     assert.equal(r.class, "auth", JSON.stringify(r));
-    assert.equal(r.tier, 2);
+    assert.equal(r.tier, 1);
     assert.match(r.next ?? "", /api-anything login walled/);
-    assert.equal(
-      fx.hits.filter((h) => h.url === "/api/me").length,
-      2,
-      "tier 1, then one page fetch, and no trigger run",
-    );
+    const fromPage = fx.hits.filter((h) => h.url === "/api/me" && /Chrome\//.test(String(h.headers["user-agent"])));
+    assert.equal(fromPage.length, 1, "one attempt from a page, and no trigger run");
+  });
+
+  test("recovery comes before the page attempt: a fresher cookie in the Chrome profile answers at tier 1", async () => {
+    // a session with no source (one saved by an older version), an empty jar, and the cookie only in the profile
+    site("legacy", rd("me", "/api/me"));
+    fx.state.sid = "profile-only";
+    await addCookiesToProfile([cookie("sid", "profile-only", "127.0.0.1")], profileDir());
+    saveSession("legacy", { cookies: [], values: {} });
+    fx.hits.length = 0;
+    const r = await call("legacy", "me", {}, { minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.deepEqual(r.data, [{ me: "profile-only" }]);
+    const fromPage = fx.hits.filter((h) => h.url === "/api/me" && /Chrome\//.test(String(h.headers["user-agent"])));
+    assert.equal(fromPage.length, 0, "the jar was refreshed from the profile and plain HTTP answered");
   });
 
   test("tier 2 honours timeoutMs", async () => {

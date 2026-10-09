@@ -403,8 +403,8 @@ export async function call(
     return done({ ok: false, class: "input", reason: (e as Error).message, next: nextFor("input", siteName, op) });
   }
 
-  // No login on record for this site: none was run (a login leaves its source, even after its cookies
-  // expire), no login cookie is in the jar, and the op neither takes a credential nor was learned signed in.
+  // No login on record for this site: the session has no source (a login records one, logout clears it),
+  // the jar has no live login cookie, and the op neither takes a credential nor was learned signed in.
   const noLogin =
     !session.source && !loggedIn(session.cookies, site.loginCookies) && !op.slots.some(holdsRef) && !op.learnedLoggedIn;
   const ctx: Ctx = { site: siteName, args, opts, maxTier: opts.maxTier ?? 3 };
@@ -469,15 +469,6 @@ export async function call(
       tier++;
       continue;
     }
-    // Plain HTTP answered auth, and there is no login on record to have run out: more likely the
-    // client was turned away (a wall that answers 419 or 401 to what is not a browser) than a session
-    // expired. The same request from a real page tells which, once; if that says auth too, recovery
-    // and the login hint follow as usual. With a login on record, recovery comes first, as before.
-    if (a.class === "auth" && noLogin && tier === 1 && ctx.maxTier >= 2 && chromeAvailable()) {
-      notes.push(`tier 1 said auth with no login on record for this site (${a.reason})`);
-      tier = 2;
-      continue;
-    }
     // Once per call, at any tier. A write gets here only when it certainly did not run.
     if (a.class === "auth" && !authTried) {
       authTried = true;
@@ -501,6 +492,20 @@ export async function call(
       }
     }
     if (a.class === "drift") return done(await onDrift(ctx, site, op, a));
+    // Recovery is spent, plain HTTP still says auth, and the site has no login on record that could
+    // have run out: a wall that answers 419 or 401 to what is not a browser looks the same. One tier-2
+    // attempt tells them apart. It can only add an answer: when it does not get the data, the call
+    // ends as it would have without it (a write it may have run ends as that attempt's own failure).
+    if (a.class === "auth" && tier === 1 && noLogin && ctx.maxTier >= 2 && chromeAvailable()) {
+      const b = await attempt(ctx, op, 2);
+      if (b.class === "ok") {
+        rememberTier(siteName, op.name, 2);
+        const why = `tier 1 said auth with no login on record for this site (${a.reason}); a real page got the answer`;
+        return done(success(b, { reason: why }));
+      }
+      if (write && !notRun(b))
+        return done({ ok: false, class: b.class, tier: 2, reason: b.reason, next: nextFor(b.class, siteName, op, b) });
+    }
     return fail();
   }
 }

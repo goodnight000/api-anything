@@ -260,17 +260,17 @@ more; a write is never resent. The tier-3 answer is the matching request whose d
 materialized call, including short and structured values, and whose response judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
 A param's default is filled into the args once, before the first tier, so every tier runs with the
 same values: the tier-3 trigger opens `?count=20`, never a literal `{count}`.
-When tier 1 answers `auth` and there is no login on record for the site (no `login` was run, no login
-cookie is in the jar, the op takes no cookie or session value and was not learned signed in), the
-likelier cause is a wall that answers 419 or 401 to a client that is not a browser, not an expired
-session. The request is sent once from a real page (tier 2), when that tier may run. If the page gets
-the data, the tier is remembered; if it says `auth` too, recovery and the login hint follow as usual.
-With a login on record, recovery comes first, as before. This is a guess from what is known before the
-call, not proof: a site that started requiring an account costs one page fetch more per failed call.
 An `auth` answer starts recovery at whichever tier got it (an op with `minTier: 2` or `3`, or one a
 remembered escalation starts there), at most once per call. At tier 3 only the re-import applies,
 and only to a read: the page just ran with the profile's own cookies and session values, so there is
 nothing fresher to take, and a write the page sent is never sent again.
+When tier 1 still answers `auth` after that recovery and the site has no login on record (the session
+has no source, the jar has no live login cookie, the op takes no cookie or session value and was not
+learned signed in), a wall that answers 419 or 401 to a client that is not a browser looks the same as
+a login wall. One tier-2 attempt is made, when that tier may run, before the call gives up. If the page
+gets the data, tier 2 is remembered. If it does not, the call ends exactly as it would have without the
+attempt: tier 1's `auth` and the login hint (a write the attempt may have run ends as that attempt's
+own failure). The attempt can only add an answer; its cost is one page fetch per failed call.
 
 ## Browser
 
