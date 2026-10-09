@@ -1179,6 +1179,34 @@ describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not insta
     assert.notEqual(r, "hung", `no answer after ${Date.now() - t0} ms with timeoutMs 1000`);
   });
 
+  test("tier 2's timeoutMs is one deadline once Chrome is up: opening the site's page and the fetch share it", async () => {
+    // a site whose root page takes 2.5 s to come, and whose API never answers
+    const slow = createHttpServer((req, res) => {
+      if (req.url !== "/") return;
+      setTimeout(
+        () => res.writeHead(200, { "content-type": "text/html" }).end("<!doctype html><title>slow</title>"),
+        2500,
+      );
+    });
+    await new Promise<void>((r) => slow.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(slow.address() as AddressInfo).port}`;
+    try {
+      site("t2up", rd("up", "/plain", { minTier: 2 }));
+      assert.equal((await call("t2up", "up", {}, { maxTier: 2, minIntervalMs: 0 })).ok, true, "Chrome is up");
+      const request = { method: "GET", url: `${base}/api`, headers: {} };
+      saveSite(parseSite({ name: "t2late", baseUrl: base, operations: [rd("n", "/api", { minTier: 2, request })] }));
+      const t0 = Date.now();
+      const r = await call("t2late", "n", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 3000 });
+      const ms = Date.now() - t0;
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.reason ?? "", /no response within 3000 ms/);
+      assert.ok(ms < 4500, `${ms} ms with timeoutMs 3000: the page's 2.5 s were not counted`);
+    } finally {
+      slow.closeAllConnections();
+      slow.close();
+    }
+  });
+
   test("a second process (CLI next to a running MCP server) can still use tier 2", async () => {
     await closeBrowser();
     site("two", rd("l", "/plain", { minTier: 2 }));

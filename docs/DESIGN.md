@@ -417,8 +417,10 @@ appended to `~/.api-anything/heals.jsonl` (op, strategy, diff summary). A tier a
 its own tier), and a call that ran above tier 1 says why in `reason`. The jar, `state.json` and a
 spec (every add and heal, re-read under the lock) are read-modify-written under a lock file, so
 concurrent processes and calls lose nothing.
-Tier 2 honours `timeoutMs` (the wait for the site's answer, as at tier 1; starting Chrome is not
-counted); when the origin's root redirects to another origin, it fetches from a
+At tier 2 `timeoutMs` is one deadline for the whole call, counted from the moment Chrome is up
+(starting it, seconds on a busy machine, is not counted): the first load of the origin page, every
+hop of the fetch, and the wait and second fetch after the page navigated all draw on it. When the
+origin's root redirects to another origin, it fetches from a
 blank stand-in page on the request's origin. When the origin page navigates mid-fetch (its own
 challenge or redirect destroys the context), a read waits for the new document and fetches once
 more; a write is never resent. The tier-3 answer is the matching request whose declared parameter positions equal the

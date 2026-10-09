@@ -962,11 +962,11 @@ async function redirectOf(seen: Response[], hop: Hop, url: string) {
 }
 
 /** A page on `origin` to fetch from: its root, or a blank stand-in when the root redirects elsewhere (api.* to www). */
-async function originPage(ctx: BrowserContext, origin: string, timeout: number): Promise<Page> {
+async function originPage(ctx: BrowserContext, origin: string, left: () => number): Promise<Page> {
   let page = originPages.get(origin);
   if (page && !page.isClosed()) return page;
   page = await ctx.newPage();
-  await page.goto(origin, { waitUntil: "domcontentloaded", timeout }).catch(() => {});
+  await page.goto(origin, { waitUntil: "domcontentloaded", timeout: left() }).catch(() => {});
   let here = "";
   try {
     here = new URL(page.url()).origin;
@@ -979,7 +979,7 @@ async function originPage(ctx: BrowserContext, origin: string, timeout: number):
     await page.route(blank, (r) =>
       r.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title></title>" }),
     );
-    await page.goto(blank, { waitUntil: "domcontentloaded", timeout });
+    await page.goto(blank, { waitUntil: "domcontentloaded", timeout: left() });
   }
   originPages.set(origin, page);
   return page;
@@ -1052,17 +1052,19 @@ export async function pageFetch(o: {
         page.off("response", onResponse);
       }
     };
-    let page = await originPage(ctx, o.origin, timeoutMs);
+    // One deadline for the whole call from here, with Chrome up: the origin page's load, every hop
+    // of the fetch and a recovery after the page navigated all draw on it.
     const deadline = Date.now() + timeoutMs;
+    const left = () => Math.max(1, deadline - Date.now());
+    let page = await originPage(ctx, o.origin, left);
     const fetchHop = async (hop: Hop) => {
-      const left = () => Math.max(1, deadline - Date.now());
       try {
         return await once(page, hop, left());
       } catch (e) {
         if (!o.retryOnNavigation || !/Execution context was destroyed|navigat/i.test((e as Error).message)) throw e;
         // waitForFunction outlives a context swap (a bare load-state wait can resolve on the old document)
         await page
-          .waitForFunction(() => document.readyState !== "loading", undefined, { timeout: timeoutMs })
+          .waitForFunction(() => document.readyState !== "loading", undefined, { timeout: left() })
           .catch(() => {});
         // it may have landed on another origin (a challenge's redirect): start from a fresh page on ours
         let here = "";
@@ -1074,7 +1076,7 @@ export async function pageFetch(o: {
         if (here !== o.origin) {
           originPages.delete(o.origin);
           await page.close().catch(() => {});
-          page = await originPage(ctx, o.origin, timeoutMs);
+          page = await originPage(ctx, o.origin, left);
         }
         return await once(page, hop, left());
       }
