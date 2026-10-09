@@ -89,6 +89,26 @@ function base64Texts(s: string): string[] {
 }
 
 /**
+ * How a value reads inside base64 text, whatever stands before or after it: its encoding at each of
+ * the three byte offsets, without the characters that also carry a neighbouring byte, in the
+ * standard and the URL-safe alphabet. Decoding the text does not find these: text in front shifts
+ * every byte, and a short value's run is too short to tell from a word.
+ */
+function base64Cores(value: string): string[] {
+  const bytes = Buffer.from(value, "utf8");
+  const out = new Set<string>();
+  for (let lead = 0; lead < 3; lead++) {
+    const text = Buffer.concat([Buffer.alloc(lead), bytes])
+      .toString("base64")
+      .replace(/=+$/, "");
+    // the first characters hold the bytes in front, and the last one bits of the byte that follows
+    const core = text.slice([0, 2, 3][lead], (lead + bytes.length) % 3 ? -1 : undefined);
+    out.add(core).add(core.replace(/\+/g, "-").replace(/\//g, "_"));
+  }
+  return [...out];
+}
+
+/**
  * Every text a spec string may hide a value in: percent-decoded (+ as a space or not),
  * JSON-unescaped (`\/`, `\u002b`) and base64 runs decoded, in any order, up to 3 layers deep.
  */
@@ -131,10 +151,11 @@ export function ipIn(v: string): string | undefined {
 }
 
 /**
- * `secrets`: exact hits of live jar/session values (6+ chars, raw, unquoted or URL-decoded) under
- * any encoding the spec may carry them in: no false positives, so callers fail closed. `warnings`:
- * regex heuristics, which do misfire. `allowed`: JSON paths a human marked public (an op's
- * `public` headers); skipped.
+ * `secrets`: exact hits of live jar/session values (6+ chars, raw, unquoted or URL-decoded). Each
+ * is looked for in the text and in what the text decodes to (three layers of percent-encoding,
+ * JSON escapes and whole base64 runs), and by its own base64 encoding at any byte offset. A hit
+ * is the value itself, so callers fail closed. `warnings`: regex heuristics, which do misfire.
+ * `allowed`: JSON paths a human marked public (an op's `public` headers); skipped.
  */
 export function scanSecrets(
   value: unknown,
@@ -144,7 +165,7 @@ export function scanSecrets(
   const live: [string, string][] = [];
   const add = (label: string, v: string) => {
     for (const f of new Set([v, v.replace(/^"|"$/g, ""), pctDecode(v, false)]))
-      if (f.length >= 6) live.push([label, f]);
+      if (f.length >= 6) for (const text of [f, ...base64Cores(f)]) live.push([label, text]);
   };
   for (const c of session.cookies) add(`cookie ${c.name}`, c.value);
   for (const [k, v] of Object.entries(session.values)) add(`session value ${k}`, v);

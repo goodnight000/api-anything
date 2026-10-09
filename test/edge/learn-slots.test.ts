@@ -15,6 +15,7 @@ after(() => rmSync(HOME, { recursive: true, force: true }));
 import { addOperation, type CaptureFile } from "../../src/heal.js";
 import { buildRequest } from "../../src/http.js";
 import { learnOperation, matches } from "../../src/learn.js";
+import { scanSecrets } from "../../src/secrets.js";
 import type { Exchange, StoredCookie } from "../../src/types.js";
 
 const A = "Zx81kLmN0pQrStUv2wXyZ3aBcD";
@@ -406,6 +407,42 @@ test("learning refuses a request it could not clear of a live value, in any enco
     { cookies: [cookie("sess", "secret123")], public: ["x-ctx"] },
   );
   assert.equal(op.request.headers["x-ctx"], "v1:secret123");
+});
+
+test("the scan finds a base64 copy whatever sits before it, and of a value too short to decode on its own", () => {
+  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
+  const b64 = (s: string) => Buffer.from(s).toString("base64");
+  const jar = (value: string) => ({ cookies: [cookie("sid", value)], values: {} });
+  const found = (text: string, value: string) => scanSecrets({ state: text }, jar(value)).secrets.length > 0;
+
+  // six characters encode to eight, under the length at which a run is decoded as one
+  assert.equal(b64("aB3dE4"), "YUIzZEU0");
+  assert.ok(found("YUIzZEU0", "aB3dE4"), "the short value's own encoding");
+  // text in front of the encoding shifts what decoding the whole run gives
+  assert.ok(found(`prefix${b64(T)}`, T), "after a prefix");
+  // the value at each byte offset inside encoded text, in both alphabets
+  for (const lead of ["", "x", "xy"]) {
+    const inside = b64(`${lead}aB3dE4??>>tail`);
+    assert.ok(found(inside, "aB3dE4??>>"), `standard alphabet, offset ${lead.length}: ${inside}`);
+    assert.ok(
+      found(inside.replace(/\+/g, "-").replace(/\//g, "_"), "aB3dE4??>>"),
+      `URL-safe alphabet, offset ${lead.length}`,
+    );
+  }
+  // control: other base64 text, and the encoding of a different value
+  assert.ok(!found(b64("nothing to see here, move along"), "aB3dE4"));
+  assert.ok(!found(b64("aB3dE5"), "aB3dE4"));
+
+  // and learning refuses both of the reviewer's cases
+  for (const [value, state] of [
+    ["aB3dE4", "YUIzZEU0"],
+    [T, `prefix${b64(T)}`],
+  ] as const)
+    assert.throws(
+      () =>
+        learn([post(JSON.stringify({ q: "kittens", state }))], [{ q: "kittens" }], { cookies: [cookie("sid", value)] }),
+      /keep a credential in the spec: .* holds the live cookie sid/,
+    );
 });
 
 test("the check knows a stored credential that no pass made a reference, and no stored setting", () => {
