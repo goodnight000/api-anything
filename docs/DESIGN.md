@@ -162,11 +162,17 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    stored; only a ref slot's own value takes a `transform`. So a cookie that could only be a hole and sits
    there unquoted or URL-decoded has no safe form, and learning refuses the request rather than keep its text. When that slot has no
    escape of its own and the value sits there percent- or JSON-encoded, the slot takes that escape. The text then left
-   around the holes of a param's leaf is judged by the leaf's name, the way a whole leaf is (`x-csrf-token: kittens.<token>`,
-   `token=kittens.<token>`): when it is a credential by that test, learning refuses the request. It is not made a
-   hole, because no later capture could tell where the arg ends and the credential begins (`red.fox.<token>`), and a
-   refresh would store the wrong text. The caller can mark the name public when the text is the same for every visitor.
-   Text that is no credential by that test stays (`cache_key=search:{q}:page1`). A capture refreshes a
+   around the holes of a param's leaf may be a credential beside the arg. Under a per-session field or header name
+   (`token`, `x-csrf-token`) it is one from 8 characters on, as a whole leaf there is (`token=kittens.<token>`). Under any
+   other name, one that only reads like a credential's included (`cache_key`, `api_key`), it is one only when a piece of
+   it, without the separators next to the hole, is a token and nothing else: one unbroken run of 16 or more characters
+   of the hex or URL-safe base64 alphabet that is random-looking (`api_key=<token>:kittens`). Text with separators inside
+   it is structure and stays (`cache_key=query:{q}:page:1:sort:relevance`, a path), and so are words and numbers joined
+   by `-` or `_` (a slug). A credential there refuses the request. It is not made a hole, because no later capture
+   could tell where the arg ends and the credential begins (`red.fox.<token>`), and a refresh would store the wrong
+   text. The rule goes by shape, so it also refuses a public id or hash that stands alone beside the arg
+   (`/<docId>/kittens`, `rev=kittens@<hash>`); the caller can mark the name public when the text is the same for every
+   visitor. A capture refreshes a
    templated `session:` value from its place in the leaf. Slots never overlap: a ref for a whole container
    (a JSON body the app saved in storage, a JSON-valued header) yields to the params and refs inside it,
    since blanking the whole would take their positions away. A container that is a credential (by its header's name, a
@@ -200,9 +206,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    one is caught only as a copy of a known value); a credential split across two leaves; a copy behind more encoding
    than that (four layers, base64 twice after other text, hex); a cookie that only the second run's request carried and the jar does not hold; a value under a
    credential's name that is too plain for the name's rule (under 8 characters for a per-session name, not random-looking
-   for a credential-like one), whole or beside a param; and a credential no rule recognizes (not a cookie, not stored,
-   not named like one, not issued by an earlier answer), which beside a param in an ordinarily named leaf stays in the
-   template with the rest of the leaf's text. Export scans a
+   for a credential-like one); beside a param under a name that is not per-session, a token with separators in it or
+   around it in the same piece (a JWT's dots, standard base64's `+` and `/`, `auth=<token>` after other text) or under
+   16 characters; and a credential no rule recognizes (not a cookie, not stored, not named like one, not issued by an
+   earlier answer). Export scans a
    spec again, by name and by shape, before it is shared. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes), never another site's.

@@ -283,7 +283,7 @@ test("a credential container that yields to a slot inside it keeps nothing else 
   // ...whose text, when it is a credential by the header's name on its own, is refused as such
   assert.throws(
     () => run({ sig: `kittens.${T}` }),
-    /header:x-csrf-token > json:\/sig holds a param inside text that is a credential .*\(x-csrf-token\)/,
+    /header:x-csrf-token > json:\/sig holds a param inside text that is a credential \(by the leaf's name, x-csrf-token\)/,
   );
 });
 
@@ -622,18 +622,43 @@ test("the text beside a param in its leaf is judged by the leaf's name, as a who
   assert.deepEqual(marked.operation.slots.at(-1), { param: "q", at: ["query:token"], template: `{q}.${T}` });
   assert.deepEqual(marked.sessionValues, {});
 
-  // control: a credential-like name whose leftover text is no credential by the same test changes nothing
-  const cache = learn([xhr({ url: `${search}kittens&cache_key=search:kittens:page1` })], [{ q: "kittens" }]);
-  assert.deepEqual(cache.operation.slots.at(-1), {
-    param: "q",
-    at: ["query:cache_key"],
-    template: "search:{q}:page1",
-  });
-  assert.deepEqual(cache.sessionValues, {});
-  assert.equal(
-    buildRequest(cache.operation, { q: "tigers" }, noSession).url,
-    `${search}tigers&cache_key=search:tigers:page1`,
+  // an opaque token is one under any name: a UUID beside the arg, under a name that says nothing
+  assert.throws(
+    () =>
+      learn([xhr({ url: `${search}kittens&ctx=kittens|550e8400-e29b-41d4-a716-446655440000` })], [{ q: "kittens" }]),
+    /^Error: query:ctx holds a param inside text that is a credential \(an unbroken random-looking run/,
   );
+});
+
+test("structured text beside a param is no credential, whatever the leaf is called", () => {
+  // a name that reads like a credential's, and text long and mixed enough to look random as a whole
+  const keys = [
+    "search:kittens:page1",
+    "query:kittens:page:1:sort:relevance",
+    "search:kittens:locale:en-US:v2",
+    "search:kittens:page1:sort:updated",
+    // words and numbers joined by - or _ are structure too, and so is a path
+    "kittens-care-guide-2024-v2",
+    "list_kittens_sorted_by_price_desc_v2",
+    "/v2/items/kittens/reviews/page/1",
+  ];
+  for (const cacheKey of keys) {
+    const { operation: op, sessionValues } = learn(
+      [post(JSON.stringify({ q: "kittens", cache_key: cacheKey }))],
+      [{ q: "kittens" }],
+    );
+    const slot = op.slots.at(-1)!;
+    assert.deepEqual(
+      [slot.param, slot.at.join(" > "), slot.template],
+      ["q", "body > json:/cache_key", cacheKey.replace("kittens", "{q}")],
+      cacheKey,
+    );
+    assert.deepEqual(sessionValues, {});
+    assert.deepEqual(JSON.parse(buildRequest(op, { q: "tigers" }, noSession).body!), {
+      q: "tigers",
+      cache_key: cacheKey.replace("kittens", "tigers"),
+    });
+  }
 });
 
 test("beside a param under an ordinary name, a known live value too short to template is refused by the check", () => {

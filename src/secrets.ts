@@ -54,6 +54,17 @@ export function isCredential(name: string, value: string): boolean {
   );
 }
 
+/**
+ * A token and nothing else, under any name: one unbroken run of 16+ characters of the hex or
+ * URL-safe base64 alphabet that is random-looking. Words and numbers joined by - or _ are not one,
+ * however long (a slug, page-1-sort-relevance), and any other character breaks the run: `:`, `/`,
+ * `.`, `=` and `+` separate the parts of structured text.
+ */
+export function opaqueToken(text: string): boolean {
+  const worded = text.split(/[-_]/).every((part) => /^[A-Za-z]*\d*$/.test(part));
+  return /^[A-Za-z0-9_-]{16,}$/.test(text) && highEntropy(text) && !worded;
+}
+
 /* ------------------------------------------------------------------- scan */
 
 const JWT = /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/;

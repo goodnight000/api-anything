@@ -24,6 +24,7 @@ import {
   isCredential,
   lastToken,
   leafName,
+  opaqueToken,
   SESSION_FIELD,
   SESSION_HEADER,
   scanSecrets,
@@ -1055,23 +1056,33 @@ function embeddedRefs(refs: Refs, leaves: Leaf[], request: Request): Request {
 }
 
 /**
- * In a param's templated leaf, the text left around the holes is judged by the leaf's name the way
- * a whole leaf is (isCredential): `x-csrf-token: kittens.<token>` keeps a credential beside the
- * arg. It cannot be a reference: no later capture could tell where the arg ends and the credential
- * begins, so a refresh would store the wrong text. The learn is refused instead.
+ * In a param's templated leaf, the text left around the holes may be a credential beside the arg
+ * (`x-csrf-token: kittens.<token>`). Under a per-session name it is one from 8 characters on, as a
+ * whole leaf there is. Under any other name, one that only reads like a credential's included
+ * (cache_key), it is one only when a piece of it is a token and nothing else: text with separators
+ * inside (`query:{q}:page:1:sort:relevance`) is structure. Such text cannot be a reference, since no
+ * later capture could tell where the arg ends and the credential begins and a refresh would store
+ * the wrong text. The learn is refused instead.
  */
 function refuseLeftoverText(slots: Slot[], leaves: Leaf[]): void {
   for (const { at } of leaves) {
     const own = slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(at));
     if (!own) continue;
-    const text = own.template!.replace(/\{\{|\}\}|\{[^{}]+\}/g, (m) => (m === "{{" ? "{" : m === "}}" ? "}" : ""));
+    // the literal pieces between the holes, braces unescaped
+    const pieces = own
+      .template!.replace(/\{\{|\}\}|\{[^{}]+\}/g, (m) => (m === "{{" ? "{" : m === "}}" ? "}" : "\0"))
+      .split("\0");
     const name = leafName(at);
-    if (isCredential(name, text))
-      throw new Error(
-        `${at.join(" > ")} holds a param inside text that is a credential by the leaf's name (${name}): ` +
-          `that text cannot be a reference and would stay in the spec. Not learned. If it is the same for every ` +
-          `visitor, mark the field or header with --public ${name}; otherwise ${ANOTHER_REQUEST}`,
-      );
+    const named = (SESSION_FIELD.test(name) || SESSION_HEADER.test(name)) && pieces.join("").length >= 8;
+    // the separators next to a hole are not part of the token
+    const token = pieces.map((p) => p.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "")).find(opaqueToken);
+    if (!named && token === undefined) continue;
+    const why = named ? `by the leaf's name, ${name}` : `an unbroken random-looking run of ${token!.length} characters`;
+    throw new Error(
+      `${at.join(" > ")} holds a param inside text that is a credential (${why}): ` +
+        `that text cannot be a reference and would stay in the spec. Not learned. If it is the same for every ` +
+        `visitor, mark the field or header with --public ${name}; otherwise ${ANOTHER_REQUEST}`,
+    );
   }
 }
 
