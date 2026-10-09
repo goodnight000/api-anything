@@ -107,18 +107,29 @@ export function splitPick(s: string): string[] {
   return out;
 }
 
+function pickEntry(p: string): { name: string; path: string; re?: RegExp } {
+  const [, name, rest] = /^([\w$-]+)=(.+)$/.exec(p) ?? [p, undefined, p];
+  const cut = rest.indexOf("~");
+  const path = cut < 0 ? rest : rest.slice(0, cut);
+  return { name: name ?? path, path, re: cut < 0 ? undefined : new RegExp(rest.slice(cut + 1)) };
+}
+
+/**
+ * The keys an item of the result carries, when the recipe names them: the pick's, else an HTML
+ * recipe's fields. Discovery sends these, so a description never has to repeat (and misstate) them.
+ */
+export function returnedFields(r: Pick<ResponseSpec, "pick" | "html">): string[] | undefined {
+  if (r.pick?.length) return r.pick.map((p) => pickEntry(p).name);
+  return r.html ? Object.keys(r.html.fields) : undefined;
+}
+
 /**
  * Keep only the given paths, per item for arrays. `name=path` renames the output key, and
  * `name=path~regex` keeps the part of a string that the regex's group 1 (or whole match) finds
  * (`publicId=navigationUrl~/in/([^/?]+)`); a non-string or no match drops the field.
  */
 export function pick(value: unknown, paths: string[]): unknown {
-  const named = paths.map((p) => {
-    const [, name, rest] = /^([\w$-]+)=(.+)$/.exec(p) ?? [p, undefined, p];
-    const cut = rest.indexOf("~");
-    const path = cut < 0 ? rest : rest.slice(0, cut);
-    return { name: name ?? path, path, re: cut < 0 ? undefined : new RegExp(rest.slice(cut + 1)) };
-  });
+  const named = paths.map(pickEntry);
   const one = (item: unknown) => {
     if (!item || typeof item !== "object") return item;
     const out: Record<string, unknown> = {};

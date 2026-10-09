@@ -6,7 +6,7 @@ import { z } from "zod";
 import { chromeAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
 import { botWall } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
-import { capOutput, extract, innerJson, splitPick } from "./extract.js";
+import { capOutput, extract, innerJson, returnedFields, splitPick } from "./extract.js";
 import { addOperation, capturePage, loadCapture, PROFILE_HINT, profileDir } from "./heal.js";
 import { buildRequest } from "./http.js";
 import { AmbiguousProfile } from "./import.js";
@@ -571,6 +571,7 @@ function cmdOps({ pos }: Parsed): number {
   const { site } = requireSite(pos[0]);
   const notes = siteNotes(site.name);
   const about = (p: Operation["params"][number]) => [
+    ...(p.description ? [p.description] : []),
     ...(p.example !== undefined ? [`e.g. ${JSON.stringify(p.example)}`] : []),
     ...(p.hint ? [p.hint] : p.pattern ? [`matches /${p.pattern}/`] : []),
   ];
@@ -581,6 +582,7 @@ function cmdOps({ pos }: Parsed): number {
       name: o.name,
       ...(o.description ? { description: o.description } : {}),
       readOnly: o.readOnly,
+      ...(returnedFields(o.response) ? { returns: returnedFields(o.response) } : {}),
       params: o.params.map(
         (p) => `${p.name}:${p.type}${p.required ? "" : "?"}${about(p).length ? ` (${about(p).join("; ")})` : ""}`,
       ),

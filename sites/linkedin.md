@@ -14,7 +14,8 @@ requests.
   Dynamics is `boston-dynamics`).
 - In `keywords`, apostrophes and non-ASCII letters work. A search with no matches returns `ok` with
   `[]`.
-- An unknown or restricted `publicId` is `input`, and so is an unknown name in `getCompany`.
+- An unknown or restricted `publicId` is expected to return `input`, but that has not been verified
+  live against LinkedIn. An unknown name in `getCompany` returns `input`.
 - `getProfile` has no location name (only `countryCode`), follower count or experience list. Its
   `summary` is the About text; `getMe`'s `occupation` is the headline.
 - `getCompany` returns `name`, `universalName`, `tagline` (when set), `description`, `industry`,

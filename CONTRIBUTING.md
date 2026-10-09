@@ -31,7 +31,9 @@ bundled spec is a starting point that each user's machine keeps healing.
 5. Write `sites/<site>.md`, the notes every `ops` and `list_operations` call sends: only what a
    caller needs and the spec doesn't say (arg formats, unclear result fields, account, limits).
    Everything from a `## Maintainer notes` heading to the end of the file is not sent: put what you
-   verified, how the request works and what failed there.
+   verified, how the request works and what failed there. That heading line ends the notes wherever
+   it appears, a code block included. Don't list result keys: `ops` and `list_operations` send them
+   as `returns`, read from the op's `pick`. Say only what a key means when its name doesn't.
 6. In the PR description, say what you verified, on what date, and whether you were logged in.
 
 Rules for bundled specs:

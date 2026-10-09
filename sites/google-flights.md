@@ -8,8 +8,6 @@ No account is needed. One-way, 1 adult, economy only. No pagination.
   resolves it.
 - `priceCalendar`'s `pattern` refuses metro codes, but its list is not exhaustive: an unlisted metro
   code comes back empty.
-- `via` is a flight's stop airports in order, absent for a nonstop flight. The departure date is the
-  one you asked for; only `arrivalDate` is returned.
 - A date in the past or a place Google can't resolve makes `search` and `top` return `input`: check
   the date and places. `priceCalendar` with an empty range returns `input`.
 
