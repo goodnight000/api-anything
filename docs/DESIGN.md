@@ -128,7 +128,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    That includes a place step 2 gave a param which stays as it was although the param changed (the endpoint's own
    segment in `/api/search?q=search`, when example 2 is `q=kitten`): run 2 disproves it, so it is no slot, and learning
    runs again without it, which makes the leaf a constant to every step (the match names the segment, a credential in
-   it is found). A param left with no place is an error, not a warning. Run 2's request is chosen on the evidence
+   it is found). A param left with no place is an error, not a warning. This covers params whose example is a
+   string, number or flag. An object or array param is outside it: its places are not checked against run 2, so a
+   copy of it elsewhere in the request that did not follow stays a slot, and the leaves inside it, which change with
+   the example, are read as nonces (`minTier: 3`). Run 2's request is chosen on the evidence
    run 1's was: what the response recipe reads, when there is one, and for a read an answer that is data: a captured 2xx,
    not a bare acknowledgement, an error, or a request nobody answered (unless run 1's own answer, pinned by the caller, is no data either). Among the requests that pass, the one on run 1's own path that carries the args comes first (the
    wildcard a false path param puts in the match fits sibling endpoints too). When none passes, run 2 disproves nothing.
@@ -173,7 +176,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    text. The rule goes by shape, so it also refuses a public id or hash that stands alone beside the arg
    (`/<docId>/kittens`, `rev=kittens@<hash>`); the caller can mark the name public when the text is the same for every
    visitor. A capture refreshes a
-   templated `session:` value from its place in the leaf. Slots never overlap: a ref for a whole container
+   templated `session:` value from its place in the leaf. A `session:` value the page later sends empty is not
+   refreshed: the stored one is kept. Slots never overlap: a ref for a whole container
    (a JSON body the app saved in storage, a JSON-valued header) yields to the params and refs inside it,
    since blanking the whole would take their positions away. A container that is a credential (by its header's name, a
    cookie, a stored value that is one) stays one in every part: each of its other string leaves becomes a `session:`
@@ -201,6 +205,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    in the text; in what the text decodes to, through up to three layers of percent-encoding, JSON escapes and base64
    runs of 16 characters or more decoded whole; and as the value's own base64 encoding at any byte offset, in the
    standard and the URL-safe alphabet (a six-character value's eight characters, an encoding that follows other text).
+   That last search only says where to look: the text there is decoded at that offset and must hold the value's bytes,
+   so a match is always a copy of the value, never another one that encodes alike (`xqbcdef` beside `abcdef`).
    It does not prove a spec holds no credential. These can still reach one: a cookie or value under
    6 characters; a credential that is a number (a number leaf is never a ref, and digits alone are not random-looking, so
    one is caught only as a copy of a known value); a credential split across two leaves; a copy behind more encoding
@@ -216,7 +222,8 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    The same `siteOf` scopes Set-Cookie domains, the profile's exported cookies and browser import. A header or field name a human marks public
    (`add --public authorization` for a web app's shared bearer) is a constant under every rule above: its leaf stays
    literal whatever it equals or holds (a cookie, a stored value, a per-session name), and the op lists it in `public`.
-   Save and export waive a public header only: a public query or body field that holds a live cookie or session value is still refused.
+   Learning waives the position of any public name. The save-time scan (`heal.ts`) and export waive a public header
+   only: a public query or body field that holds a live cookie or session value learns, and `add` then refuses to save it.
 5. **Volatile anchors.** A hash-like literal (queryId path segment, doc_id, persisted hash) gets a
    `volatile` entry recording its shape (charset + length) and a stable **anchor** string next to it
    (the GraphQL operationName or the neighboring path segment). This is what the cheap heal uses.
