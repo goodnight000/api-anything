@@ -1172,6 +1172,30 @@ function sessionRefs(
   return { request, slots: refs.slots, sessionValues: refs.sessionValues, publicNames: [...listed] };
 }
 
+/**
+ * The scan's hits (`whole`, by JSON path) said by position, as the other refusals say them: the
+ * leaf that holds each value is the field a user would mark public. The deepest leaf names a hit,
+ * not the containers around it; a hit no leaf holds (a key, the URL's fragment) keeps its path.
+ */
+function placed(request: Request, live: Session, whole: string[]): string[] {
+  const split = (hit: string) => {
+    const i = hit.indexOf(" holds the live ");
+    return [hit.slice(2, i), hit.slice(i)] as const;
+  };
+  const leaves = walk(request);
+  const at = new Map(leaves.map((l) => [l.at.join(" > "), l.at]));
+  const texts = Object.fromEntries(leaves.map((l) => [l.at.join(" > "), l.value]));
+  const hits = scanSecrets(texts, live).secrets.map(split);
+  const deepest = hits.filter(
+    ([where, what]) => !hits.some(([w, x]) => x === what && covers(at.get(where)!, at.get(w)!)),
+  );
+  const elsewhere = whole.map(split).flatMap(([where, what]) => {
+    if (where.startsWith("templates.")) return [`the template for ${where.slice(10)}${what}`];
+    return deepest.some(([, x]) => x === what) ? [] : [`$.${where}${what}`];
+  });
+  return [...deepest.map(([where, what]) => where + what), ...elsewhere];
+}
+
 /** What the final check looks for. */
 interface Known {
   cookies: StoredCookie[];
@@ -1195,8 +1219,9 @@ function refuseLeftover(request: Request, slots: Slot[], known: Known, publicNam
   const isPublic = (at: Step[]) => publicNames.has(leafName(at).toLowerCase());
   const cached = (at: Step[]) => isPublic(at) || VOLATILE_KEY.test(lastToken(at));
   const example = (at: Step[]) => slots.some((s) => s.param && (key(s.at) === key(at) || covers(s.at, at)));
-  // The stored request with the exempt leaves blank, and the templates of the slots that are not exempt.
-  const without = (leaf: (at: Step[]) => boolean, slot: (at: Step[]) => boolean) => {
+  // What the scan finds in the stored request with the exempt leaves blank, and in the templates of
+  // the slots that are not exempt.
+  const look = (leaf: (at: Step[]) => boolean, slot: (at: Step[]) => boolean, live: Session): string[] => {
     let rest = request;
     const gone: Step[][] = [];
     for (const { at } of walk(request)) {
@@ -1204,18 +1229,18 @@ function refuseLeftover(request: Request, slots: Slot[], known: Known, publicNam
       rest = setAt(rest, at, "");
       gone.push(at);
     }
-    return { request: rest, slots: slots.map((s) => (slot(s.at) ? {} : s)) };
+    const templates = Object.fromEntries(
+      slots.flatMap((s) => (s.template !== undefined && !slot(s.at) ? [[s.at.join(" > "), s.template]] : [])),
+    );
+    const whole = scanSecrets({ request: rest, templates }, live).secrets;
+    return whole.length ? placed(rest, live, whole) : [];
   };
   const own = (at: Step[]) => isPublic(at) || known.yielded.some((y) => key(y.at) === key(at));
   const values = (v: Record<string, string>): Session => ({ cookies: [], values: v });
   const secrets = [
-    ...scanSecrets(without(isPublic, isPublic), { cookies: known.cookies, values: known.values }).secrets,
-    ...scanSecrets(
-      without((at) => cached(at) || example(at), cached),
-      values(known.stored),
-    ).secrets,
-    ...scanSecrets(without(own, isPublic), values(Object.fromEntries(known.yielded.map((y) => [y.name, y.value]))))
-      .secrets,
+    ...look(isPublic, isPublic, { cookies: known.cookies, values: known.values }),
+    ...look((at) => cached(at) || example(at), cached, values(known.stored)),
+    ...look(own, isPublic, values(Object.fromEntries(known.yielded.map((y) => [y.name, y.value])))),
   ];
   if (secrets.length)
     throw new Error(

@@ -391,14 +391,16 @@ test("learning refuses a request it could not clear of a live value, in any enco
   for (const [label, c, fields] of cases) {
     assert.throws(
       () => learn([post(JSON.stringify({ q: "kittens", ...fields }))], [{ q: "kittens" }], { cookies: [c] }),
-      new RegExp(`keep a credential in the spec: \\$\\.request\\.body holds the live cookie ${c.name}`),
+      new RegExp(
+        `keep a credential in the spec: body > json:/${Object.keys(fields)[0]} holds the live cookie ${c.name}\\.`,
+      ),
       label,
     );
   }
   // a session value the learner found by name counts too, where no pass reaches its second copy
   assert.throws(
     () => learn([post(JSON.stringify({ q: "kittens", csrf: "Ab3dEf9h", ctx: "v1:Ab3dEf9h" }))], [{ q: "kittens" }]),
-    /keep a credential in the spec: \$\.request\.body holds the live session value csrf/,
+    /keep a credential in the spec: body > json:\/ctx holds the live session value csrf\./,
   );
   // control: a header the caller marked public may hold one
   const { operation: op } = learn(
@@ -441,7 +443,7 @@ test("the scan finds a base64 copy whatever sits before it, and of a value too s
     assert.throws(
       () =>
         learn([post(JSON.stringify({ q: "kittens", state }))], [{ q: "kittens" }], { cookies: [cookie("sid", value)] }),
-      /keep a credential in the spec: .* holds the live cookie sid/,
+      /keep a credential in the spec: body > json:\/state holds the live cookie sid\./,
     );
 });
 
@@ -454,11 +456,11 @@ test("the check knows a stored credential that no pass made a reference, and no 
   // under a credential's name, and random-looking inside a JSON entry under an ordinary one
   assert.throws(
     () => run({ state: b64(T) }, { storage: { token: T } }),
-    /keep a credential in the spec: \$\.request\.body holds the live session value storage:token/,
+    /keep a credential in the spec: body > json:\/state holds the live session value storage:token\./,
   );
   assert.throws(
     () => run({ state: b64(T) }, { storage: { cache: JSON.stringify({ user: { id: T } }) } }),
-    /\$\.request\.body holds the live session value storage:cache\/user\/id.*--public/,
+    /body > json:\/state holds the live session value storage:cache\/user\/id\..*--public/,
   );
   // a short per-session value inside a longer leaf, where no pass templates it
   assert.throws(() => run({ ctx: "v1:Ab3dEf9h" }, { storage: { csrf: "Ab3dEf9h" } }), /storage:csrf/);
@@ -519,7 +521,10 @@ test("the check knows a stored credential that no pass made a reference, and no 
   // a credential container whose ref yielded to a param inside it is still looked for whole
   const csrf = JSON.stringify({ q: "kittens", n: "ab" });
   const copied = post(JSON.stringify({ q: "kittens", state: b64(csrf) }), { "x-csrf-token": csrf });
-  assert.throws(() => learn([copied], [{ q: "kittens" }]), /request\.body holds the live session value x-csrf-token/);
+  assert.throws(
+    () => learn([copied], [{ q: "kittens" }]),
+    /body > json:\/state holds the live session value x-csrf-token\./,
+  );
 });
 
 /* --------------------------------------------- the text beside a param */
@@ -572,11 +577,11 @@ test("beside a param under an ordinary name, a known live value too short to tem
   ];
   assert.throws(
     () => learn(ctx("secret123"), [{ q: "kittens" }], { cookies: [cookie("sess", "secret123")] }),
-    /keep a credential in the spec: .*holds the live cookie sess/,
+    /keep a credential in the spec: header:x-ctx holds the live cookie sess; the template for header:x-ctx holds the live cookie sess\./,
   );
   assert.throws(
     () => learn(ctx("Ab3dEf9h"), [{ q: "kittens" }], { storage: { csrf: "Ab3dEf9h" } }),
-    /keep a credential in the spec: \$\.slots\[1\]\.template holds the live session value storage:csrf/,
+    /keep a credential in the spec: the template for header:x-ctx holds the live session value storage:csrf\./,
   );
   // control: the same leaf with nothing known in it learns
   assert.equal(learn(ctx("Ab3dEf9h"), [{ q: "kittens" }]).operation.slots.length, 2);
