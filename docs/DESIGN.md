@@ -171,7 +171,9 @@ an upvote may be `new Image().src`, a link, a GET form, JSONP or an iframe), tho
 the site's own endpoint in disguise (same site, and no asset extension or a query carrying an
 example value: `<link rel=stylesheet href=/api/vote?id=..>`), and anything matching a
 known write's `match`; WebSocket messages any of the run's pages sends (a popup's too: the socket
-route is context-wide) are dropped too. Service workers are
+route is context-wide) are dropped too. The guards are lifted only after the run's pages are closed:
+an open page still sends (a client's retry; Chrome reloads an aborted navigation's error page after
+about a second), and removing a route releases the requests paused in it. Service workers are
 blocked in the profile, since their fetches bypass routing. The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
 run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the
@@ -248,7 +250,8 @@ appended to `~/.api-anything/heals.jsonl` (op, strategy, diff summary). A tier a
 its own tier), and a call that ran above tier 1 says why in `reason`. The jar, `state.json` and a
 spec (every add and heal, re-read under the lock) are read-modify-written under a lock file, so
 concurrent processes and calls lose nothing.
-Tier 2 honours `timeoutMs`; when the origin's root redirects to another origin, it fetches from a
+Tier 2 honours `timeoutMs` (the wait for the site's answer, as at tier 1; starting Chrome is not
+counted); when the origin's root redirects to another origin, it fetches from a
 blank stand-in page on the request's origin. When the origin page navigates mid-fetch (its own
 challenge or redirect destroys the context), a read waits for the new document and fetches once
 more; a write is never resent. The tier-3 answer is the matching request whose declared parameter positions equal the
