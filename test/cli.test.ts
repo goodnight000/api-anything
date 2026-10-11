@@ -958,3 +958,47 @@ describe("capture's next hint", { skip: noChrome }, () => {
     assert.equal(out.pageStatus, 404, "the document's status is reported on its own");
   });
 });
+
+describe("capture on a page with a reCAPTCHA frame from another site", {
+  skip: !chromeAvailable() && "Google Chrome not installed",
+}, () => {
+  let server: import("node:http").Server;
+  after(() => {
+    server?.closeAllConnections();
+    server?.close();
+  });
+  test("is not reported as blocked: the frame's document is not the page", async () => {
+    const { createServer } = await import("node:http");
+    server = createServer((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      const port = (server.address() as import("node:net").AddressInfo).port;
+      if (u.pathname === "/p") {
+        res.writeHead(200, { "content-type": "text/html" });
+        return res.end(
+          `<iframe src="http://localhost:${port}/anchor"></iframe><script>fetch("/api/items?q="+new URLSearchParams(location.search).get("q"))</script>`,
+        );
+      }
+      if (u.pathname === "/anchor") {
+        res.writeHead(200, { "content-type": "text/html" });
+        return res.end(
+          '<div class="g-recaptcha"></div><script src="https://www.google.com/recaptcha/api.js"></script>',
+        );
+      }
+      if (u.pathname === "/api/items") {
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ items: [{ name: u.searchParams.get("q") }] }));
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+    const r = await cli("capture", `${base}/p?q=kittens`, "--example", "q=kittens");
+    assert.equal(r.code, 0, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.blocked, undefined, r.stdout);
+    assert.ok(
+      out.candidates.some((c: { url: string }) => c.url.includes("/api/items")),
+      r.stdout,
+    );
+  });
+});

@@ -462,7 +462,8 @@ export async function call(
   // Why a call ran above tier 1, so a slow call explains itself.
   const notes: string[] = tier > op.minTier ? [`started at tier ${tier}: an earlier call escalated there`] : [];
   const noted = (a: Attempt) => success(a, notes.length ? { reason: notes.join("; ") } : {});
-  let authTried = false;
+  // auth recovery steps taken this call: 1 re-import, 2 the profile's cookies, 3 a trigger run
+  let authStep = 0;
   let examplesChecked = false;
   for (;;) {
     if (tier > ctx.maxTier) {
@@ -470,7 +471,7 @@ export async function call(
         ok: false,
         class: "blocked",
         tier,
-        reason: `needs tier ${tier}, capped at ${ctx.maxTier}`,
+        reason: [...notes, `needs tier ${tier}, capped at ${ctx.maxTier}`].join("; "),
         next: `allow a higher tier (--max-tier ${tier})`,
       });
     }
@@ -519,16 +520,24 @@ export async function call(
       tier++;
       continue;
     }
-    // Once per call, at any tier. A write gets here only when it certainly did not run.
-    if (a.class === "auth" && !authTried) {
-      authTried = true;
+    // Each step once per call, at any tier; a retry that still says auth goes on to the next step (a
+    // changed analytics cookie is a changed request, not a renewed token). A write gets here only
+    // when it certainly did not run.
+    if (a.class === "auth" && authStep < 3) {
       // An imported session is a mirror of the everyday browser: silently re-import from the same
       // profile once (browserless), in case the human re-signed in there. It lands in the jar and
       // in the Chrome profile tiers 2 and 3 send from. Then retry.
-      if (await reimportIfBrowser(siteName, op.request.url, site.loginCookies)) continue;
+      if (authStep < 1) {
+        authStep = 1;
+        if (await reimportIfBrowser(siteName, op.request.url, site.loginCookies)) continue;
+      }
       // tier 3 ran the site's own page: the profile's cookies and session values are what it just used
       if (tier === 3 || ctx.maxTier <= 1) return fail();
-      if (await refreshCookies(ctx, op, tier)) continue;
+      if (authStep < 2) {
+        authStep = 2;
+        if (await refreshCookies(ctx, op, tier)) continue;
+      }
+      authStep = 3;
       // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
       // refreshes them, and for a read its answer is this call's answer.
       if (op.readOnly && ctx.maxTier >= 3 && chromeAvailable() && op.slots.some((s) => s.ref?.startsWith("session:"))) {
@@ -539,6 +548,21 @@ export async function call(
         }
         // The run answered other args (a trigger fixed to one page), but it refreshed the session values: retry once.
         continue;
+      }
+      // A write's page-issued token (a CSRF field, fb_dtsg) went stale, and a login renews only cookies:
+      // run the trigger as learning does, the write intercepted and never sent, to refresh it; retry once.
+      if (
+        !op.readOnly &&
+        ctx.maxTier >= 3 &&
+        chromeAvailable() &&
+        op.slots.some((s) => s.ref?.startsWith("session:"))
+      ) {
+        try {
+          await runOpTrigger(siteName, op, args, { intercept: true });
+          continue;
+        } catch {
+          // no browser run: the call keeps its auth answer
+        }
       }
     }
     if (a.class === "drift") return done(await onDrift(ctx, site, op, a));
@@ -555,6 +579,10 @@ export async function call(
         return done(success(b, { reason: why }));
       }
     }
+    // A credential marked public (a web app's shared bearer) answers auth when the site rotated it,
+    // which no login fixes: re-learn it from the page, as for drift.
+    if (a.class === "auth" && op.readOnly && op.public?.length && noLogin())
+      return done(await onDrift(ctx, site, op, { ...a, class: "drift" }));
     return fail();
   }
 }

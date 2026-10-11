@@ -255,3 +255,18 @@ test("add --from a capture judges the op on the captured response: a wrong --ext
   assert.deepEqual(good.preview, { first: { name: "NASA" } });
   assert.equal(good.replaced, true);
 });
+
+test("capped below the tier a wall needs: the reason says what tier 1 met", async () => {
+  const wall = new Response("<html><title>Just a moment...</title></html>", {
+    status: 403,
+    headers: { "content-type": "text/html", "cf-mitigated": "challenge" },
+  });
+  const r = await call(
+    "t",
+    "user",
+    { name: "bob" },
+    opts(() => wall),
+  );
+  assert.equal(r.class, "blocked");
+  assert.match(r.reason ?? "", /tier 1 was blocked \(Cloudflare.*\); needs tier 2, capped at 1/);
+});

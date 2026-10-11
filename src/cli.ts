@@ -326,6 +326,12 @@ function positive(text: string | undefined, flag: string): number | undefined {
   return Number(text);
 }
 
+/** The main frame's last document: a widget's iframe (a reCAPTCHA frame) is a document too. */
+function mainDocument(c: CaptureFile): Exchange | undefined {
+  const pages = capturePages(c).map((u) => u.split("#")[0]);
+  return c.exchanges.filter((e) => e.resourceType === "document" && e.response && pages.includes(e.request.url)).at(-1);
+}
+
 /**
  * What the page a capture ended on says about learning from it. `stop`: nothing to learn here, the
  * navigation ended on a login path that shows a sign-in form, or the page itself answered an HTTP error. `also`: the page shows
@@ -337,11 +343,7 @@ function pageSays(
   ranked: Candidate[],
   values: string[],
 ): { stop?: string; also?: string; status?: number } {
-  const pages = capturePages(c).map((u) => u.split("#")[0]);
-  // the main frame's last document: a widget's iframe is a document too
-  const page = c.exchanges
-    .filter((e) => e.resourceType === "document" && e.response && pages.includes(e.request.url))
-    .at(-1);
+  const page = mainDocument(c);
   if (!page?.response) return {};
   const { status, body = "" } = page.response;
   // A login path is where sign-in pages live, and where a public /docs/login/... page may too: it takes the form as well.
@@ -394,7 +396,7 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
   const top = ranked[0];
   const html = top && /html/i.test(top.contentType ?? "");
   // a bot wall is not fixed by picking another request or writing a recipe
-  const doc = c.exchanges.filter((e) => e.resourceType === "document" && e.response).at(-1);
+  const doc = mainDocument(c);
   const topEx = top && c.exchanges.find((e) => e.id === top.id);
   const wall = [doc, topEx]
     .map(

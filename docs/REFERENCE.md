@@ -162,7 +162,7 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 
 ## Status and known limits
 
-This is an early release for developers and agents. It ships 17 read operations across eight
+This is an early release for developers and agents. It ships 22 read operations across nine
 sites. Those operations cover selected features, not the entire sites. LinkedIn messaging and
 posting are not bundled. The engine's write handling is tested against a local fixture, not
 against every site's real write endpoints. Check the returned receipt and read back a real write

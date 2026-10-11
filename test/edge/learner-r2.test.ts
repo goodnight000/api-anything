@@ -666,3 +666,166 @@ describe("a site-wide key header, on a trigger page that always asks for its own
     assert.equal(got.tier, 1);
   });
 });
+
+describe("a write whose CSRF token the page issues, after the site rotates it", {
+  skip: !chromeAvailable() && "Google Chrome not installed",
+}, () => {
+  let server: Server;
+  let token = "csrf-Qx7mK2pL9vR4tZ8w";
+  const posts: string[] = [];
+  after(async () => {
+    await closeBrowser();
+    server?.closeAllConnections();
+    server?.close();
+  });
+  test("is refreshed by an intercepted trigger run and sent once, instead of answering auth", async () => {
+    server = createServer((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      if (u.pathname === "/compose") {
+        res.writeHead(200, { "content-type": "text/html" });
+        return res.end(
+          `<meta name="csrf" content="${token}"><input id="text"><button id="post">Post</button><script>` +
+            `document.getElementById("post").onclick=()=>fetch("/api/post",{method:"POST",headers:{"content-type":"application/json","x-csrf-token":document.querySelector("meta[name=csrf]").content},body:JSON.stringify({text:document.getElementById("text").value})})</script>`,
+        );
+      }
+      if (u.pathname === "/api/post" && req.method === "POST") {
+        let body = "";
+        req.on("data", (c) => (body += c));
+        return req.on("end", () => {
+          const ok = req.headers["x-csrf-token"] === token;
+          if (ok) posts.push(JSON.parse(body).text);
+          res.writeHead(ok ? 200 : 403, { "content-type": "application/json" });
+          res.end(JSON.stringify(ok ? { ok: true, id: posts.length } : { error: "csrf token mismatch" }));
+        });
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const r = await addOperation({
+      site: "board",
+      op: "post",
+      trigger: {
+        url: `${base}/compose`,
+        steps: [
+          { action: "fill", selector: "#text", value: "{text}" },
+          { action: "click", selector: "#post" },
+        ],
+      },
+      examples: [{ text: "first draft" }, { text: "second draft" }],
+      write: true,
+    });
+    assert.ok(
+      r.operation.slots.some((s) => s.ref?.startsWith("session:")),
+      JSON.stringify(r.operation.slots),
+    );
+    assert.deepEqual(posts, [], "learning sent no write");
+    const opts = { allowWrites: true, minIntervalMs: 0 };
+    assert.equal((await call("board", "post", { text: "hello" }, opts)).ok, true);
+    token = "csrf-Zr3nW8yT5bJ1hM6q";
+    const got = await call("board", "post", { text: "after rotation" }, opts);
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.tier, 1);
+    assert.deepEqual(posts, ["hello", "after rotation"], "each call's write was sent exactly once");
+  });
+});
+
+describe("a read with a public web-app bearer, after the site rotates the bearer", {
+  skip: !chromeAvailable() && "Google Chrome not installed",
+}, () => {
+  let server: Server;
+  let bearer = "Bearer AAAAAAAAAAAAAAAAAAAAAPublicFixtureOne111";
+  after(async () => {
+    await closeBrowser();
+    server?.closeAllConnections();
+    server?.close();
+  });
+  test("is re-learned from the page and answers, instead of telling the user to log in", async () => {
+    server = createServer((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      const m = u.pathname.match(/^\/u\/([^/]+)$/);
+      if (m) {
+        res.writeHead(200, { "content-type": "text/html" });
+        return res.end(
+          `<script>fetch("/api/user?name=${m[1]}",{headers:{authorization:${JSON.stringify(bearer)}}})</script>`,
+        );
+      }
+      if (u.pathname === "/api/user") {
+        const ok = req.headers.authorization === bearer;
+        res.writeHead(ok ? 200 : 400, { "content-type": "application/json" });
+        return res.end(
+          JSON.stringify(
+            ok
+              ? { data: { user: { name: u.searchParams.get("name") } } }
+              : { errors: [{ message: "Bad Authentication data", code: 215 }] },
+          ),
+        );
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    await addOperation({
+      site: "birds",
+      op: "getUser",
+      trigger: { url: `${base}/u/{name}` },
+      examples: [{ name: "alice" }, { name: "bobby" }],
+      response: { extract: "data.user" },
+      public: ["authorization"],
+    });
+    const opts = { minIntervalMs: 0 };
+    assert.equal((await call("birds", "getUser", { name: "carol" }, opts)).ok, true);
+    bearer = "Bearer AAAAAAAAAAAAAAAAAAAAAPublicFixtureTwo222";
+    const got = await call("birds", "getUser", { name: "dave" }, opts);
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.deepEqual(got.data, { name: "dave" });
+    assert.equal(loadSite("birds")!.site.operations[0]!.request.headers.authorization, bearer);
+    const again = await call("birds", "getUser", { name: "erin" }, opts);
+    assert.equal(again.tier, 1, JSON.stringify(again));
+  });
+});
+
+describe("an expired page-issued bearer, when the profile also holds a cookie the jar lacks", {
+  skip: !chromeAvailable() && "Google Chrome not installed",
+}, () => {
+  let server: Server;
+  const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbm9uIn0.YW5vbnltb3Vz";
+  after(async () => {
+    await closeBrowser();
+    server?.closeAllConnections();
+    server?.close();
+  });
+  test("still refreshes the bearer on the first call: a cookie retry that fails does not spend the recovery", async () => {
+    server = createServer((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      if (u.pathname === "/p") {
+        // an analytics cookie that changes every load, beside the token the page keeps
+        res.writeHead(200, { "content-type": "text/html", "set-cookie": `_ga=GA1.${Date.now()}; Path=/` });
+        return res.end(
+          `<script>localStorage.setItem("tok",${JSON.stringify(JWT)});` +
+            `fetch("/api/data?name="+new URLSearchParams(location.search).get("name"),{headers:{authorization:"Bearer "+localStorage.getItem("tok")}})</script>`,
+        );
+      }
+      if (u.pathname === "/api/data") {
+        const ok = req.headers.authorization === `Bearer ${JWT}`;
+        res.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
+        return res.end(JSON.stringify(ok ? { data: { name: u.searchParams.get("name") } } : { error: "expired" }));
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    await addOperation({
+      site: "tunes",
+      op: "get",
+      trigger: { url: `${base}/p?name={name}` },
+      examples: [{ name: "alice" }, { name: "bobby" }],
+      response: { extract: "data" },
+    });
+    // the token expired, and the jar no longer matches the profile's analytics cookie
+    saveSession("tunes", { ...loadSession("tunes"), cookies: [], values: {} });
+    const got = await call("tunes", "get", { name: "carol" }, { minIntervalMs: 0 });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.deepEqual(got.data, { name: "carol" });
+  });
+});

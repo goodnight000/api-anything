@@ -155,13 +155,17 @@ cookies and tokens, never their values, so a refreshed session works without re-
 
 A session is kept current where that is possible. Cookies a site sets on a plain-HTTP response,
 or while API Anything runs the site's page in Chrome, are saved. When a plain-HTTP call comes back
-unauthorized, API Anything makes one recovery attempt, the first of these that applies:
+unauthorized, API Anything tries these in order, each at most once, retrying the call after each
+one that changes something:
 
 1. re-import from the browser profile you chose at login;
 2. take the cookies from its own Chrome profile, if they differ from the saved ones;
-3. for a read that uses session tokens, reload the page so the site issues fresh ones.
+3. for an operation that uses session tokens (a bearer, a CSRF token the page issues), reload
+   the page so the site issues fresh ones. For a write, the page's own request is stopped, so it
+   is sent only by the retry.
 
-If the call is still unauthorized, it returns `class: "auth"` with the `login` command to run.
+A read whose only credential is a key the site gives every visitor (X's web-app bearer) is
+re-learned from the page when the site rotates it. If the call is still unauthorized, it returns `class: "auth"` with the `login` command to run.
 
 Import reads Chrome, Arc, Brave, Edge, Chromium and Firefox profiles on macOS and Linux (on
 Linux, not cookies encrypted with the desktop keyring). On Windows, `login` opens the Chrome

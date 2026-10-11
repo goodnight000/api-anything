@@ -193,7 +193,11 @@ test("auth and rate signals win over drift when the data is gone (X code 215, In
 test("login wording on 400, 403 and 422 is auth; a 422 validation error or form page is not", () => {
   for (const status of [400, 403, 422]) {
     assert.equal(cls(op(), json(status, { message: "Bad Authentication data" })), "auth", `HTTP ${status}`);
+    // a rotated public key (Algolia's answer): the credential is refused, not a bot wall
+    const key = { message: "Invalid Application-ID or API key", status };
+    assert.equal(cls(op(), json(status, key)), "auth", `HTTP ${status}`);
   }
+  assert.equal(cls(op(), json(403, { error: "API key expired" })), "auth");
   assert.equal(cls(op(), json(422, { errors: { email: ["is invalid"] } })), "error");
   assert.equal(cls(op(), json(422, { error: "screen_name is invalid" })), "error");
   // a signup's "username taken" page shows a password field; only the wording counts

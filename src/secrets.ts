@@ -160,14 +160,17 @@ const ipAddress = (v: string) =>
   (IPV6.test(v) && (v.includes("::") || v.split(":").length >= 5) && v !== "::1");
 /**
  * An IP address anywhere in a leaf: the whole value, "ip:port", an x-forwarded-for list, "ip=.."
- * text. A version string is not one: "Chrome/120.0.0.0" follows a letter or "/", and ends in .0.
+ * text. A version string is not one: "Chrome/120.0.0.0" follows a letter or "/", and ends in .0;
+ * "1.3.6.68.gbe30f56" runs on into a word.
  */
 export function ipIn(v: string): string | undefined {
   for (const m of v.matchAll(/[0-9A-Fa-f:.]+/g)) {
     const before = v[m.index - 1] ?? "";
     let t = m[0].replace(/^[.:]+|[.:]+$/g, "");
     if (t.includes(".")) t = t.replace(/:\d{1,5}$/, ""); // ip:port
-    if (t.includes(".") && /[\w/]/.test(before)) continue; // a version: v1.2.3.4, Chrome/1.2.3.4
+    const after = v[m.index + m[0].length] ?? "";
+    // a version: v1.2.3.4, Chrome/1.2.3.4, 1.3.6.68.gbe30f56 (a build hash after it)
+    if (t.includes(".") && (/[\w/]/.test(before) || /\w/.test(after))) continue;
     if (ipAddress(t)) return t;
   }
   return undefined;

@@ -310,6 +310,7 @@ test("export flags an IP inside a longer leaf, not a version string", () => {
       JSON.stringify({
         ua: "Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36",
         v: "v1.2.3.4",
+        build: "1.3.6.68.gbe30f563b8b4",
         at: "2026-09-27T12:30:45.123Z",
       }),
     ),

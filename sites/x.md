@@ -4,8 +4,8 @@ No account is needed. No tweets.
 - `getProfile`'s `title` looks like "NASA (@NASA) on X".
 - `getUser`'s `avatar.image_url` is the `_normal` (48 px) size. Replace `_normal` with `_400x400` for
   a larger one.
-- `getUser` sends X's public bearer, which X could rotate. Then every call returns 400 "Bad
-  Authentication data" (code 215), classified `auth`. Re-learn the op with `--public authorization`.
+- `getUser` sends X's public bearer, which X could rotate. Then X answers 400 "Bad Authentication
+  data" (code 215), and the call re-learns the bearer from the page (a browser run, once).
 
 ## Maintainer notes
 

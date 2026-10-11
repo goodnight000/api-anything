@@ -58,7 +58,7 @@ const CHALLENGE_TITLE =
 
 // What a server says when the session is missing, as opposed to a page that shows a password field.
 const LOGIN_SAID =
-  /"require_login"\s*:\s*true|login_required|not logged in|(log|sign) ?in to continue|please (log|sign) ?in|authentication required|bad authentication|could not authenticate|bad guest token|invalid session|session (has )?expired/i;
+  /"require_login"\s*:\s*true|login_required|not logged in|(log|sign) ?in to continue|please (log|sign) ?in|authentication required|bad authentication|could not authenticate|bad guest token|invalid session|session (has )?expired|invalid (application-id or )?api[ _-]?key|api[ _-]?key (is )?(invalid|expired)/i;
 const LOGIN = new RegExp(`${LOGIN_SAID.source}|type=["']password["']|accounts\\.google\\.com\\/ServiceLogin`, "i");
 /** A sign-in form: a password field next to a username field, a current-password hint, or a form posting to a login path. */
 export const signInForm = (body: string) =>
