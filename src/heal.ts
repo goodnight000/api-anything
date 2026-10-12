@@ -8,7 +8,19 @@ import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, send } from "./http.js";
-import { type Args, ASSET_EXT, capturePages, checkExamples, hashLike, learnOperation, matches } from "./learn.js";
+import {
+  type Args,
+  ASSET_EXT,
+  capturePages,
+  checkExamples,
+  hashLike,
+  learnOperation,
+  matches,
+  unplaced,
+} from "./learn.js";
+
+export { unplaced };
+
 import { scanSecrets } from "./secrets.js";
 import {
   cookieHeaderFor,
@@ -39,6 +51,8 @@ export interface Attempt {
   ambiguous?: boolean;
   /** the args may be the problem (data missing, or a bare 403); see Classified.missing */
   missing?: boolean;
+  /** the server says it failed; see Classified.server */
+  server?: boolean;
   /** the first answer was a redirect, so the server took the request (a write ran) */
   redirected?: boolean;
   /** a specific `next` for the agent (a local problem, not the site's) */
@@ -507,15 +521,6 @@ export function captureTrigger(c: CaptureFile, args: Args): Trigger {
   };
 }
 
-/** The args a trigger has no `{name}` for, in its URL, its soft-navigation page or its steps. */
-export const unplaced = (t: Trigger, args: Args): string[] =>
-  Object.keys(args).filter(
-    (k) =>
-      ![t.url, t.softFrom ?? "", ...(t.steps ?? []).flatMap((s) => [s.selector ?? "", s.value ?? ""])].some((x) =>
-        x.includes(`{${k}}`),
-      ),
-  );
-
 export function putOperation(site: Site, op: Operation): Site {
   const rest = site.operations.filter((o) => o.name !== op.name);
   return { ...site, operations: [...rest, op] };
@@ -978,8 +983,10 @@ export type HealResult =
       transient?: boolean;
     };
 
-// A check answered with these says nothing about the candidate: stop, and don't spend a browser run on it.
+// A check answered with these, or with the server's own failure, says nothing about the candidate:
+// stop, and don't spend a browser run on it.
 const STOP: ReadonlySet<Class> = new Set(["rate", "blocked", "auth"]);
+export const learnedNothing = (a: Pick<Attempt, "class" | "server">) => STOP.has(a.class) || !!a.server;
 
 function saveHealed(
   site: string,
@@ -1051,7 +1058,7 @@ export async function healOperation(
     budget--;
     last = await o.validate(scanned.operation);
     if (last.class === "ok") return saveHealed(site, scanned.operation, "rescan", scanned.diff, last);
-    if (STOP.has(last.class))
+    if (learnedNothing(last))
       return { outcome: "failed", attempt: last, transient: true, reason: swapped.replace("%s", last.reason) };
     if (!budget) return { outcome: "failed", attempt: last, reason: swapped.replace("%s", last.reason) };
   }
@@ -1102,7 +1109,7 @@ export async function healOperation(
       reason: `the trigger fired no request matching ${JSON.stringify(op.match)}`,
     };
   const seen = run.matched && judgeExchange(op, run.matched);
-  if (seen && STOP.has(seen.class))
+  if (seen && learnedNothing(seen))
     return {
       outcome: "failed",
       attempt: seen,
@@ -1113,13 +1120,13 @@ export async function healOperation(
   const fallback = op.readOnly && learnArgs === callArgs && run.matched ? judgeExchange(op, run.matched) : undefined;
   let fresh: Operation;
   let sessionValues: Record<string, string>;
-  // A param the trigger never gives the page (a picker's own range end) keeps its places. One the
-  // trigger gives but the page did not send means something else now: no candidate stands on it.
-  const oldTypes = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]));
-  const free = new Set(unplaced(op.trigger, learnArgs));
+  // Where the op fills each param: a place the page filled with its own value can keep it (learn's paramSlots).
+  const wasThere = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l]));
   const established = op.slots.flatMap((slot) => {
-    const type = slot.param && free.has(slot.param) ? oldTypes.get(JSON.stringify(slot.at)) : undefined;
-    return type ? [{ slot, type }] : [];
+    const leaf = wasThere.get(JSON.stringify(slot.at));
+    if (!leaf || (!slot.param && !slot.template)) return [];
+    const pattern = op.params.find((p) => p.name === slot.param)?.pattern;
+    return [{ slot, type: leaf.type, value: leaf.value, ...(pattern !== undefined ? { pattern } : {}) }];
   });
   try {
     ({ operation: fresh, sessionValues } = learnOperation({
@@ -1209,7 +1216,7 @@ export async function healOperation(
     outcome: "failed",
     attempt: last,
     fallback,
-    ...(STOP.has(last.class) ? { transient: true } : {}),
+    ...(learnedNothing(last) ? { transient: true } : {}),
     reason: `recaptured template failed replay: ${last.reason}`,
   };
 }

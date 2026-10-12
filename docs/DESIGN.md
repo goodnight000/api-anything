@@ -363,11 +363,18 @@ An error status a 2xx answer carries in place of its data is judged as the HTTP 
 for: a batchexecute RPC whose payload's place holds `[13]` (`[["wrb.fr",null,null,null,null,[13]]]`),
 `{"error": {"status": "UNAVAILABLE"}}` or `{"error": {"code": 503}}`, a JSON-RPC `error`. gRPC's
 codes go as Google's gateways map them (13 and 2 → 500, 14 → 503, 4 → 504, 8 → 429, 16 → 401, 7 → 403,
-5 → 404, 3 → 400), JSON-RPC's as a server error (500), a missing method (404) or a bad request (400).
-So a server's own failure is `error`, not drift: it is not healed and marks nothing stale. It counts
-only where the data is missing, or anywhere when the op has no extract path (the body is then the
-answer); another RPC's failure next to the data the path finds changes nothing. An app's own error
-number (`{"error": {"code": 190}}`) is not a status. A write's 2xx that carries one was refused.
+5 → 404, 3, 9 and 11 → 400), JSON-RPC's as a server error (500), a missing method (404) or a bad
+request (400). So a server's own failure is `error`, not drift: it is not healed and marks nothing
+stale. A heal whose page or candidate check gets a server failure (a 5xx, or a status in the body
+that stands for one) learned nothing either: it stops and marks nothing stale, as for a throttled
+check, and so does an example-args check that gets one. A read's bad request in the body names no
+param, so it is missing data: the example args tell bad args (`input`: a reversed date range) from a
+template that went stale. Of several RPCs in one answer, the status is the one the extract path
+reads. It counts only where the extract target is absent or null, or anywhere when the op has no
+extract path (the body is then the answer): data that is there, its shape changed or not, is judged
+as before, whatever error member sits next to it. An app's own error number
+(`{"error": {"code": 190}}`) and a name that is not gRPC's are not statuses. A write's 2xx that
+carries one was refused.
 Login and rate wording in a 2xx JSON body only counts when the data is missing (Instagram sends
 `require_login: false` on its rate-limit answers). **Missing data is ambiguous**: "no such user"
 and "no results" look exactly like a moved extract path. Before healing a read, the stored
@@ -438,12 +445,17 @@ Heal strategies, cheapest first:
   args (classifier must say `ok` and the extract must resolve). It learns from the call's args with
   defaults filled when they can be located (every param present, 3+ chars, distinct), else from the
   op's examples. A new slot where the arg merely equals the old template's constant there (q=search
-  in /api/search) is dropped; a candidate that loses any param's slot is refused. A param the trigger
-  has no `{name}` for, whose example the page therefore never sends (a date picker asks for its own
-  range, never the caller's end), keeps the op's own places for it, where each still holds the same
-  kind of leaf (a string, a number); one gone or holding another kind fails the heal. A param the
-  trigger does give the page, but which the page did not send, means something else now: that fails
-  the heal as before. Adding an op stays strict: there an example the request
+  in /api/search) is dropped; a candidate that loses any param's slot is refused. A page fills some places with its
+  own values: a date picker asks for its own range (from the first of the chosen day's month, to a day
+  it picks), so the caller's `start` is only at the chosen day and the caller's `end` nowhere. A param
+  found only at places the op already had (it did not move) keeps its other places too, and a param
+  the trigger has no `{name}` for, whose example the page therefore never sends, keeps all of them.
+  Each kept place must still hold the same kind of value: the same leaf type, the same runs of
+  characters ("2026-10-31" and "2027-05-31" are one kind, "en-US" another, so fields that moved are
+  caught), the param's pattern, and no cookie or stored value. One holding another kind, or inside a
+  longer text (a templated slot, which could not be filled with the page's value left beside it),
+  fails the heal: re-add the operation. A param the trigger does give the page, but which the page
+  sent nowhere, means something else now: that fails the heal as before. Adding an op stays strict: there an example the request
   does not carry is refused, since the param would change nothing. Values of newly
   learned `session:` refs are stored before the check.
 

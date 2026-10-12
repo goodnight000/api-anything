@@ -11,6 +11,7 @@ import {
   type HealResult,
   healOperation,
   judgeExchange,
+  learnedNothing,
   PROFILE_HINT,
   profileDir,
   runOpTrigger,
@@ -279,8 +280,8 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
           },
         );
       }
-      // throttled or challenged while checking: stop, don't spend a heal (a browser run) against it
-      if (b.class === "rate" || b.class === "blocked" || b.class === "auth") return fail(b);
+      // throttled, challenged or a server failure while checking: stop, don't spend a heal (a browser run) against it
+      if (learnedNothing(b)) return fail(b);
       examplesFail = true;
     }
   }
@@ -627,8 +628,9 @@ export async function heal(
   if (h.outcome === "healed") return { ...success(h.attempt, { healed: true }), strategy: h.strategy, ms };
   if (h.outcome === "identical") {
     // The same template is no proof it works: its answer says whether the op does.
-    const complete = op.params.every((p) => !p.required || args[p.name] !== undefined);
-    const b = await attempt({ ...ctx, args: complete ? args : (exampleArgs(op) ?? args) }, op, tier);
+    const filled = withDefaults(op, args);
+    const complete = op.params.every((p) => !p.required || filled[p.name] !== undefined);
+    const b = await attempt({ ...ctx, args: complete ? filled : (exampleArgs(op) ?? filled) }, op, tier);
     const why = "the stored template is already current";
     if (b.class === "ok") return { ...success(b, { healed: false, reason: why }), ms: Date.now() - t0 };
     return {

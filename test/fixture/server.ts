@@ -60,14 +60,15 @@ if((m=p.match(/^\\/u\\/([^/]+)$/))){
   x.onload=()=>out(JSON.parse(JSON.parse(x.responseText.slice(5))[0][2]));
   x.send("f.req="+encodeURIComponent(JSON.stringify([[["search",JSON.stringify([q,10]),null,"generic"]]])));
 }else if(p==="/cal"){
-  // a date picker asks for its own range, 60 days from the chosen date, never the caller's end
+  // a date picker asks for its own range, never the caller's: from the first of the chosen day's
+  // month to 60 days after it. The chosen day goes along on its own.
   const q=new URLSearchParams(location.search);
   const start=q.get("start");
   const end=new Date(Date.parse(start)+60*864e5).toISOString().slice(0,10);
   const x=new XMLHttpRequest();
   x.open("POST","/api/cal?bl=${s.build}");
   x.setRequestHeader("content-type","application/x-www-form-urlencoded;charset=UTF-8");
-  x.send("f.req="+encodeURIComponent(JSON.stringify([null,JSON.stringify([[q.get("from"),q.get("to")],[start,end]])])));
+  x.send("f.req="+encodeURIComponent(JSON.stringify([null,JSON.stringify([[q.get("from"),q.get("to")],[start.slice(0,8)+"01",end],start])])));
 }else if(p==="/compose"){
   document.getElementById("post").addEventListener("click",()=>{
     const text=document.getElementById("text").value;

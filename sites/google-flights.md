@@ -75,7 +75,8 @@ per item. Add them to `pick` in your copy of the spec if you need them. `priceCa
   (gRPC INTERNAL) instead of data, in waves that come and go within minutes (issue #21). The call
   returns `error`, and a later retry gets the data. On 2026-10-12 a captured
   `x-goog-batchexecute-bgr`, a fresh `bl`, pacing and tier 2 did not change the rate; the failures
-  clustered by session and time. A reversed or empty range answers `[3]` (INVALID_ARGUMENT).
+  clustered by session and time. A reversed or past range answers `[3]` (INVALID_ARGUMENT); the
+  example range still answers, so the call returns `input`.
 - The session tokens in the calendar's `f.req` (`json:/0/3`) and `f.sid` are session-scoped, not
   per-request signatures: stale values replay fine at tier 1 from a clean home. The export's base64
   warning refers to that token. It is issued to every logged-out visitor, not a credential.

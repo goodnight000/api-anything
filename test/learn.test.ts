@@ -642,7 +642,7 @@ test("a response that is itself a list of results is learned whole, not as its f
   assert.equal(learned.operation.response.extract, undefined);
 });
 
-test("heal: a param the page did not send keeps the op's own place, only where that place is still the same kind of leaf", () => {
+test("heal: a param the page did not send keeps the op's own place, only where that place still holds the same kind of value", () => {
   // a date picker asks for its own range: the caller's end is in no request it sends (issue #21)
   const exchange = (range: unknown): Exchange[] => [
     {
@@ -657,26 +657,30 @@ test("heal: a param the page did not send keeps the op's own place, only where t
       response: { status: 200, headers: {}, contentType: "application/json", body: '[["2027-04-01",209]]' },
     },
   ];
-  const end = ["form:f.req", "json:/1", "json:/1/1"];
-  const input = (range: unknown, established?: { slot: { param: string; at: string[] }; type: "string" }[]) => ({
+  type Established = NonNullable<Parameters<typeof learnOperation>[0]["established"]>;
+  const input = (range: unknown, established?: Established, storage?: Record<string, string>) => ({
     exchanges: exchange(range),
     examples: [{ origin: "SFO", destination: "JFK", start: "2027-04-01", end: "2027-04-30" }] as [
       Record<string, string>,
     ],
     cookies: [],
+    ...(storage ? { storage } : {}),
     name: "cal",
     trigger: { url: "https://g.test/cal?start={start}" },
     readOnly: true,
     match: { method: "POST", path: "/rpc/Calendar" },
     ...(established ? { established } : {}),
   });
-  const own = [{ slot: { param: "end", at: end }, type: "string" as const }];
+  const end = ["form:f.req", "json:/1", "json:/1/1"];
+  const own: Established = [
+    { slot: { param: "end", at: end }, type: "string", value: "2026-10-31", pattern: "\\d{4}-\\d{2}-\\d{2}" },
+  ];
   // add stays strict: an example the request does not carry is refused
   assert.throws(() => learnOperation(input(["2027-04-01", "2027-05-31"])), /example value for "end"/);
   const { operation, warnings } = learnOperation(input(["2027-04-01", "2027-05-31"], own));
   assert.deepEqual(operation.slots.find((s) => s.param === "end")?.at, end);
   assert.ok(
-    warnings.some((w) => w.includes('"end"') && w.includes("kept where the op had it")),
+    warnings.some((w) => w.includes('"end"') && w.includes("kept there")),
     warnings.join("\n"),
   );
   const sent = buildRequest(
@@ -689,7 +693,73 @@ test("heal: a param the page did not send keeps the op's own place, only where t
     ["LAX", "BOS"],
     ["2027-06-01", "2027-06-10"],
   ]);
-  // the request changed under it: the place is gone, or holds another kind of value
-  assert.throws(() => learnOperation(input(["2027-04-01"], own)), /example value for "end"/);
-  assert.throws(() => learnOperation(input(["2027-04-01", 61], own)), /example value for "end"/);
+  const refused = /example value for "end"/;
+  // the request changed under it: the place is gone, or holds a number
+  assert.throws(() => learnOperation(input(["2027-04-01"], own)), refused);
+  assert.throws(() => learnOperation(input(["2027-04-01", 61], own)), refused);
+  // fields reordered: the place holds a string of another kind ([start, locale, end])
+  assert.throws(() => learnOperation(input(["2027-04-01", "en-US", "2027-05-31"], own)), refused);
+  // the same kind but outside the param's pattern
+  assert.throws(() => learnOperation(input(["2027-04-01", "2027-5-31"], own)), refused);
+  // a credential the page keeps now sits there: never a param's place, so never saved as a literal
+  const token = "2027-05-31";
+  assert.throws(() => learnOperation(input(["2027-04-01", token], own, { auth_token: token })), refused);
+  // a param that also sat inside a longer text cannot keep that place: refuse rather than leave it stale
+  const templated: Established = [
+    ...own,
+    { slot: { param: "end", at: ["query:bl"], template: "build_{end}" }, type: "string", value: "build_2026-10-31" },
+  ];
+  assert.throws(() => learnOperation(input(["2027-04-01", "2027-05-31"], templated)), refused);
+});
+
+test("heal: a param found only where the op had it keeps its other places, which the page filled with its own value", () => {
+  // Google's picker: the chosen day on its own, and the page's range from the first of that month
+  const exchanges: Exchange[] = [
+    {
+      id: 1,
+      resourceType: "xhr",
+      request: {
+        method: "POST",
+        url: "https://g.test/rpc/Calendar",
+        headers: { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: `f.req=${encodeURIComponent(JSON.stringify([["SFO", "JFK"], ["2027-04-01", "2027-06-09"], "2027-04-10"]))}`,
+      },
+      response: { status: 200, headers: {}, contentType: "application/json", body: '[["2027-04-10",209]]' },
+    },
+  ];
+  type Established = NonNullable<Parameters<typeof learnOperation>[0]["established"]>;
+  const at = (p: string) => ["form:f.req", `json:${p}`];
+  const date = "\\d{4}-\\d{2}-\\d{2}";
+  const own: Established = [
+    { slot: { param: "start", at: at("/1/0") }, type: "string", value: "2026-10-21", pattern: date },
+    { slot: { param: "start", at: at("/2") }, type: "string", value: "2026-10-21", pattern: date },
+    { slot: { param: "end", at: at("/1/1") }, type: "string", value: "2026-10-31", pattern: date },
+  ];
+  const input = (established: Established, ex = exchanges) => ({
+    exchanges: ex,
+    examples: [{ origin: "SFO", destination: "JFK", start: "2027-04-10", end: "2027-04-20" }] as [
+      Record<string, string>,
+    ],
+    cookies: [],
+    name: "cal",
+    trigger: { url: "https://g.test/cal?start={start}" },
+    readOnly: true,
+    match: { method: "POST", path: "/rpc/Calendar" },
+    established,
+  });
+  const { operation } = learnOperation(input(own));
+  const sent = buildRequest(
+    operation,
+    { origin: "LAX", destination: "BOS", start: "2027-06-03", end: "2027-06-08" },
+    { cookies: [], values: {} },
+  );
+  assert.deepEqual(JSON.parse(getAt(sent, ["form:f.req"]) as string), [
+    ["LAX", "BOS"],
+    ["2027-06-03", "2027-06-08"],
+    "2027-06-03",
+  ]);
+  // the range's first day now holds something else: refuse rather than send the page's value
+  const moved = structuredClone(exchanges);
+  moved[0]!.request.body = `f.req=${encodeURIComponent(JSON.stringify([["SFO", "JFK"], ["en-US", "2027-06-09"], "2027-04-10"]))}`;
+  assert.throws(() => learnOperation(input(own, moved)), /"start" was also at .*another kind of value/);
 });

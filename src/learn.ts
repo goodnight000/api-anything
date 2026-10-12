@@ -68,12 +68,23 @@ export interface LearnInput {
   /** where the page was during the capture (capturePages): an echo of these is not evidence */
   pages?: string[];
   /**
-   * heal: the op's own places for the params its trigger never gives the page, with the leaf's type
-   * there. Such a param whose example the page did not send (it chose its own date range) keeps them,
-   * where the leaf is still one of that type.
+   * heal: the op's own places for its params, with the leaf there and the param's pattern. A param
+   * the page filled with its own value at one of them (it chose its own date range) keeps it, where
+   * it still holds the same kind of value; see paramSlots.
    */
-  established?: { slot: Slot; type: Leaf["type"] }[];
+  established?: Established[];
 }
+
+type Established = { slot: Slot; type: Leaf["type"]; value: string; pattern?: string };
+
+/** The args a trigger has no `{name}` for, in its URL, its soft-navigation page or its steps. */
+export const unplaced = (t: Trigger, args: Args): string[] =>
+  Object.keys(args).filter(
+    (k) =>
+      ![t.url, t.softFrom ?? "", ...(t.steps ?? []).flatMap((s) => [s.selector ?? "", s.value ?? ""])].some((x) =>
+        x.includes(`{${k}}`),
+      ),
+  );
 
 export interface Learned {
   operation: Operation;
@@ -706,7 +717,9 @@ function paramSlots(
   warnings: string[],
   disproved: Disproved,
   short: Set<string>,
-  established: NonNullable<LearnInput["established"]> = [],
+  established: Established[] = [],
+  live: (v: string) => boolean = () => false,
+  untriggered: Set<string> = new Set(),
 ): { slots: Slot[]; types: Map<string, Param["type"]> } {
   const slots: Slot[] = [];
   const types = new Map<string, Param["type"]>();
@@ -730,31 +743,61 @@ function paramSlots(
   // A leaf that equals one param's value belongs to that param, even if another's value is inside it.
   const exactKeys = new Set([...found.values()].flatMap((f) => f.exact.map((l) => key(l.at))));
   const partial = new Map<string, Hit[]>();
+  // heal: an established place the page filled with its own value, where it still holds the kind it held
+  const keeps = (e: Established) => {
+    const leaf = leaves.find((l) => key(l.at) === key(e.slot.at));
+    return (
+      !!leaf &&
+      e.slot.template === undefined &&
+      !leaf.container &&
+      !exactKeys.has(key(leaf.at)) &&
+      leaf.type === e.type &&
+      kindOf(leaf.value) === kindOf(e.value) &&
+      (e.pattern === undefined || new RegExp(`^(?:${e.pattern})$`).test(leaf.value)) &&
+      !live(leaf.value)
+    );
+  };
+  const keep = (name: string, kept: Established[]) => {
+    warnings.push(
+      `"${name}" (${JSON.stringify(args[name])}) is not where the op had it in the request the page sent; kept there: ${kept.map((e) => e.slot.at.join(" > ")).join("; ")}`,
+    );
+    for (const { slot, type } of kept) {
+      slots.push({ param: name, at: slot.at });
+      if (type === "number" || type === "boolean") types.set(name, type);
+    }
+  };
   for (const [name, f] of found) {
     const part = f.part.filter((h) => !exactKeys.has(key(h.leaf.at)));
     const v = asText(args[name]).toLowerCase();
     const places = [...f.exact, ...part.map((h) => h.leaf)]
       .filter((l) => !NOT_EVIDENCE.has(l.at[0]!) && !echoes(l.value, v, locs))
       .map((l) => l.at.join(" > "));
+    const own = established.filter(
+      (e) => (e.slot.param === name || e.slot.template?.includes(`{${name}}`)) && !NOT_EVIDENCE.has(e.slot.at[0]!),
+    );
     if (!places.length) {
-      const own = established.filter((e) => e.slot.param === name && e.slot.template === undefined);
-      const kept = own.filter(
-        ({ slot, type }) =>
-          !exactKeys.has(key(slot.at)) &&
-          !NOT_EVIDENCE.has(slot.at[0]!) &&
-          leaves.some((l) => key(l.at) === key(slot.at) && l.type === type && !l.container),
-      );
-      // every place still there, or the request changed under it: no evidence where the param went
-      if (!kept.length || kept.length < own.filter((e) => !NOT_EVIDENCE.has(e.slot.at[0]!)).length)
+      // only a param the page is never given (a picker's own range end); every place of it kept, or no evidence where it went
+      const kept = untriggered.has(name) ? own.filter(keeps) : [];
+      if (!own.length || kept.length < own.length)
         throw notFound(name, args[name], disprovedFor(disproved, name), short.has(name));
-      warnings.push(
-        `"${name}" (${JSON.stringify(args[name])}) is not in the request the page sent; kept where the op had it: ${kept.map((e) => e.slot.at.join(" > ")).join("; ")}`,
-      );
-      for (const { slot, type } of kept) {
-        slots.push({ param: name, at: slot.at });
-        if (type === "number" || type === "boolean") types.set(name, type);
-      }
+      keep(name, kept);
       continue;
+    }
+    // Found only where the op had it (it did not move): its other places, which the page filled with
+    // its own value (a range's first day next to the chosen day), stay, or the heal is refused.
+    const at = new Set(places.map((p) => key(p.split(" > "))));
+    const plain = own.filter((e) => e.slot.template === undefined);
+    if (plain.length && [...at].every((k) => plain.some((e) => key(e.slot.at) === k))) {
+      const rest = plain.filter(
+        (e) =>
+          !at.has(key(e.slot.at)) && leaves.some((l) => key(l.at) === key(e.slot.at)) && !exactKeys.has(key(e.slot.at)),
+      );
+      const changed = rest.find((e) => !keeps(e));
+      if (changed)
+        throw new Error(
+          `"${name}" was also at ${changed.slot.at.join(" > ")}, which now holds another kind of value; re-add the operation to confirm where it goes`,
+        );
+      if (rest.length) keep(name, rest);
     }
     if (places.length > 1)
       warnings.push(`"${name}" appears in ${places.length} places, all will be filled: ${places.join("; ")}`);
@@ -769,6 +812,13 @@ function paramSlots(
   for (const hits of partial.values()) slots.push(templatedSlot(hits));
   return { slots, types };
 }
+
+/** A value's kind by its runs of characters: "2026-10-31" and "2027-05-31" are one kind, "en-US" another. */
+const kindOf = (v: string) =>
+  v
+    .replace(/[0-9]+/g, "9")
+    .replace(/[a-z]+/g, "a")
+    .replace(/[A-Z]+/g, "A");
 
 const notFound = (name: string, raw: unknown, disproved: string[] = [], whole = false) =>
   new Error(
@@ -1603,7 +1653,18 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
   const locs = input.id !== undefined ? { abs: [], rel: [] } : locations(pages);
-  const param = paramSlots(leaves, args1, locs, warnings, disproved, short, input.established);
+  const live = input.established && liveValues(input.cookies, input.storage);
+  const param = paramSlots(
+    leaves,
+    args1,
+    locs,
+    warnings,
+    disproved,
+    short,
+    input.established,
+    (v) => !!live?.has(v),
+    new Set(unplaced(input.trigger, args1)),
+  );
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
   const { request, slots, sessionValues, publicNames } = sessionRefs(input, exchange, captured, leaves, param.slots);

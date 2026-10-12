@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { browserAvailable, closeBrowser, openBrowser, runTrigger } from "../src/browser.js";
-import { call } from "../src/execute.js";
+import { call, heal } from "../src/execute.js";
 import { addOperation, capturePage, profileDir } from "../src/heal.js";
 import { importSession } from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
@@ -482,7 +482,7 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
       site: SITE,
       op: "calendar",
       trigger: { url: `${fx.url}/cal?from={from}&to={to}&start={start}` },
-      // the page asks for 60 days from start, so each example's end is that day
+      // on the first of a month the page's range is start to 60 days later, so the examples are in it
       examples: [
         { from: "SFO", to: "JFK", start: "2027-04-01", end: "2027-05-31" },
         { from: "LAX", to: "BOS", start: "2027-06-01", end: "2027-07-31" },
@@ -490,11 +490,11 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
       response: { extract: "[0][0][2][0]", pick: ["date=[0]", "price=[1][1]"] },
     });
     assert.equal(r.operation.minTier, 1, r.warnings.join("\n"));
-    const april = { from: "SFO", to: "JFK", start: "2027-04-01", end: "2027-04-30" };
+    const april = { from: "SFO", to: "JFK", start: "2027-04-10", end: "2027-04-20" };
     const days = (res: { data?: unknown }) => (res.data as { date: string }[]).map((d) => d.date);
     const ok = await call(SITE, "calendar", april, fast);
     assert.equal(ok.ok, true, JSON.stringify(ok));
-    assert.equal(days(ok).length, 30);
+    assert.equal(days(ok).length, 11);
 
     // the server's own failure, as HTTP 200 with a status where the payload goes: no heal, nothing stale
     const before = fx.calls.length;
@@ -507,10 +507,17 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
 
     // a deploy: the old build is gone ([5]). The heal's page asks for its own range, without the caller's end.
     fx.rotate();
+    // the server fails for the page and for the candidate's check: nothing was learned, so nothing is stale
+    fx.failCalendar(13, 13);
+    const busy = await call(SITE, "calendar", april, fast);
+    assert.equal(busy.class, "error", JSON.stringify(busy));
+    assert.match(busy.reason ?? "", /heal stopped/);
+    assert.equal(staleMark(SITE, "calendar"), undefined);
     const healed = await call(SITE, "calendar", april, fast);
     assert.equal(healed.ok, true, JSON.stringify(healed));
     assert.equal(healed.healed, true);
-    assert.deepEqual([days(healed)[0], days(healed).at(-1)], ["2027-04-01", "2027-04-30"], "the caller's range");
+    // the page sent its own first day (2027-04-01) and last; both stay the caller's
+    assert.deepEqual([days(healed)[0], days(healed).at(-1)], ["2027-04-10", "2027-04-20"], "the caller's range");
     assert.equal(
       heals()
         .filter((h) => h.op === "calendar")
@@ -520,6 +527,16 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     const june = await call(SITE, "calendar", { from: "LAX", to: "BOS", start: "2027-06-01", end: "2027-06-10" }, fast);
     assert.equal(june.tier, 1, JSON.stringify(june));
     assert.equal(days(june).length, 10);
+    // a forced heal that re-learns the same template replays it, with the caller's args, and says so
+    const current = await heal(
+      SITE,
+      "calendar",
+      { from: "LAX", to: "BOS", start: "2027-06-01", end: "2027-06-10" },
+      fast,
+    );
+    assert.equal(current.ok, true, JSON.stringify(current));
+    assert.equal(current.healed, false);
+    assert.deepEqual([days(current)[0], days(current).at(-1)], ["2027-06-01", "2027-06-10"]);
   });
 
   test("17. capture's next hint points at inspect and --html when the best candidate is the page itself", async () => {
