@@ -353,6 +353,9 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   if (h.outcome === "healed") return success(h.attempt, { healed: true });
   // Throttled, challenged, logged out, or no browser: nothing was learned about the op, so it is not stale.
   if (h.outcome === "failed" && h.transient) {
+    // the replay that would have saved a candidate got no answer, but the site's own request did: that is the tier-3 read
+    if (h.fallback?.class === "ok" && ctx.maxTier >= 3)
+      return success(h.fallback, { reason: `heal stopped (${h.reason}); answered by the site's own request` });
     const b = h.attempt ?? a;
     return fail(b, { reason: `${a.reason}; heal stopped: ${h.reason}` });
   }

@@ -210,6 +210,48 @@ fetch("/api/"+"${QID.slice(0, 11)}"+"${QID.slice(11)}"+"/User?name="+location.pa
     assert.equal(staleMark("down", "get"), undefined);
   });
 
+  test("a candidate whose replay gets no answer still returns the site's own answer for these args, and nothing is stale", async () => {
+    const { server, base } = await serve((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      if (u.pathname === "/api/old") return void res.writeHead(404).end();
+      if (u.pathname === "/api/new") {
+        res.writeHead(200, { "content-type": "application/json" });
+        return void res.end(JSON.stringify({ data: [{ q: u.searchParams.get("q") }] }));
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end('<script>fetch("/api/new?q="+new URLSearchParams(location.search).get("q"))</script>');
+    });
+    servers.push(server);
+    saveSite(
+      parseSite({
+        name: "reset",
+        baseUrl: base,
+        operations: [
+          {
+            name: "op",
+            readOnly: true,
+            request: { method: "GET", url: `${base}/api/old?q=alice`, headers: {} },
+            slots: [{ param: "q", at: ["query:q"] }],
+            params: [{ name: "q", example: "alice" }],
+            match: { method: "GET", path: "/api/*" },
+            trigger: { url: `${base}/page?q={q}` },
+            response: { extract: "data" },
+          },
+        ],
+      }),
+    );
+    // the candidate's replay from Node meets a reset; the page's own request answered
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (new URL(String(input)).pathname === "/api/new") throw new TypeError("fetch failed: connection reset");
+      return fetch(input, init);
+    }) as typeof fetch;
+    const r = await call("reset", "op", { q: "bob" }, { ...fast, fetchImpl });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(r.data, [{ q: "bob" }]);
+    assert.match(r.reason ?? "", /answered by the site's own request/);
+    assert.equal(staleMark("reset", "op"), undefined);
+  });
+
   test("call() never throws when the heal's browser run fails", async () => {
     saveSite(
       parseSite({
