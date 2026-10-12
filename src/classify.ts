@@ -14,7 +14,10 @@ export interface Classified {
    * the caller checks the example args before healing or climbing tiers.
    */
   missing?: boolean;
-  /** the server says it failed (a 5xx, or an error status in the body standing for one): nothing is learned about the request */
+  /**
+   * the server says it failed (a 5xx, or an error status in the body standing for one), or a call
+   * could not reach it: nothing is learned about the request
+   */
   server?: boolean;
 }
 export interface Observed {

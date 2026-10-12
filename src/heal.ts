@@ -3,7 +3,7 @@
  * add (create), recapture (heal), and the tier-3 read. Rescan is the browserless heal.
  */
 import { join } from "node:path";
-import { browserAvailable, ProfileInUse, runTrigger } from "./browser.js";
+import { browserAvailable, PageUnreachable, ProfileInUse, runTrigger } from "./browser.js";
 import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
@@ -52,7 +52,7 @@ export interface Attempt {
   ambiguous?: boolean;
   /** the args may be the problem (data missing, or a bare 403); see Classified.missing */
   missing?: boolean;
-  /** the server says it failed; see Classified.server */
+  /** the server failed or could not be reached; see Classified.server */
   server?: boolean;
   /** the first answer was a redirect, so the server took the request (a write ran) */
   redirected?: boolean;
@@ -1105,6 +1105,9 @@ export async function healOperation(
         transient: true,
         reason,
       };
+    // the page did not load: nothing it would have sent was seen
+    if (e instanceof PageUnreachable)
+      return { outcome: "failed", attempt: { tier: 3, class: "error", reason, server: true }, transient: true, reason };
     return { outcome: "failed", attempt: last, reason };
   }
   if (!run.matched && run.loginWall) {

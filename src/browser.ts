@@ -42,6 +42,14 @@ export class ProfileInUse extends Error {
   }
 }
 
+/** A page that did not load (a timeout, a network error): nothing it would have sent was seen. */
+export class PageUnreachable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PageUnreachable";
+  }
+}
+
 let users = 0;
 let idleTimer: NodeJS.Timeout | undefined;
 function scheduleIdleClose(): void {
@@ -568,7 +576,8 @@ async function goto(page: Page, url: string, referer?: string): Promise<void> {
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", ...(referer ? { referer } : {}) });
   } catch (e) {
-    if (!/Download is starting|net::ERR_ABORTED/.test((e as Error).message)) throw e;
+    if (!/Download is starting|net::ERR_ABORTED/.test((e as Error).message))
+      throw new PageUnreachable((e as Error).message);
   }
 }
 

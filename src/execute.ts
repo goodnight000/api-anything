@@ -3,7 +3,14 @@
  * the heal-loop guards, and the write rules. Always sends the stored template first; healing is
  * reactive only.
  */
-import { browserAvailable, type PageFetchResult, ProfileInUse, pageFetch, profileCookies } from "./browser.js";
+import {
+  browserAvailable,
+  type PageFetchResult,
+  PageUnreachable,
+  ProfileInUse,
+  pageFetch,
+  profileCookies,
+} from "./browser.js";
 import { type Class, judge } from "./classify.js";
 import { capOutput } from "./extract.js";
 import {
@@ -211,7 +218,16 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         : `the write may have run: check the site first. Do not retry: ${why}`;
       return { tier, class: "error", reason: e.message, ambiguous: true, hint };
     }
-    return { tier, class: "error", reason: (e as Error).message.split("\n")[0]!, ambiguous: true };
+    // No answer (a timeout, a reset, a page that did not load) teaches nothing about the request; a
+    // trigger step that failed (its button is gone) does.
+    const reason = (e as Error).message.split("\n")[0]!;
+    return {
+      tier,
+      class: "error",
+      reason,
+      ambiguous: true,
+      ...(tier < 3 || e instanceof PageUnreachable ? { server: true } : {}),
+    };
   }
 }
 

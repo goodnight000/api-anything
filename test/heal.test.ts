@@ -230,7 +230,9 @@ fetch("/api/"+"${QID.slice(0, 11)}"+"${QID.slice(11)}"+"/User?name="+location.pa
     const fetchImpl = (async () => new Response("", { status: 404 })) as unknown as typeof fetch;
     const r = await call("d", "get", { q: "abc" }, { ...fast, fetchImpl });
     assert.equal(r.ok, false);
-    assert.equal(r.class, "drift");
-    assert.match(r.reason ?? "", /heal failed/);
+    // the trigger page never loaded: nothing was learned about the op, so it is not stale
+    assert.equal(r.class, "error");
+    assert.match(r.reason ?? "", /heal stopped: the browser run failed/);
+    assert.equal(staleMark("d", "get"), undefined);
   });
 });
