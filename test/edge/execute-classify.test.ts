@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { addCookiesToProfile, chromeAvailable, closeBrowser, openBrowser } from "../../src/browser.js";
+import { addCookiesToProfile, browserAvailable, closeBrowser, openBrowser } from "../../src/browser.js";
 import { classify, judge, type Observed } from "../../src/classify.js";
 import { call } from "../../src/execute.js";
 import { capOutput } from "../../src/extract.js";
@@ -743,7 +743,7 @@ test("auth stays at tier 1 when no browser tier may run, and when a login is on 
 
 /* ----------------------------------------------------------------- Chrome-only */
 
-describe("browser tiers", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
+describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser installed" }, () => {
   test("a write whose POST was redirected (303) to a 403 page ran: it is not re-sent at tier 2", async () => {
     site("prg", {
       name: "follow",

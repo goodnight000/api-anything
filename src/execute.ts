@@ -3,7 +3,7 @@
  * the heal-loop guards, and the write rules. Always sends the stored template first; healing is
  * reactive only.
  */
-import { chromeAvailable, type PageFetchResult, ProfileInUse, pageFetch, profileCookies } from "./browser.js";
+import { browserAvailable, type PageFetchResult, ProfileInUse, pageFetch, profileCookies } from "./browser.js";
 import { type Class, judge } from "./classify.js";
 import { capOutput } from "./extract.js";
 import {
@@ -214,7 +214,7 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
  * a tier-2 page sends the profile's own cookies, so there the jar only fills `cookie:` refs.
  */
 async function refreshCookies(ctx: Ctx, op: Operation, tier: Tier): Promise<boolean> {
-  if (!chromeAvailable()) return false;
+  if (!browserAvailable()) return false;
   let fresh: StoredCookie[];
   try {
     fresh = await profileCookies({ url: op.request.url, profileDir: profileDir() });
@@ -296,7 +296,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   }
   if (guard) {
     // Not re-healed. A read can still get its answer from the site's own frontend.
-    if (op.readOnly && a.tier < 3 && ctx.maxTier >= 3 && stale?.tier3 !== false && chromeAvailable()) {
+    if (op.readOnly && a.tier < 3 && ctx.maxTier >= 3 && stale?.tier3 !== false && browserAvailable()) {
       const b = await attempt(ctx, op, 3);
       if (b.class === "ok") return success(b, { reason: guard });
       // the site's own request doesn't answer either: stop paying a browser run per call
@@ -475,7 +475,7 @@ export async function call(
         next: `allow a higher tier (--max-tier ${tier})`,
       });
     }
-    if (tier > 1 && !chromeAvailable()) {
+    if (tier > 1 && !browserAvailable()) {
       return done({
         ok: false,
         class: "blocked",
@@ -540,7 +540,12 @@ export async function call(
       authStep = 3;
       // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
       // refreshes them, and for a read its answer is this call's answer.
-      if (op.readOnly && ctx.maxTier >= 3 && chromeAvailable() && op.slots.some((s) => s.ref?.startsWith("session:"))) {
+      if (
+        op.readOnly &&
+        ctx.maxTier >= 3 &&
+        browserAvailable() &&
+        op.slots.some((s) => s.ref?.startsWith("session:"))
+      ) {
         const b = await attempt(ctx, op, 3);
         if (b.class === "ok") {
           const why = [...notes, `tier ${tier} said ${a.class} (${a.reason})`].join("; ");
@@ -554,7 +559,7 @@ export async function call(
       if (
         !op.readOnly &&
         ctx.maxTier >= 3 &&
-        chromeAvailable() &&
+        browserAvailable() &&
         op.slots.some((s) => s.ref?.startsWith("session:"))
       ) {
         try {
@@ -571,7 +576,7 @@ export async function call(
     // attempt tells them apart, for a read only: a page can send a request more than once (its own
     // scripts, a retry after a navigation or a reset), and a write is sent once. When the attempt does
     // not get the data, the call ends with tier 1's answer.
-    if (a.class === "auth" && tier === 1 && !write && ctx.maxTier >= 2 && chromeAvailable() && noLogin()) {
+    if (a.class === "auth" && tier === 1 && !write && ctx.maxTier >= 2 && browserAvailable() && noLogin()) {
       const b = await attempt(ctx, op, 2);
       if (b.class === "ok") {
         rememberTier(siteName, op.name, 2);

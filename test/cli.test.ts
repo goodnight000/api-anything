@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chromeAvailable } from "../src/browser.js";
+import { browserAvailable } from "../src/browser.js";
 import { addOperation } from "../src/heal.js";
 import type { TriggerStep } from "../src/types.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
@@ -895,7 +895,7 @@ describe("add from a saved capture", () => {
   });
 });
 
-const noChrome = !chromeAvailable() && "Google Chrome not installed";
+const noChrome = !browserAvailable() && "no Chromium browser installed";
 
 describe("capture's next hint", { skip: noChrome }, () => {
   const capture = async (path: string, ...flags: string[]) =>
@@ -960,7 +960,7 @@ describe("capture's next hint", { skip: noChrome }, () => {
 });
 
 describe("capture on a page with a reCAPTCHA frame from another site", {
-  skip: !chromeAvailable() && "Google Chrome not installed",
+  skip: !browserAvailable() && "no Chromium browser installed",
 }, () => {
   let server: import("node:http").Server;
   after(() => {

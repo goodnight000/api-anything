@@ -3,7 +3,7 @@
  * add (create), recapture (heal), and the tier-3 read. Rescan is the browserless heal.
  */
 import { join } from "node:path";
-import { chromeAvailable, ProfileInUse, runTrigger } from "./browser.js";
+import { browserAvailable, ProfileInUse, runTrigger } from "./browser.js";
 import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { capOutput, extract } from "./extract.js";
@@ -1058,8 +1058,12 @@ export async function healOperation(
   const tried = scanned ? swapped.replace("%s", last!.reason) : "rescan found nothing new";
   if (o.browser === false)
     return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs the browser (maxTier 1)` };
-  if (!chromeAvailable())
-    return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs a Chromium browser (Google Chrome, Brave, Edge or Chromium)` };
+  if (!browserAvailable())
+    return {
+      outcome: "failed",
+      attempt: last,
+      reason: `${tried}; recapture needs a Chromium browser (Google Chrome, Brave, Edge or Chromium)`,
+    };
 
   const examples = withDefaults(
     op,

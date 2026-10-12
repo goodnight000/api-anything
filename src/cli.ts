@@ -3,7 +3,7 @@
 import { writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { z } from "zod";
-import { chromeAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
+import { browserAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
 import { botWall, emptyResults, loginPath, signInForm } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
@@ -189,8 +189,8 @@ function stepsOf(text: string | undefined): TriggerStep[] | undefined {
   return json(text, z.array(TriggerStepSchema), "steps");
 }
 
-const needChrome = () => {
-  if (!chromeAvailable())
+const needBrowser = () => {
+  if (!browserAvailable())
     throw new Fail(
       "no Chromium browser is installed (Google Chrome, Brave, Edge or Chromium)",
       "install one, or set API_ANYTHING_BROWSER to the path of any Chromium executable, then retry",
@@ -264,7 +264,7 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
 
   // The visible-window flow: --window, or the automatic fallback when nothing is importable.
   const runWindow = async (reason?: string) => {
-    needChrome();
+    needBrowser();
     process.stderr.write(
       `${reason ? `${reason} ` : ""}Sign in to ${url} in the browser window, then close it or press Enter here.\n`,
     );
@@ -374,7 +374,7 @@ function pageSays(
 async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
   const url = pos[0];
   if (!url) throw new Fail("missing <url>", "api-anything capture <url>");
-  needChrome();
+  needBrowser();
   const limit = positive(v.limit, "limit") ?? 15;
   const examples = kv(v.example);
   const c = await capturePage({ url, steps, softFrom: v["soft-from"], write: v.write, args: examples });
@@ -571,7 +571,7 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
         : undefined;
   const match = json(matchText, MatchSchema, "match");
   const html = json(v.html, HtmlRecipeSchema, "html");
-  if (!v.from) needChrome();
+  if (!v.from) needBrowser();
   if (v.from2 && !ex2)
     throw new Fail("--from2 needs --example2 (the values that capture was made with)", "api-anything add --help");
   if (v.from && ex2 && !v.from2) {

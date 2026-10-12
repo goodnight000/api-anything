@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
-import { chromeAvailable, closeBrowser } from "../../src/browser.js";
+import { browserAvailable, closeBrowser } from "../../src/browser.js";
 import { classify } from "../../src/classify.js";
 import { call } from "../../src/execute.js";
 import { addOperation, type CaptureFile, capturePage } from "../../src/heal.js";
@@ -238,7 +238,7 @@ describe("conditional request headers", () => {
   });
 
   describe("capture then add (the SKILL flow) on a site with stable ETags", {
-    skip: !chromeAvailable() && "Google Chrome not installed",
+    skip: !browserAvailable() && "no Chromium browser installed",
   }, () => {
     let fx: Fixture;
     before(async () => (fx = await startFixture()));

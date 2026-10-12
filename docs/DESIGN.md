@@ -462,7 +462,7 @@ send a request again (its own scripts, a retry after a navigation or a connectio
 
 ## Browser
 
-- Any Chromium build, resolved once per process and launched by path (no browser download).
+- Any installed Chromium build, launched by path (no browser download).
   The default order is Google Chrome, then Brave, Microsoft Edge, Chromium, Vivaldi, Arc, each
   probed at its standard install location for the current OS. `API_ANYTHING_BROWSER` overrides
   the choice: a name (matched against the browsers above, case- and style-insensitive — `brave`,

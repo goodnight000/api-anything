@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
-import { chromeAvailable, closeBrowser, openBrowser } from "../../src/browser.js";
+import { browserAvailable, closeBrowser, openBrowser } from "../../src/browser.js";
 import { classify } from "../../src/classify.js";
 import { call } from "../../src/execute.js";
 import { capOutput } from "../../src/extract.js";
@@ -22,7 +22,7 @@ import { type LiveFixture, startLiveFixture } from "./live-a.fixture.js";
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-live-a-"));
 process.env.API_ANYTHING_HOME = HOME;
 const fast = { minIntervalMs: 0 };
-const noChrome = !chromeAvailable() && "Google Chrome not installed";
+const noChrome = !browserAvailable() && "no Chromium browser installed";
 
 let fx: LiveFixture;
 before(async () => {

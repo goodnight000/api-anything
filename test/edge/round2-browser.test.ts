@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
-import { chromeAvailable, closeBrowser, runTrigger } from "../../src/browser.js";
+import { browserAvailable, closeBrowser, runTrigger } from "../../src/browser.js";
 import { capturePage, profileDir } from "../../src/heal.js";
 
 const TMP = mkdtempSync(join(tmpdir(), "aa-round2-"));
@@ -23,7 +23,7 @@ const newHome = () => {
   return h;
 };
 newHome();
-const noChrome = !chromeAvailable() && "Google Chrome not installed";
+const noChrome = !browserAvailable() && "no Chromium browser installed";
 
 /* ------------------------------------------------------------ 5, 6: browser */
 

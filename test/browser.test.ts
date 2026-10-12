@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
-import { chromeAvailable, closeBrowser, headlessUserAgent, pageFetch, runTrigger } from "../src/browser.js";
+import { browserAvailable, closeBrowser, headlessUserAgent, pageFetch, runTrigger } from "../src/browser.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
 // the browser keeps what it learned about the installed Chrome under the home: not the user's own
@@ -46,7 +46,7 @@ describe("fixture site (plain http)", () => {
   });
 });
 
-describe("browser", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
+describe("browser", { skip: !browserAvailable() && "no Chromium browser installed" }, () => {
   let fx: Fixture;
   let profileDir: string;
   before(async () => {

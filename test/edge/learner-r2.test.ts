@@ -14,7 +14,7 @@ import { after, describe, test } from "node:test";
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-edge-r2-"));
 process.env.API_ANYTHING_HOME = HOME;
 
-import { chromeAvailable, closeBrowser } from "../../src/browser.js";
+import { browserAvailable, closeBrowser } from "../../src/browser.js";
 import { call } from "../../src/execute.js";
 import { addOperation, type CaptureFile, putOperation, rescan, runOpTrigger, templatizeUrl } from "../../src/heal.js";
 import { buildRequest } from "../../src/http.js";
@@ -558,7 +558,7 @@ test("a value equal to a path segment and to a query value under another key tem
 /* --------------------------------------------- web storage, in the browser */
 
 describe("a token the page keeps in localStorage", {
-  skip: !chromeAvailable() && "Google Chrome not installed",
+  skip: !browserAvailable() && "no Chromium browser installed",
 }, () => {
   let server: Server;
   const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.Zm9vYmFyYmF6cXV4";
@@ -610,7 +610,7 @@ describe("a token the page keeps in localStorage", {
 });
 
 describe("a site-wide key header, on a trigger page that always asks for its own record", {
-  skip: !chromeAvailable() && "Google Chrome not installed",
+  skip: !browserAvailable() && "no Chromium browser installed",
 }, () => {
   let server: Server;
   const KEY = "da2-k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc";
@@ -668,7 +668,7 @@ describe("a site-wide key header, on a trigger page that always asks for its own
 });
 
 describe("a write whose CSRF token the page issues, after the site rotates it", {
-  skip: !chromeAvailable() && "Google Chrome not installed",
+  skip: !browserAvailable() && "no Chromium browser installed",
 }, () => {
   let server: Server;
   let token = "csrf-Qx7mK2pL9vR4tZ8w";
@@ -731,7 +731,7 @@ describe("a write whose CSRF token the page issues, after the site rotates it", 
 });
 
 describe("a read with a public web-app bearer, after the site rotates the bearer", {
-  skip: !chromeAvailable() && "Google Chrome not installed",
+  skip: !browserAvailable() && "no Chromium browser installed",
 }, () => {
   let server: Server;
   let bearer = "Bearer AAAAAAAAAAAAAAAAAAAAAPublicFixtureOne111";
@@ -786,7 +786,7 @@ describe("a read with a public web-app bearer, after the site rotates the bearer
 });
 
 describe("an expired page-issued bearer, when the profile also holds a cookie the jar lacks", {
-  skip: !chromeAvailable() && "Google Chrome not installed",
+  skip: !browserAvailable() && "no Chromium browser installed",
 }, () => {
   let server: Server;
   const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbm9uIn0.YW5vbnltb3Vz";

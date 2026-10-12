@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
-import { chromeAvailable, closeBrowser } from "../src/browser.js";
+import { browserAvailable, closeBrowser } from "../src/browser.js";
 import { call } from "../src/execute.js";
 import { addOperation } from "../src/heal.js";
 import { parseSite } from "../src/spec.js";
@@ -25,7 +25,7 @@ async function serve(handler: Parameters<typeof createServer>[1]): Promise<{ ser
   return { server, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
 }
 
-describe("heal", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
+describe("heal", { skip: !browserAvailable() && "no Chromium browser installed" }, () => {
   const servers: Server[] = [];
   after(async () => {
     await closeBrowser();

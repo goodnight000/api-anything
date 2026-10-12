@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { chromeAvailable, closeBrowser } from "../src/browser.js";
+import { browserAvailable, closeBrowser } from "../src/browser.js";
 import { judge } from "../src/classify.js";
 import { call } from "../src/execute.js";
 import { addOperation, type CaptureFile, healOperation, runOpTrigger } from "../src/heal.js";
@@ -104,7 +104,7 @@ test("add refuses to save a spec containing a credential it cannot remove", asyn
 });
 
 test("browser execution and failed-heal fallback never accept data for different arguments", {
-  skip: !chromeAvailable(),
+  skip: !browserAvailable(),
   timeout: 45_000,
 }, async () => {
   const server = createServer((req, res) => {
@@ -232,7 +232,7 @@ test("a write rejected inside an HTTP 200 response is not success and is never r
 });
 
 test("a learned message operation generalizes recipients and content without sending while learning", {
-  skip: !chromeAvailable(),
+  skip: !browserAvailable(),
   timeout: 45_000,
 }, async () => {
   const messages: unknown[] = [];
@@ -287,7 +287,7 @@ test("a learned message operation generalizes recipients and content without sen
 });
 
 test("compound-only credentials all replay, refresh and stay on their origin", {
-  skip: !chromeAvailable(),
+  skip: !browserAvailable(),
   timeout: 45_000,
 }, async () => {
   const server = createServer((req, res) => {

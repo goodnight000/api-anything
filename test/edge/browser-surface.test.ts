@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { chromeAvailable, closeBrowser, openBrowser, pageFetch, runTrigger, tabsOf } from "../../src/browser.js";
+import { browserAvailable, closeBrowser, openBrowser, pageFetch, runTrigger, tabsOf } from "../../src/browser.js";
 import { call } from "../../src/execute.js";
 import { addOperation, capturePage, loadCapture, profileDir } from "../../src/heal.js";
 import { createServer } from "../../src/mcp.js";
@@ -26,7 +26,7 @@ const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const CLI = join(ROOT, "src", "cli.ts");
 const TMP = mkdtempSync(join(tmpdir(), "api-anything-edge-browser-"));
 const fast = { minIntervalMs: 0 };
-const noChrome = !chromeAvailable() && "Google Chrome not installed";
+const noChrome = !browserAvailable() && "no Chromium browser installed";
 
 let homes = 0;
 /** A fresh API_ANYTHING_HOME, made current for in-process calls. */

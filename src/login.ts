@@ -5,7 +5,7 @@
  * and the persistent browser profile, and re-imports on a self-healing auth failure.
  */
 import { readFileSync } from "node:fs";
-import { addCookiesToProfile, chromeAvailable, clearProfileCookies } from "./browser.js";
+import { addCookiesToProfile, browserAvailable, clearProfileCookies } from "./browser.js";
 import { profileDir } from "./heal.js";
 import {
   belongs,
@@ -86,7 +86,7 @@ export async function importSession(
   withLock(sessionFile(site), () =>
     saveSession(site, { ...loadSession(site), cookies: imported.cookies, source: imported.source }),
   );
-  if (o.pushProfile !== false && chromeAvailable()) {
+  if (o.pushProfile !== false && browserAvailable()) {
     try {
       await addCookiesToProfile(imported.cookies, profileDir());
     } catch {
@@ -126,7 +126,7 @@ export async function reimportIfBrowser(site: string, url: string, loginCookies?
 export async function logout(site: string): Promise<void> {
   safeName(site);
   withLock(sessionFile(site), () => saveSession(site, { cookies: [], values: {} }));
-  if (chromeAvailable()) {
+  if (browserAvailable()) {
     try {
       await clearProfileCookies(site, profileDir());
     } catch {

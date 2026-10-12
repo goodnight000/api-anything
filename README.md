@@ -63,7 +63,7 @@ api-anything call hacker-news search query=sqlite
 Over MCP an agent **calls** operations, using four tools: `list_sites`, `list_operations`,
 `call_operation` and `login`. To **create** operations, an agent needs a shell and the
 [skill](skills/api-anything/SKILL.md). A Chromium browser is needed only for creating operations
-and for browser tier — Google Chrome by default, or Brave, Edge, Chromium, Vivaldi, Arc; any
+and for the browser tier — Google Chrome by default, or Brave, Edge, Chromium, Vivaldi, Arc; any
 Chromium executable works via `API_ANYTHING_BROWSER`. [Setup details](docs/QUICKSTART.md).
 
 ## Teach it a new site

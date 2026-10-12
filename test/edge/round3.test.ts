@@ -16,7 +16,7 @@ import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { chromeAvailable, closeBrowser, pageFetch, runTrigger } from "../../src/browser.js";
+import { browserAvailable, closeBrowser, pageFetch, runTrigger } from "../../src/browser.js";
 import { classify } from "../../src/classify.js";
 import { call } from "../../src/execute.js";
 import { addOperation, capturePage, profileDir, runOpTrigger } from "../../src/heal.js";
@@ -37,7 +37,7 @@ const newHome = () => {
   return h;
 };
 newHome();
-const noChrome = !chromeAvailable() && "Google Chrome not installed";
+const noChrome = !browserAvailable() && "no Chromium browser installed";
 const noSession = { cookies: [] as StoredCookie[], values: {} as Record<string, string> };
 
 let nextId = 1;

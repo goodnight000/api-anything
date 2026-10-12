@@ -86,7 +86,7 @@ async function launch(
 const BROWSERS: { name: string; aliases: string[]; candidates: string[] }[] = [
   {
     name: "Google Chrome",
-    aliases: ["google chrome", "chrome", "chrome beta", "chrome dev"],
+    aliases: ["google chrome", "chrome"],
     candidates: [
       "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
       "/opt/google/chrome/chrome",
@@ -105,12 +105,20 @@ const BROWSERS: { name: string; aliases: string[]; candidates: string[] }[] = [
   {
     name: "Microsoft Edge",
     aliases: ["microsoft edge", "edge", "msedge"],
-    candidates: ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "/opt/microsoft/msedge/msedge", "/usr/bin/microsoft-edge"],
+    candidates: [
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/opt/microsoft/msedge/msedge",
+      "/usr/bin/microsoft-edge",
+    ],
   },
   {
     name: "Chromium",
     aliases: ["chromium"],
-    candidates: ["/Applications/Chromium.app/Contents/MacOS/Chromium", "/usr/bin/chromium", "/usr/bin/chromium-browser"],
+    candidates: [
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+    ],
   },
   {
     name: "Vivaldi",
@@ -127,11 +135,11 @@ const BROWSERS: { name: string; aliases: string[]; candidates: string[] }[] = [
 /** Windows install locations, by key: `<root>\<dir>\<bin>` under the per-user then per-machine roots. */
 const WIN_PATHS: Record<string, { dir: string; bin: string }[]> = {
   "Google Chrome": [{ dir: "Google/Chrome/Application", bin: "chrome.exe" }],
-  "Brave": [{ dir: "BraveSoftware/Brave-Browser/Application", bin: "brave.exe" }],
+  Brave: [{ dir: "BraveSoftware/Brave-Browser/Application", bin: "brave.exe" }],
   "Microsoft Edge": [{ dir: "Microsoft/Edge/Application", bin: "msedge.exe" }],
-  "Chromium": [{ dir: "Chromium/Application", bin: "chrome.exe" }],
-  "Vivaldi": [{ dir: "Vivaldi/Application", bin: "vivaldi.exe" }],
-  "Arc": [],
+  Chromium: [{ dir: "Chromium/Application", bin: "chrome.exe" }],
+  Vivaldi: [{ dir: "Vivaldi/Application", bin: "vivaldi.exe" }],
+  Arc: [],
 };
 
 /** One browser's installed executable (first that exists), or undefined. */
@@ -160,7 +168,11 @@ export function browserChoice(): { name: string; bin: string } | undefined {
     if (env.includes("/") || env.includes("\\")) {
       return existsSync(env) ? { name: basename(env).replace(/\.(exe|app)$/i, ""), bin: env } : undefined;
     }
-    const wanted = env.toLowerCase().replace(/\.(exe|app)$/i, "").replace(/[-_]/g, " ").replace(/\s+/g, " ");
+    const wanted = env
+      .toLowerCase()
+      .replace(/\.(exe|app)$/i, "")
+      .replace(/[-_]/g, " ")
+      .replace(/\s+/g, " ");
     const hit = BROWSERS.find((b) => b.aliases.includes(wanted));
     if (!hit) return undefined; // an unknown name: a path would work
     const bin = browserBin(hit);
@@ -176,16 +188,10 @@ export function browserChoice(): { name: string; bin: string } | undefined {
 /** Checked up front so callers can skip cleanly. */
 export const browserAvailable = (): boolean => !!browserChoice();
 
-/** Backwards-compatible name: "a browser is installed" (Chrome was the only candidate before 0.1.1). */
-export const chromeAvailable = (): boolean => browserAvailable();
-
 // Default headless UA says "HeadlessChrome/<v>" and x.com answers 403. sec-ch-ua already
 // carries the browser's name, so only the UA string needs the fix.
 async function probeHeadlessUA(): Promise<string> {
-  const choice = browserChoice();
-  const b = await chromium.launch(
-    choice ? { executablePath: choice.bin, headless: true } : { headless: true },
-  );
+  const b = await chromium.launch({ executablePath: browserChoice()?.bin, headless: true });
   try {
     const p = await b.newPage();
     return (await p.evaluate(() => navigator.userAgent)).replace("HeadlessChrome", "Chrome");
@@ -241,10 +247,8 @@ export function openBrowser({
   const ctx = (async () => {
     if (prev) await closeContext(prev.ctx);
     if (headless) headlessUA ??= await headlessUserAgent();
-    const choice = browserChoice();
     const c = await launch(profileDir, {
-      // the installed browser, by path: no download, no channel
-      ...(choice ? { executablePath: choice.bin } : {}),
+      executablePath: browserChoice()?.bin,
       headless,
       userAgent: headless ? headlessUA : undefined,
       viewport: headless ? undefined : null,

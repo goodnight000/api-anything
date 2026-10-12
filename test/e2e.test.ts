@@ -11,7 +11,7 @@ import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { chromeAvailable, closeBrowser, openBrowser, runTrigger } from "../src/browser.js";
+import { browserAvailable, closeBrowser, openBrowser, runTrigger } from "../src/browser.js";
 import { call } from "../src/execute.js";
 import { addOperation, capturePage, profileDir } from "../src/heal.js";
 import { importSession } from "../src/login.js";
@@ -52,7 +52,7 @@ function cli(...args: string[]): Promise<{ code: number; stdout: string; stderr:
   );
 }
 
-describe("e2e", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
+describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }, () => {
   let fx: Fixture;
   before(async () => (fx = await startFixture()));
   after(async () => {

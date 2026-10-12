@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, beforeEach, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chromeAvailable, closeBrowser } from "../../src/browser.js";
+import { browserAvailable, closeBrowser } from "../../src/browser.js";
 import { call, heal } from "../../src/execute.js";
 import { addOperation, rescan } from "../../src/heal.js";
 import { loadSession, saveSession } from "../../src/session.js";
@@ -890,7 +890,7 @@ const sendJs = (res: ServerResponse, s: string) =>
   void res.writeHead(200, { "content-type": "application/javascript" }).end(s);
 const fast = { minIntervalMs: 0 };
 
-describe("heal with the browser (recapture)", { skip: !chromeAvailable() && "Google Chrome not installed" }, () => {
+describe("heal with the browser (recapture)", { skip: !browserAvailable() && "no Chromium browser installed" }, () => {
   const servers: Server[] = [];
   after(async () => {
     await closeBrowser();
