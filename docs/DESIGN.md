@@ -462,14 +462,21 @@ send a request again (its own scripts, a retry after a navigation or a connectio
 
 ## Browser
 
-- playwright-core, `channel: "chrome"` (the installed Chrome; no browser download). A persistent
-  profile at `~/.api-anything/profile`. Headless by default, with the user agent's `HeadlessChrome`
-  replaced by `Chrome`. Asking Chrome for that user agent means starting it once more (about 3 s of
-  a cold call), so the answer is kept in `~/.api-anything/chrome-ua.json`, by the Chrome binary's
-  path, modification time and size: an update changes those. A file that cannot be read, or that
-  names another Chrome, is not believed, and Chrome is asked again. A wrong user agent under the right key is believed:
-  delete `chrome-ua.json` and start again (a running process, an MCP server too, keeps the one it
-  read). `login` runs headed.
+- Any Chromium build, resolved once per process and launched by path (no browser download).
+  The default order is Google Chrome, then Brave, Microsoft Edge, Chromium, Vivaldi, Arc, each
+  probed at its standard install location for the current OS. `API_ANYTHING_BROWSER` overrides
+  the choice: a name (matched against the browsers above, case- and style-insensitive — `brave`,
+  `Brave`, `BRAVE`, `chrome` all work) or the path of any Chromium executable, which is how a
+  portable install or an off-list build is named. When the resolver finds nothing, the browser
+  tiers skip cleanly; the plain-HTTP tier needs no browser at all.
+- The headless user agent is asked of the resolved browser once (it means starting it again,
+  about 3 s of a cold call), so the answer is kept at `~/.api-anything/browser-ua.json`, keyed by
+  the browser binary's path, modification time and size: an update changes those and the browser
+  is asked again. A file that cannot be read, or that names another browser, is not believed. A
+  wrong user agent under the right key is believed: delete the file and start again (a running
+  process, an MCP server too, keeps the one it read). `HeadlessChrome` in the reported agent is
+  rewritten to `Chrome` (a default-headless agent says so, and some sites answer 403). `login`
+  runs headed.
 - Capture listens on the context, keeps the run's own pages and the popups they open (closed
   afterwards), and reads bodies **inside the response handler** (bodies vanish after navigation).
   The document body is kept raw. Pages load to `domcontentloaded` (a hung tracker or a download URL
@@ -481,7 +488,7 @@ send a request again (its own scripts, a retry after a navigation or a connectio
   or more), it waits up to 15 s for the real document, then waits for its data as before; UI steps
   wait for it the same way before they run. It records every URL the main frame had (history API
   changes included) as the capture's `locations`.
-- Chrome locks a profile to one process. The browser is released after 3 s idle, and a second
+- A browser locks a profile to one process. The browser is released after 3 s idle, and a second
   process waits up to 15 s for the profile before it fails with a short hint. SIGTERM exits.
 - After every browser run, cookies are exported (full Playwright cookie objects) to
   `~/.api-anything/sessions/<site>.json`, together with session values seen in captured headers.
@@ -555,9 +562,9 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
 - **Targets**: a site name, a domain (`linkedin.com`, `www.linkedin.com`) or a URL. A domain or URL
   on a known site's baseUrl host (with or without `www.`) is that site; any other becomes a site
   named after its host.
-- Imported cookies go into the jar **and** into api-anything's own Chrome profile (`addCookies`), so
+- Imported cookies go into the jar **and** into api-anything's own browser profile (`addCookies`), so
   tier 2/3 and heals are logged in too.
-- `--window` opens a visible Chrome window on api-anything's profile for a by-hand sign-in (an
+- `--window` opens a visible browser window on api-anything's profile for a by-hand sign-in (an
   independent session). It is also the automatic fallback when nothing is importable.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON array (Cookie-Editor / Playwright)
   export, for servers/CI with no browser.
@@ -565,7 +572,7 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
   exactly the recorded profile is silently re-imported once (browserless) and the call retried (a write
   only when it certainly did not run, so never one the page sent at tier 3); only if it is
   still `auth` does the result carry the "run `api-anything login`" hint. This runs at tiers 2 and 3 as at
-  tier 1: the import also lands in the Chrome profile those tiers send their cookies from.
+  tier 1: the import also lands in the browser profile those tiers send their cookies from.
 - **`logout <site>`** clears the jar and that site's cookies in the profile.
 
 `node:sqlite` is chosen over the `sqlite3` CLI: it is built in (no dependency, present on every

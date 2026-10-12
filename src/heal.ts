@@ -1059,7 +1059,7 @@ export async function healOperation(
   if (o.browser === false)
     return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs the browser (maxTier 1)` };
   if (!chromeAvailable())
-    return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs Google Chrome` };
+    return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs a Chromium browser (Google Chrome, Brave, Edge or Chromium)` };
 
   const examples = withDefaults(
     op,

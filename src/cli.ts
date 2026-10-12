@@ -54,13 +54,13 @@ const HELP: Record<string, string> = {
               profiles are signed in to the site (possibly different people's accounts): login
               then lists them with their names and emails instead of guessing. The choice is
               remembered: a later automatic re-import uses the same profile.
-  --window    open a visible Chrome window to sign in by hand (an independent session); also the
+  --window    open a visible browser window to sign in by hand (an independent session); also the
               automatic fallback when nothing is importable. This is where you solve 2FA/captchas.
   --cookies   import a cookies.txt (Netscape) or JSON export (Cookie-Editor / Playwright), for CI`,
   logout: `api-anything logout <site>
-  Clears the stored cookie jar and this site's cookies in api-anything's Chrome profile.`,
+  Clears the stored cookie jar and this site's cookies in api-anything's browser profile.`,
   capture: `api-anything capture <url> [--steps <json>] [--soft-from <url>] [--example k=v]... [--write] [--limit n] [--outline]
-  Loads the page in Chrome and lists the requests it made, noise filtered and ranked (requests carrying
+  Loads the page in the browser and lists the requests it made, noise filtered and ranked (requests carrying
   the --example values first). Saves everything as a capture id for: add --from <id> --pick-request <n>,
   and for: inspect <id> <n>. Captures hold cookie values; the newest 20 are kept, none past 24 h.
   --steps      JSON array of {action: click|fill|press|wait|goto, selector?, value?, ms?}
@@ -79,7 +79,7 @@ const HELP: Record<string, string> = {
   is on the page with no item in it (data: [], with a note).
   --outline summarizes the response (as capture --outline does) instead of printing it.`,
   add: `api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
-  Runs the trigger twice in Chrome (with --example, then --example2 or --example again), picks the request
+  Runs the trigger twice in the browser (with --example, then --example2 or --example again), picks the request
   carrying the example values, and saves the learned operation to ~/.api-anything/sites/<site>.json.
   --trigger       page URL with {param} placeholders, e.g. https://site.com/u/{name}
   --steps <json>  UI steps after load, [{action: click|fill|press|wait|goto, selector?, value?, ms?}];
@@ -190,7 +190,11 @@ function stepsOf(text: string | undefined): TriggerStep[] | undefined {
 }
 
 const needChrome = () => {
-  if (!chromeAvailable()) throw new Fail("Google Chrome is not installed", "install Google Chrome, then retry");
+  if (!chromeAvailable())
+    throw new Fail(
+      "no Chromium browser is installed (Google Chrome, Brave, Edge or Chromium)",
+      "install one, or set API_ANYTHING_BROWSER to the path of any Chromium executable, then retry",
+    );
 };
 
 function requireSite(name: string | undefined) {
@@ -262,7 +266,7 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
   const runWindow = async (reason?: string) => {
     needChrome();
     process.stderr.write(
-      `${reason ? `${reason} ` : ""}Sign in to ${url} in the Chrome window, then close it or press Enter here.\n`,
+      `${reason ? `${reason} ` : ""}Sign in to ${url} in the browser window, then close it or press Enter here.\n`,
     );
     const cookies = await login({ url, profileDir: profileDir() });
     withLock(sessionFile(site), () => saveSession(site, { ...loadSession(site), cookies, source: "window" }));
@@ -848,7 +852,7 @@ try {
 } catch (e) {
   await closeBrowser();
   const f = e instanceof Fail ? e : undefined;
-  // Playwright errors carry the whole Chrome command line after the first line
+  // Playwright errors carry the whole browser command line after the first line
   out({ ok: false, error: oneLine((e as Error).message), ...(f?.extra ?? {}) });
   const next =
     f?.next ??

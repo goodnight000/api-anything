@@ -2,7 +2,7 @@
  * login = get a signed-in session for a site. By default it IMPORTS cookies from the user's
  * everyday browser (they are almost always already signed in there); `--window` and `--cookies`
  * are the other two sources. This module wires the pure import (import.ts) to the session store
- * and the persistent Chrome profile, and re-imports on a self-healing auth failure.
+ * and the persistent browser profile, and re-imports on a self-healing auth failure.
  */
 import { readFileSync } from "node:fs";
 import { addCookiesToProfile, chromeAvailable, clearProfileCookies } from "./browser.js";
@@ -61,7 +61,7 @@ export interface ImportOptions {
   profile?: string;
   /** a cookies.txt / JSON export, for servers/CI with no browser */
   file?: string;
-  /** also inject into api-anything's Chrome profile (default true when Chrome is present) */
+  /** also inject into api-anything's browser profile (default true when a browser is present) */
   pushProfile?: boolean;
 }
 
@@ -90,7 +90,7 @@ export async function importSession(
     try {
       await addCookiesToProfile(imported.cookies, profileDir());
     } catch {
-      // an open Chrome, a locked profile: the jar still works for tier 1
+      // an open browser, a locked profile: the jar still works for tier 1
     }
   }
   return imported;
@@ -130,7 +130,7 @@ export async function logout(site: string): Promise<void> {
     try {
       await clearProfileCookies(site, profileDir());
     } catch {
-      /* no profile yet, or Chrome open */
+      /* no profile yet, or the browser open */
     }
   }
 }

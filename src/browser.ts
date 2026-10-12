@@ -1,9 +1,10 @@
 /**
- * The browser layer: installed Chrome via playwright-core, one persistent profile per process.
- * Produces raw Exchanges for the learner (tier 3 / create / heal) and runs tier-2 page fetches.
+ * The browser layer: an installed Chromium (Google Chrome by default, or Brave, Edge, Chromium,
+ * Vivaldi, Arc, or any `API_ANYTHING_BROWSER`) via playwright-core, one persistent profile per
+ * process. Produces raw Exchanges for the learner (tier 3 / create / heal) and tier-2 page fetches.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import {
   type BrowserContext,
@@ -24,18 +25,18 @@ let current: { profileDir: string; headless: boolean; ctx: Promise<BrowserContex
 let headlessUA: string | undefined;
 const originPages = new Map<string, Page>();
 
-// Chrome locks a profile to one process. A long-lived process (the MCP server) releases it after
-// this much idle time (an agent's calls are seconds apart, so Chrome would mostly relaunch anyway),
-// and a second process waits up to LOCK_WAIT_MS for it.
+// A browser locks a profile to one process. A long-lived process (the MCP server) releases it
+// after this much idle time (an agent's calls are seconds apart, so the browser would mostly
+// relaunch anyway), and a second process waits up to LOCK_WAIT_MS for it.
 const IDLE_CLOSE_MS = 3_000;
 const LOCK_WAIT_MS = 15_000;
 const LOCKED = /ProcessSingleton|profile (directory )?is already in use|SingletonLock/i;
 
-/** Another process holds api-anything's Chrome profile. */
+/** Another process holds api-anything's browser profile. */
 export class ProfileInUse extends Error {
   constructor(dir: string) {
     super(
-      `the api-anything Chrome profile is in use by another process (an MCP server or another api-anything command): ${dir}`,
+      `the api-anything browser profile is in use by another process (an MCP server or another api-anything command): ${dir}`,
     );
     this.name = "ProfileInUse";
   }
@@ -76,27 +77,115 @@ async function launch(
   }
 }
 
-/** The installed Chrome: the paths Playwright's "chrome" channel launches. */
-function chromePath(): string | undefined {
-  const env = process.env;
+/**
+ * The Chromium browsers api-anything can drive, in default order (Google Chrome first, then the
+ * other Chromium builds people actually run). The list's paths are the standard install
+ * locations; a portable install — or any browser outside the list — is named by path through
+ * `API_ANYTHING_BROWSER`.
+ */
+const BROWSERS: { name: string; aliases: string[]; candidates: string[] }[] = [
+  {
+    name: "Google Chrome",
+    aliases: ["google chrome", "chrome", "chrome beta", "chrome dev"],
+    candidates: [
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/opt/google/chrome/chrome",
+      "/usr/bin/google-chrome",
+    ],
+  },
+  {
+    name: "Brave",
+    aliases: ["brave", "brave browser", "bravebrowser"],
+    candidates: [
+      "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+      "/opt/brave.com/brave/brave",
+      "/usr/bin/brave-browser",
+    ],
+  },
+  {
+    name: "Microsoft Edge",
+    aliases: ["microsoft edge", "edge", "msedge"],
+    candidates: ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "/opt/microsoft/msedge/msedge", "/usr/bin/microsoft-edge"],
+  },
+  {
+    name: "Chromium",
+    aliases: ["chromium"],
+    candidates: ["/Applications/Chromium.app/Contents/MacOS/Chromium", "/usr/bin/chromium", "/usr/bin/chromium-browser"],
+  },
+  {
+    name: "Vivaldi",
+    aliases: ["vivaldi"],
+    candidates: ["/Applications/Vivaldi.app/Contents/MacOS/Vivaldi", "/usr/bin/vivaldi"],
+  },
+  {
+    name: "Arc",
+    aliases: ["arc"],
+    candidates: ["/Applications/Arc.app/Contents/MacOS/Arc"],
+  },
+];
+
+/** Windows install locations, by key: `<root>\<dir>\<bin>` under the per-user then per-machine roots. */
+const WIN_PATHS: Record<string, { dir: string; bin: string }[]> = {
+  "Google Chrome": [{ dir: "Google/Chrome/Application", bin: "chrome.exe" }],
+  "Brave": [{ dir: "BraveSoftware/Brave-Browser/Application", bin: "brave.exe" }],
+  "Microsoft Edge": [{ dir: "Microsoft/Edge/Application", bin: "msedge.exe" }],
+  "Chromium": [{ dir: "Chromium/Application", bin: "chrome.exe" }],
+  "Vivaldi": [{ dir: "Vivaldi/Application", bin: "vivaldi.exe" }],
+  "Arc": [],
+};
+
+/** One browser's installed executable (first that exists), or undefined. */
+function browserBin(e: (typeof BROWSERS)[number]): string | undefined {
   const candidates =
-    process.platform === "darwin"
-      ? ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
-      : process.platform === "win32"
-        ? [env.LOCALAPPDATA, env.PROGRAMFILES, env["PROGRAMFILES(X86)"]]
+    process.platform === "win32"
+      ? (WIN_PATHS[e.name] ?? []).flatMap(({ dir, bin }) =>
+          [process.env.LOCALAPPDATA, process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"]]
             .filter((d): d is string => !!d)
-            .map((d) => join(d, "Google", "Chrome", "Application", "chrome.exe"))
-        : ["/opt/google/chrome/chrome"];
+            .map((root) => join(root, dir, bin)),
+        )
+      : e.candidates;
   return candidates.find((p) => existsSync(p));
 }
 
+/**
+ * Resolve the browser to launch. `API_ANYTHING_BROWSER` is the escape hatch that also covers
+ * browsers outside the list: a name ("brave", "Chrome", "microsoft edge") picks one of the
+ * named ones, and a path (e.g. a portable build) picks whatever it points at. Without the
+ * variable, the first installed browser in the list's order. Returns undefined when nothing is
+ * found, so callers skip cleanly (the plain-HTTP tier needs no browser).
+ */
+export function browserChoice(): { name: string; bin: string } | undefined {
+  const env = process.env.API_ANYTHING_BROWSER?.trim();
+  if (env) {
+    if (env.includes("/") || env.includes("\\")) {
+      return existsSync(env) ? { name: basename(env).replace(/\.(exe|app)$/i, ""), bin: env } : undefined;
+    }
+    const wanted = env.toLowerCase().replace(/\.(exe|app)$/i, "").replace(/[-_]/g, " ").replace(/\s+/g, " ");
+    const hit = BROWSERS.find((b) => b.aliases.includes(wanted));
+    if (!hit) return undefined; // an unknown name: a path would work
+    const bin = browserBin(hit);
+    return bin ? { name: hit.name, bin } : undefined;
+  }
+  for (const b of BROWSERS) {
+    const bin = browserBin(b);
+    if (bin) return { name: b.name, bin };
+  }
+  return undefined;
+}
+
 /** Checked up front so callers can skip cleanly. */
-export const chromeAvailable = (): boolean => !!chromePath();
+export const browserAvailable = (): boolean => !!browserChoice();
+
+/** Backwards-compatible name: "a browser is installed" (Chrome was the only candidate before 0.1.1). */
+export const chromeAvailable = (): boolean => browserAvailable();
 
 // Default headless UA says "HeadlessChrome/<v>" and x.com answers 403. sec-ch-ua already
-// carries "Google Chrome", so only the UA string needs the fix.
+// carries the browser's name, so only the UA string needs the fix.
 async function probeHeadlessUA(): Promise<string> {
-  const b = await chromium.launch({ channel: "chrome", headless: true });
+  const choice = browserChoice();
+  const b = await chromium.launch(
+    choice ? { executablePath: choice.bin, headless: true } : { headless: true },
+  );
   try {
     const p = await b.newPage();
     return (await p.evaluate(() => navigator.userAgent)).replace("HeadlessChrome", "Chrome");
@@ -106,17 +195,20 @@ async function probeHeadlessUA(): Promise<string> {
 }
 
 /**
- * The user agent a headless Chrome is given. Asking Chrome means starting it once more (most of a
- * cold call's time), so the answer is kept under the home, by the binary's path, modification time
- * and size: an update changes those, and then, or when the file cannot be read, Chrome is asked again.
+ * The user agent a headless browser is given. Asking it means starting it once more (most of a
+ * cold call's time), so the answer is kept under the home, by the binary's path, modification
+ * time and size: an update changes those, and then, or when the file cannot be read, it is
+ * asked again.
  */
 export async function headlessUserAgent(): Promise<string> {
-  const file = join(home(), "chrome-ua.json");
+  const file = join(home(), "browser-ua.json");
   let key: string | undefined;
   try {
-    const bin = chromePath();
-    const s = statSync(bin!);
-    key = `${bin}:${s.mtimeMs}:${s.size}`;
+    const choice = browserChoice();
+    if (choice) {
+      const s = statSync(choice.bin);
+      key = `${choice.bin}:${s.mtimeMs}:${s.size}`;
+    }
     const kept = JSON.parse(readFileSync(file, "utf8")) as { key?: unknown; ua?: unknown };
     if (kept.key === key && typeof kept.ua === "string" && /Chrome\/\d/.test(kept.ua) && !/Headless/.test(kept.ua))
       return kept.ua;
@@ -149,8 +241,10 @@ export function openBrowser({
   const ctx = (async () => {
     if (prev) await closeContext(prev.ctx);
     if (headless) headlessUA ??= await headlessUserAgent();
+    const choice = browserChoice();
     const c = await launch(profileDir, {
-      channel: "chrome",
+      // the installed browser, by path: no download, no channel
+      ...(choice ? { executablePath: choice.bin } : {}),
       headless,
       userAgent: headless ? headlessUA : undefined,
       viewport: headless ? undefined : null,

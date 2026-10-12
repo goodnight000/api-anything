@@ -1,6 +1,6 @@
 /** Library entry: `import { call } from "api-anything"`. */
 
-export { closeBrowser } from "./browser.js";
+export { browserAvailable, browserChoice, closeBrowser } from "./browser.js";
 export { classify } from "./classify.js";
 export { type CallOptions, type CallResult, call, heal, type Tier } from "./execute.js";
 export { type AddInput, addOperation, capturePage, healOperation } from "./heal.js";

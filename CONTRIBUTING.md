@@ -64,7 +64,7 @@ npm install
 npm run format  # Biome: format and apply safe lint fixes
 npm run lint    # what CI runs: formatting and lint, no changes
 npm run check   # typecheck src and test
-npm test        # unit + offline e2e (the Chrome parts skip when Chrome is missing)
+npm test        # unit + offline e2e (the browser parts skip when no Chromium browser is installed)
 ```
 
 CI runs `lint`, `check` and `test` on every pull request.

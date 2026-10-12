@@ -1,8 +1,10 @@
 # Setup and demos
 
-Use Node 22.13 or newer. Install Google Chrome if you want to learn operations or use browser
-fallback. The runtime is local: it needs no API Anything account, cloud service, or model key.
-Your coding agent supplies the reasoning when creating an operation.
+Use Node 22.13 or newer. Install a Chromium browser if you want to learn operations or use the
+browser tier: Google Chrome by default, or Brave, Microsoft Edge, Chromium, Vivaldi, Arc — any
+Chromium executable works, and a non-default one is named with `API_ANYTHING_BROWSER` (a name
+like `brave`, or the path). The runtime is local: it needs no API Anything account, cloud
+service, or model key. Your coding agent supplies the reasoning when creating an operation.
 
 ## Install and check
 
@@ -20,7 +22,7 @@ api-anything call hacker-news search query=sqlite
 ```
 
 The last command should return `ok: true`, `tier: 1`, and a list of stories. It does not need an
-account or Chrome. `ok: false` includes a class, reason and next step. CLI failures exit nonzero.
+account or a browser. `ok: false` includes a class, reason and next step. CLI failures exit nonzero.
 For a reproducible deployment, run `git checkout <commit>` before `npm ci` and update that pin
 only after testing. Packing first avoids an npm 11 global Git-install failure that omits build
 dependencies. The installed command contains built files and does not depend on keeping the clone.
@@ -71,7 +73,7 @@ If a desktop app cannot find the executable, use the absolute path from `command
 
 ## Demo 1: teach once, call with new arguments
 
-From the clone, with Chrome and `jq` installed:
+From the clone, with a Chromium browser (default Chrome; any works) and `jq` installed:
 
 ```sh
 ./examples/teach-once.sh arxiv.org

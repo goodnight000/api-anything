@@ -11,8 +11,11 @@ node --version && npm --version && git --version
 ```
 
 Node must be v22.13 or newer. If Node is missing or older, stop and tell the user; don't change
-their Node yourself. Also check whether Google Chrome is installed. It's needed only to teach new
-sites, so a missing Chrome isn't a reason to stop.
+their Node yourself. Also check whether *a* Chromium browser is installed — Google Chrome (the
+default), or Brave, Microsoft Edge, Chromium, Vivaldi or Arc. It's needed only to teach new
+sites (the browser tier), so if none is there it isn't a reason to stop: the plain-HTTP tier has
+no browser at all. A user can point at their own with `API_ANYTHING_BROWSER` (a name or the path
+of any Chromium executable).
 
 ## 2. Install the command
 
@@ -77,4 +80,5 @@ install `SKILL.md` from the path above.
 - They need to restart this agent session to load the new tools.
 - Things to ask after the restart: "What does Goodreads rate Piranesi?", "What sites can API
   Anything call?", or "Turn <a website> into an API for me."
-- If Chrome is missing, they need it before teaching new sites.
+- If no Chromium browser (Chrome, Brave, Edge, Chromium, …) is there, they need one before
+  teaching new sites. Any works; `API_ANYTHING_BROWSER` names a non-default one.

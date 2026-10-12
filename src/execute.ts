@@ -480,8 +480,8 @@ export async function call(
         ok: false,
         class: "blocked",
         tier,
-        reason: `tier ${tier} needs Google Chrome`,
-        next: "install Google Chrome, then retry once",
+        reason: `tier ${tier} needs a Chromium browser (Google Chrome, Brave, Edge or Chromium)`,
+        next: "install one, or set API_ANYTHING_BROWSER to its path, then retry once",
       });
     }
     const a = await attempt(ctx, op, tier);

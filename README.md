@@ -62,8 +62,9 @@ api-anything call hacker-news search query=sqlite
 
 Over MCP an agent **calls** operations, using four tools: `list_sites`, `list_operations`,
 `call_operation` and `login`. To **create** operations, an agent needs a shell and the
-[skill](skills/api-anything/SKILL.md). Google Chrome is needed only for creating operations and
-for browser fallback. [Setup details](docs/QUICKSTART.md).
+[skill](skills/api-anything/SKILL.md). A Chromium browser is needed only for creating operations
+and for browser tier — Google Chrome by default, or Brave, Edge, Chromium, Vivaldi, Arc; any
+Chromium executable works via `API_ANYTHING_BROWSER`. [Setup details](docs/QUICKSTART.md).
 
 ## Teach it a new site
 
@@ -78,7 +79,7 @@ api-anything add hn-demo links \
 api-anything call hn-demo links domain=arxiv.org      # 30 arxiv.org stories, tier 1
 ```
 
-Headless Chrome loads the page once for each example. The part of the request that changed with
+The headless browser loads the page once for each example. The part of the request that changed with
 the input becomes a parameter, and the rest is stored as a template. The agent (or you) picks the
 request and the fields. API Anything builds the template without an LLM.
 [Recorded demos](docs/demos/README.md).
@@ -133,11 +134,11 @@ caveats.
 
 ## How it works
 
-- **Learn.** Chrome records the page's requests for two example inputs. The request that
+- **Learn.** The headless browser records the page's requests for two example inputs. The request that
   followed the inputs becomes a template with slots, and cookies and tokens become references to
   a local store.
 - **Call.** Fill the slots and send the request with Node's `fetch`. If the site blocks that,
-  fetch from inside a Chrome page. As a last resort for reads, run the page itself and read its
+  fetch from inside a browser page. As a last resort for reads, run the page itself and read its
   own response.
 - **Repair.** If the request stops working (a rotated id, a moved field), re-learn it and save
   the new version only after a replay succeeds. Otherwise the call returns an error, not
@@ -150,16 +151,16 @@ caveats.
 For a site that needs an account, `api-anything login <site>` first tries to import that
 site's cookies from a browser profile you are already signed in to, so there is usually no
 password to type. If several profiles are signed in it asks which one, and if none can be
-imported it opens a Chrome window to sign in by hand. A saved operation holds references to
+imported it opens a browser window to sign in by hand. A saved operation holds references to
 cookies and tokens, never their values, so a refreshed session works without re-learning anything.
 
 A session is kept current where that is possible. Cookies a site sets on a plain-HTTP response,
-or while API Anything runs the site's page in Chrome, are saved. When a plain-HTTP call comes back
+or while API Anything runs the site's page in the browser, are saved. When a plain-HTTP call comes back
 unauthorized, API Anything tries these in order, each at most once, retrying the call after each
 one that changes something:
 
 1. re-import from the browser profile you chose at login;
-2. take the cookies from its own Chrome profile, if they differ from the saved ones;
+2. take the cookies from its own browser profile, if they differ from the saved ones;
 3. for an operation that uses session tokens (a bearer, a CSRF token the page issues), reload
    the page so the site issues fresh ones. For a write, the page's own request is stopped, so it
    is sent only by the retry.
@@ -168,7 +169,7 @@ A read whose only credential is a key the site gives every visitor (X's web-app 
 re-learned from the page when the site rotates it. If the call is still unauthorized, it returns `class: "auth"` with the `login` command to run.
 
 Import reads Chrome, Arc, Brave, Edge, Chromium and Firefox profiles on macOS and Linux (on
-Linux, not cookies encrypted with the desktop keyring). On Windows, `login` opens the Chrome
+Linux, not cookies encrypted with the desktop keyring). On Windows, `login` opens the browser
 window. [Details](docs/REFERENCE.md#logging-in)
 
 ## Limits

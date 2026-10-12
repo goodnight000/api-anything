@@ -6,7 +6,9 @@ description: Turn a website that only has a GUI into operations you can call dir
 # api-anything
 
 api-anything learns operations from browser captures of the site's own frontend. Calls try direct
-HTTP first, with Chrome fallback when needed. Results report the transport tier and elapsed time.
+HTTP first, with the browser as fallback when needed (a Chromium build: Chrome by default, or
+Brave/Edge/Chromium/Vivaldi/Arc — any executable named with `API_ANYTHING_BROWSER`). Results
+report the transport tier and elapsed time.
 When a request drifts, the runtime tries to repair it; failure is reported. Everything is
 local, under `~/.api-anything` (`API_ANYTHING_HOME` overrides it).
 
