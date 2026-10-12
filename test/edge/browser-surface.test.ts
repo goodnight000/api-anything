@@ -36,6 +36,8 @@ function newHome(): string {
   process.env.API_ANYTHING_HOME = h;
   return h;
 }
+// the tests before the first newHome() open the browser too, which keeps its user agent in the home
+newHome();
 
 /** A read op whose request is GET <path>?name=alice, triggered by a page on the fixture. */
 function op(fx: EdgeFixture, name: string, trigger: string, path = "/api/data", extra: Record<string, unknown> = {}) {
