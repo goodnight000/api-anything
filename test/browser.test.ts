@@ -179,7 +179,7 @@ describe("browser", { skip: !browserAvailable() && "no Chromium browser installe
   });
 
   test("the headless user agent is asked of the browser once per installed browser, then read from disk", async () => {
-    const file = join(HOME, "browser-ua.json");
+    const file = join(HOME, "chrome-ua.json");
     rmSync(file, { force: true });
     // nothing on disk: Chrome is started to ask, and the answer is kept
     const probed = await headlessUserAgent();

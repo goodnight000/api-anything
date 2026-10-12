@@ -470,7 +470,7 @@ send a request again (its own scripts, a retry after a navigation or a connectio
   portable install or an off-list build is named. When the resolver finds nothing, the browser
   tiers skip cleanly; the plain-HTTP tier needs no browser at all.
 - The headless user agent is asked of the resolved browser once (it means starting it again,
-  about 3 s of a cold call), so the answer is kept at `~/.api-anything/browser-ua.json`, keyed by
+  about 3 s of a cold call), so the answer is kept at `~/.api-anything/chrome-ua.json`, keyed by
   the browser binary's path, modification time and size: an update changes those and the browser
   is asked again. A file that cannot be read, or that names another browser, is not believed. A
   wrong user agent under the right key is believed: delete the file and start again (a running

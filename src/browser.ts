@@ -207,7 +207,8 @@ async function probeHeadlessUA(): Promise<string> {
  * asked again.
  */
 export async function headlessUserAgent(): Promise<string> {
-  const file = join(home(), "browser-ua.json");
+  // the name from before other browsers: renaming it would orphan every install's cache
+  const file = join(home(), "chrome-ua.json");
   let key: string | undefined;
   try {
     const choice = browserChoice();
