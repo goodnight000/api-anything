@@ -173,6 +173,41 @@ fetch("/api/"+"${QID.slice(0, 11)}"+"${QID.slice(11)}"+"/User?name="+location.pa
     assert.ok(apiPaths.includes(`/api/${DECOY}/User`), `the candidate itself was sent: ${JSON.stringify(apiPaths)}`);
   });
 
+  test("a trigger page that answers 500 learned nothing about the op: the heal stops, and nothing is stale", async () => {
+    const { server, base } = await serve((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      if (u.pathname.startsWith("/api/")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        return void res.end("{}"); // the data is gone
+      }
+      res.writeHead(500, { "content-type": "text/html" });
+      res.end("<html><body>Internal Server Error</body></html>");
+    });
+    servers.push(server);
+    saveSite(
+      parseSite({
+        name: "down",
+        baseUrl: base,
+        operations: [
+          {
+            name: "get",
+            readOnly: true,
+            request: { method: "GET", url: `${base}/api/thing?q=abc`, headers: {} },
+            slots: [{ param: "q", at: ["query:q"] }],
+            trigger: { url: `${base}/page?q={q}` },
+            match: { method: "GET", path: "/api/thing" },
+            params: [{ name: "q", example: "abc" }],
+            response: { extract: "items" },
+          },
+        ],
+      }),
+    );
+    const r = await call("down", "get", { q: "xyz" }, fast);
+    assert.equal(r.ok, false);
+    assert.match(r.reason ?? "", /heal stopped: the trigger page answered HTTP 500/);
+    assert.equal(staleMark("down", "get"), undefined);
+  });
+
   test("call() never throws when the heal's browser run fails", async () => {
     saveSite(
       parseSite({

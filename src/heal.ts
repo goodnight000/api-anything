@@ -334,6 +334,15 @@ export async function runOpTrigger(
   };
 }
 
+/** The trigger page's own failure (a 5xx): its requests never fired, which says nothing about the op. */
+export function pageDown(capture: CaptureResult): Attempt | undefined {
+  const status = capture.exchanges.find((e) => e.resourceType === "document" && e.request.url === capture.finalUrl)
+    ?.response?.status;
+  return status !== undefined && status >= 500
+    ? { tier: 3, class: "error", status, server: true, reason: `the trigger page answered HTTP ${status}` }
+    : undefined;
+}
+
 /** A tier-3 result: the site's own request, answered. */
 export function judgeExchange(op: Operation, e: Exchange): Attempt | undefined {
   const r = e.response;
@@ -1102,12 +1111,15 @@ export async function healOperation(
       reason: `the trigger landed on a sign-in page (${run.loginWall})`,
     };
   }
-  if (!run.capture.exchanges.some((e) => matches(op.match, e.request)))
+  if (!run.capture.exchanges.some((e) => matches(op.match, e.request))) {
+    const down = pageDown(run.capture);
+    if (down) return { outcome: "failed", attempt: down, transient: true, reason: down.reason };
     return {
       outcome: "failed",
       attempt: last,
       reason: `the trigger fired no request matching ${JSON.stringify(op.match)}`,
     };
+  }
   const seen = run.matched && judgeExchange(op, run.matched);
   if (seen && learnedNothing(seen))
     return {

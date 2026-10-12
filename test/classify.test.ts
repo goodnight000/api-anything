@@ -182,6 +182,8 @@ test("an error status in a 200 body is judged as the HTTP status it stands for, 
     ["wrb.fr", "target", null, null, null, [13]],
   ]);
   assert.equal(cls(two, json(200, pair)), "error");
+  // the target RPC is absent: another one's status is not its answer, so the data is missing
+  assert.equal(cls(two, json(200, JSON.stringify([["wrb.fr", "other", null, null, null, [8]]]))), "drift");
   // a second RPC's failure does not undo the data the extract path finds
   const mixed = `)]}'\n\n9\n[["wrb.fr",null,"[0,[\\"a\\"]]"],["wrb.fr",null,null,null,null,[13]]]\n`;
   assert.equal(cls(rpc, json(200, mixed)), "ok");

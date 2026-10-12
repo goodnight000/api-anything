@@ -250,12 +250,19 @@ function rpcStatus(entry: unknown): number | undefined {
   return payload == null && Array.isArray(status) && typeof status[0] === "number" && status[0] ? status[0] : undefined;
 }
 
-/** The status of the RPC the extract path reads (`[0][0][2]...` passes through it), else of the first one that failed. */
+/**
+ * The status of the RPC the extract path reads (`[0][0][2]...` passes through it): none when that RPC is
+ * absent, never another one's. Without such a path, the first RPC that failed.
+ */
 function batchexecuteCode(data: unknown, extract = ""): number | undefined {
-  let at = data;
-  for (const [, i] of extract.match(/^(\[\d+\])+/)?.[0].matchAll(/\[(\d+)\]/g) ?? []) {
-    at = Array.isArray(at) ? at[Number(i)] : undefined;
-    if (Array.isArray(at) && at[0] === "wrb.fr") return rpcStatus(at);
+  const steps = extract.match(/^(\[\d+\])+/)?.[0];
+  if (steps) {
+    let at = data;
+    for (const [, i] of steps.matchAll(/\[(\d+)\]/g)) {
+      at = Array.isArray(at) ? at[Number(i)] : undefined;
+      if (Array.isArray(at) && at[0] === "wrb.fr") return rpcStatus(at);
+    }
+    return undefined;
   }
   const first = (x: unknown, depth: number): number | undefined => {
     if (!Array.isArray(x) || depth > 2) return undefined;

@@ -761,5 +761,20 @@ test("heal: a param found only where the op had it keeps its other places, which
   // the range's first day now holds something else: refuse rather than send the page's value
   const moved = structuredClone(exchanges);
   moved[0]!.request.body = `f.req=${encodeURIComponent(JSON.stringify([["SFO", "JFK"], ["en-US", "2027-06-09"], "2027-04-10"]))}`;
-  assert.throws(() => learnOperation(input(own, moved)), /"start" was also at .*another kind of value/);
+  assert.throws(() => learnOperation(input(own, moved)), /"start" was also at .*now sends something else/);
+  // a place inside a longer text ("from:{start}") that the page filled with its own value cannot stay
+  const texts = structuredClone(exchanges);
+  texts[0]!.request.body = `f.req=${encodeURIComponent(JSON.stringify([["SFO", "JFK"], "from:2027-04-01", "2027-04-10"]))}`;
+  const templated: Established = [
+    { slot: { param: "start", at: at("/1"), template: "from:{start}" }, type: "string", value: "from:2026-10-21" },
+    { slot: { param: "start", at: at("/2") }, type: "string", value: "2026-10-21", pattern: date },
+  ];
+  assert.throws(
+    () =>
+      learnOperation({
+        ...input(templated, texts),
+        examples: [{ origin: "SFO", destination: "JFK", start: "2027-04-10" }] as [Record<string, string>],
+      }),
+    /"start" was also at form:f.req > json:\/1, where the page now sends something else/,
+  );
 });

@@ -13,6 +13,7 @@ import {
   judgeExchange,
   learnedNothing,
   PROFILE_HINT,
+  pageDown,
   profileDir,
   runOpTrigger,
 } from "./heal.js";
@@ -148,7 +149,11 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         resent ||
         (run.loginWall
           ? { tier, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` }
-          : { tier, class: "drift", reason: `the trigger fired no request matching ${JSON.stringify(op.match)}` });
+          : (pageDown(run.capture) ?? {
+              tier,
+              class: "drift",
+              reason: `the trigger fired no request matching ${JSON.stringify(op.match)}`,
+            }));
       if (!run.repeats) return a;
       const stopped = run.repeats === 1 ? "the repeat was" : `${run.repeats} repeats were`;
       return { ...a, note: `the page sent this write ${run.repeats + 1} times: ${stopped} stopped in the browser` };
@@ -301,7 +306,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       const b = await attempt(ctx, op, 3);
       if (b.class === "ok") return success(b, { reason: guard });
       // the site's own request doesn't answer either: stop paying a browser run per call
-      if (!b.hint && b.class !== "auth")
+      if (!b.hint && b.class !== "auth" && !b.server)
         markStale(ctx.site, op.name, stale?.reason ?? guard, undefined, undefined, { tier3: false });
     }
     // `heal` refuses writes: a stale write is re-learned

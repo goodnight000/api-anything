@@ -365,12 +365,13 @@ for: a batchexecute RPC whose payload's place holds `[13]` (`[["wrb.fr",null,nul
 codes go as Google's gateways map them (13 and 2 → 500, 14 → 503, 4 → 504, 8 → 429, 16 → 401, 7 → 403,
 5 → 404, 3, 9 and 11 → 400), JSON-RPC's as a server error (500), a missing method (404) or a bad
 request (400). So a server's own failure is `error`, not drift: it is not healed and marks nothing
-stale. A heal whose page or candidate check gets a server failure (a 5xx, or a status in the body
-that stands for one) learned nothing either: it stops and marks nothing stale, as for a throttled
-check, and so does an example-args check that gets one. A read's bad request in the body names no
+stale. A heal whose trigger page or candidate check gets a server failure (a 5xx, or a status in the
+body that stands for one) learned nothing either: it stops and marks nothing stale, as for a
+throttled check, and so does an example-args check that gets one. A tier-3 run whose page answered
+a 5xx is that `error` too, and does not switch tier 3 off for a stale op. A read's bad request in the body names no
 param, so it is missing data: the example args tell bad args (`input`: a reversed date range) from a
 template that went stale. Of several RPCs in one answer, the status is the one the extract path
-reads. It counts only where the extract target is absent or null, or anywhere when the op has no
+reads, and none when that RPC is absent. It counts only where the extract target is absent or null, or anywhere when the op has no
 extract path (the body is then the answer): data that is there, its shape changed or not, is judged
 as before, whatever error member sits next to it. An app's own error number
 (`{"error": {"code": 190}}`) and a name that is not gRPC's are not statuses. A write's 2xx that

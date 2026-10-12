@@ -769,9 +769,10 @@ function paramSlots(
   for (const [name, f] of found) {
     const part = f.part.filter((h) => !exactKeys.has(key(h.leaf.at)));
     const v = asText(args[name]).toLowerCase();
-    const places = [...f.exact, ...part.map((h) => h.leaf)]
-      .filter((l) => !NOT_EVIDENCE.has(l.at[0]!) && !echoes(l.value, v, locs))
-      .map((l) => l.at.join(" > "));
+    const evidence = [...f.exact, ...part.map((h) => h.leaf)].filter(
+      (l) => !NOT_EVIDENCE.has(l.at[0]!) && !echoes(l.value, v, locs),
+    );
+    const places = evidence.map((l) => l.at.join(" > "));
     const own = established.filter(
       (e) => (e.slot.param === name || e.slot.template?.includes(`{${name}}`)) && !NOT_EVIDENCE.has(e.slot.at[0]!),
     );
@@ -784,18 +785,18 @@ function paramSlots(
       continue;
     }
     // Found only where the op had it (it did not move): its other places, which the page filled with
-    // its own value (a range's first day next to the chosen day), stay, or the heal is refused.
-    const at = new Set(places.map((p) => key(p.split(" > "))));
-    const plain = own.filter((e) => e.slot.template === undefined);
-    if (plain.length && [...at].every((k) => plain.some((e) => key(e.slot.at) === k))) {
-      const rest = plain.filter(
+    // its own value (a range's first day next to the chosen day), stay, or the heal is refused. One
+    // inside a longer text cannot stay with the page's value beside it.
+    const at = new Set(evidence.map((l) => key(l.at)));
+    if (own.length && [...at].every((k) => own.some((e) => key(e.slot.at) === k))) {
+      const rest = own.filter(
         (e) =>
           !at.has(key(e.slot.at)) && leaves.some((l) => key(l.at) === key(e.slot.at)) && !exactKeys.has(key(e.slot.at)),
       );
       const changed = rest.find((e) => !keeps(e));
       if (changed)
         throw new Error(
-          `"${name}" was also at ${changed.slot.at.join(" > ")}, which now holds another kind of value; re-add the operation to confirm where it goes`,
+          `"${name}" was also at ${changed.slot.at.join(" > ")}, where the page now sends something else; re-add the operation to confirm where it goes`,
         );
       if (rest.length) keep(name, rest);
     }
