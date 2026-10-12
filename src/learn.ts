@@ -85,8 +85,9 @@ type Established = {
 };
 
 /**
- * The array a place sits in, by position, with every param's place as "p" and the rest by kind: a
- * field inserted beside a kept place, or one that moved, changes it. Undefined outside an array.
+ * The array a place sits in, by position, with every param's place as "p" and the rest as they are: a
+ * field inserted beside a kept place, or a constant that traded places with it, changes it. Undefined
+ * outside an array.
  */
 export function arrayAround(leaves: Leaf[], at: Step[], places: Set<string>): string | undefined {
   const m = /^json:(.*)\/\d+$/.exec(at.at(-1)!);
@@ -98,10 +99,7 @@ export function arrayAround(leaves: Leaf[], at: Step[], places: Set<string>): st
     const step = l.at.at(-1)!;
     if (l.at.length !== at.length || !step.startsWith(inside) || key(l.at.slice(0, -1)) !== head) continue;
     const [i, ...deeper] = step.slice(inside.length).split("/");
-    items.set(
-      Number(i),
-      places.has(key(l.at)) ? "p" : deeper.length || l.container ? "[]" : `${l.type}:${kindOf(l.value)}`,
-    );
+    items.set(Number(i), places.has(key(l.at)) ? "p" : deeper.length || l.container ? "[]" : `${l.type}:${l.value}`);
   }
   return [...items]
     .sort((a, b) => a[0] - b[0])

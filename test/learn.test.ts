@@ -671,18 +671,22 @@ test("heal: a param the page did not send keeps the op's own place, only where t
     match: { method: "POST", path: "/rpc/Calendar" },
     ...(established ? { established } : {}),
   });
+  const start = ["form:f.req", "json:/1", "json:/1/0"];
   const end = ["form:f.req", "json:/1", "json:/1/1"];
-  // the op's own request, as heal reads it: where end sits among its neighbours
-  const was = walk({ ...exchange(["2026-10-21", "2026-10-31"])[0]!.request });
-  const own: Established = [
-    {
-      slot: { param: "end", at: end },
-      type: "string",
-      value: "2026-10-31",
+  // the op's own places, as heal reads them from its own request: where each sits among its neighbours
+  const established = (old: unknown[]): Established => {
+    const was = walk({ ...exchange(old)[0]!.request });
+    const placed = new Set([JSON.stringify(start), JSON.stringify(end)]);
+    const place = (param: string, at: string[], value: string) => ({
+      slot: { param, at },
+      type: "string" as const,
+      value,
       pattern: "\\d{4}-\\d{2}-\\d{2}",
-      around: arrayAround(was, end, new Set([JSON.stringify(end)])),
-    },
-  ];
+      around: arrayAround(was, at, placed),
+    });
+    return [place("start", start, "2026-10-21"), place("end", end, "2026-10-31")];
+  };
+  const own = established(["2026-10-21", "2026-10-31"]);
   // add stays strict: an example the request does not carry is refused
   assert.throws(() => learnOperation(input(["2027-04-01", "2027-05-31"])), /example value for "end"/);
   const { operation, warnings } = learnOperation(input(["2027-04-01", "2027-05-31"], own));
@@ -709,6 +713,16 @@ test("heal: a param the page did not send keeps the op's own place, only where t
   assert.throws(() => learnOperation(input(["2027-04-01", "en-US", "2027-05-31"], own)), refused);
   // a field inserted beside it ([start, cutoff, end]): the old place holds a date of the same kind, but not end
   assert.throws(() => learnOperation(input(["2027-04-01", "2027-06-30", "2027-05-31"], own)), refused);
+  // a constant date beside it traded places with it ([start, end, cutoff] -> [start, cutoff, end])
+  const own3 = established(["2026-10-21", "2026-10-31", "2026-12-31"]);
+  assert.throws(() => learnOperation(input(["2027-04-01", "2026-12-31", "2027-05-31"], own3)), refused);
+  assert.deepEqual(
+    learnOperation(input(["2027-04-01", "2027-05-31", "2026-12-31"], own3)).operation.slots.find(
+      (s) => s.param === "end",
+    )?.at,
+    end,
+    "the same layout keeps it",
+  );
   // the same kind but outside the param's pattern
   assert.throws(() => learnOperation(input(["2027-04-01", "2027-5-31"], own)), refused);
   // a credential the page keeps now sits there: never a param's place, so never saved as a literal
