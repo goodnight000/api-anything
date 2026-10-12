@@ -75,7 +75,39 @@ export interface LearnInput {
   established?: Established[];
 }
 
-type Established = { slot: Slot; type: Leaf["type"]; value: string; pattern?: string };
+type Established = {
+  slot: Slot;
+  type: Leaf["type"];
+  value: string;
+  pattern?: string;
+  /** arrayAround the place in the op's own request */
+  around?: string;
+};
+
+/**
+ * The array a place sits in, by position, with every param's place as "p" and the rest by kind: a
+ * field inserted beside a kept place, or one that moved, changes it. Undefined outside an array.
+ */
+export function arrayAround(leaves: Leaf[], at: Step[], places: Set<string>): string | undefined {
+  const m = /^json:(.*)\/\d+$/.exec(at.at(-1)!);
+  if (!m) return undefined;
+  const head = key(at.slice(0, -1));
+  const inside = `json:${m[1]}/`;
+  const items = new Map<number, string>();
+  for (const l of leaves) {
+    const step = l.at.at(-1)!;
+    if (l.at.length !== at.length || !step.startsWith(inside) || key(l.at.slice(0, -1)) !== head) continue;
+    const [i, ...deeper] = step.slice(inside.length).split("/");
+    items.set(
+      Number(i),
+      places.has(key(l.at)) ? "p" : deeper.length || l.container ? "[]" : `${l.type}:${kindOf(l.value)}`,
+    );
+  }
+  return [...items]
+    .sort((a, b) => a[0] - b[0])
+    .map(([i, k]) => `${i}=${k}`)
+    .join(",");
+}
 
 /** The args a trigger has no `{name}` for, in its URL, its soft-navigation page or its steps. */
 export const unplaced = (t: Trigger, args: Args): string[] =>
@@ -744,10 +776,12 @@ function paramSlots(
   const exactKeys = new Set([...found.values()].flatMap((f) => f.exact.map((l) => key(l.at))));
   const partial = new Map<string, Hit[]>();
   // heal: an established place the page filled with its own value, where it still holds the kind it held
+  const placed = new Set(established.map((e) => key(e.slot.at)));
   const keeps = (e: Established) => {
     const leaf = leaves.find((l) => key(l.at) === key(e.slot.at));
     return (
       !!leaf &&
+      (e.around === undefined || arrayAround(leaves, e.slot.at, placed) === e.around) &&
       e.slot.template === undefined &&
       !leaf.container &&
       !exactKeys.has(key(leaf.at)) &&

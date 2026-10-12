@@ -453,7 +453,9 @@ Heal strategies, cheapest first:
   the trigger has no `{name}` for, whose example the page therefore never sends, keeps all of them.
   Each kept place must still hold the same kind of value: the same leaf type, the same runs of
   characters ("2026-10-31" and "2027-05-31" are one kind, "en-US" another, so fields that moved are
-  caught), the param's pattern, and no cookie or stored value. One holding another kind, or inside a
+  caught), the param's pattern, no cookie or stored value, and, in an array, the same array around
+  it: as long, with the same kind of value at every position no param fills (a field inserted beside
+  it is caught). One holding another kind, or inside a
   longer text (a templated slot, which could not be filled with the page's value left beside it),
   fails the heal: re-add the operation. A param the trigger does give the page, but which the page
   sent nowhere, means something else now: that fails the heal as before. Adding an op stays strict: there an example the request

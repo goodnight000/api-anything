@@ -11,6 +11,7 @@ import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, send } from "./http.js
 import {
   type Args,
   ASSET_EXT,
+  arrayAround,
   capturePages,
   checkExamples,
   hashLike,
@@ -336,8 +337,11 @@ export async function runOpTrigger(
 
 /** The trigger page's own failure (a 5xx): its requests never fired, which says nothing about the op. */
 export function pageDown(capture: CaptureResult): Attempt | undefined {
-  const status = capture.exchanges.find((e) => e.resourceType === "document" && e.request.url === capture.finalUrl)
-    ?.response?.status;
+  // the page's last load: a redirect's end carries no #fragment, and a reload answers again
+  const page = capture.finalUrl.split("#")[0];
+  const status = capture.exchanges
+    .filter((e) => e.resourceType === "document" && e.response && e.request.url.split("#")[0] === page)
+    .at(-1)?.response?.status;
   return status !== undefined && status >= 500
     ? { tier: 3, class: "error", status, server: true, reason: `the trigger page answered HTTP ${status}` }
     : undefined;
@@ -1133,12 +1137,24 @@ export async function healOperation(
   let fresh: Operation;
   let sessionValues: Record<string, string>;
   // Where the op fills each param: a place the page filled with its own value can keep it (learn's paramSlots).
-  const wasThere = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l]));
-  const established = op.slots.flatMap((slot) => {
+  const was = walk(op.request);
+  const wasThere = new Map(was.map((l) => [JSON.stringify(l.at), l]));
+  const own = op.slots.filter((slot) => slot.param || slot.template);
+  const placed = new Set(own.map((slot) => JSON.stringify(slot.at)));
+  const established = own.flatMap((slot) => {
     const leaf = wasThere.get(JSON.stringify(slot.at));
-    if (!leaf || (!slot.param && !slot.template)) return [];
+    if (!leaf) return [];
     const pattern = op.params.find((p) => p.name === slot.param)?.pattern;
-    return [{ slot, type: leaf.type, value: leaf.value, ...(pattern !== undefined ? { pattern } : {}) }];
+    const around = arrayAround(was, slot.at, placed);
+    return [
+      {
+        slot,
+        type: leaf.type,
+        value: leaf.value,
+        ...(pattern !== undefined ? { pattern } : {}),
+        ...(around !== undefined ? { around } : {}),
+      },
+    ];
   });
   try {
     ({ operation: fresh, sessionValues } = learnOperation({

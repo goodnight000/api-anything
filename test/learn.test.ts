@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getAt } from "../src/codec.js";
+import { getAt, walk } from "../src/codec.js";
 import { buildRequest } from "../src/http.js";
-import { learnOperation, matches, rankCandidates } from "../src/learn.js";
+import { arrayAround, learnOperation, matches, rankCandidates } from "../src/learn.js";
 import type { Exchange, StoredCookie } from "../src/types.js";
 
 const cookie = (name: string, value: string, domain = ".x.com"): StoredCookie => ({
@@ -672,8 +672,16 @@ test("heal: a param the page did not send keeps the op's own place, only where t
     ...(established ? { established } : {}),
   });
   const end = ["form:f.req", "json:/1", "json:/1/1"];
+  // the op's own request, as heal reads it: where end sits among its neighbours
+  const was = walk({ ...exchange(["2026-10-21", "2026-10-31"])[0]!.request });
   const own: Established = [
-    { slot: { param: "end", at: end }, type: "string", value: "2026-10-31", pattern: "\\d{4}-\\d{2}-\\d{2}" },
+    {
+      slot: { param: "end", at: end },
+      type: "string",
+      value: "2026-10-31",
+      pattern: "\\d{4}-\\d{2}-\\d{2}",
+      around: arrayAround(was, end, new Set([JSON.stringify(end)])),
+    },
   ];
   // add stays strict: an example the request does not carry is refused
   assert.throws(() => learnOperation(input(["2027-04-01", "2027-05-31"])), /example value for "end"/);
@@ -699,6 +707,8 @@ test("heal: a param the page did not send keeps the op's own place, only where t
   assert.throws(() => learnOperation(input(["2027-04-01", 61], own)), refused);
   // fields reordered: the place holds a string of another kind ([start, locale, end])
   assert.throws(() => learnOperation(input(["2027-04-01", "en-US", "2027-05-31"], own)), refused);
+  // a field inserted beside it ([start, cutoff, end]): the old place holds a date of the same kind, but not end
+  assert.throws(() => learnOperation(input(["2027-04-01", "2027-06-30", "2027-05-31"], own)), refused);
   // the same kind but outside the param's pattern
   assert.throws(() => learnOperation(input(["2027-04-01", "2027-5-31"], own)), refused);
   // a credential the page keeps now sits there: never a param's place, so never saved as a literal

@@ -180,6 +180,8 @@ fetch("/api/"+"${QID.slice(0, 11)}"+"${QID.slice(11)}"+"/User?name="+location.pa
         res.writeHead(200, { "content-type": "application/json" });
         return void res.end("{}"); // the data is gone
       }
+      // the page redirects to where it fails; the final address keeps a #fragment the request never carries
+      if (u.pathname === "/page") return void res.writeHead(302, { location: "/down#retry" }).end();
       res.writeHead(500, { "content-type": "text/html" });
       res.end("<html><body>Internal Server Error</body></html>");
     });
