@@ -1058,10 +1058,12 @@ export async function healOperation(
   const tried = scanned ? swapped.replace("%s", last!.reason) : "rescan found nothing new";
   if (o.browser === false)
     return { outcome: "failed", attempt: last, reason: `${tried}; recapture needs the browser (maxTier 1)` };
+  // nothing was learned about the op: once a browser is installed, the next call heals
   if (!browserAvailable())
     return {
       outcome: "failed",
       attempt: last,
+      transient: true,
       reason: `${tried}; recapture needs a Chromium browser (Google Chrome, Brave, Edge or Chromium)`,
     };
 
@@ -1111,6 +1113,14 @@ export async function healOperation(
   const fallback = op.readOnly && learnArgs === callArgs && run.matched ? judgeExchange(op, run.matched) : undefined;
   let fresh: Operation;
   let sessionValues: Record<string, string>;
+  // A param the trigger never gives the page (a picker's own range end) keeps its places. One the
+  // trigger gives but the page did not send means something else now: no candidate stands on it.
+  const oldTypes = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]));
+  const free = new Set(unplaced(op.trigger, learnArgs));
+  const established = op.slots.flatMap((slot) => {
+    const type = slot.param && free.has(slot.param) ? oldTypes.get(JSON.stringify(slot.at)) : undefined;
+    return type ? [{ slot, type }] : [];
+  });
   try {
     ({ operation: fresh, sessionValues } = learnOperation({
       exchanges: run.capture.exchanges,
@@ -1124,6 +1134,7 @@ export async function healOperation(
       readOnly: op.readOnly,
       loginCookies: o.loginCookies,
       public: op.public,
+      established,
     }));
   } catch (e) {
     return { outcome: "failed", attempt: last, fallback, reason: `re-learning failed: ${(e as Error).message}` };

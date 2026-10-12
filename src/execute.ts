@@ -625,8 +625,24 @@ export async function heal(
   );
   const ms = Date.now() - t0;
   if (h.outcome === "healed") return { ...success(h.attempt, { healed: true }), strategy: h.strategy, ms };
-  if (h.outcome === "identical")
-    return { ok: true, class: "ok", healed: false, reason: "the stored template is already current", ms };
+  if (h.outcome === "identical") {
+    // The same template is no proof it works: its answer says whether the op does.
+    const complete = op.params.every((p) => !p.required || args[p.name] !== undefined);
+    const b = await attempt({ ...ctx, args: complete ? args : (exampleArgs(op) ?? args) }, op, tier);
+    const why = "the stored template is already current";
+    if (b.class === "ok") return { ...success(b, { healed: false, reason: why }), ms: Date.now() - t0 };
+    return {
+      ok: false,
+      class: b.class,
+      tier: b.tier,
+      reason: `${why}, and it answers: ${b.reason}`,
+      next:
+        b.class === "drift"
+          ? `if the site works in a browser, re-learn the response recipe: api-anything add ${siteName} ${op.name} ... --extract <path> (api-anything capture <trigger url> shows the response); otherwise report it`
+          : nextFor(b.class, siteName, op, b),
+      ms: Date.now() - t0,
+    };
+  }
   const b = h.attempt ?? h.fallback;
   return {
     ok: false,

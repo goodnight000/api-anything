@@ -67,6 +67,12 @@ export interface LearnInput {
   accepts?: (e: Exchange) => boolean;
   /** where the page was during the capture (capturePages): an echo of these is not evidence */
   pages?: string[];
+  /**
+   * heal: the op's own places for the params its trigger never gives the page, with the leaf's type
+   * there. Such a param whose example the page did not send (it chose its own date range) keeps them,
+   * where the leaf is still one of that type.
+   */
+  established?: { slot: Slot; type: Leaf["type"] }[];
 }
 
 export interface Learned {
@@ -700,6 +706,7 @@ function paramSlots(
   warnings: string[],
   disproved: Disproved,
   short: Set<string>,
+  established: NonNullable<LearnInput["established"]> = [],
 ): { slots: Slot[]; types: Map<string, Param["type"]> } {
   const slots: Slot[] = [];
   const types = new Map<string, Param["type"]>();
@@ -729,7 +736,26 @@ function paramSlots(
     const places = [...f.exact, ...part.map((h) => h.leaf)]
       .filter((l) => !NOT_EVIDENCE.has(l.at[0]!) && !echoes(l.value, v, locs))
       .map((l) => l.at.join(" > "));
-    if (!places.length) throw notFound(name, args[name], disprovedFor(disproved, name), short.has(name));
+    if (!places.length) {
+      const own = established.filter((e) => e.slot.param === name && e.slot.template === undefined);
+      const kept = own.filter(
+        ({ slot, type }) =>
+          !exactKeys.has(key(slot.at)) &&
+          !NOT_EVIDENCE.has(slot.at[0]!) &&
+          leaves.some((l) => key(l.at) === key(slot.at) && l.type === type && !l.container),
+      );
+      // every place still there, or the request changed under it: no evidence where the param went
+      if (!kept.length || kept.length < own.filter((e) => !NOT_EVIDENCE.has(e.slot.at[0]!)).length)
+        throw notFound(name, args[name], disprovedFor(disproved, name), short.has(name));
+      warnings.push(
+        `"${name}" (${JSON.stringify(args[name])}) is not in the request the page sent; kept where the op had it: ${kept.map((e) => e.slot.at.join(" > ")).join("; ")}`,
+      );
+      for (const { slot, type } of kept) {
+        slots.push({ param: name, at: slot.at });
+        if (type === "number" || type === "boolean") types.set(name, type);
+      }
+      continue;
+    }
     if (places.length > 1)
       warnings.push(`"${name}" appears in ${places.length} places, all will be filled: ${places.join("; ")}`);
     for (const leaf of f.exact) {
@@ -1577,7 +1603,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
   const locs = input.id !== undefined ? { abs: [], rel: [] } : locations(pages);
-  const param = paramSlots(leaves, args1, locs, warnings, disproved, short);
+  const param = paramSlots(leaves, args1, locs, warnings, disproved, short, input.established);
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
   const { request, slots, sessionValues, publicNames } = sessionRefs(input, exchange, captured, leaves, param.slots);

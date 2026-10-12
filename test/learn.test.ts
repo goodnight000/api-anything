@@ -641,3 +641,55 @@ test("a response that is itself a list of results is learned whole, not as its f
   });
   assert.equal(learned.operation.response.extract, undefined);
 });
+
+test("heal: a param the page did not send keeps the op's own place, only where that place is still the same kind of leaf", () => {
+  // a date picker asks for its own range: the caller's end is in no request it sends (issue #21)
+  const exchange = (range: unknown): Exchange[] => [
+    {
+      id: 1,
+      resourceType: "xhr",
+      request: {
+        method: "POST",
+        url: "https://g.test/rpc/Calendar?bl=build_20261007",
+        headers: { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" },
+        body: `f.req=${encodeURIComponent(JSON.stringify([null, JSON.stringify([["SFO", "JFK"], range])]))}`,
+      },
+      response: { status: 200, headers: {}, contentType: "application/json", body: '[["2027-04-01",209]]' },
+    },
+  ];
+  const end = ["form:f.req", "json:/1", "json:/1/1"];
+  const input = (range: unknown, established?: { slot: { param: string; at: string[] }; type: "string" }[]) => ({
+    exchanges: exchange(range),
+    examples: [{ origin: "SFO", destination: "JFK", start: "2027-04-01", end: "2027-04-30" }] as [
+      Record<string, string>,
+    ],
+    cookies: [],
+    name: "cal",
+    trigger: { url: "https://g.test/cal?start={start}" },
+    readOnly: true,
+    match: { method: "POST", path: "/rpc/Calendar" },
+    ...(established ? { established } : {}),
+  });
+  const own = [{ slot: { param: "end", at: end }, type: "string" as const }];
+  // add stays strict: an example the request does not carry is refused
+  assert.throws(() => learnOperation(input(["2027-04-01", "2027-05-31"])), /example value for "end"/);
+  const { operation, warnings } = learnOperation(input(["2027-04-01", "2027-05-31"], own));
+  assert.deepEqual(operation.slots.find((s) => s.param === "end")?.at, end);
+  assert.ok(
+    warnings.some((w) => w.includes('"end"') && w.includes("kept where the op had it")),
+    warnings.join("\n"),
+  );
+  const sent = buildRequest(
+    operation,
+    { origin: "LAX", destination: "BOS", start: "2027-06-01", end: "2027-06-10" },
+    { cookies: [], values: {} },
+  );
+  const inner = JSON.parse(getAt(sent, ["form:f.req", "json:/1"]) as string);
+  assert.deepEqual(inner, [
+    ["LAX", "BOS"],
+    ["2027-06-01", "2027-06-10"],
+  ]);
+  // the request changed under it: the place is gone, or holds another kind of value
+  assert.throws(() => learnOperation(input(["2027-04-01"], own)), /example value for "end"/);
+  assert.throws(() => learnOperation(input(["2027-04-01", 61], own)), /example value for "end"/);
+});

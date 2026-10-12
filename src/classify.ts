@@ -220,6 +220,64 @@ function graphqlErrors(errors: unknown[], extra = ""): Classified {
   return is("error", `GraphQL errors${extra}: ${snippet(msg)}`);
 }
 
+// gRPC's canonical codes 1-16, in order, as the HTTP status Google's own gateways answer them with.
+const GRPC: Record<string, number> = {
+  CANCELLED: 499,
+  UNKNOWN: 500,
+  INVALID_ARGUMENT: 400,
+  DEADLINE_EXCEEDED: 504,
+  NOT_FOUND: 404,
+  ALREADY_EXISTS: 409,
+  PERMISSION_DENIED: 403,
+  RESOURCE_EXHAUSTED: 429,
+  FAILED_PRECONDITION: 400,
+  ABORTED: 409,
+  OUT_OF_RANGE: 400,
+  UNIMPLEMENTED: 501,
+  INTERNAL: 500,
+  UNAVAILABLE: 503,
+  DATA_LOSS: 500,
+  UNAUTHENTICATED: 401,
+};
+const GRPC_NAMES = Object.keys(GRPC);
+
+/** A batchexecute RPC that answered a status instead of its payload: `["wrb.fr", id, null, null, null, [13]]`. */
+function batchexecuteCode(data: unknown, depth = 0): number | undefined {
+  if (!Array.isArray(data) || depth > 2) return undefined;
+  const [tag, , payload, , , status] = data as unknown[];
+  if (tag === "wrb.fr" && payload == null && Array.isArray(status) && typeof status[0] === "number" && status[0])
+    return status[0];
+  for (const x of data) {
+    const code = batchexecuteCode(x, depth + 1);
+    if (code !== undefined) return code;
+  }
+  return undefined;
+}
+
+/**
+ * An error a 2xx answer carries in its body instead of data, as the HTTP status it stands for:
+ * a batchexecute status, `{"error": {"status": "UNAVAILABLE"}}`, `{"error": {"code": 503}}`, a JSON-RPC error.
+ */
+function inBandError(data: unknown): { status: number; said: string } | undefined {
+  const rpc = batchexecuteCode(data);
+  if (rpc !== undefined) {
+    const name = GRPC_NAMES[rpc - 1];
+    return { status: name ? GRPC[name]! : 500, said: `batchexecute error ${rpc}${name ? ` (${name})` : ""}` };
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const { error, jsonrpc } = data as { error?: unknown; jsonrpc?: unknown };
+  if (!error || typeof error !== "object") return undefined;
+  const { code, status } = error as { code?: unknown; status?: unknown };
+  if (typeof status === "string" && GRPC[status]) return { status: GRPC[status]!, said: `error ${status}` };
+  if (typeof code !== "number") return undefined;
+  // -32601 method not found, -32603 internal and -32000..-32099 server errors; the rest are a bad request
+  if (jsonrpc !== undefined && code <= -32000 && code >= -32768) {
+    const status = code === -32601 ? 404 : code === -32603 || code >= -32099 ? 500 : 400;
+    return { status, said: `JSON-RPC error ${code}` };
+  }
+  return code >= 400 && code < 600 ? { status: code, said: `error ${code}` } : undefined;
+}
+
 /** Learned shape and value, scoped to the extract path when it resolves: other subtrees may come and go. */
 function shapeScope(op: Operation, data: unknown): { expected: Record<string, string>; value: unknown } {
   const shape = op.response.shape ?? {};
@@ -341,7 +399,16 @@ export function classify(op: Operation, r: Observed): Classified {
   // Partial data: errors next to a null target (a rate limit, a not-found user) are the answer, not a successful null.
   if (errors && op.response.extract && getPath(data, op.response.extract) == null)
     return graphqlErrors(errors, ` and a null "${op.response.extract}"`);
-  if (!op.readOnly) return ok();
+  // An error status in the body is judged as that status: a server's own failure is not moved data.
+  const inBand = () => {
+    const e = inBandError(data);
+    if (!e) return undefined;
+    const c = classify(op, { ...r, status: e.status });
+    const as = `HTTP ${r.status} carrying ${e.said}, judged as HTTP ${e.status}`;
+    const own = `HTTP ${e.status}`;
+    return { ...c, reason: c.reason.startsWith(own) ? as + c.reason.slice(own.length) : `${as}: ${c.reason}` };
+  };
+  if (!op.readOnly) return inBand() ?? ok();
 
   if (op.response.format === "html") {
     if (!op.response.html) return ok();
@@ -364,6 +431,11 @@ export function classify(op: Operation, r: Observed): Classified {
     gone = `extract path "${op.response.extract}" missing`;
   else if (scope && Object.keys(scope.expected).length >= 4 && shapeKept(scope.expected, scope.value) < 0.5) {
     gone = "response shape changed (under half of the learned key paths remain)";
+  }
+  // Without an extract path the whole body is the answer, so an error there is the answer's.
+  if (gone || !op.response.extract) {
+    const e = inBand();
+    if (e) return e;
   }
   if (!gone) return ok();
   // Instagram answers "login_required" and "please wait" as 200 JSON; only trust the wording when the data is gone.

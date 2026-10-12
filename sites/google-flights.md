@@ -14,7 +14,8 @@ No account is needed. One-way, 1 adult, economy only. No pagination.
 ## Maintainer notes
 
 Verified 2026-09-27, logged out, US IP, from a clean `API_ANYTHING_HOME`: `verify` passes, and live
-calls covered airport, metro and city searches and 92-day calendars.
+calls covered airport, metro and city searches and 92-day calendars. Re-verified 2026-10-12 the same
+way: `verify` passes.
 
 | op | args | returns | tier |
 |---|---|---|---|
@@ -65,9 +66,16 @@ per item. Add them to `pick` in your copy of the spec if you need them. `priceCa
 - `search` and `top` are disjoint. Together they are the whole results page, and each costs one
   3 to 4 MB page download.
 - Calendar ranges were tested up to 3 months per call. The trigger (tier 3) opens the date picker,
-  which requests the page's own range, not `start`/`end`. The runtime refuses that response
-  when its request differs from the requested range. If direct replay fails, the calendar may
-  need re-capture or a repaired trigger; it will not claim the UI's default dates are your answer.
+  which requests the page's own range (start to the end of the next month), not `start`/`end`. The
+  runtime refuses that response when its request differs from the requested range: it will not
+  claim the UI's default dates are your answer. A heal re-learns the request from the picker's own
+  and keeps `end` where the op has it, since the trigger has no `{end}` (a forced heal from a clean
+  home succeeded and replayed the caller's range on 2026-10-12).
+- `GetCalendarPicker` sometimes answers HTTP 200 with `[["wrb.fr",null,null,null,null,[13]]]`
+  (gRPC INTERNAL) instead of data, in waves that come and go within minutes (issue #21). The call
+  returns `error`, and a later retry gets the data. On 2026-10-12 a captured
+  `x-goog-batchexecute-bgr`, a fresh `bl`, pacing and tier 2 did not change the rate; the failures
+  clustered by session and time. A reversed or empty range answers `[3]` (INVALID_ARGUMENT).
 - The session tokens in the calendar's `f.req` (`json:/0/3`) and `f.sid` are session-scoped, not
   per-request signatures: stale values replay fine at tier 1 from a clean home. The export's base64
   warning refers to that token. It is issued to every logged-out visitor, not a credential.

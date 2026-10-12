@@ -477,6 +477,51 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     }
   });
 
+  test("19. a picker with its own range: a failure status in a 200 body is not drift, and a heal keeps the place the page left out", async () => {
+    const r = await addOperation({
+      site: SITE,
+      op: "calendar",
+      trigger: { url: `${fx.url}/cal?from={from}&to={to}&start={start}` },
+      // the page asks for 60 days from start, so each example's end is that day
+      examples: [
+        { from: "SFO", to: "JFK", start: "2027-04-01", end: "2027-05-31" },
+        { from: "LAX", to: "BOS", start: "2027-06-01", end: "2027-07-31" },
+      ],
+      response: { extract: "[0][0][2][0]", pick: ["date=[0]", "price=[1][1]"] },
+    });
+    assert.equal(r.operation.minTier, 1, r.warnings.join("\n"));
+    const april = { from: "SFO", to: "JFK", start: "2027-04-01", end: "2027-04-30" };
+    const days = (res: { data?: unknown }) => (res.data as { date: string }[]).map((d) => d.date);
+    const ok = await call(SITE, "calendar", april, fast);
+    assert.equal(ok.ok, true, JSON.stringify(ok));
+    assert.equal(days(ok).length, 30);
+
+    // the server's own failure, as HTTP 200 with a status where the payload goes: no heal, nothing stale
+    const before = fx.calls.length;
+    fx.failCalendar(13);
+    const failed = await call(SITE, "calendar", april, fast);
+    assert.equal(failed.class, "error", JSON.stringify(failed));
+    assert.match(failed.reason ?? "", /batchexecute error 13 \(INTERNAL\)/);
+    assert.equal(fx.calls.length, before + 1, "one request: no example replay, no heal");
+    assert.equal(staleMark(SITE, "calendar"), undefined);
+
+    // a deploy: the old build is gone ([5]). The heal's page asks for its own range, without the caller's end.
+    fx.rotate();
+    const healed = await call(SITE, "calendar", april, fast);
+    assert.equal(healed.ok, true, JSON.stringify(healed));
+    assert.equal(healed.healed, true);
+    assert.deepEqual([days(healed)[0], days(healed).at(-1)], ["2027-04-01", "2027-04-30"], "the caller's range");
+    assert.equal(
+      heals()
+        .filter((h) => h.op === "calendar")
+        .at(-1)?.strategy,
+      "recapture",
+    );
+    const june = await call(SITE, "calendar", { from: "LAX", to: "BOS", start: "2027-06-01", end: "2027-06-10" }, fast);
+    assert.equal(june.tier, 1, JSON.stringify(june));
+    assert.equal(days(june).length, 10);
+  });
+
   test("17. capture's next hint points at inspect and --html when the best candidate is the page itself", async () => {
     await closeBrowser(); // the CLI launches its own Chrome on the same profile
     const r = await cli("capture", `${fx.url}/list`, "--example", "q=alice");

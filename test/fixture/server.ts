@@ -22,6 +22,8 @@ export interface Fixture {
   /** new UserByName/CreatePost queryIds and a new bundle hash; old ids 404 with an empty body */
   rotate(): void;
   setRequireSignature(on: boolean): void;
+  /** the next /api/cal answers carry these batchexecute statuses instead of data, in order */
+  failCalendar(...codes: number[]): void;
   /** every /api/* hit, in order */
   calls: FixtureCall[];
   /** current queryIds and bundle hash, for assertions */
@@ -57,6 +59,15 @@ if((m=p.match(/^\\/u\\/([^/]+)$/))){
   x.setRequestHeader("content-type","application/x-www-form-urlencoded;charset=UTF-8");
   x.onload=()=>out(JSON.parse(JSON.parse(x.responseText.slice(5))[0][2]));
   x.send("f.req="+encodeURIComponent(JSON.stringify([[["search",JSON.stringify([q,10]),null,"generic"]]])));
+}else if(p==="/cal"){
+  // a date picker asks for its own range, 60 days from the chosen date, never the caller's end
+  const q=new URLSearchParams(location.search);
+  const start=q.get("start");
+  const end=new Date(Date.parse(start)+60*864e5).toISOString().slice(0,10);
+  const x=new XMLHttpRequest();
+  x.open("POST","/api/cal?bl=${s.build}");
+  x.setRequestHeader("content-type","application/x-www-form-urlencoded;charset=UTF-8");
+  x.send("f.req="+encodeURIComponent(JSON.stringify([null,JSON.stringify([[q.get("from"),q.get("to")],[start,end]])])));
 }else if(p==="/compose"){
   document.getElementById("post").addEventListener("click",()=>{
     const text=document.getElementById("text").value;
@@ -138,6 +149,7 @@ export async function startFixture(): Promise<Fixture> {
   const mint = () => randomBytes(12).toString("hex");
   let requireSignature = false;
   let limitedHits = 0;
+  const calendarFails: number[] = [];
 
   const send = (
     res: ServerResponse,
@@ -174,7 +186,7 @@ export async function startFixture(): Promise<Fixture> {
     let m: RegExpMatchArray | null;
     if (p === "/") return html(200, page(state.build, LIST_USERS.map((n) => `<a href="/u/${n}">${n}</a>`).join(" ")));
     if (/^\/u\/[^/]+$/.test(p)) return html(200, page(state.build));
-    if (p === "/search") return html(200, page(state.build));
+    if (p === "/search" || p === "/cal") return html(200, page(state.build));
     if (p === "/compose")
       return html(200, page(state.build, '<textarea id="text"></textarea><button id="post">Post</button>'));
     if (p === "/feed" || p === "/scoped" || p === "/walled" || p.startsWith("/spa/"))
@@ -318,6 +330,27 @@ export async function startFixture(): Promise<Fixture> {
       }
     }
 
+    // Google's batchexecute answers a failure as HTTP 200 with a status where the payload goes: an
+    // old build is gone ([5], NOT_FOUND), and a server failure is [13], INTERNAL.
+    if (p === "/api/cal" && req.method === "POST") {
+      const answer = (entry: unknown[]) =>
+        send(res, 200, "application/json; charset=utf-8", `)]}'\n\n100\n${JSON.stringify([entry])}\n`);
+      const status = (code: number) => answer(["wrb.fr", null, null, null, null, [code]]);
+      if (u.searchParams.get("bl") !== state.build) return status(5);
+      const fail = calendarFails.shift();
+      if (fail) return status(fail);
+      try {
+        const [, inner] = JSON.parse(new URLSearchParams(body).get("f.req") ?? "");
+        const [[from, to], [start, end]] = JSON.parse(inner) as [[string, string], [string, string]];
+        const days: unknown[] = [];
+        for (let t = Date.parse(start); t <= Date.parse(end); t += 864e5)
+          days.push([new Date(t).toISOString().slice(0, 10), [null, (from + to).length * 10]]);
+        return answer(["wrb.fr", null, JSON.stringify([days])]);
+      } catch {
+        return status(3);
+      }
+    }
+
     if (p === "/api/signed/feed") {
       const sig = req.headers["x-sig"];
       if (requireSignature) {
@@ -381,6 +414,9 @@ export async function startFixture(): Promise<Fixture> {
     },
     setRequireSignature(on) {
       requireSignature = on;
+    },
+    failCalendar(...codes) {
+      calendarFails.push(...codes);
     },
     revoke(token) {
       revoked.add(token);
