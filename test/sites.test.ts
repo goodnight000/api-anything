@@ -182,7 +182,25 @@ test("google-flights search for a past date (Google's Explore page, with a Sign-
     }) as typeof fetch,
   );
   assert.equal(r.class, "input", JSON.stringify(r));
-  assert.deepEqual(dates, ["2020-01-01", "2027-04-15"]);
+  assert.deepEqual(dates, ["2020-01-01", "2020-01-01", "2027-04-15"]);
+});
+
+test("google-flights top: a fallback page for good args (Google sometimes serves one) is answered by a second try, not blamed on the args", async () => {
+  const home = `<html><head><title>Find Cheap Flights Worldwide</title></head><body><script nonce="x">AF_initDataCallback({key: 'ds:1', hash: '1', data:[[null,null,0,"x"]], sideChannel: {}});</script></body></html>`;
+  const results = flightsPage([flight(219, "EWR")], [flight(149, "EWR")]);
+  let n = 0;
+  const r = await callBundled(
+    "google-flights",
+    "top",
+    { origin: "SFO", destination: "NYC", date: "2027-05-02" },
+    (async () =>
+      new Response(n++ === 0 ? home : results, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      })) as typeof fetch,
+  );
+  assert.equal(r.class, "ok", JSON.stringify(r));
+  assert.match(r.reason ?? "", /a second try did/);
+  assert.equal(n, 2, "no example request, no heal");
 });
 
 // ---------------------------------------------------------------- youtube

@@ -154,7 +154,7 @@ test("a byte-identical rescan is not a heal; rate is reported without heal or re
   assert.match(rate.next ?? "", /do not retry/);
 });
 
-test("no data for an arg while the example still returns data is input, not drift: no heal, one extra request", async () => {
+test("no data for an arg while the example still returns data is input, not drift: no heal, a second try and one example request", async () => {
   saveSite(
     parseSite({
       name: "nf",
@@ -180,7 +180,7 @@ test("no data for an arg while the example still returns data is input, not drif
   assert.equal(r.class, "input", JSON.stringify(r));
   assert.match(r.reason ?? "", /example args still return data/);
   assert.match(r.next ?? "", /do not heal/);
-  assert.equal(seen.length, 2);
+  assert.equal(seen.length, 3);
   assert.equal(heals().length, 0);
 
   // when the example fails too, it is drift and the heal runs

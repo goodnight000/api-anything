@@ -334,11 +334,11 @@ describe("response bodies", () => {
     assert.equal(typeof data, "object", `got a ${typeof data}: ${JSON.stringify(data).slice(0, 60)}`);
   });
 
-  test("a read answered 204 with no body is not ok, and is sent once", async () => {
+  test("a read answered 204 with no body is not ok, and is sent once more at most", async () => {
     site("e204", rd("e", "/empty"));
     const r = await call("e204", "e", {}, t1);
     assert.notEqual(r.class, "ok");
-    assert.equal(fx.hits.length, 1, "exactly one request");
+    assert.equal(fx.hits.length, 2, "the request, and a second try for missing data");
   });
 
   test("an empty 204 read while the example args still answer is input (the missing-data check), not a heal", async () => {

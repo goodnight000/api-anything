@@ -378,9 +378,12 @@ as before, whatever error member sits next to it. An app's own error number
 carries one was refused.
 Login and rate wording in a 2xx JSON body only counts when the data is missing (Instagram sends
 `require_login: false` on its rate-limit answers). **Missing data is ambiguous**: "no such user"
-and "no results" look exactly like a moved extract path. Before healing a read, the stored
-template is replayed once with the op's example args; if that answers, nothing drifted and the
-call returns `input`. This costs one request instead of a browser run. If that replay is
+and "no results" look exactly like a moved extract path, and so does a server that sometimes
+answers a good request without the data (Google sends its homepage for a valid flight search now
+and then). A read below tier 3 is first sent once more: if that answers, it is the call's answer.
+Then, before healing, the stored template is replayed once with the op's example args; if that
+answers, nothing drifted and the call returns `input`. This costs two requests instead of a browser
+run. If that replay is
 throttled, challenged or logged out, the call stops there with that class and nothing is healed.
 If the examples get no data either and re-learning gives the same request, the response recipe
 drifted (a renamed field): `drift`, with a hint to re-add with a new `--extract`.

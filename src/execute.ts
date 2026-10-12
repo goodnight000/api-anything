@@ -267,6 +267,15 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     );
   }
 
+  // A server that sometimes answers without the data (Google's fallback page, issue #21) answers a second
+  // try: before the args are blamed or a browser heals, the same request goes once more.
+  if (a.missing && op.readOnly && a.tier < 3) {
+    const again = await attempt(ctx, op, a.tier);
+    if (again.class === "ok")
+      return success(again, { reason: `the first answer had no data (${a.reason}); a second try did` });
+    if (learnedNothing(again)) return fail(again);
+  }
+
   // "No such user" and "no results" look exactly like a moved extract path. If the example args
   // still return data through the same template, nothing drifted: the args are the problem.
   const examples = exampleArgs(op);
