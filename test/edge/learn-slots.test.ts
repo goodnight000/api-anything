@@ -1224,6 +1224,63 @@ test("the save-time scan skips a recorded setting, and looks for everything else
   );
 });
 
+test("a cookie holding the site's own origin refuses no add or export, and any other URL is still a credential", async () => {
+  // an analytics script keeps the last page in a cookie, and the capture's run sets it again: encoded or raw,
+  // beside a Referer that carries a param (the origin is then text beside it in that slot's template)
+  const referer = { referer: "http://127.0.0.1/search?q=kittens" };
+  for (const [site, value] of [
+    ["issue27", encodeURIComponent("http://127.0.0.1/")],
+    ["issue27-raw", "http://127.0.0.1/"],
+  ] as const) {
+    const { operation: op } = await add(site, xhr({ url: `${local}?q=kittens`, headers: referer }), [
+      here("__ps_lu", value),
+    ]);
+    assert.ok(!op.slots.some((s) => s.ref?.startsWith("cookie:")), site);
+    assert.deepEqual(exportSite(site).secrets, [], site);
+  }
+
+  // a setting the origin holds (the page keeps its host) stays one through the add, a cookie re-import and a retry
+  const lastPage = here("__ps_lu", encodeURIComponent("http://127.0.0.1/"));
+  const hostAdd = () =>
+    add("issue27-host", xhr({ url: `${local}?q=kittens&host=127.0.0.1` }), [lastPage], { host: "127.0.0.1" });
+  await hostAdd();
+  assert.deepEqual(loadSession("issue27-host").kinds, { "op/host": "setting" });
+  // the saved operation's origin is the site's own from now on, for every write
+  assert.deepEqual(loadSession("issue27-host").origins, ["http://127.0.0.1"]);
+  saveSession("issue27-host", { ...loadSession("issue27-host"), cookies: [lastPage] });
+  assert.deepEqual(loadSession("issue27-host").kinds, { "op/host": "setting" });
+  await hostAdd();
+  assert.deepEqual(exportSite("issue27-host").secrets, []);
+
+  // a URL that carries more than the origin is still a credential: its copy becomes a ref
+  const magic = here("__ps_lu", encodeURIComponent(`http://127.0.0.1/login?t=${OPAQUE}`));
+  const { operation: held } = await add(
+    "issue27-magic",
+    xhr({ url: `${local}?q=kittens&next=http://127.0.0.1/login?t=${OPAQUE}` }),
+    [magic],
+  );
+  assert.ok(!JSON.stringify(held).includes(OPAQUE));
+  assert.ok(held.slots.some((s) => s.ref === "cookie:__ps_lu"));
+  // ...and where no ref can reach it (base64), the learn is refused
+  const b64 = Buffer.from(`http://127.0.0.1/login?t=${OPAQUE}`).toString("base64");
+  await assert.rejects(
+    add("issue27-b64", xhr({ url: `${local}?q=kittens&ctx=${b64}` }), [magic]),
+    /holds the live cookie __ps_lu/,
+  );
+  // a refused add records no origin as the site's own
+  assert.equal(loadSession("issue27-b64").origins, undefined);
+  // so is another host's origin, under a header whatever its name
+  const other = "http://k7qm9xlp.x.test/";
+  await assert.rejects(
+    add(
+      "issue27-other",
+      xhr({ url: `${local}?q=kittens`, headers: { "x.origin": encodeURIComponent(encodeURIComponent(other)) } }),
+      [here("sid", other)],
+    ),
+    /holds the live cookie sid/,
+  );
+});
+
 test("a session a refused add left with the setting unclassified still adds", async () => {
   const ref = "op/store/state/byScope/sidebar/a3a9e1ed9732/sections/0/id";
   // what the add that refused before the fix left behind: the value stored, with nothing classified

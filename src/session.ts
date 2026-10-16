@@ -14,7 +14,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getDomain } from "tldts";
-import { credentialsOf } from "./secrets.js";
+import { besideOrigins, credentialsOf, originsOf } from "./secrets.js";
 import type { StoredCookie } from "./types.js";
 
 export interface Session {
@@ -28,6 +28,12 @@ export interface Session {
    * every write records here what the scan keeps (`recordProtection`), so no rotation undoes it.
    */
   kinds?: Record<string, "setting" | "credential">;
+  /**
+   * The origins this site's saved operations send to or open, recorded with each save and never
+   * dropped. A value equal to one is no credential (`besideOrigins`), so no write records a setting as
+   * one for it.
+   */
+  origins?: string[];
   /** where the cookies came from: "<browser>:<profile>" (import), "window", or "file"; drives self-heal re-import */
   source?: string;
   updatedAt?: string;
@@ -141,6 +147,7 @@ export function loadSession(site: string): Session {
     cookies: s.cookies ?? [],
     values: s.values ?? {},
     ...(s.kinds ? { kinds: s.kinds } : {}),
+    ...(Array.isArray(s.origins) ? { origins: s.origins } : {}),
     source: s.source,
     updatedAt: s.updatedAt,
   };
@@ -153,7 +160,7 @@ export function loadSession(site: string): Session {
  * -- before the write and after it, since either state can hold the relationship -- and a credential
  * is sticky. A setting whose own value this write replaces is left alone: the protected text is gone.
  */
-function recordProtection(site: string, s: Session): Session {
+function recordProtection(site: string, s: Session, urls: (string | undefined)[]): Session {
   if (!s.kinds || !Object.values(s.kinds).includes("setting")) return s; // nothing is exempt: nothing to keep
   const kinds = { ...s.kinds };
   const stored = loadSession(site);
@@ -169,8 +176,14 @@ function recordProtection(site: string, s: Session): Session {
       ...stored.kinds,
     },
   };
-  for (const held of [was, s])
-    for (const name of Object.keys(credentialsOf(held).values))
+  // The origins of an operation not saved yet relax only what this write stores: what the file held is
+  // protected as it was, since a refused save would otherwise leave that protection taken apart.
+  const own = s.origins ?? [];
+  for (const [held, origins] of [
+    [was, own],
+    [s, [...own, ...urls]],
+  ] as const)
+    for (const name of Object.keys(credentialsOf(besideOrigins(held, origins)).values))
       if (held.kinds?.[name] === "setting" && kinds[name] === "setting" && held.values[name] === s.values[name])
         kinds[name] = "credential";
   return { ...s, kinds };
@@ -179,10 +192,11 @@ function recordProtection(site: string, s: Session): Session {
 /**
  * Every write of the session file goes through here, so the protection a scan found is never lost.
  * It returns what it wrote: a caller that goes on scanning with the session it passed in would use
- * kinds the seal has already overruled, and save a spec this file's own kinds refuse.
+ * kinds the seal has already overruled, and save a spec this file's own kinds refuse. `urls`: those of
+ * an operation being learned, whose origins count as the site's own for this write only.
  */
-export function saveSession(site: string, s: Session): Session {
-  const sealed = recordProtection(site, s);
+export function saveSession(site: string, s: Session, urls: (string | undefined)[] = []): Session {
+  const sealed = recordProtection(site, s, urls);
   writePrivate(sessionFile(site), JSON.stringify({ ...sealed, updatedAt: new Date().toISOString() }, null, 1));
   return sealed;
 }
@@ -194,8 +208,11 @@ export function mergeCapture(
   site: string,
   cookies: StoredCookie[],
   values: Record<string, string> = {},
-  /** a learn's classification of `values`; without one a name whose value changed is unclassified again */
-  learned?: { settings: string[] },
+  /**
+   * a learn's classification of `values`, and the URLs its operation sends to or opens; without one a
+   * name whose value changed is unclassified again
+   */
+  learned?: { settings: string[]; urls?: (string | undefined)[] },
   now = Date.now(),
 ): Session {
   return withLock(sessionFile(site), () => {
@@ -220,8 +237,18 @@ export function mergeCapture(
       values: { ...s.values, ...values },
       source: s.source,
       ...(Object.keys(kinds).length ? { kinds } : {}),
+      ...(s.origins ? { origins: s.origins } : {}),
     };
-    return saveSession(site, merged);
+    return saveSession(site, merged, learned?.urls);
+  });
+}
+
+/** Record the origins of an operation just saved as the site's own (`Session.origins`). */
+export function recordOrigins(site: string, urls: (string | undefined)[]): void {
+  withLock(sessionFile(site), () => {
+    const s = loadSession(site);
+    const origins = new Set([...(s.origins ?? []), ...originsOf(urls)]);
+    if (origins.size > (s.origins?.length ?? 0)) saveSession(site, { ...s, origins: [...origins] });
   });
 }
 

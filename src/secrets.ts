@@ -179,6 +179,46 @@ export function ipIn(v: string): string | undefined {
   return undefined;
 }
 
+/** The addresses an operation sends to or opens. */
+export const opUrls = (op: { request: { url: string }; trigger: { url: string; softFrom?: string } }) => [
+  op.request.url,
+  op.trigger.url,
+  op.trigger.softFrom,
+];
+
+/** The origins of `urls` (`https://www.x.test`), the http(s) ones whose host is no template. */
+export function originsOf(urls: readonly (string | undefined)[]): Set<string> {
+  const origins = new Set<string>();
+  for (const u of urls) {
+    try {
+      if (u && /^https?:/i.test(u)) origins.add(new URL(u).origin);
+    } catch {
+      /* a template the host is filled into: no origin to spell */
+    }
+  }
+  return origins;
+}
+
+/**
+ * The session without the values that are one of the origins of `urls` (`https://www.x.test/`, the
+ * last page an analytics cookie kept), raw, unquoted or URL-decoded. A spec spells the host it
+ * sends to and opens, so such a value carries nothing the spec does not hold already, wherever a
+ * copy of it is: it is no credential to look for, and nothing to make a ref of.
+ */
+export function besideOrigins<S extends Pick<Session, "cookies" | "values">>(
+  session: S,
+  urls: readonly (string | undefined)[],
+): S {
+  const origins = originsOf(urls);
+  const own = (v: string) =>
+    [v, v.replace(/^"|"$/g, ""), pctDecode(v, false)].some((f) => origins.has(f.replace(/\/$/, "")));
+  return {
+    ...session,
+    cookies: session.cookies.filter((c) => !own(c.value)),
+    values: Object.fromEntries(Object.entries(session.values).filter(([, v]) => !own(v))),
+  };
+}
+
 /**
  * `secrets`: exact hits of live jar/session values (6+ chars, raw, unquoted or URL-decoded). Each
  * is looked for in the text and in what the text decodes to (three layers of percent-encoding,

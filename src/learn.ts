@@ -19,6 +19,7 @@ import {
 } from "./codec.js";
 import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
 import {
+  besideOrigins,
   credentialName,
   credentialsOf,
   headerName,
@@ -28,6 +29,7 @@ import {
   lastToken,
   leafName,
   opaqueToken,
+  opUrls,
   SESSION_FIELD,
   SESSION_HEADER,
   scanSecrets,
@@ -1283,6 +1285,13 @@ function covers(at: Step[], leaf: Step[]): boolean {
   return at.slice(0, last).every((step, i) => leaf[i] === step) && (deeper || below);
 }
 
+/** The cookies and storage a learn reads as live: all but the operation's own origins (`besideOrigins`). */
+const ownSession = (input: LearnInput, captured: Request, sent: StoredCookie[] = []) =>
+  besideOrigins(
+    { cookies: [...input.cookies, ...sent], values: input.storage ?? {} },
+    opUrls({ request: captured, trigger: input.trigger }),
+  );
+
 /**
  * Step 4: session refs: live cookie/storage values anywhere, per-session fields, credential-named
  * values, auth headers. Takes the captured template and the param slots; returns the template with
@@ -1303,8 +1312,8 @@ function sessionRefs(
   publicNames: string[];
   settings: string[];
 } {
-  const cookies = [...input.cookies, ...sentCookies(ex)];
-  const live = liveValues(cookies, input.storage);
+  const { cookies, values: storage } = ownSession(input, captured, sentCookies(ex));
+  const live = liveValues(cookies, storage);
   // The final check refuses only a copy no pass could make a ref, so there the choice is to refuse or
   // to keep the text as captured. A stored value that is a credential by its storage key's name alone,
   // and neither random-looking nor shaped like a token, is no ground to refuse (a theme under `token`).
@@ -1776,7 +1785,8 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
   const locs = input.id !== undefined ? { abs: [], rel: [] } : locations(pages);
-  const live = input.established && liveValues(input.cookies, input.storage);
+  const own = input.established && ownSession(input, captured);
+  const live = own && liveValues(own.cookies, own.values);
   const param = paramSlots(
     leaves,
     args1,

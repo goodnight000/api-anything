@@ -139,6 +139,49 @@ test("secret scan: exact live values are secrets; heuristics only warn, and URL 
   assert.deepEqual(r.warnings, ["$.h.b looks like a JWT (eyJhbGciOi.eyJzdWIiOiIx....); check it is public"]);
 });
 
+test("secret scan: a live value that is the spec's own origin is not looked for; any other URL is", async () => {
+  const { besideOrigins, scanSecrets } = await import("../src/secrets.js");
+  const T = "k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc2Jd0Fa";
+  const url = "https://www.x.test/services/graphql/?operationName=Q&ssr=0";
+  const b64 = (v: string) => Buffer.from(v).toString("base64");
+  const held = (value: string, spec: Record<string, unknown> = {}) =>
+    scanSecrets(
+      { url, ...spec },
+      besideOrigins(
+        {
+          cookies: [
+            { name: "__ps_lu", value, domain: "x.test", path: "/", expires: -1, httpOnly: false, secure: true },
+          ],
+          values: {},
+        },
+        [url],
+      ),
+    ).secrets;
+  // an analytics cookie keeping the last page, percent-encoded or raw, with or without the slash, quoted:
+  // the spec spells it as its host, so a copy anywhere carries nothing new
+  for (const v of ["https%3A%2F%2Fwww.x.test%2F", "https://www.x.test/", "https://www.x.test", '"https://www.x.test/"'])
+    assert.deepEqual(held(v, { body: '{"from":"https://www.x.test/"}', ctx: b64("https://www.x.test/") }), [], v);
+  // ...and the same as a session value
+  const values = { "op/last": "https://www.x.test/", "op/token": T };
+  assert.deepEqual(besideOrigins({ cookies: [], values }, [url]).values, { "op/token": T });
+
+  // any other URL is looked for, wherever it is copied
+  const flagged = "$.ctx holds the live cookie __ps_lu";
+  for (const v of [
+    "https://k7qm9xlp.x.test/", // another host: a capability host is no origin the spec spells
+    "https://www.x.test:8443/", // another port
+    `https://www.x.test/reset/${T}/`, // a path
+    "https://www.x.test/?token=abc123", // a query
+    "https://www.x.test/#access_token=abc123", // a fragment
+    "https://user:hunter22@www.x.test/", // user info
+  ]) {
+    assert.deepEqual(held(v, { ctx: b64(v) }), [flagged], v);
+    assert.deepEqual(held(encodeURIComponent(v), { ctx: b64(v) }), [flagged], v);
+  }
+  // a quoted value: the unquoted form is looked for, its quote lets nothing off
+  assert.deepEqual(held(`https://${T}"`, { ctx: b64(`https://${T}`) }), [flagged]);
+});
+
 test("a spec's file name is its name, so saving never overwrites another site's file", () => {
   const { home } = fresh();
   mkdirSync(join(home, "sites"), { recursive: true });

@@ -153,3 +153,25 @@ test("cookieValue never hands a cookie to another site, nor a Secure one over ht
     "same site: page JS echoes it to its API host",
   );
 });
+
+test("an operation's origins count as the site's own for its learn's write only, and for good once it is saved", async () => {
+  const { recordOrigins } = await import("../src/session.js");
+  process.env.API_ANYTHING_HOME = mkdtempSync(join(tmpdir(), "api-anything-origins-"));
+  const page = "https://private-value.test/";
+  const urls = ["https://private-value.test/api?q={q}"];
+  const host = { "one/host": "private-value.test" };
+  // the learn's write: the cookie holding its origin does not protect the setting it holds
+  mergeCapture("o", [c("lu", encodeURIComponent(page), "private-value.test")], host, { settings: ["one/host"], urls });
+  assert.deepEqual(loadSession("o").kinds, { "one/host": "setting" });
+  assert.equal(loadSession("o").origins, undefined);
+  // that save was refused: a second learn's write rotating the cookie keeps what the file protected
+  mergeCapture("o", [c("lu", "rotated", "private-value.test")], host, { settings: ["one/host"], urls });
+  assert.deepEqual(loadSession("o").kinds, { "one/host": "credential" });
+
+  // once saved, the origin is the site's own for every write: a cookie import does not promote the setting
+  mergeCapture("p", [c("lu", encodeURIComponent(page), "private-value.test")], host, { settings: ["one/host"], urls });
+  recordOrigins("p", urls);
+  assert.deepEqual(loadSession("p").origins, ["https://private-value.test"]);
+  mergeCapture("p", [c("lu", "rotated", "private-value.test")]);
+  assert.deepEqual(loadSession("p").kinds, { "one/host": "setting" });
+});

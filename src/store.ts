@@ -3,7 +3,7 @@ import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync } from
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setAt, walk } from "./codec.js";
-import { credentialsOf, ipIn, isCredential, leafName, scanSecrets } from "./secrets.js";
+import { besideOrigins, credentialsOf, ipIn, isCredential, leafName, opUrls, scanSecrets } from "./secrets.js";
 import { ensureDir, home, loadSession, readJson, safeName, withLock, writePrivate } from "./session.js";
 import { parseSite, type Site } from "./spec.js";
 
@@ -235,7 +235,8 @@ export function exportSite(
         );
     }
   });
-  const scan = scanSecrets(spec, credentialsOf(loadSession(name)), allowed);
+  const own = [spec.baseUrl, ...spec.operations.flatMap(opUrls)];
+  const scan = scanSecrets(spec, credentialsOf(besideOrigins(loadSession(name), own)), allowed);
   // one finding per place: the exact live hit already names it
   const more = named.filter(([p]) => !scan.secrets.some((s) => s.startsWith(`${p} `))).map(([, why]) => why);
   return { spec, secrets: [...scan.secrets, ...more], warnings: [...scan.warnings, ...ips] };

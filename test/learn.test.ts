@@ -890,3 +890,32 @@ test("heal: a param found only where the op had it keeps its other places, which
     /"start" was also at form:f.req > json:\/1, where the page now sends something else/,
   );
 });
+
+test("heal keeps a place the page filled with the site's own origin, beside a cookie holding that origin", () => {
+  // the page fills `dest` with its own address, and an analytics cookie keeps the same one
+  const ex: Exchange = {
+    id: 1,
+    resourceType: "fetch",
+    request: {
+      method: "GET",
+      url: `https://g.test/rpc/go?q=kittens&dest=${encodeURIComponent("https://g.test/")}`,
+      headers: {},
+    },
+    response: { status: 200, headers: {}, contentType: "application/json", body: '{"results":[{"id":1},{"id":2}]}' },
+  };
+  const input = (cookies: StoredCookie[]) => ({
+    exchanges: [ex],
+    examples: [{ q: "kittens", dest: "https://elsewhere.test/" }] as [Record<string, string>],
+    cookies,
+    name: "go",
+    trigger: { url: "https://g.test/go?q={q}" },
+    readOnly: true,
+    established: [
+      { slot: { param: "dest", at: ["query:dest"] }, type: "string" as const, value: "https://other.test/" },
+    ],
+  });
+  for (const cookies of [[], [cookie("__ps_lu", encodeURIComponent("https://g.test/"), "g.test")]]) {
+    const { operation } = learnOperation(input(cookies));
+    assert.deepEqual(operation.slots.find((s) => s.param === "dest")?.at, ["query:dest"], `${cookies.length} cookies`);
+  }
+});

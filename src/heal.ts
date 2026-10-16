@@ -22,7 +22,7 @@ import {
 
 export { unplaced };
 
-import { credentialsOf, scanSecrets } from "./secrets.js";
+import { besideOrigins, credentialsOf, opUrls, scanSecrets } from "./secrets.js";
 import {
   cookieHeaderFor,
   home,
@@ -31,6 +31,7 @@ import {
   parseCookieHeader,
   pruneCaptures,
   readJson,
+  recordOrigins,
   type Session,
   safeName,
   siteOf,
@@ -631,7 +632,7 @@ function saveOperation(
   }
 
   const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
-  const secrets = scanSecrets(operation, credentialsOf(session), allowed).secrets;
+  const secrets = scanSecrets(operation, credentialsOf(besideOrigins(session, opUrls(operation))), allowed).secrets;
   if (secrets.length) throw new Error(`refusing to save a spec containing a credential: ${secrets.join("; ")}`);
   // Re-read under the lock: another add or a heal may have saved this site since we started.
   let replaced = false;
@@ -640,6 +641,7 @@ function saveOperation(
     const fresh = { name: site, baseUrl: new URL(operation.trigger.url).origin, operations: [] };
     return putOperation(current ?? fresh, operation);
   });
+  recordOrigins(site, opUrls(operation));
   clearStale(site, operation.name);
   return { operation, warnings, path, ...(preview ? { preview } : {}), replaced };
 }
@@ -784,7 +786,10 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     ...(prior && !run2 && prior.minTier > learned.operation.minTier ? { minTier: prior.minTier } : {}),
     response: withRecipe(learned.operation.response, r),
   };
-  const session = mergeCapture(i.site, (run2 ?? run1).cookies, learned.sessionValues, learned);
+  const session = mergeCapture(i.site, (run2 ?? run1).cookies, learned.sessionValues, {
+    settings: learned.settings,
+    urls: opUrls(learned.operation),
+  });
 
   // Values that differ between two page loads are often session-scoped ids, not per-request
   // signatures. One replay of run 1's template with example 2's args tells them apart.
@@ -1009,7 +1014,7 @@ function saveHealed(
   attempt: Attempt,
 ): HealResult {
   const allowed = new Set((op.public ?? []).map((h) => `$.request.headers.${h}`));
-  const secrets = scanSecrets(op, credentialsOf(loadSession(site)), allowed).secrets;
+  const secrets = scanSecrets(op, credentialsOf(besideOrigins(loadSession(site), opUrls(op))), allowed).secrets;
   if (secrets.length)
     return {
       outcome: "failed",
@@ -1019,6 +1024,7 @@ function saveHealed(
     if (!current) throw new Error(`site "${site}" disappeared during heal`);
     return putOperation(current, op);
   });
+  recordOrigins(site, opUrls(op));
   appendHeal({ site, op: op.name, strategy, diff });
   clearStale(site, op.name);
   return { outcome: "healed", strategy, operation: op, attempt };
@@ -1183,7 +1189,7 @@ export async function healOperation(
     return { outcome: "failed", attempt: last, fallback, reason: `re-learning failed: ${(e as Error).message}` };
   }
   // A deploy that adds an auth/anti-bot header: its value is needed to validate (and later send) the candidate.
-  mergeCapture(site, [], sessionValues, { settings });
+  mergeCapture(site, [], sessionValues, { settings, urls: opUrls(fresh) });
   // An arg equal to a constant the old template had there ("search" in /api/search) is not a param position.
   const oldLeaves = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.value.toLowerCase()]));
   const oldSlots = new Set(op.slots.map((sl) => JSON.stringify(sl.at)));
