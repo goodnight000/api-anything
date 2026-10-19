@@ -265,14 +265,14 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
       !added.warnings.some((w) => /response is HTML/.test(w)),
       "no 'set response.html' warning when --html was given",
     );
-    assert.deepEqual(added.preview, { count: 3, first: { name: "alice", href: "/u/alice" } });
+    assert.deepEqual(added.preview, { count: 3, first: { name: "alice", href: `${fx.url}/u/alice` } });
     assert.equal(added.captures.length, 2, "both trigger runs are saved as captures");
     const res = await call(SITE, "listUsers", {}, fast);
     assert.equal(res.ok, true, JSON.stringify(res));
     assert.deepEqual(res.data, [
-      { name: "alice", href: "/u/alice" },
-      { name: "bob", href: "/u/bob" },
-      { name: "carol", href: "/u/carol" },
+      { name: "alice", href: `${fx.url}/u/alice` },
+      { name: "bob", href: `${fx.url}/u/bob` },
+      { name: "carol", href: `${fx.url}/u/carol` },
     ]);
   });
 

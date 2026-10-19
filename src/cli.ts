@@ -489,7 +489,7 @@ function cmdInspect({ v, pos }: Parsed): number {
   let data: unknown = body;
   let note: string | undefined;
   if (html) {
-    data = extract({ format: "html", html }, body);
+    data = extract({ format: "html", html }, body, e.request.url);
     if (!(data as unknown[]).length) {
       // a results page with no results is an answer, as a call would give it; a selector that is not there is not
       if (!emptyResults(body, html.items)) throw nothing(`the --html items selector "${html.items}" matched nothing`);

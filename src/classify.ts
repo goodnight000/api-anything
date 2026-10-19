@@ -515,7 +515,8 @@ export function judge(op: Operation, r: Observed): Judged {
   }
   if (c.class !== "ok") return c;
   try {
-    if (op.response.format !== "json") return { ...c, data: extract(op.response, r.body) };
+    // r.url is the page's final address (redirects included): it is where a relative @href/@src lives
+    if (op.response.format !== "json") return { ...c, data: extract(op.response, r.body, r.url) };
     const data = readTarget(readJson());
     return { ...c, data: data !== undefined && op.response.pick?.length ? pick(data, op.response.pick) : data };
   } catch (e) {
