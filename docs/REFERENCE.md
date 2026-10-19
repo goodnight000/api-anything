@@ -183,8 +183,8 @@ Known limits:
   are fine; they are matched decoded, so `mcp server` finds `mcp%20server`).
 - An op extracts one value from one request. Data in two places of one page takes two ops.
 - `--html` returns text as it is in the page. `@href` and `@src` are links, so a relative value
-  is resolved against the final URL the answer came from and returned absolute; the other
-  attributes (`@title`, `@id`, ...) and plain text stay as they are in the page.
+  is resolved against the page's `<base href>` or else the final URL the answer came from, and
+  returned absolute; the other attributes (`@title`, `@id`, ...) and plain text stay as they are.
 - "Not found" is detected by replaying the op's example args, so a spec without examples reports
   missing data as `drift`. An empty result is `ok` with `[]` when the page shows it structurally:
   an empty JSON list at the extract path, or, for `--html`, an items selector written as

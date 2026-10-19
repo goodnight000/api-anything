@@ -607,8 +607,9 @@ dropped. It runs in about linear time on 10k-member objects. For HTML-only pages
 "html"` with a selector recipe `{ items: "<css>", fields: { name: "<css>[@attr]" } }` parsed
 in Node; a field written `all:<css>[@attr]` returns every match as a list (a book's genres).
 `@href` and `@src` values are links, so a relative one is unusable without the page's own
-address: they are resolved against the final URL the answer came from (redirects included) and
-the other attributes are returned as they are in the page. For data embedded in the HTML document (for example Google's `AF_initDataCallback`), `format:
+address: they are resolved as a browser would, against the page's `<base href>` or else the final
+URL the answer came from (redirects included). The other attributes are returned as they are in
+the page. For data embedded in the HTML document (for example Google's `AF_initDataCallback`), `format:
 "embedded"` with a regex whose capture group is JSON, followed by `extract`. Seroval/JS-literal
 payloads are out of scope for v1.
 

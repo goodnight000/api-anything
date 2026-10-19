@@ -193,38 +193,48 @@ const address = (v: string, attr: string, base: string): string => {
   }
 };
 
+/** What a browser resolves the page's links against: its first `<base href>`, else its own address. */
+function documentBase(doc: HTMLElement, url: string): string {
+  const href = doc.querySelector("base[href]")?.getAttribute("href");
+  try {
+    return href ? new URL(href, url).href : url;
+  } catch {
+    return url;
+  }
+}
+
 /**
  * `fields` values are "<css>" (text) or "<css>@attr"; an empty css means the item itself.
  * An "all:" prefix returns every match as a list (a book's genres, a post's tags), [] when none.
  * `base` (the page's final address, redirects included) makes `@href`/`@src` values usable as-is:
- * a relative link is resolved against it, a scheme-carrying or foreign value stays.
+ * a relative link is resolved against it (or the page's `<base href>`), a scheme-carrying value stays.
  */
 export function extractHtml(
   body: string,
   recipe: { items: string; fields: Record<string, string> },
   base?: string,
 ): Record<string, string | string[] | undefined>[] {
-  return parseHtml(body)
-    .querySelectorAll(recipe.items)
-    .map((el) => {
-      const out: Record<string, string | string[] | undefined> = {};
-      for (const [name, field] of Object.entries(recipe.fields)) {
-        const all = field.startsWith("all:");
-        const sel = all ? field.slice(4) : field;
-        const m = /^(.*?)@([\w:-]+)$/.exec(sel);
-        const css = (m ? m[1]! : sel).trim();
-        const value = (t: HTMLElement): string | undefined => {
-          const raw = m ? t.getAttribute(m[2]!) : t.text.replace(/\s+/g, " ").trim();
-          return raw && base && m ? address(raw, m[2]!, base) : raw;
-        };
-        if (all) out[name] = (css ? el.querySelectorAll(css) : [el]).map(value).filter((v): v is string => !!v);
-        else {
-          const target = css ? el.querySelector(css) : el;
-          out[name] = target ? value(target) : undefined;
-        }
+  const doc = parseHtml(body);
+  base &&= documentBase(doc, base);
+  return doc.querySelectorAll(recipe.items).map((el) => {
+    const out: Record<string, string | string[] | undefined> = {};
+    for (const [name, field] of Object.entries(recipe.fields)) {
+      const all = field.startsWith("all:");
+      const sel = all ? field.slice(4) : field;
+      const m = /^(.*?)@([\w:-]+)$/.exec(sel);
+      const css = (m ? m[1]! : sel).trim();
+      const value = (t: HTMLElement): string | undefined => {
+        const raw = m ? t.getAttribute(m[2]!) : t.text.replace(/\s+/g, " ").trim();
+        return raw && base && m ? address(raw, m[2]!, base) : raw;
+      };
+      if (all) out[name] = (css ? el.querySelectorAll(css) : [el]).map(value).filter((v): v is string => !!v);
+      else {
+        const target = css ? el.querySelector(css) : el;
+        out[name] = target ? value(target) : undefined;
       }
-      return out;
-    });
+    }
+    return out;
+  });
 }
 
 /** JSON embedded in a document; the regex's group 1 marks where the JSON value starts. */
