@@ -1,0 +1,347 @@
+{
+  "name": "dominos-au",
+  "baseUrl": "https://www.dominos.com.au",
+  "operations": [
+    {
+      "name": "findStores",
+      "request": {
+        "method": "GET",
+        "url": "https://www.dominos.com.au/dynamicstoresearchapi/getstoresfromquery?lon=%7Blon%7D&lat=%7Blat%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"Windows\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": ""
+        }
+      },
+      "slots": [
+        {
+          "param": "lon",
+          "at": [
+            "query:lon"
+          ]
+        },
+        {
+          "param": "lat",
+          "at": [
+            "query:lat"
+          ]
+        },
+        {
+          "ref": "session:findStores/AMP_unsent_32d197234d/7/event_properties/[Amplitude] FCP/navigationType",
+          "at": [
+            "header:sec-fetch-mode"
+          ]
+        },
+        {
+          "ref": "session:findStores/AMP_unsent_32d197234d/0/user_agent",
+          "at": [
+            "header:user-agent"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.dominos.com.au/dynamicstoresearchapi/getstoresfromquery?lon={lon}&lat={lat}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.dominos.com.au",
+        "path": "/dynamicstoresearchapi/getstoresfromquery"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "PickupSearchStore",
+        "pick": [
+          "storeNo",
+          "name",
+          "storeType",
+          "distance=locations[0].distance",
+          "address=locations[0].address.attributes",
+          "url=properties.storeUrl"
+        ]
+      },
+      "params": [
+        {
+          "name": "lon",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "lat",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "findDeliveryStore",
+      "description": "Which store delivers to an address. Returns Domino's normalised address and storeNo (use with getMenu).",
+      "request": {
+        "method": "POST",
+        "url": "https://olo-graph.dominos.com.au/graphql",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+          "content-type": "application/json",
+          "dpe-application": "DesktopWeb",
+          "dpe-application-version": "1.0",
+          "dpe-correlationid": "5f836eac-a546-4769-8225-6ee39ce8ddb1",
+          "dpe-country": "AU",
+          "dpe-env": "",
+          "dpe-language": "en",
+          "dpe-pushnotificationclientid": "",
+          "dpe-sessionid": "",
+          "dpe-version": "1.0",
+          "origin": "https://order.dominos.com.au",
+          "priority": "u=1, i",
+          "referer": "https://order.dominos.com.au/",
+          "request-id": "|bce28b0d843c423b82e0a1b2cb5af319.e61b8cca64f84248",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"Windows\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site",
+          "traceparent": "00-a97d6f42b6ad2e8db14c0c7c82549cb0-f8c15093996de3c3-01",
+          "tracestate": "1334198@nr=0-1-2272623-1074702716-f8c15093996de3c3----1792645512997",
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+        },
+        "body": "{\"operationName\":\"addressSearchQuery\",\"variables\":{\"unitNo\":\"\",\"streetNo\":\"{streetNo}\",\"streetName\":\"{street}\",\"suburb\":\"{suburb}\",\"postCode\":\"{postCode}\"},\"query\":\"query addressSearchQuery($buildingName: String, $floorNo: String, $unitNo: String, $streetNo: String, $streetName: String, $suburb: String, $postCode: String!) {\\n  deliverySearch(\\n    buildingName: $buildingName\\n    floorNo: $floorNo\\n    unitNo: $unitNo\\n    streetNo: $streetNo\\n    streetName: $streetName\\n    suburb: $suburb\\n    postCode: $postCode\\n  ) {\\n    storeNo\\n    media {\\n      displayAddress\\n      __typename\\n    }\\n    rawAddress {\\n      buildingName\\n      unitNo\\n      streetNo\\n      street\\n      suburb\\n      postCode\\n      state\\n      floorNo\\n      __typename\\n    }\\n    __typename\\n  }\\n}\\n\"}"
+      },
+      "slots": [
+        {
+          "param": "streetNo",
+          "at": [
+            "body",
+            "json:/variables/streetNo"
+          ]
+        },
+        {
+          "param": "street",
+          "at": [
+            "body",
+            "json:/variables/streetName"
+          ]
+        },
+        {
+          "param": "suburb",
+          "at": [
+            "body",
+            "json:/variables/suburb"
+          ]
+        },
+        {
+          "param": "postCode",
+          "at": [
+            "body",
+            "json:/variables/postCode"
+          ]
+        },
+        {
+          "ref": "session:findDeliveryStore/swrve.user_id",
+          "at": [
+            "header:dpe-pushnotificationclientid"
+          ]
+        },
+        {
+          "ref": "session:findDeliveryStore/dpe-sessionid",
+          "at": [
+            "header:dpe-sessionid"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://order.dominos.com.au/delivery/fallback",
+        "steps": [
+          {
+            "action": "wait",
+            "ms": 3000
+          },
+          {
+            "action": "fill",
+            "selector": "input[name=streetNo]",
+            "value": "{streetNo}"
+          },
+          {
+            "action": "fill",
+            "selector": "input[name=street]",
+            "value": "{street}"
+          },
+          {
+            "action": "fill",
+            "selector": "input[name=suburb]",
+            "value": "{suburb}"
+          },
+          {
+            "action": "fill",
+            "selector": "input[name=postCode]",
+            "value": "{postCode}"
+          },
+          {
+            "action": "click",
+            "selector": "[data-testid=find-address-button]"
+          },
+          {
+            "action": "wait",
+            "ms": 3000
+          }
+        ]
+      },
+      "match": {
+        "operationName": "addressSearchQuery"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "data.deliverySearch",
+        "pick": [
+          "storeNo",
+          "address=media.displayAddress",
+          "unitNo=rawAddress.unitNo",
+          "streetNo=rawAddress.streetNo",
+          "street=rawAddress.street",
+          "suburb=rawAddress.suburb",
+          "postCode=rawAddress.postCode",
+          "state=rawAddress.state"
+        ]
+      },
+      "params": [
+        {
+          "name": "streetNo",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "street",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "suburb",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "postCode",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": true
+    },
+    {
+      "name": "getMenu",
+      "description": "A store's menu for serviceMethod Pickup or Delivery (prices differ). type=Product rows are items (sizes + prices); type=Voucher rows are the store's deals (code = voucher code). storeNo comes from findStores or findDeliveryStore.",
+      "request": {
+        "method": "POST",
+        "url": "https://olo-graph.dominos.com.au/graphql",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+          "content-type": "application/json",
+          "dpe-application": "DesktopWeb",
+          "dpe-application-version": "1.0",
+          "dpe-correlationid": "41ccfab5-601a-4aa4-91a7-7afd85439735",
+          "dpe-country": "AU",
+          "dpe-env": "",
+          "dpe-language": "en",
+          "dpe-pushnotificationclientid": "",
+          "dpe-sessionid": "",
+          "dpe-version": "1.0",
+          "origin": "https://order.dominos.com.au",
+          "priority": "u=1, i",
+          "referer": "https://order.dominos.com.au/",
+          "request-id": "|6f58a632f749437ea5b771380d768974.7303b972b9594fbf",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"Windows\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site",
+          "traceparent": "00-e519dda1a738b341383ebd62a33b2084-be4cea6327862c49-01",
+          "tracestate": "1334198@nr=0-1-2272623-1074702716-be4cea6327862c49----1792645731212",
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+        },
+        "body": "{\"operationName\":\"menu\",\"variables\":{\"storeNo\":null,\"serviceMethod\":\"{serviceMethod}\",\"requestTime\":null},\"query\":\"query menu($storeNo: Int!, $serviceMethod: ServiceMethodEnum!, $serviceMethodSubtype: ServiceMethodSubTypeEnum, $requestTime: DateTime) {\\n  menuTransitional(\\n    storeNo: $storeNo\\n    serviceMethod: $serviceMethod\\n    serviceMethodSubtype: $serviceMethodSubtype\\n    requestTime: $requestTime\\n  ) {\\n    pages {\\n      code\\n      visualisationOverride {\\n        pageNavigationLayout\\n        showInPageNavigation\\n        __typename\\n      }\\n      media {\\n        name\\n        description\\n        colour\\n        logo {\\n          url\\n          altText\\n          __typename\\n        }\\n        banner {\\n          url\\n          altText\\n          __typename\\n        }\\n        __typename\\n      }\\n      mediaV2 {\\n        name {\\n          value\\n          __typename\\n        }\\n        description {\\n          value\\n          __typename\\n        }\\n        logoImage {\\n          uri\\n          altText\\n          __typename\\n        }\\n        bannerImage {\\n          uri\\n          altText\\n          __typename\\n        }\\n        categoryImage {\\n          uri\\n          altText\\n          __typename\\n        }\\n        __typename\\n      }\\n      sections {\\n        code\\n        type\\n        visualisationOverride {\\n          layout\\n          showTitle\\n          showBorder\\n          __typename\\n        }\\n        media {\\n          name\\n          description\\n          logo {\\n            url\\n            altText\\n            __typename\\n          }\\n          banner {\\n            url\\n            altText\\n            __typename\\n          }\\n          __typename\\n        }\\n        items {\\n          ... on VoucherMenuItemOld {\\n            code\\n            type\\n            media {\\n              name\\n              description\\n              applicationImage {\\n                url\\n                altText\\n                __typename\\n              }\\n              __typename\\n            }\\n            __typename\\n          }\\n          ... on ProductMenuItemOld {\\n            ...ProductCondensedMenuItemFields\\n            __typename\\n          }\\n          ... on PortionMenuItemOld {\\n            ...PortionMenuItemFields\\n            __typename\\n          }\\n          ... on VarietyMenuItemOld {\\n            code\\n            type\\n            media {\\n              name\\n              description\\n              largeImage {\\n                url\\n                altText\\n                __typename\\n              }\\n              smallImage {\\n                url\\n                altText\\n                __typename\\n              }\\n              applicationImage {\\n                url\\n                altText\\n                __typename\\n              }\\n              __typename\\n            }\\n            items {\\n              ... on ProductMenuItemOld {\\n                ...ProductCondensedMenuItemFields\\n                __typename\\n              }\\n              ... on PortionMenuItemOld {\\n                ...PortionMenuItemFields\\n                __typename\\n              }\\n              __typename\\n            }\\n            legends {\\n              ...LegendFields\\n              __typename\\n            }\\n            disclaimers\\n            __typename\\n          }\\n          __typename\\n        }\\n        __typename\\n      }\\n      legends {\\n        ...LegendFields\\n        __typename\\n      }\\n      disclaimers\\n      __typename\\n    }\\n    legends {\\n      ...LegendFields\\n      __typename\\n    }\\n    market {\\n      legends {\\n        code\\n        media {\\n          icon {\\n            uri\\n            altText\\n            __typename\\n          }\\n          name {\\n            value\\n            __typename\\n          }\\n          description {\\n            value\\n            __typename\\n          }\\n          __typename\\n        }\\n        __typename\\n      }\\n      dimensions {\\n        sizes {\\n          size\\n          media {\\n            name {\\n              value\\n              __typename\\n            }\\n            description {\\n              value\\n              __typename\\n            }\\n            iconImage {\\n              uri\\n              altText\\n              __typename\\n            }\\n            __typename\\n          }\\n          __typename\\n        }\\n        bases {\\n          base\\n          media {\\n            name {\\n              value\\n              __typename\\n            }\\n            description {\\n              value\\n              __typename\\n            }\\n            iconImage {\\n              uri\\n              altText\\n              __typename\\n            }\\n            __typename\\n          }\\n          __typename\\n        }\\n        __typename\\n      }\\n      ingredients {\\n        code\\n        type\\n        media {\\n          name {\\n            value\\n            __typename\\n          }\\n          description {\\n            value\\n            __typename\\n          }\\n          image {\\n            uri\\n            altText\\n            __typename\\n          }\\n          icon {\\n            uri\\n            altText\\n            __typename\\n          }\\n          __typename\\n        }\\n        allergens {\\n          code\\n          level\\n          __typename\\n        }\\n        tags {\\n          tag\\n          __typename\\n        }\\n        __typename\\n      }\\n      __typename\\n    }\\n    disclaimers\\n    __typename\\n  }\\n}\\n\\nfragment ProductNutritionalFields on ProductNutritionalsOld {\\n  energyKJ\\n  carbohydrate\\n  energyKcal\\n  fat\\n  fatSaturated\\n  fibre\\n  protein\\n  salt\\n  sodium\\n  sugars\\n  weight\\n  __typename\\n}\\n\\nfragment PortionNutritionalFields on PortionNutritionalsOld {\\n  energyKJ\\n  carbohydrate\\n  energyKcal\\n  fat\\n  fatSaturated\\n  fibre\\n  protein\\n  salt\\n  sodium\\n  sugars\\n  weight\\n  __typename\\n}\\n\\nfragment ProductMediaFields on ProductMediaOld {\\n  name\\n  description\\n  largeImage {\\n    url\\n    altText\\n    __typename\\n  }\\n  smallImage {\\n    url\\n    altText\\n    __typename\\n  }\\n  applicationImage {\\n    url\\n    altText\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment ProductRuleFields on ProductRuleOld {\\n  min\\n  max\\n  maxPerIngredient\\n  locked\\n  allowAdd\\n  allowRemove\\n  __typename\\n}\\n\\nfragment IngredientMedia on IngredientMediaOld {\\n  name\\n  image\\n  colour\\n  icon\\n  __typename\\n}\\n\\nfragment IngredientFields on IngredientOld {\\n  code\\n  media {\\n    ...IngredientMedia\\n    __typename\\n  }\\n  price\\n  __typename\\n}\\n\\nfragment IngredientSetFields on IngredientSetOld {\\n  rule {\\n    ...ProductRuleFields\\n    __typename\\n  }\\n  ingredients {\\n    ...IngredientFields\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment LegendFields on MenuLegendOld {\\n  code\\n  image {\\n    url\\n    altText\\n    __typename\\n  }\\n  text\\n  __typename\\n}\\n\\nfragment ProductCondensedMenuItemFields on ProductMenuItemOld {\\n  code\\n  type\\n  defaultSize\\n  halfNHalfEnabled\\n  media {\\n    ...ProductMediaFields\\n    __typename\\n  }\\n  sizes {\\n    code\\n    price\\n    salePrice\\n    promoPrice\\n    availability\\n    media {\\n      name\\n      __typename\\n    }\\n    swaps {\\n      options {\\n        ...IngredientSetFields\\n        __typename\\n      }\\n      __typename\\n    }\\n    recipe {\\n      options {\\n        ingredient {\\n          ...IngredientFields\\n          __typename\\n        }\\n        quantity\\n        __typename\\n      }\\n      __typename\\n    }\\n    nutritionals {\\n      ...ProductNutritionalFields\\n      __typename\\n    }\\n    allergens {\\n      name\\n      type\\n      __typename\\n    }\\n    upgrades {\\n      ...IngredientFields\\n      __typename\\n    }\\n    __typename\\n  }\\n  legends {\\n    ...LegendFields\\n    __typename\\n  }\\n  disclaimers\\n  features {\\n    inMenuCustomisation\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment PortionMenuItemFields on PortionMenuItemOld {\\n  code\\n  type\\n  defaultSize\\n  media {\\n    name\\n    description\\n    largeImage {\\n      url\\n      altText\\n      __typename\\n    }\\n    smallImage {\\n      url\\n      altText\\n      __typename\\n    }\\n    applicationImage {\\n      url\\n      altText\\n      __typename\\n    }\\n    __typename\\n  }\\n  sizes {\\n    code\\n    price\\n    promoPrice\\n    availability\\n    media {\\n      name\\n      __typename\\n    }\\n    swaps {\\n      bases {\\n        rule {\\n          ...ProductRuleFields\\n          __typename\\n        }\\n        ingredients {\\n          ...IngredientFields\\n          nutritionals {\\n            ...ProductNutritionalFields\\n            __typename\\n          }\\n          allergens {\\n            name\\n            type\\n            __typename\\n          }\\n          __typename\\n        }\\n        __typename\\n      }\\n      portionProductCodes\\n      __typename\\n    }\\n    recipe {\\n      base {\\n        ...IngredientFields\\n        __typename\\n      }\\n      portionCount\\n      __typename\\n    }\\n    nutritionals {\\n      ...PortionNutritionalFields\\n      __typename\\n    }\\n    allergens {\\n      name\\n      type\\n      __typename\\n    }\\n    __typename\\n  }\\n  legends {\\n    ...LegendFields\\n    __typename\\n  }\\n  disclaimers\\n  features {\\n    inMenuCustomisation\\n    __typename\\n  }\\n  __typename\\n}\\n\"}"
+      },
+      "slots": [
+        {
+          "param": "storeNo",
+          "at": [
+            "body",
+            "json:/variables/storeNo"
+          ]
+        },
+        {
+          "param": "serviceMethod",
+          "at": [
+            "body",
+            "json:/variables/serviceMethod"
+          ]
+        },
+        {
+          "ref": "session:getMenu/swrve.user_id",
+          "at": [
+            "header:dpe-pushnotificationclientid"
+          ]
+        },
+        {
+          "ref": "session:getMenu/dpe-sessionid",
+          "at": [
+            "header:dpe-sessionid"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://order.dominos.com.au/menu?storeNo={storeNo}&serviceMethod={serviceMethod}"
+      },
+      "match": {
+        "operationName": "menu"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "data.menuTransitional.pages[*].sections[*].items",
+        "pick": [
+          "code",
+          "type",
+          "name=media.name",
+          "sizes=sizes[*].code",
+          "prices=sizes[*].price"
+        ]
+      },
+      "params": [
+        {
+          "name": "storeNo",
+          "type": "number",
+          "required": true
+        },
+        {
+          "name": "serviceMethod",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": true
+    }
+  ]
+}
