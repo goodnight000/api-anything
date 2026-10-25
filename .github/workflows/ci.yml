@@ -14,8 +14,11 @@ permissions:
 
 jobs:
   check:
-    # pinned: the browser tests need the image's Google Chrome where src/browser.ts looks for it
-    runs-on: ubuntu-24.04
+    # CI_RUNS_ON=instabox runs pushes and same-repository pull requests on the self-hosted Instabox
+    # box; pull requests from forks use GitHub's runner. A fork could edit this line, so the
+    # repository requires approval before any outside contributor's workflow runs. Both machines
+    # have Google Chrome where src/browser.ts looks for it.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON || 'ubuntu-24.04' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
