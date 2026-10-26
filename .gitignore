@@ -7,3 +7,4 @@ bench/results/**/raw/
 bench/video/raw*/
 bench/video/frames/
 bench/explore/state/
+docs/media/explainer/frames/

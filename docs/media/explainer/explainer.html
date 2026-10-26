@@ -1,0 +1,585 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>API Anything explainer</title>
+<!--
+  The explainer video, as one page. render(t) draws the frame at t seconds and nothing else moves it,
+  so render.mjs can step it frame by frame. Opened directly in a browser, it plays itself in a loop.
+  Every number on screen comes from README.md or bench/README.md.
+-->
+<style>
+  @import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=block");
+  :root {
+    --page: #111110; --panel: #1a1a19; --inset: #222221; --line: #2d2d2b; --wall: #3a3a37;
+    --text: #ecebe6; --text-2: #b9b8b0; --muted: #85847e;
+    --api: #3987e5; --api-text: #6aa7f0; --api-soft: #15253a;
+    --browser: #d95926; --browser-text: #ec7f4f; --browser-soft: #2c1a11;
+    --ok: #3fb950; --ok-soft: #14291a; --warn: #e3b341; --warn-soft: #2e2510;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1280px; height: 720px; overflow: hidden; background: var(--page); color: var(--text);
+    font: 400 16px/1.4 Geist, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+  .mono, code { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .abs { position: absolute; }
+  #bg { position: absolute; inset: 0; background-image: radial-gradient(#ffffff0d 1px, transparent 1.2px); background-size: 20px 20px;
+    -webkit-mask-image: radial-gradient(ellipse 80% 70% at 70% 60%, #000 20%, transparent 75%); }
+
+  /* top bar: wordmark and chapters */
+  #top { position: absolute; left: 80px; right: 80px; top: 30px; height: 32px; display: flex; align-items: center; justify-content: space-between; }
+  #mark { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+  #mark i { width: 18px; height: 18px; border-radius: 5px; background: var(--api); display: inline-block; position: relative; }
+  #mark i::after { content: ""; position: absolute; left: 4px; right: 4px; top: 8px; height: 2px; background: var(--page); border-radius: 1px; }
+  #chapters { position: relative; display: flex; gap: 4px; font-size: 14px; }
+  #chapters span { position: relative; z-index: 1; padding: 6px 12px; color: var(--muted); border-radius: 999px; }
+  #chapters span b { font-weight: 500; color: var(--muted); margin-right: 6px; font-variant-numeric: tabular-nums; }
+  #pill { position: absolute; top: 0; height: 32px; border-radius: 999px; background: var(--inset); border: 1px solid var(--line); }
+
+  .scene { position: absolute; inset: 0; display: none; }
+  .hl { position: absolute; left: 80px; top: 100px; font-size: 46px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.1; }
+  .sub { position: absolute; left: 80px; top: 160px; font-size: 21px; color: var(--text-2); letter-spacing: -0.005em; }
+  .label { font-size: 14px; color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+  .chip { background: var(--inset); border-radius: 10px; padding: 0 16px; display: flex; align-items: center; white-space: nowrap; }
+  .k { color: var(--muted); } .s { color: var(--ok); } .n { color: var(--api-text); } .o { color: var(--browser-text); }
+  .slot { background: var(--api); color: #fff; border-radius: 6px; padding: 1px 6px; font-weight: 600; }
+  .ref { background: var(--api-soft); color: var(--api-text); border: 1px solid #2a4a73; border-radius: 6px; padding: 1px 6px; font-weight: 600; }
+
+  /* terminal */
+  .term { position: absolute; background: #0c0c0b; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .term .bar { height: 36px; display: flex; align-items: center; gap: 7px; padding: 0 14px; border-bottom: 1px solid #1f1f1d; }
+  .term .bar i { width: 11px; height: 11px; border-radius: 6px; background: #2f2f2c; display: inline-block; }
+  .term .bar span { margin-left: 10px; font-size: 13px; color: var(--muted); }
+  .term .body { padding: 18px 22px; font: 400 17px/28px "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+  .term .p { color: var(--muted); }
+  .caret { display: inline-block; width: 9px; height: 19px; background: var(--text); vertical-align: -3px; margin-left: 1px; }
+
+  /* scene 0: the browser */
+  .win { position: absolute; left: 80px; top: 236px; width: 700px; height: 424px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .win .bar { height: 40px; display: flex; align-items: center; gap: 7px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+  .win .bar i { width: 11px; height: 11px; border-radius: 6px; background: var(--wall); display: inline-block; }
+  .win .url { margin-left: 14px; flex: 1; height: 24px; border-radius: 6px; background: var(--inset); font-size: 13px; color: var(--muted); display: flex; align-items: center; padding: 0 10px; }
+  .field { position: absolute; top: 24px; height: 44px; border: 1px solid var(--wall); border-radius: 8px; padding: 0 12px; display: flex; align-items: center; font-size: 15px; color: var(--muted); }
+  .field.on { border-color: var(--browser); }
+  .go { position: absolute; top: 24px; left: 560px; width: 116px; height: 44px; border-radius: 8px; background: var(--browser); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 15px; }
+  .spin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid #ffffff55; border-top-color: #fff; display: none; }
+  .rows { position: absolute; left: 0; right: 0; top: 92px; bottom: 0; overflow: hidden; }
+  .row { position: absolute; left: 24px; right: 24px; height: 44px; border-radius: 8px; background: var(--inset); display: flex; align-items: center; gap: 14px; padding: 0 16px; }
+  .row u { height: 9px; border-radius: 5px; background: var(--wall); display: block; text-decoration: none; }
+  .row.sel { outline: 2px solid var(--browser); }
+  .cursor { position: absolute; left: 0; top: 0; width: 22px; height: 22px; z-index: 5; }
+  .ripple { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 50%; border: 2px solid var(--browser); z-index: 4; opacity: 0; }
+  .log { position: absolute; left: 820px; top: 236px; width: 380px; height: 424px; }
+  .log .head { padding: 18px 20px 12px; display: flex; justify-content: space-between; align-items: baseline; }
+  .log .name { font-size: 17px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 10px; height: 10px; border-radius: 5px; display: inline-block; }
+  .clock { font-size: 34px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .log ol { list-style: none; padding: 0 12px; display: flex; flex-direction: column; gap: 2px; }
+  .log li { font-size: 13.5px; padding: 5px 8px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log li .mono { color: var(--text); }
+  .log li em { font-style: normal; color: var(--muted); margin-left: 8px; }
+  .log li.now { background: var(--inset); }
+  .cost { position: absolute; left: 20px; right: 20px; bottom: 16px; font-size: 13px; color: var(--muted); }
+  .costv { font-size: 17px; font-weight: 600; color: var(--browser-text); font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+  /* scene 1: learning */
+  .ex { position: absolute; left: 80px; width: 320px; height: 56px; font-size: 20px; }
+  .req { position: absolute; left: 470px; width: 730px; height: 56px; font-size: 20px; }
+  .tpl { position: absolute; left: 470px; top: 336px; width: 730px; height: 108px; border-radius: 12px; border: 1.5px solid var(--api); background: var(--api-soft);
+    display: flex; flex-direction: column; justify-content: center; padding: 0 22px; font-size: 20px; gap: 12px; }
+  .tpl .tag { position: absolute; top: -12px; left: 16px; background: var(--api); color: #fff; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 6px; letter-spacing: 0.02em; }
+  .loader { position: absolute; left: 80px; width: 320px; height: 4px; border-radius: 2px; background: var(--inset); overflow: hidden; }
+  .loader div { height: 100%; width: 0; background: var(--browser); border-radius: 2px; }
+  .note { display: flex; align-items: center; gap: 10px; font-size: 16px; color: var(--text-2); }
+  .tick { width: 22px; height: 22px; border-radius: 11px; background: var(--ok); display: inline-grid; place-items: center; flex: none; }
+  .tick::after { content: ""; width: 9px; height: 5px; border: solid #0b0b0b; border-width: 0 0 2.5px 2.5px; transform: translateY(-1px) rotate(-45deg); }
+  .lock { width: 22px; height: 22px; flex: none; }
+
+  /* scene 2: ladder */
+  .step { position: absolute; left: 800px; width: 400px; height: 76px; border-radius: 12px; border: 1.5px solid var(--wall); background: var(--panel); padding: 13px 18px; }
+  .step .t { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; color: var(--muted); }
+  .step .h { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .step .w { position: absolute; right: 18px; top: 28px; font-size: 13px; color: var(--muted); text-align: right; }
+  .step.on { border-color: var(--api); background: var(--api-soft); }
+  .step.on .t { color: var(--api-text); }
+  .hit { position: absolute; left: 12px; right: 12px; height: 28px; border-radius: 6px; background: #3987e529; transform-origin: left center; }
+  .strip { position: absolute; left: 80px; top: 612px; width: 1120px; height: 56px; display: flex; align-items: center; gap: 18px; padding: 0 22px; font-size: 16px; color: var(--text-2); }
+  .strip b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* scene 3: repair */
+  .fix { position: absolute; top: 250px; width: 256px; height: 112px; border-radius: 12px; border: 1.5px solid var(--wall); background: var(--panel); padding: 16px 18px; }
+  .fix .h { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .fix .d { font-size: 14.5px; color: var(--text-2); margin-top: 6px; line-height: 1.4; }
+  .fix .n { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.08em; }
+  .arrow { position: absolute; top: 300px; width: 20px; height: 12px; }
+  .diff { position: absolute; left: 80px; top: 404px; width: 1120px; height: 132px; padding: 18px 24px; font-size: 18px; line-height: 32px; }
+  .strike { position: relative; display: inline-block; }
+  .strike::after { content: ""; position: absolute; left: -2px; right: -2px; top: 52%; height: 2px; background: var(--browser-text); transform-origin: left; transform: scaleX(var(--k, 0)); }
+
+  /* scene 4: writes */
+  .status { position: absolute; top: 560px; width: 268px; height: 96px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--panel); padding: 14px 16px; }
+  .status code { font-size: 16px; font-weight: 600; color: var(--text); }
+  .status div { font-size: 14px; color: var(--muted); margin-top: 6px; line-height: 1.35; }
+  .flag { position: absolute; font-size: 14px; font-weight: 500; padding: 5px 10px; border-radius: 7px; white-space: nowrap; }
+
+  /* scene 5: registry */
+  .reg { position: absolute; left: 860px; top: 236px; width: 340px; height: 424px; padding: 18px 20px; }
+  .reg h3 { font-size: 17px; font-weight: 600; }
+  .reg .file { height: 31px; display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--text-2); border-bottom: 1px solid var(--line); }
+  .reg .file svg { flex: none; }
+  .fly { position: absolute; height: 34px; padding: 0 12px; border-radius: 8px; display: flex; align-items: center; gap: 8px; font-size: 15px; z-index: 6; white-space: nowrap; }
+
+  /* scene 6: end card */
+  .end-mark { position: absolute; left: 0; right: 0; top: 176px; text-align: center; font-size: 84px; font-weight: 700; letter-spacing: -0.045em; }
+  .end-line { position: absolute; left: 0; right: 0; top: 284px; text-align: center; font-size: 26px; color: var(--text-2); letter-spacing: -0.01em; }
+  .install { position: absolute; left: 110px; width: 1060px; top: 392px; height: 112px; border-radius: 14px; padding: 20px 26px; }
+  .install .label { margin-bottom: 12px; }
+  .install code { font-size: 18px; color: var(--text); white-space: nowrap; }
+  .end-foot { position: absolute; left: 0; right: 0; top: 540px; text-align: center; font-size: 17px; color: var(--muted); }
+</style>
+
+<div id="bg"></div>
+<div id="top">
+  <div id="mark"><i></i>API Anything</div>
+  <div id="chapters"><div id="pill"></div>
+    <span>The problem</span><span><b>1</b>Learn</span><span><b>2</b>Call</span><span><b>3</b>Repair</span><span><b>4</b>Writes</span><span><b>5</b>Share</span>
+  </div>
+</div>
+
+<!-- 0. The problem -->
+<section class="scene" id="s0" data-start="0" data-end="7.4">
+  <h1 class="hl" data-in="0.1">Agents use websites the slow way.</h1>
+  <p class="sub" data-in="0.25">They drive a browser like a person: load, click, wait, read the page, again and again.</p>
+  <div class="win" data-in="0.35">
+    <div class="bar"><i></i><i></i><i></i><div class="url">google.com/travel/flights</div></div>
+    <div class="abs" style="left:0;right:0;top:40px;bottom:0">
+      <div class="field" style="left:24px;width:180px">San Francisco</div>
+      <div class="field" id="to" style="left:216px;width:180px">Where to?</div>
+      <div class="field" id="date" style="left:408px;width:140px">Departure</div>
+      <div class="go"><span id="golabel">Search</span><div class="spin" id="spin"></div></div>
+      <div class="rows" id="rows"></div>
+    </div>
+  </div>
+  <div class="ripple" id="ripple"></div>
+  <svg class="cursor" id="cursor" viewBox="0 0 22 22"><path d="M3,2L3,18L7.5,13.8L10.6,20.5L13.4,19.3L10.4,12.7L16.5,12.4Z" fill="#fff" stroke="#111" stroke-width="1.4" stroke-linejoin="round"/></svg>
+  <div class="log panel" data-in="0.45">
+    <div class="head"><div class="name"><span class="dot" style="background:var(--browser)"></span>Agent + browser</div>
+      <div style="text-align:right"><div class="clock" id="clock0">0.0 s</div><div class="costv" id="cost0">$0.166</div></div></div>
+    <ol id="log0"></ol>
+    <div class="cost" id="cap0">Median of 5 runs: cheapest nonstop SFO to JFK, 1 date</div>
+  </div>
+</section>
+
+<!-- 1. Learn -->
+<section class="scene" id="s1" data-start="7.4" data-end="15.4">
+  <h1 class="hl" data-in="0.1">Teach it a site once.</h1>
+  <p class="sub" data-in="0.25">Give two example inputs. A headless browser loads the page for each. No LLM needed.</p>
+  <div class="label abs" style="left:80px;top:298px" data-in="0.5">two example inputs</div>
+  <div class="ex chip mono" style="top:326px" data-in="0.6">domain=<span class="o">github.com</span></div>
+  <div class="ex chip mono" style="top:398px" data-in="0.72">domain=<span class="o">github.io</span></div>
+  <div class="loader" style="top:472px" data-in="0.9"><div id="load1"></div></div>
+  <div class="loader" style="top:484px" data-in="0.9"><div id="load2"></div></div>
+  <div class="label abs" id="loadlabel" style="left:80px;top:500px" data-in="0.9">headless browser: loading the page…</div>
+  <div class="label abs" id="reqlabel" style="left:470px;top:298px" data-in="1.5">the request each load sent</div>
+  <div class="req chip mono" id="req1" style="top:326px" data-in="1.7"><b style="font-weight:600">GET</b>&nbsp;news.ycombinator.com/from?site=<span class="o">github.com</span></div>
+  <div class="req chip mono" id="req2" style="top:398px" data-in="2.5"><b style="font-weight:600">GET</b>&nbsp;news.ycombinator.com/from?site=<span class="o">github.io</span></div>
+  <div class="tpl mono" id="tpl">
+    <span class="tag">saved operation: hn-demo links</span>
+    <div><b style="font-weight:600">GET</b> news.ycombinator.com/from?site=<span class="slot" id="slot">{domain}</span></div>
+    <div id="cookie"><span class="k">Cookie:</span> <span id="cval" class="o">user=a8f3…c2e1</span><span id="cref" class="ref" style="display:none">cookie:user</span></div>
+  </div>
+  <div class="note abs" style="left:470px;top:494px" data-in="4.6"><span class="tick"></span><span>What changed with the input became the slot <code class="n">{domain}</code>. The rest is a template.</span></div>
+  <div class="note abs" style="left:470px;top:536px" data-in="5.3">
+    <svg class="lock" viewBox="0 0 22 22"><rect x="4" y="9.5" width="14" height="10" rx="2.5" fill="none" stroke="var(--api-text)" stroke-width="1.8"/><path d="M7.5,9.5V7a3.5,3.5 0 0 1 7,0v2.5" fill="none" stroke="var(--api-text)" stroke-width="1.8"/></svg>
+    <span>Cookies and tokens become references. The values stay in ~/.api-anything, never in the spec.</span>
+  </div>
+</section>
+
+<!-- 2. Call -->
+<section class="scene" id="s2" data-start="15.4" data-end="23">
+  <h1 class="hl" data-in="0.1">Then it calls the site like an API.</h1>
+  <p class="sub" data-in="0.25">Fill the slots and send plain HTTP. JSON comes back, with no browser.</p>
+  <div class="term" style="left:80px;top:236px;width:680px;height:352px" data-in="0.35">
+    <div class="bar"><i></i><i></i><i></i><span>terminal</span></div>
+    <div class="hit" id="hit1" style="top:166px"></div>
+    <div class="hit" id="hit2" style="top:222px"></div>
+    <div class="body"><span class="p">$ </span><span data-type="0.7" data-cps="44">api-anything call hacker-news search query=sqlite</span><span class="caret" data-caret="0.5,2.0"></span>
+<span id="json2" style="display:inline-block;vertical-align:top">{
+  <span class="k">"ok":</span> <span class="s">true</span>,
+  <span class="k">"class":</span> <span class="s">"ok"</span>,
+  <span class="k">"tier":</span> <span class="n">1</span>,
+  <span class="k">"data":</span> [{<span class="k">"title":</span> "Hosting SQLite databases on…"}, …],
+  <span class="k">"ms":</span> <span class="n">111</span>
+}</span></div>
+  </div>
+  <div class="label abs" style="left:800px;top:240px" data-in="3.0">if the site pushes back, it falls back</div>
+  <div class="step on" style="top:266px" data-in="3.1"><div class="t">TIER 1</div><div class="h">Node fetch, plain HTTP</div><div class="w mono" style="color:var(--api-text);font-size:15px;font-weight:600;top:27px">~100 ms</div></div>
+  <div class="step" style="top:356px" data-in="3.35"><div class="t">TIER 2 · IF THE SITE BLOCKS PLAIN HTTP</div><div class="h">fetch from inside a browser page</div></div>
+  <div class="step" style="top:446px" data-in="3.6"><div class="t">TIER 3 · LAST RESORT, READS ONLY</div><div class="h">run the page, read its own response</div></div>
+  <div class="strip panel" data-in="4.6">
+    <span>Same agent, same prompt, 1-date flight search:</span>
+    <span><span class="dot" style="background:var(--browser)"></span> browser <b>12.9 s · $0.166</b></span>
+    <span style="color:var(--muted)">→</span>
+    <span><span class="dot" style="background:var(--api)"></span> API Anything <b>8.4 s · $0.074</b></span>
+    <span style="margin-left:auto;font-size:13px;color:var(--muted)">median of 5 runs</span>
+  </div>
+</section>
+
+<!-- 3. Repair -->
+<section class="scene" id="s3" data-start="23" data-end="30">
+  <h1 class="hl" data-in="0.1">When the site changes, it repairs the request.</h1>
+  <p class="sub" data-in="0.25">It re-learns what drifted, and saves the new version only after a replay succeeds.</p>
+  <div class="fix" id="f1" style="left:80px" data-in="0.5"><div class="n">1</div><div class="h">It drifts</div><div class="d">The answer stops fitting: a rotated id, a moved field.</div></div>
+  <svg class="arrow" style="left:342px" data-in="0.6" viewBox="0 0 24 12"><path d="M1,6H21M16,1.5L21.5,6L16,10.5" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  <div class="fix" id="f2" style="left:368px" data-in="0.65"><div class="n">2</div><div class="h">Re-learn</div><div class="d">Rescan the page's scripts, or capture the request again.</div></div>
+  <svg class="arrow" style="left:630px" data-in="0.75" viewBox="0 0 24 12"><path d="M1,6H21M16,1.5L21.5,6L16,10.5" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  <div class="fix" id="f3" style="left:656px" data-in="0.8"><div class="n">3</div><div class="h">Replay</div><div class="d">Send the new request with the call's own inputs.</div></div>
+  <svg class="arrow" style="left:918px" data-in="0.9" viewBox="0 0 24 12"><path d="M1,6H21M16,1.5L21.5,6L16,10.5" fill="none" stroke="var(--muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  <div class="fix" id="f4" style="left:944px" data-in="0.95"><div class="n">4</div><div class="h">Save</div><div class="d">Only if the replay succeeds. Otherwise, an honest error.</div></div>
+  <div class="diff term" data-in="1.1"><div class="body" style="padding:0;font-size:18px;line-height:32px"><span class="k">GET</span> /api/search?q=<span class="slot">{query}</span>
+<span class="k">x-build-id:</span> <span class="strike o" id="oldid">8f2a1c</span> <span id="newid" class="s" style="display:inline-block">93d0e7</span>   <span id="driftflag" class="flag" style="position:static;background:var(--browser-soft);color:var(--browser-text)">the site shipped a new build</span>
+<span class="k">replay:</span> <span id="replay" class="s"></span></div></div>
+  <div class="term" style="left:80px;top:556px;width:1120px;height:100px" data-in="4.2">
+    <div class="body" style="font-size:17px"><span class="p">→ </span>{<span class="k">"ok":</span> <span class="s">true</span>, <span class="k">"class":</span> <span class="s">"ok"</span>, <span class="k">"tier":</span> <span class="n">1</span>, <span class="k">"healed":</span> <span class="s">true</span>, <span class="k">"data":</span> […]}
+<span class="p">  If the repair fails, the call returns an error, never someone else's data.</span></div>
+  </div>
+</section>
+
+<!-- 4. Writes -->
+<section class="scene" id="s4" data-start="30" data-end="37.2">
+  <h1 class="hl" data-in="0.1">It tells the truth about writes.</h1>
+  <p class="sub" data-in="0.25">Writes need --allow-writes. Each result says what was sent and whether to send it again.</p>
+  <div class="term" style="left:80px;top:236px;width:1120px;height:296px" data-in="0.35">
+    <div class="bar"><i></i><i></i><i></i><span>terminal</span></div>
+    <div class="body"><span class="p">$ </span><span data-type="0.6" data-cps="60">api-anything call my-site postComment text="Ship it" --allow-writes</span><span class="caret" data-caret="0.45,1.85"></span>
+<span id="w1">{<span class="k">"ok":</span> <span class="s">true</span>, <span class="k">"class":</span> <span class="s">"ok"</span>, <span class="k">"tier":</span> <span class="n">1</span>, <span class="k">"write":</span> <span class="s">"accepted"</span>}</span>
+<span id="w2p"><span class="p">$ </span></span><span data-type="2.9" data-cps="90">api-anything call my-site postComment text="Ship it" --allow-writes</span><span class="caret" data-caret="2.75,3.75"></span>
+<span id="w2">{<span class="k">"ok":</span> false, <span class="k">"class":</span> <span style="color:var(--warn)">"duplicate"</span>, <span class="k">"write":</span> <span style="color:var(--warn)">"not_sent"</span>, <span class="k">"retry":</span> <span class="n">"no"</span>,
+ <span class="k">"nextCall":</span> {<span class="k">"action":</span> <span class="n">"check_site"</span>}}</span></div>
+  </div>
+  <div class="flag" id="flag1" style="left:870px;top:319px;background:var(--ok-soft);color:var(--ok)">the site took it</div>
+  <div class="flag" id="flag2" style="left:870px;top:375px;background:var(--warn-soft);color:var(--warn)">same write, so it's refused, not sent twice</div>
+  <div class="status" id="st0" style="left:80px" data-in="0.5"><code>not_sent</code><div>nothing was sent</div></div>
+  <div class="status" id="st1" style="left:364px" data-in="0.58"><code>not_applied</code><div>the site answered that it didn't run it</div></div>
+  <div class="status" id="st2" style="left:648px" data-in="0.66"><code>accepted</code><div>a 2xx: proof the site took it</div></div>
+  <div class="status" id="st3" style="left:932px" data-in="0.74"><code>may_have_applied</code><div>it may have reached the site: check before any retry</div></div>
+</section>
+
+<!-- 5. Share -->
+<section class="scene" id="s5" data-start="37.2" data-end="44">
+  <h1 class="hl" data-in="0.1">Share what it learned.</h1>
+  <p class="sub" data-in="0.25">Pull a spec someone published, or publish yours as a pull request. Both pass the same checks.</p>
+  <div class="term" style="left:80px;top:236px;width:740px;height:196px" data-in="0.35">
+    <div class="bar"><i></i><i></i><i></i><span>pull</span></div>
+    <div class="body" style="font-size:16px;line-height:27px"><span class="p">$ </span><span data-type="0.6" data-cps="40">api-anything pull goodreads</span>
+<span id="pull1"><span class="s">✓</span> passed the shared checks, saved goodreads</span>
+<span id="pull2p"><span class="p">$ </span></span><span data-type="2.0" data-cps="70">api-anything call goodreads searchBooks q=piranesi</span>
+<span id="pull3">{<span class="k">"ok":</span> <span class="s">true</span>, <span class="k">"class":</span> <span class="s">"ok"</span>, <span class="k">"tier":</span> <span class="n">1</span>, <span class="k">"data":</span> […]}</span></div>
+  </div>
+  <div class="term" style="left:80px;top:448px;width:740px;height:212px" data-in="0.5">
+    <div class="bar"><i></i><i></i><i></i><span>publish</span></div>
+    <div class="body" style="font-size:16px;line-height:27px"><span class="p">$ </span><span data-type="2.7" data-cps="40">api-anything publish hn-demo</span>
+<span id="pub1" class="k">preview: the files, every host it sends to, anything that may be yours</span>
+<span id="pub2p"><span class="p">$ </span></span><span data-type="3.7" data-cps="50">api-anything publish hn-demo --yes</span>
+<span id="pub3"><span class="s">✓</span> opened a pull request from your fork</span></div>
+  </div>
+  <div class="reg panel" data-in="0.45">
+    <h3>sites/</h3>
+    <div class="label" style="margin:2px 0 10px">the registry, on GitHub</div>
+    <div id="files"></div>
+  </div>
+  <div class="fly mono" id="flyPull" style="background:var(--api-soft);color:var(--api-text);border:1px solid #2a4a73">goodreads.json</div>
+  <div class="fly mono" id="flyPub" style="background:var(--ok-soft);color:var(--ok);border:1px solid #23502e">hn-demo.json</div>
+</section>
+
+<!-- 6. End card -->
+<section class="scene" id="s6" data-start="44" data-end="99">
+  <div class="end-mark" data-in="0.1" data-s="0.96">API Anything</div>
+  <div class="end-line" data-in="0.3">Teach your agent a website once. After that, it calls the site like an API.</div>
+  <div class="install panel" data-in="0.6">
+    <div class="label">Install: paste this into Claude Code, Codex or another coding agent</div>
+    <code>Set up API Anything for me: https://github.com/goodnight000/api-anything/blob/main/INSTALL.md</code>
+  </div>
+  <div class="end-foot" data-in="0.9">MCP server · CLI · TypeScript library  —  github.com/goodnight000/api-anything</div>
+</section>
+
+<script>
+  const DURATION = 49;
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const clamp = (x) => Math.max(0, Math.min(1, x));
+  const lerp = (a, b, k) => a + (b - a) * k;
+  // ease-out curves for things arriving, ease-in-out for things moving on screen
+  const outQuint = (x) => 1 - (1 - x) ** 5;
+  const outCubic = (x) => 1 - (1 - x) ** 3;
+  const inOut = (x) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2);
+  const inCubic = (x) => x * x * x;
+  const prog = (t, at, dur) => clamp((t - at) / dur);
+  const show = (el, on) => (el.style.opacity = on ? 1 : 0);
+
+  const scenes = $$(".scene").map((el) => ({ el, start: +el.dataset.start, end: +el.dataset.end }));
+  for (const el of $$("[data-type]")) el.dataset.text = el.textContent;
+
+  // Scene 0 content
+  const rowsEl = $("#rows");
+  const widths = [[70, 110, 60, 180], [90, 80, 70, 150], [60, 120, 80, 170], [80, 100, 50, 160], [70, 90, 70, 190], [90, 110, 60, 140], [60, 100, 80, 170]];
+  widths.forEach((w, i) => {
+    const r = document.createElement("div");
+    r.className = "row";
+    r.style.top = `${i * 52}px`;
+    r.innerHTML = w.map((x) => `<u style="width:${x}px"></u>`).join("") + `<u style="width:54px;margin-left:auto"></u>`;
+    rowsEl.append(r);
+  });
+  const LOG = [
+    [0.3, "browser_navigate", "google.com/travel/flights"],
+    [1.05, "browser_click", '"Where to?"'],
+    [1.2, "browser_type", '"New York (JFK)"'],
+    [2.05, "browser_click", '"Departure"'],
+    [2.65, "browser_click", '"Search"'],
+    [3.0, "browser_wait_for", "results"],
+    [4.1, "browser_snapshot", "read the page"],
+    [4.9, "browser_evaluate", "scroll"],
+    [5.8, "browser_snapshot", "read it again"],
+  ];
+  $("#log0").innerHTML = LOG.map(([, a, b]) => `<li><span class="mono">${a}</span><em>${b}</em></li>`).join("");
+  // cursor keyframes [t, x, y] and clicks
+  const PATH = [[0.4, 700, 640], [1.0, 386, 322], [1.9, 386, 322], [2.0, 558, 322], [2.5, 558, 322], [2.62, 698, 322], [4.4, 698, 322], [4.85, 430, 452], [5.75, 430, 452]];
+  const CLICKS = [1.02, 2.03, 2.64, 5.78];
+
+  // Scene 5 content
+  const FILES = ["airbnb", "amazon", "dominos-au", "goodreads", "google-flights", "hacker-news", "instagram", "linkedin", "x", "youtube"];
+  const fileIcon = `<svg width="14" height="16" viewBox="0 0 14 16"><path d="M2,1h6.5L12.5,5v9.5a.5.5 0 0 1-.5.5H2a.5.5 0 0 1-.5-.5V1.5A.5.5 0 0 1 2,1Z" fill="none" stroke="var(--muted)" stroke-width="1.3"/></svg>`;
+  $("#files").innerHTML =
+    FILES.map((f) => `<div class="file mono" data-f="${f}">${fileIcon}${f}.json</div>`).join("") +
+    `<div class="file mono" id="newfile" style="color:var(--ok);height:0;overflow:hidden;border:0">${fileIcon}hn-demo.json<span style="margin-left:auto;font-family:Geist;font-size:12px">pull request</span></div>`;
+
+  // chapter pill: measured once
+  const chapterEls = $$("#chapters span");
+  const pill = $("#pill");
+  const boxes = chapterEls.map((s) => [s.offsetLeft, s.offsetWidth]);
+
+  function reveal(el, lt) {
+    const at = +el.dataset.in;
+    const k = outQuint(prog(lt, at, +(el.dataset.d ?? 0.7)));
+    const dy = +(el.dataset.y ?? 16) * (1 - k);
+    const s = lerp(+(el.dataset.s ?? 1), 1, k);
+    el.style.opacity = k;
+    el.style.transform = `translateY(${dy}px)${s !== 1 ? ` scale(${s})` : ""}`;
+    el.style.filter = k < 1 ? `blur(${(1 - k) * 4}px)` : "";
+  }
+
+  function type(el, lt) {
+    const full = el.dataset.text;
+    const n = Math.max(0, Math.min(full.length, Math.floor((lt - +el.dataset.type) * +el.dataset.cps)));
+    el.textContent = full.slice(0, n);
+  }
+
+  function caret(el, lt) {
+    const [a, b] = el.dataset.caret.split(",").map(Number);
+    el.style.visibility = lt >= a && lt <= b && (lt > b - 0.3 || Math.floor(lt * 2.4) % 2 === 0 || lt < a + 1.2) ? "visible" : "hidden";
+  }
+
+  /** reveal a block whose time is not a data attribute: opacity plus a small rise */
+  function rise(el, lt, at, dur = 0.5, dy = 8) {
+    const k = outCubic(prog(lt, at, dur));
+    el.style.opacity = k;
+    el.style.transform = `translateY(${dy * (1 - k)}px)`;
+    return k;
+  }
+
+  const custom = {
+    s0(lt) {
+      // cursor
+      let x = PATH[0][1], y = PATH[0][2];
+      for (let i = 1; i < PATH.length; i++) {
+        const [t0, x0, y0] = PATH[i - 1], [t1, x1, y1] = PATH[i];
+        if (lt >= t0) {
+          const k = inOut(prog(lt, t0, t1 - t0));
+          x = lerp(x0, x1, k); y = lerp(y0, y1, k);
+        }
+      }
+      const cur = $("#cursor");
+      const press = CLICKS.some((c) => lt >= c && lt < c + 0.12);
+      cur.style.transform = `translate(${x - 3}px, ${y - 2}px) scale(${press ? 0.86 : 1})`;
+      cur.style.opacity = clamp((lt - 0.4) / 0.3) * (1 - prog(lt, 6.6, 0.4));
+      const rip = $("#ripple");
+      const c = CLICKS.findLast((c) => lt >= c);
+      const rk = c === undefined ? 1 : prog(lt, c, 0.5);
+      rip.style.left = `${x}px`; rip.style.top = `${y}px`;
+      rip.style.opacity = rk < 1 ? (1 - rk) * 0.9 : 0;
+      rip.style.transform = `scale(${0.4 + outCubic(rk) * 0.9})`;
+      // page state
+      const to = $("#to"), date = $("#date");
+      const typed = "New York (JFK)";
+      const n = Math.floor(clamp((lt - 1.2) / 0.55) * typed.length);
+      to.textContent = lt < 1.2 ? "Where to?" : typed.slice(0, n) || " ";
+      to.style.color = lt < 1.2 ? "" : "var(--text)";
+      to.classList.toggle("on", lt >= 1.02 && lt < 2.03);
+      date.textContent = lt < 2.15 ? "Departure" : "Tue, Oct 20";
+      date.style.color = lt < 2.15 ? "" : "var(--text)";
+      date.classList.toggle("on", lt >= 2.03 && lt < 2.64);
+      const loading = lt >= 2.7 && lt < 3.95;
+      $("#spin").style.display = loading ? "block" : "none";
+      $("#spin").style.transform = `rotate(${lt * 720}deg)`;
+      $("#golabel").style.display = loading ? "none" : "";
+      const rows = $$(".row", rowsEl);
+      const scroll = inOut(prog(lt, 4.95, 0.7)) * 104;
+      rows.forEach((r, i) => {
+        const filled = lt >= 4.0 + i * 0.05;
+        const pending = lt >= 2.8;
+        r.style.opacity = !pending ? 0 : filled ? 1 : 0.7 + 0.3 * Math.sin(lt * 7 - i * 0.8);
+        r.style.transform = `translateY(${-scroll}px)`;
+        for (const u of r.children) u.style.background = filled ? (u === r.children[3] ? "#6d6c66" : "var(--wall)") : "#2c2c2a";
+        r.classList.toggle("sel", i === 3 && lt >= 5.78);
+      });
+      // log and clock
+      const items = $$("#log0 li");
+      LOG.forEach(([at], i) => {
+        rise(items[i], lt, at, 0.35, 6);
+        items[i].classList.toggle("now", lt >= at && (i === LOG.length - 1 || lt < LOG[i + 1][0]));
+      });
+      const secs = 12.9 * clamp((lt - 0.2) / 6.0);
+      $("#clock0").textContent = `${secs.toFixed(1)} s`;
+      $("#clock0").style.color = lt >= 6.2 ? "var(--browser-text)" : "";
+      rise($("#cost0"), lt, 6.25, 0.5, 6);
+      rise($("#cap0"), lt, 6.4, 0.5, 6);
+    },
+
+    s1(lt) {
+      $("#load1").style.width = `${inOut(prog(lt, 1.0, 0.7)) * 100}%`;
+      $("#load2").style.width = `${inOut(prog(lt, 1.8, 0.7)) * 100}%`;
+      $("#loadlabel").textContent = lt < 2.6 ? "headless browser: loading the page…" : "headless browser: loaded it twice";
+      // the two requests fold into one template
+      const m = inOut(prog(lt, 3.6, 0.6));
+      const r1 = $("#req1"), r2 = $("#req2"), tpl = $("#tpl");
+      if (lt >= 3.6) {
+        r1.style.transform = `translateY(${m * 36}px)`;
+        r2.style.transform = `translateY(${-m * 36}px)`;
+        r1.style.opacity = r2.style.opacity = 1 - m;
+      }
+      $("#reqlabel").textContent = lt < 3.9 ? "the request each load sent" : "what changed with the input becomes a slot";
+      const tk = outQuint(prog(lt, 3.95, 0.6));
+      tpl.style.opacity = tk;
+      tpl.style.transform = `scale(${lerp(0.97, 1, tk)})`;
+      const sk = prog(lt, 4.25, 0.45);
+      $("#slot").style.transform = `scale(${sk < 1 ? 1 + Math.sin(sk * Math.PI) * 0.12 : 1})`;
+      $("#slot").style.display = "inline-block";
+      // cookie value becomes a reference
+      const swap = lt >= 5.0;
+      $("#cval").style.display = swap ? "none" : "";
+      $("#cref").style.display = swap ? "inline-block" : "none";
+      const ck = outQuint(prog(lt, 5.0, 0.5));
+      $("#cref").style.transform = `scale(${lerp(0.85, 1, ck)})`;
+      $("#cref").style.opacity = ck;
+      $("#cval").style.opacity = 1 - prog(lt, 4.7, 0.3);
+      $("#cval").style.filter = `blur(${prog(lt, 4.6, 0.4) * 4}px)`;
+    },
+
+    s2(lt) {
+      const out = $("#json2");
+      out.style.clipPath = `inset(0 0 ${100 - 100 * clamp((lt - 2.25) / 0.45)}% 0)`;
+      out.style.opacity = lt >= 2.2 ? 1 : 0;
+      for (const [id, at] of [["#hit1", 2.9], ["#hit2", 3.05]]) {
+        const k = outQuint(prog(lt, at, 0.5));
+        $(id).style.transform = `scaleX(${k})`;
+        $(id).style.opacity = k;
+      }
+    },
+
+    s3(lt) {
+      const lit = (id, at, color, soft) => {
+        const el = $(id), k = outCubic(prog(lt, at, 0.4));
+        el.style.borderColor = k > 0 ? color : "";
+        el.style.background = k > 0 ? soft : "";
+        el.style.boxShadow = k > 0 ? `0 0 0 ${(1 - k) * 8}px ${color}33` : "";
+      };
+      lit("#f1", 1.6, "var(--browser)", "var(--browser-soft)");
+      lit("#f2", 2.3, "var(--api)", "var(--api-soft)");
+      lit("#f3", 3.2, "var(--api)", "var(--api-soft)");
+      lit("#f4", 3.8, "var(--ok)", "var(--ok-soft)");
+      $("#oldid").style.setProperty("--k", outCubic(prog(lt, 2.4, 0.35)));
+      $("#oldid").style.opacity = 1 - 0.5 * prog(lt, 2.75, 0.3);
+      const nk = outQuint(prog(lt, 2.85, 0.5));
+      $("#newid").style.opacity = nk;
+      $("#newid").style.transform = `translateX(${(1 - nk) * -8}px)`;
+      $("#driftflag").style.opacity = rise($("#driftflag"), lt, 1.55, 0.4, 0) * (1 - prog(lt, 2.85, 0.3));
+      const rp = "✓ answered with data, so the new template was saved";
+      $("#replay").textContent = lt < 3.2 ? "" : rp.slice(0, Math.floor((lt - 3.2) * 70));
+    },
+
+    s4(lt) {
+      for (const [id, at] of [["#w1", 2.0], ["#w2p", 2.75], ["#w2", 3.85]]) show($(id), lt >= at);
+      rise($("#flag1"), lt, 2.15, 0.45, 0);
+      rise($("#flag2"), lt, 4.0, 0.45, 0);
+      const mark = (id, from, to, color, soft) => {
+        const on = lt >= from && lt < to;
+        const el = $(id);
+        el.style.borderColor = on ? color : "";
+        el.style.background = on ? soft : "";
+        el.querySelector("code").style.color = on ? color : "";
+      };
+      mark("#st2", 2.1, 3.85, "var(--ok)", "var(--ok-soft)");
+      mark("#st0", 3.95, 99, "var(--warn)", "var(--warn-soft)");
+    },
+
+    s5(lt) {
+      for (const [id, at] of [["#pull1", 1.45], ["#pull2p", 1.85], ["#pull3", 2.85], ["#pub1", 3.5], ["#pub2p", 3.6], ["#pub3", 4.55]]) show($(id), lt >= at);
+      // goodreads.json flies from the registry into the pull terminal
+      const fly = (el, at, dur, from, to) => {
+        const k = inOut(prog(lt, at, dur));
+        el.style.left = `${lerp(from[0], to[0], k)}px`;
+        el.style.top = `${lerp(from[1], to[1], k)}px`;
+        el.style.opacity = lt < at || k >= 1 ? 0 : Math.min(1, Math.sin(k * Math.PI) * 3);
+      };
+      fly($("#flyPull"), 0.95, 0.6, [880, 403], [600, 290]);
+      fly($("#flyPub"), 4.1, 0.6, [600, 610], [880, 620]);
+      const row = $('[data-f="goodreads"]');
+      const hk = prog(lt, 0.85, 0.9);
+      row.style.background = hk > 0 && hk < 1 ? `rgba(57,135,229,${0.18 * Math.sin(hk * Math.PI)})` : "";
+      const nk = outQuint(prog(lt, 4.6, 0.5));
+      const nf = $("#newfile");
+      nf.style.height = `${nk * 31}px`;
+      nf.style.opacity = nk;
+      nf.style.borderBottom = nk > 0 ? "1px solid var(--line)" : "0";
+    },
+  };
+
+  window.render = (t) => {
+    for (const sc of scenes) {
+      const visible = t >= sc.start && t < sc.end;
+      sc.el.style.display = visible ? "block" : "none";
+      if (!visible) continue;
+      const lt = t - sc.start;
+      // the scene leaves together: a short fade and lift
+      const ex = inCubic(prog(t, sc.end - 0.4, 0.4));
+      sc.el.style.opacity = 1 - ex;
+      sc.el.style.transform = `translateY(${-10 * ex}px)`;
+      for (const el of $$("[data-in]", sc.el)) reveal(el, lt);
+      for (const el of $$("[data-type]", sc.el)) type(el, lt);
+      for (const el of $$("[data-caret]", sc.el)) caret(el, lt);
+      custom[sc.el.id]?.(lt);
+    }
+    // chapter pill slides to the current scene, and the top bar fades for the end card
+    const idx = scenes.findLastIndex((s) => t >= s.start);
+    const cur = Math.min(idx, 5),
+      prev = Math.max(0, Math.min(idx - 1, 5));
+    const k = idx === 0 ? 1 : inOut(prog(t, scenes[idx].start, 0.5));
+    const [l0, w0] = boxes[prev], [l1, w1] = boxes[cur];
+    pill.style.left = `${lerp(l0, l1, k)}px`;
+    pill.style.width = `${lerp(w0, w1, k)}px`;
+    chapterEls.forEach((s, i) => {
+      s.style.color = i === cur ? "var(--text)" : "";
+      s.querySelector("b")?.style.setProperty("color", i === cur ? "var(--api-text)" : "");
+    });
+    $("#top").style.opacity = 1 - prog(t, 43.6, 0.4);
+  };
+
+  if (!window.__RENDERING__) {
+    document.fonts.ready.then(() => {
+      const t0 = performance.now();
+      const tick = (now) => {
+        window.render(((now - t0) / 1000) % DURATION);
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+</script>
