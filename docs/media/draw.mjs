@@ -495,7 +495,11 @@ function howItWorks(t) {
   b += `<rect class="land" x="760" y="407" width="464" height="34" rx="8" fill="${t.api}" opacity="0"/>`;
   const fields = [
     ["class", "what happened", "ok · drift · auth · rate · blocked · input · error · …"],
-    ["write", "what a write did; a repeat is refused", "not_sent · not_applied · accepted · may_have_applied"],
+    [
+      "write",
+      "what a write did; a repeat is refused",
+      "not_sent · not_applied · accepted · applied · may_have_applied",
+    ],
     ["retry", "whether to send it again", "no · safe · after_wait · after_fix"],
     ["nextCall", "the one step to take next", "login · relearn · fix_args · check_site · …"],
   ];
@@ -503,7 +507,8 @@ function howItWorks(t) {
     const y = 478 + i * 47;
     b += text(760, y, f, { size: 15, mono: true, weight: 600, fill: t.apiText });
     b += text(760 + monoW(f, 15) + 12, y, what, { size: 15, fill: t.text2 });
-    b += text(760, y + 21, vals, { size: 13, mono: true, fill: t.muted });
+    // 12.5 px: the five write outcomes have to fit the panel
+    b += text(760, y + 21, vals, { size: 12.5, mono: true, fill: t.muted });
   }
 
   // 3. Repair

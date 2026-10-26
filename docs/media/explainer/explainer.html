@@ -115,7 +115,7 @@
   .strike::after { content: ""; position: absolute; left: -2px; right: -2px; top: 52%; height: 2px; background: var(--browser-text); transform-origin: left; transform: scaleX(var(--k, 0)); }
 
   /* scene 4: writes */
-  .status { position: absolute; top: 560px; width: 268px; height: 96px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--panel); padding: 14px 16px; }
+  .status { position: absolute; top: 560px; width: 208px; height: 96px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--panel); padding: 14px 16px; }
   .status code { font-size: 16px; font-weight: 600; color: var(--text); }
   .status div { font-size: 14px; color: var(--muted); margin-top: 6px; line-height: 1.35; }
   .flag { position: absolute; font-size: 14px; font-weight: 500; padding: 5px 10px; border-radius: 7px; white-space: nowrap; }
@@ -258,9 +258,10 @@
   <div class="flag" id="flag1" style="left:870px;top:319px;background:var(--ok-soft);color:var(--ok)">the site took it</div>
   <div class="flag" id="flag2" style="left:870px;top:375px;background:var(--warn-soft);color:var(--warn)">same write, so it's refused, not sent twice</div>
   <div class="status" id="st0" style="left:80px" data-in="0.5"><code>not_sent</code><div>nothing was sent</div></div>
-  <div class="status" id="st1" style="left:364px" data-in="0.58"><code>not_applied</code><div>the site answered that it didn't run it</div></div>
-  <div class="status" id="st2" style="left:648px" data-in="0.66"><code>accepted</code><div>a 2xx: proof the site took it</div></div>
-  <div class="status" id="st3" style="left:932px" data-in="0.74"><code>may_have_applied</code><div>it may have reached the site: check before any retry</div></div>
+  <div class="status" id="st1" style="left:308px" data-in="0.56"><code>not_applied</code><div>the site said it didn't run it</div></div>
+  <div class="status" id="st2" style="left:536px" data-in="0.62"><code>accepted</code><div>a 2xx: the site took it</div></div>
+  <div class="status" id="st3" style="left:764px" data-in="0.68"><code>may_have_applied</code><div>it may have run: check before any retry</div></div>
+  <div class="status" id="st4" style="left:992px" data-in="0.74"><code>applied</code><div>its read-back found it</div></div>
 </section>
 
 <!-- 5. Share -->

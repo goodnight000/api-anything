@@ -1,0 +1,16 @@
+$ # Demo 5: a write to a local test site. Live, no cuts.
+$ api-anything readback todo add list --find 'title={title}' | jq -c .readback
+{"op":"list","args":{},"find":{"field":"title","equals":"{title}"}}
+$ api-anything call todo add title='pay rent' | jq -c '{ok, class, write}'
+{"ok":false,"class":"refused","write":"not_sent"}
+next: only if the user asked for this write: rerun with --allow-writes (MCP: start the server with --
+allow-writes)
+$ api-anything call todo add title='pay rent' --allow-writes | jq -c '{ok, class, write, reason}'
+{"ok":true,"class":"ok","write":"applied","reason":"read back with list: found it"}
+$ api-anything call todo add title='pay rent' --allow-writes | jq -c '{ok, class, write, retry}'
+{"ok":false,"class":"duplicate","write":"not_sent","retry":"no"}
+next: check the site: the write is probably there. Only if it is not, and the user wants it sent agai
+n, repeat the call with again (CLI --again, MCP again: true)
+$ api-anything call todo list | jq -c .data
+[{"id":"t1","title":"pay rent"}]
+$

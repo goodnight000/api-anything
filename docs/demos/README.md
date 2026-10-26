@@ -1,10 +1,11 @@
 # Demos
 
-Three recordings made on 2026-09-27 on macOS with Node 25.1.0 and npm 11.6.2, from commit
-`56839a7` plus the example scripts on this branch. Each ran live with no cuts and no speed-up.
-[VHS](https://github.com/charmbracelet/vhs) typed the commands. The `.txt` file next to each GIF
-is the terminal text from the same run, and `research-brief.json` is the file demo 3 wrote.
-These are dated results. They do not show that a site answers the same way today.
+Demos 1 to 3 were recorded on 2026-09-27 on macOS with Node 25.1.0 and npm 11.6.2, from commit
+`56839a7` plus the example scripts on this branch. Demos 4 and 5 were recorded on 2026-10-26 with
+the same Node and npm, from a build of commit `64d1ae2`. Each ran live with no cuts and no
+speed-up. [VHS](https://github.com/charmbracelet/vhs) typed the commands. The `.txt` file next to
+each GIF is the terminal text from the same run, and `research-brief.json` is the file demo 3
+wrote. These are dated results. They do not show that a site answers the same way today.
 
 Before each recording, an off-screen step pointed all state at `/tmp/api-anything-demo`: the
 `API_ANYTHING_HOME` directory, the npm global prefix and, for demo 1, a new npm cache. The
@@ -139,6 +140,61 @@ script sends no messages or connection requests. Without `--linkedin`, it needs 
 Without a LinkedIn session, the script stops at `searchCompanies` with `class: "auth"`
 ("HTTP 403 with login markers") and `next: ask the user to run: api-anything login linkedin`.
 
+## 4. Pull a shared spec and call it
+
+[![Demo 4 still: pull goodreads, search it, then search Hacker News, both over plain HTTP](pull-call.png)](pull-call.gif)
+
+[Recording](pull-call.gif) (16 s) · [transcript](pull-call.txt) · [tape](pull-call.tape)
+
+```sh
+api-anything pull goodreads | jq -r '.operations[].op'
+api-anything call goodreads searchBooks q=piranesi | jq -c '{ok, class, tier, ms}, .data[0]'
+api-anything call hacker-news search query=sqlite | jq -c '{ok, class, tier, ms}, (.data[0] | {title, points})'
+```
+
+```text
+{"ok":true,"class":"ok","tier":1,"ms":440}
+{"bookId":"50202953","title":"Piranesi","author":"Susanna Clarke","authorId":8842,"avgRating":"4.19","ratingsCount":599466}
+{"ok":true,"class":"ok","tier":1,"ms":185}
+{"title":"Hosting SQLite databases on GitHub Pages or any static file hoster","points":1812}
+```
+
+`pull` fetched `sites/goodreads.json` from this repository's main branch, checked it against the
+shared rules, and listed its operations. Both calls went over tier 1, with no browser. `ms` covers
+the whole call in a new process, DNS and TLS included. Over a few runs the same day, the Hacker
+News search took 133 to 412 ms and the Goodreads search 440 to 590 ms; one Goodreads book page
+(`getBook`, not in the recording) took 1.3 to 1.5 s, and once 15.9 s.
+
+## 5. A write: refused by default, sent once, never twice
+
+[![Demo 5 still: a write refused without --allow-writes, applied once, then refused as a duplicate](safety.png)](safety.gif)
+
+[Recording](safety.gif) (20 s) · [transcript](safety.txt) · [tape](safety.tape) ·
+[fixture](todo-fixture.mjs)
+
+This runs against the test suite's local fixture site, not a real one: no write operation is
+bundled. Off screen, [`todo-fixture.mjs`](todo-fixture.mjs) starts it and seeds two captures of its
+to-do page, as `test/cli.test.ts` does, and `add` learns `todo.list` and `todo.add` from them. The
+add was learned from a request the `--write` capture aborted, so nothing was sent while learning.
+
+```text
+$ api-anything readback todo add list --find 'title={title}' | jq -c .readback
+{"op":"list","args":{},"find":{"field":"title","equals":"{title}"}}
+$ api-anything call todo add title='pay rent' | jq -c '{ok, class, write}'
+{"ok":false,"class":"refused","write":"not_sent"}
+$ api-anything call todo add title='pay rent' --allow-writes | jq -c '{ok, class, write, reason}'
+{"ok":true,"class":"ok","write":"applied","reason":"read back with list: found it"}
+$ api-anything call todo add title='pay rent' --allow-writes | jq -c '{ok, class, write, retry}'
+{"ok":false,"class":"duplicate","write":"not_sent","retry":"no"}
+$ api-anything call todo list | jq -c .data
+[{"id":"t1","title":"pay rent"}]
+```
+
+Without `--allow-writes` nothing is sent. With it, the write is sent once, and the readback (one
+call to `list`, never a resend) finds the new item, so `write` is `applied`. The same write again
+within 10 minutes is refused as `duplicate` and not sent; its `next` (on stderr, in the recording)
+says to check the site first. The list holds one "pay rent", not two.
+
 ## Re-recording
 
 ```sh
@@ -146,6 +202,7 @@ brew install vhs              # also needs jq, Google Chrome and network access
 docs/demos/record.sh          # or: docs/demos/record.sh teach-once
 ```
 
-The recordings reuse demo 1's install, so run them in order. Demo 3 reads the LinkedIn session
+Demos 2 and 3 reuse demo 1's install, so run them in order. Demos 4 and 5 run this checkout's
+build (`record.sh` builds it), and demo 5 needs `npm ci` for the fixture. Demo 3 reads the LinkedIn session
 from `~/.api-anything` and never writes to it. Check each GIF's first and last frames before
 committing a new recording.
