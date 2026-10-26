@@ -169,6 +169,70 @@ const hostOf = (url: string) => {
   }
 };
 
+// A response path to one value (getPath's steps, `[*]` aside): a.b, [0], ["x.y"]
+const ONE_VALUE_PATH = /^(?:[^.[\]"]+|\[\d+\]|\["(?:[^"\\]|\\.)*"\])(?:\.[^.[\]"]+|\[\d+\]|\["(?:[^"\\]|\\.)*"\])*$/;
+
+/** What is wrong with a read's paging: the param it sets must reach the request, and `next` name one value. */
+export function pagingProblems(op: Operation): string[] {
+  const p = op.paging;
+  if (!p) return [];
+  if (!op.readOnly) return ["a write has no pages, and this one says it has (paging)"];
+  const out: string[] = [];
+  const param = op.params.find((x) => x.name === p.param);
+  if (!param) out.push(`paging param ${p.param} is no param of it`);
+  else if (!op.slots.some((s) => s.param === p.param || argHoles(s.template ?? "").includes(p.param)))
+    out.push(`paging param ${p.param} goes in no slot of its request, so the next page is never asked for`);
+  else if (p.next && param.required && param.default === undefined)
+    out.push(`paging param ${p.param} is required, so the first page cannot be asked for: a cursor is left out for it`);
+  if (p.next !== undefined) {
+    if (op.response.format === "html")
+      out.push("paging next reads JSON (the answer, or JSON the page embeds), not HTML");
+    if (p.next.length > LIMITS.regex) out.push(`paging next is ${p.next.length} characters; at most ${LIMITS.regex}`);
+    else if (p.next.includes("[*]")) out.push(`paging next ${JSON.stringify(p.next)} names many values, not one value`);
+    else if (!ONE_VALUE_PATH.test(p.next)) out.push(`paging next ${JSON.stringify(p.next)} is not a path`);
+  }
+  return out;
+}
+
+/**
+ * What is wrong with a write's readback: a read of the same site, every arg one of its params and
+ * every required one given, filled from this write's params, which it must use somewhere, or any
+ * answer at all would count as proof of this write.
+ */
+export function readbackProblems(site: Site, op: Operation): string[] {
+  const rb = op.readback;
+  if (!rb) return [];
+  if (op.readOnly) return ["a read has no readback: it proves a write landed"];
+  const read = site.operations.find((o) => o.name === rb.op);
+  if (!read) return [`readback op ${rb.op} is no operation of ${site.name}`];
+  if (!read.readOnly) return [`readback op ${rb.op} is a write: a readback is a read, never a second send`];
+  const out: string[] = [];
+  for (const k of Object.keys(rb.args))
+    if (!read.params.some((p) => p.name === k)) out.push(`readback sets ${k}, which is no param of ${read.name}`);
+  for (const p of read.params)
+    if (p.required && p.default === undefined && rb.args[p.name] === undefined)
+      out.push(`readback leaves ${read.name}'s required ${p.name} unset`);
+  const texts: [string, string][] = [
+    ...Object.entries(rb.args).map(([k, v]): [string, string] => [`arg ${k}`, v]),
+    ...(rb.find
+      ? ([
+          ["find field", rb.find.field],
+          ["find equals", rb.find.equals],
+        ] as [string, string][])
+      : []),
+  ];
+  for (const [where, text] of texts)
+    if (text.length > LIMITS.text) out.push(`readback ${where} is ${text.length} characters; at most ${LIMITS.text}`);
+  const holes = texts.filter(([where]) => where !== "find field").flatMap(([, t]) => argHoles(t));
+  for (const h of new Set(holes))
+    if (!op.params.some((p) => p.name === h)) out.push(`readback fills {${h}}, which is no param of ${op.name}`);
+  if (!holes.length)
+    out.push(
+      `readback uses none of ${op.name}'s params, so any answer would pass for this write: fill an arg or find.equals from one`,
+    );
+  return out;
+}
+
 export function vetShared(site: Site, notes?: string): Vetted {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -209,6 +273,7 @@ export function vetShared(site: Site, notes?: string): Vetted {
           `${op.unproven.reason}, so nothing shows the server reads ${op.unproven.params.join(", ")}: add it again with an example 2 that excludes something example 1 returned, or record a check that changes only ${op.unproven.params.join(", ")} and answers differently, then run verify`,
         ),
       );
+    for (const problem of [...pagingProblems(op), ...readbackProblems(site, op)]) errors.push(at(problem));
     const checks = op.checks ?? [];
     if (checks.length && !op.readOnly) errors.push(at("a write has checks, which would send it"));
     if (checks.length > LIMITS.checks) errors.push(at(`${checks.length} checks; at most ${LIMITS.checks}`));

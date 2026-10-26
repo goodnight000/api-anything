@@ -1,14 +1,18 @@
 /** Bundled site specs: their recipes against trimmed copies of the live responses, their param rules, and their notes. */
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { judge } from "../src/classify.js";
+import { asText, getAt } from "../src/codec.js";
 import { call } from "../src/execute.js";
-import { buildRequest } from "../src/http.js";
-import { type Operation, parseSite } from "../src/spec.js";
+import { returnedFields } from "../src/extract.js";
+import { buildRequest, holdsRef } from "../src/http.js";
+import { personalIn } from "../src/publish.js";
+import { providerKeys, scanSecrets } from "../src/secrets.js";
+import { type Operation, parseSite, type Site } from "../src/spec.js";
 import { listSites, siteNotes } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 
@@ -33,25 +37,118 @@ const ok = (o: Operation, body: string, contentType = "application/json") => {
 // A spec's param pattern is a whole-value JS regex.
 const accepts = (p: { pattern?: string }, v: string) => new RegExp(p.pattern!).test(v);
 
+// ---------------------------------------------------------------- recorded answers
+
+/**
+ * A bundled op's answer, trimmed to what its recipe reads: test/fixture/sites/<site>.json. It proves
+ * the recipe still parses that body, not that the site still answers that way.
+ */
+interface Fixture {
+  op: string;
+  args: Record<string, string | number | boolean>;
+  status: number;
+  contentType: string;
+  /** where it came from: recorded live, or built from a real answer */
+  note: string;
+  /** text, or a JSON answer as JSON */
+  body: unknown;
+}
+const FIXTURES = new URL("./fixture/sites/", import.meta.url);
+const fixtures = (site: string): Fixture[] => JSON.parse(readFileSync(new URL(`${site}.json`, FIXTURES), "utf8"));
+const bodyOf = (f: Fixture) => (typeof f.body === "string" ? f.body : JSON.stringify(f.body));
+const fixture = (site: string, name: string) => bodyOf(fixtures(site).find((f) => f.op === name)!);
+// a body this size is a page, not a trimmed answer
+const FIXTURE_BYTES = 8 * 1024;
+
+/**
+ * Why a fixture may not be kept: someone else's account in it. Only an op that runs signed out, with
+ * no credential going into its request; and none of what publish refuses or shows the publisher (a
+ * token's shape, an email, a UUID, an IP address).
+ */
+function fixtureProblems(site: Site, f: Fixture): string[] {
+  const o = site.operations.find((x) => x.name === f.op);
+  if (!o) return [`${f.op} is no operation of ${site.name}`];
+  const out: string[] = [];
+  if (o.learnedLoggedIn) out.push(`${f.op} was learned signed in: its answers are an account's`);
+  if (o.slots.some(holdsRef)) out.push(`${f.op} sends a cookie or session value: its answers can be an account's`);
+  const size = Buffer.byteLength(bodyOf(f));
+  if (size > FIXTURE_BYTES) out.push(`${f.op}'s body is ${size} bytes; trim it to at most ${FIXTURE_BYTES}`);
+  out.push(...scanSecrets(f, noSession).warnings, ...personalIn(f, `${site.name}/${f.op}`));
+  for (const k of providerKeys(JSON.stringify(f))) out.push(`${f.op} holds ${k.what} (${k.sample})`);
+  return out;
+}
+
+test("recorded answers: each fixture's args reach their slots, and its recipe finds every field in the trimmed body", () => {
+  const files = readdirSync(FIXTURES).filter((f) => f.endsWith(".json"));
+  assert.ok(files.length >= 4, files.join(", "));
+  let n = 0;
+  for (const file of files) {
+    const site = parseSite(raw(file.slice(0, -5)));
+    for (const f of fixtures(site.name)) {
+      const at = `${site.name}/${f.op}`;
+      assert.deepEqual(fixtureProblems(site, f), [], at);
+      const o = site.operations.find((x) => x.name === f.op)!;
+      const req = buildRequest(o, f.args, noSession);
+      for (const [k, v] of Object.entries(f.args)) {
+        // its own slot, or a hole in another slot's template (Google Flights spells the query in one)
+        const slots = o.slots.filter((s) => s.param === k || s.template?.includes(`{${k}}`));
+        assert.ok(slots.length, `${at}: ${k} has no slot`);
+        for (const s of slots) {
+          const leaf = asText(getAt(req, s.at));
+          assert.ok(
+            leaf.includes(asText(v)) || leaf.includes(encodeURIComponent(asText(v))),
+            `${at}: ${k} not in ${leaf}`,
+          );
+        }
+      }
+      const j = judge(o, {
+        status: f.status,
+        headers: { "content-type": f.contentType },
+        body: bodyOf(f),
+        url: req.url,
+      });
+      assert.equal(j.class, "ok", `${at}: ${j.reason}`);
+      const items = (Array.isArray(j.data) ? j.data : [j.data]) as Record<string, unknown>[];
+      assert.ok(items.length > 0 && items[0] !== undefined, `${at}: no data`);
+      for (const field of returnedFields(o.response) ?? [])
+        assert.ok(
+          items.some((i) => i?.[field] !== undefined && i[field] !== ""),
+          `${at}: no item has ${field}`,
+        );
+      n++;
+    }
+  }
+  assert.ok(n >= 8, String(n));
+});
+
+test("recorded answers: a fixture for a signed-in op, or holding a token or someone's address, is refused", () => {
+  const gr = parseSite(raw("goodreads"));
+  const li = parseSite(raw("linkedin"));
+  const f = (op: string, body: unknown): Fixture => ({
+    op,
+    args: {},
+    status: 200,
+    contentType: "text/html",
+    note: "",
+    body,
+  });
+  const said = (site: Site, x: Fixture) => fixtureProblems(site, x).join("\n");
+  assert.match(said(li, f("getMe", "{}")), /learned signed in/);
+  assert.match(said(gr, f("getReviews", "{}")), /sends a cookie or session value/);
+  assert.match(said(gr, f("getBook", "x".repeat(FIXTURE_BYTES + 1))), /trim it/);
+  assert.match(said(gr, f("getBook", `<p>${["jane", "example.com"].join("@")}</p>`)), /email address/);
+  assert.match(said(gr, f("getBook", "<p>203.0.113.9</p>")), /IP address/);
+  // a JWT's shape, made here so no scanner of this repository reads one in it
+  const jwt = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxMjM0NTY3ODkwIn0", "c2lnbmF0dXJlLXZhbHVlLWhlcmU"].join(".");
+  assert.match(said(gr, f("getBook", { token: jwt })), /looks like a JWT/);
+  // an AWS access key id's shape, made here for the same reason
+  assert.match(said(gr, f("getBook", `<p>${["AKIA", "Q3EXAMPLE7FAKE00"].join("")}</p>`)), /holds an AWS access key/);
+});
+
 // ---------------------------------------------------------------- google-flights
 
-// one real "other flights" item (SFO->EWR via ATL), legs and booking token trimmed; a nonstop has null stops
-const viaAtl = [[129, "ATL", "ATL", null, "Hartsfield-Jackson Atlanta International Airport", "Atlanta"]];
-const flight = (price: number, to: string, stops: unknown = viaAtl) => [
-  ["F9", ["Frontier"], [], "SFO", [2026, 10, 21], [22, 14], to, [2026, 10, 22], [10, 33], 559, 1, null, 0, stops],
-  [[null, price], "tok"],
-];
-const flightsPage = (top: unknown[], other: unknown[]) =>
-  `<html><script nonce="x">AF_initDataCallback({key: 'ds:0', hash: '1', data:[[null,null,0,"x"]], sideChannel: {}});</script>` +
-  `<script nonce="x">AF_initDataCallback({key: 'ds:1', hash: '9', data:${JSON.stringify([
-    [null, [[1, 2, 3]]],
-    [[[[["SFO", 0], "San Francisco International Airport"]], [[["/m/02_286", 4], "New York"]]]],
-    [top],
-    [other],
-  ])}, sideChannel: {}});</script></html>`;
-
 test("google-flights search/top read the results the page embeds, so a metro code like NYC returns flights", () => {
-  const body = flightsPage([flight(219, "EWR")], [flight(149, "EWR"), flight(204, "LGA", null)]);
+  const body = fixture("google-flights", "search");
   const other = ok(op("google-flights", "search"), body, "text/html; charset=utf-8");
   assert.deepEqual(
     other.map((f) => [f.price, f.to]),
@@ -167,7 +264,7 @@ test("google-flights search for a past date (Google's Explore page, with a Sign-
   const explore =
     `<html><head><title>Explore</title></head><body><a href="https://accounts.google.com/ServiceLogin?hl=en-US&continue=https://www.google.com/travel/explore">Sign in</a>` +
     `<script nonce="x">AF_initDataCallback({key: 'ds:0', hash: '1', data:[[null,null,0,"x"]], sideChannel: {}});</script></body></html>`;
-  const results = flightsPage([flight(219, "EWR")], [flight(149, "EWR")]);
+  const results = fixture("google-flights", "search");
   const dates: string[] = [];
   const r = await callBundled(
     "google-flights",
@@ -187,7 +284,7 @@ test("google-flights search for a past date (Google's Explore page, with a Sign-
 
 test("google-flights top: a fallback page for good args (Google sometimes serves one) is answered by a second try, not blamed on the args", async () => {
   const home = `<html><head><title>Find Cheap Flights Worldwide</title></head><body><script nonce="x">AF_initDataCallback({key: 'ds:1', hash: '1', data:[[null,null,0,"x"]], sideChannel: {}});</script></body></html>`;
-  const results = flightsPage([flight(219, "EWR")], [flight(149, "EWR")]);
+  const results = fixture("google-flights", "search");
   let n = 0;
   const r = await callBundled(
     "google-flights",
@@ -205,36 +302,9 @@ test("google-flights top: a fallback page for good args (Google sometimes serves
 
 // ---------------------------------------------------------------- youtube
 
-const video = (id: string) => ({
-  videoRenderer: {
-    videoId: id,
-    title: { runs: [{ text: `t${id}` }] },
-    ownerText: { runs: [{ text: "c" }] },
-    viewCountText: { simpleText: "1 view" },
-  },
-});
 test("youtube search with the ad layout (VISITOR_INFO1_LIVE set) still returns every video and no {} items", () => {
-  const data = {
-    contents: {
-      twoColumnSearchResultsRenderer: {
-        primaryContents: {
-          sectionListRenderer: {
-            contents: [
-              {
-                itemSectionRenderer: {
-                  contents: [{ searchPyvRenderer: { ads: [] } }, { shelfRenderer: {} }, video("a"), video("b")],
-                },
-              },
-              { adSlotRenderer: { slotId: "1" } },
-              { itemSectionRenderer: { contents: [video("c"), { reelShelfRenderer: {} }, video("d")] } },
-              { continuationItemRenderer: {} },
-            ],
-          },
-        },
-      },
-    },
-  };
-  const got = ok(op("youtube", "search"), `<script>var ytInitialData = ${JSON.stringify(data)};</script>`, "text/html");
+  // the fixture: an ad, shelves and a continuation among the videos
+  const got = ok(op("youtube", "search"), fixture("youtube", "search"), "text/html");
   assert.deepEqual(
     got.map((v) => v.id),
     ["a", "b", "c", "d"],

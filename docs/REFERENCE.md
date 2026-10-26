@@ -70,6 +70,33 @@ options), and `--min name=n` / `--max name=n` bound a numeric one. A call with a
 `input` and nothing is sent; `ops` and MCP `list_operations` show them. Set them on an existing op by
 editing its spec. An op learned again keeps its params' allowed values and descriptions.
 
+A list that pages takes `--paging`. Learn a cursor-paged list from the request that loads page 2
+("Show more"), with the cursor as the example, and say where the answer gives the next cursor:
+
+```sh
+api-anything add goodreads getReviews --from <captureId> --pick-request <id> \
+  --example workId=kca://work/... --example after=<page 2's cursor> \
+  --extract data.getReviews.edges --paging after=data.getReviews.pageInfo.nextPageToken
+```
+
+The cursor param becomes optional, and its captured value is dropped. A call without it gets page 1,
+with the cursor's slot emptied. Each call returns `nextPage`, the value to pass as `after` for the
+next page, and `hasMore` (`false` when the site says it is the last page). `--paging page`, with no
+path, marks numbered pages: the call says nothing about the next page, since a non-empty page is
+also what the last one looks like. `verify` asks a paged op for the page after its example's and
+fails it when that page holds only page 1's items again.
+
+A write can prove it landed. Name a read of the same site that shows it, filled from the write's
+args:
+
+```sh
+api-anything readback todo addTodo listTodos --find "title={title}"
+```
+
+After the write is sent and answered 2xx (or may have run), the call runs that read once. When an
+item's `title` equals the write's, `write` is `applied`. When it is not there yet, the write stays
+`accepted`, and `reason` says so. The read is never a resend.
+
 Record what a human confirmed on the site as checks, then let `verify` run them with the examples:
 
 ```sh
@@ -226,8 +253,8 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 This is an early release for developers and agents. It ships 22 read operations across nine
 sites. Those operations cover selected features, not the entire sites. LinkedIn messaging and
 posting are not bundled. The engine's write handling is tested against a local fixture, not
-against every site's real write endpoints. Check the returned receipt and read back a real write
-before treating delivery as confirmed.
+against every site's real write endpoints. Treat `write: "accepted"` as taken, not done: give the
+op a `readback`, so a call can say `applied`, or check the site before treating delivery as confirmed.
 
 Site specs are executable request/interaction instructions. Install specs from sources you trust
 and review their destinations and write declarations. A `readOnly` declaration is not a sandbox
@@ -237,8 +264,9 @@ This is version 0.1. The offline suite covers the learning, healing, tier and wr
 against a local fixture site. Individual real sites vary and are not continuously verified.
 Known limits:
 
-- An arg a site derives from another request (a numeric user id looked up from a handle, or a
-  page-2 cursor) cannot be substituted. Model the lookup as its own op, or rely on tier 3.
+- An arg a site derives from another request (a numeric user id looked up from a handle) cannot be
+  substituted. Model the lookup as its own op, or rely on tier 3. A page-2 cursor is the exception:
+  `--paging` passes the site's own cursor back as an arg.
   `add` refuses an example value that the chosen request does not carry.
 - Example values need at least 3 characters and must appear in the request (multi-word values
   are fine; they are matched decoded, so `mcp server` finds `mcp%20server`).
@@ -284,7 +312,15 @@ Known limits:
 - A site behind a bot wall that challenges a real Chrome as well needs you to clear it by hand
   (`api-anything login`). There is no CAPTCHA solving and no TLS impersonation. A trigger run or
   repair that ends on a challenge that did not solve is `blocked` and marks nothing stale.
-- Pagination is not modeled.
+- Paging returns the site's own next cursor, and only when the answer holds one. Numbered pages
+  get no `nextPage`. When the output cap cuts a page, the cut items are on neither that page nor
+  the next, so `truncated` says to ask for fewer per page.
+- A readback finds what the read shows: a write the site lists later, or under a value other than
+  the one sent, stays `accepted`. An older item with the same value passes for a new one, so find
+  something only this write makes.
+- The recorded answers in `test/fixture/sites/` prove that a bundled recipe still parses the
+  answer it was recorded from, not that the site still answers that way. Ops that send a cookie or
+  session value have none.
 
 
 ## Prior art

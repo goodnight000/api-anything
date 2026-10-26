@@ -1021,6 +1021,160 @@ describe("login from a cookies file", () => {
   });
 });
 
+describe("paging and readback: a list an agent can walk, and a write it can see landed", () => {
+  // the cursor page 1 answers with, which "Show more" sends for page 2
+  const PAGE2 = Buffer.from("offset:3").toString("base64url");
+  before(async () => {
+    for (const path of ["reviews", "stuck"])
+      seed(`c${path}`, {
+        url: `${fx.url}/reviews`,
+        exchanges: [
+          await answered(1, "document", "/reviews"),
+          await answered(2, "fetch", `/api/${path}?after=${PAGE2}`),
+        ],
+      });
+    seed("ctodos", {
+      url: `${fx.url}/todos`,
+      exchanges: [await answered(1, "document", "/todos"), await answered(2, "fetch", "/api/todos")],
+    });
+    seed("caddtodo", {
+      url: `${fx.url}/todos`,
+      write: true,
+      steps: [
+        { action: "fill", selector: "#title", value: "buy milk" },
+        { action: "click", selector: "#add" },
+      ],
+      exchanges: [
+        await answered(1, "document", "/todos"),
+        {
+          id: 2,
+          resourceType: "fetch",
+          request: {
+            method: "POST",
+            url: `${fx.url}/api/todos`,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ title: "buy milk" }),
+          },
+          aborted: true,
+        },
+      ],
+    });
+  });
+  const run = async (...args: string[]) => {
+    const r = await cli(...args);
+    return { ...r, out: JSON.parse(r.stdout) };
+  };
+  const ids = (r: { out: { data: { id: string }[] } }) => r.out.data.map((x) => x.id);
+
+  test("an op learned from the page-2 request with --paging walks the list by nextPage, and verify catches a cursor the server ignores", async () => {
+    for (const op of ["reviews", "stuck"]) {
+      const add = await run(
+        "add",
+        "lists",
+        op,
+        "--from",
+        `c${op}`,
+        "--pick-request",
+        "2",
+        "--example",
+        `after=${PAGE2}`,
+        "--extract",
+        "data.reviews.edges",
+        "--pick",
+        "id",
+        "--paging",
+        "after=data.reviews.pageInfo.nextPageToken",
+      );
+      assert.equal(add.code, 0, add.stdout);
+      assert.deepEqual(add.out.paging, { param: "after", next: "data.reviews.pageInfo.nextPageToken" });
+      assert.deepEqual(add.out.params, ["after:string"]);
+    }
+    // page 1 leaves the cursor out: the captured one (page 2's) is not sent
+    const first = await run("call", "lists", "reviews");
+    assert.deepEqual([ids(first), first.out.hasMore], [["r1", "r2", "r3"], true]);
+    assert.equal(first.out.nextPage, PAGE2);
+    const second = await run("call", "lists", "reviews", `after=${first.out.nextPage}`);
+    assert.deepEqual(ids(second), ["r4", "r5", "r6"]);
+    const last = await run("call", "lists", "reviews", `after=${second.out.nextPage}`);
+    assert.deepEqual([ids(last), last.out.hasMore, "nextPage" in last.out], [["r7"], false, false]);
+
+    const ops = await run("ops", "lists");
+    assert.equal(ops.out.operations[0].pages, "by after: pass the result's nextPage");
+    assert.match(ops.out.operations[0].params[0], /^after:string\?/);
+
+    const verify = await run("verify", "lists");
+    assert.deepEqual(
+      verify.out.results.map((r: { op: string; case: string; outcome: string; got: string }) => [
+        r.op,
+        r.case,
+        r.outcome,
+        r.got,
+      ]),
+      [
+        ["reviews", "example", "pass", "result"],
+        ["reviews", "next page", "pass", "result"],
+        ["stuck", "example", "pass", "result"],
+        ["stuck", "next page", "fail", "page 1 again"],
+      ],
+    );
+    const bad = await run(
+      "add",
+      "lists",
+      "reviews",
+      "--from",
+      "creviews",
+      "--pick-request",
+      "2",
+      "--example",
+      `after=${PAGE2}`,
+      "--paging",
+      "page",
+    );
+    assert.match(bad.out.error, /--paging: paging param page is no param of it/);
+  });
+
+  test("readback makes a write's call say applied when the read finds it, and accepted when it does not yet", async () => {
+    assert.equal(
+      (await run("add", "todo", "list", "--from", "ctodos", "--pick-request", "2", "--extract", "todos")).code,
+      0,
+    );
+    const add = await run(
+      "add",
+      "todo",
+      "add",
+      "--from",
+      "caddtodo",
+      "--pick-request",
+      "2",
+      "--example",
+      "title=buy milk",
+      "--write",
+    );
+    assert.equal(add.code, 0, add.stdout);
+    assert.deepEqual(add.out.params, ["title:string"]);
+
+    assert.match((await run("readback", "todo", "add", "nope")).out.error, /readback op nope is no operation of todo/);
+    assert.match((await run("readback", "todo", "add", "list")).out.error, /readback uses none of add's params/);
+    assert.match((await run("readback", "todo", "add", "add", "--find", "title={title}")).out.error, /is a write/);
+    const set = await run("readback", "todo", "add", "list", "--find", "title={title}");
+    assert.equal(set.code, 0, set.stdout);
+    assert.deepEqual(set.out.readback, { op: "list", args: {}, find: { field: "title", equals: "{title}" } });
+
+    const posts = () => fx.calls.filter((c) => c.method === "POST" && c.path === "/api/todos").length;
+    const before = posts();
+    const applied = await run("call", "todo", "add", "title=pay rent", "--allow-writes");
+    assert.deepEqual([applied.out.ok, applied.out.write], [true, "applied"], applied.stdout);
+    assert.match(applied.out.reason, /read back with list: found it/);
+    const later = await run("call", "todo", "add", "title=later today", "--allow-writes");
+    assert.deepEqual([later.out.ok, later.out.write], [true, "accepted"], later.stdout);
+    assert.match(later.out.reason, /not found, so it stays accepted: the site may not show it yet/);
+    const dup = await run("call", "todo", "add", "title=pay rent", "--allow-writes");
+    assert.deepEqual([dup.out.class, dup.out.write], ["duplicate", "not_sent"]);
+    assert.equal(posts() - before, 2, "each write sent once, the readback only read");
+    assert.equal((await run("ops", "todo")).out.operations[1].readback, "list");
+  });
+});
+
 const noChrome = !browserAvailable() && "no Chromium browser installed";
 
 describe("capture's next hint", { skip: noChrome }, () => {

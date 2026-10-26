@@ -1,0 +1,12 @@
+[
+  {
+    "op": "search",
+    "args": {
+      "q": "kittens"
+    },
+    "status": 200,
+    "contentType": "text/html; charset=utf-8",
+    "note": "the layout a visitor with VISITOR_INFO1_LIVE gets: an ad, shelves and a continuation among the videos; ids and titles stand-ins",
+    "body": "<script>var ytInitialData = {\"contents\":{\"twoColumnSearchResultsRenderer\":{\"primaryContents\":{\"sectionListRenderer\":{\"contents\":[{\"itemSectionRenderer\":{\"contents\":[{\"searchPyvRenderer\":{\"ads\":[]}},{\"shelfRenderer\":{}},{\"videoRenderer\":{\"videoId\":\"a\",\"title\":{\"runs\":[{\"text\":\"ta\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}},{\"videoRenderer\":{\"videoId\":\"b\",\"title\":{\"runs\":[{\"text\":\"tb\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}}]}},{\"adSlotRenderer\":{\"slotId\":\"1\"}},{\"itemSectionRenderer\":{\"contents\":[{\"videoRenderer\":{\"videoId\":\"c\",\"title\":{\"runs\":[{\"text\":\"tc\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}},{\"reelShelfRenderer\":{}},{\"videoRenderer\":{\"videoId\":\"d\",\"title\":{\"runs\":[{\"text\":\"td\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}}]}},{\"continuationItemRenderer\":{}}]}}}}};</script>"
+  }
+]

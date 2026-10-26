@@ -213,7 +213,10 @@ window. [Details](docs/REFERENCE.md#logging-in)
   confirmed, not a test suite. A spec without them is published unverified.
 - No write operations are bundled. LinkedIn messaging isn't bundled and hasn't been tested
   against LinkedIn. Writes are tested only against a local fixture, and they need
-  `--allow-writes`. An HTTP 2xx doesn't prove a message was delivered.
+  `--allow-writes`. An HTTP 2xx doesn't prove a message was delivered: only a write op with a
+  `readback` that finds it says `applied`.
+- Paging hands back the site's own next cursor when the answer has one. Numbered pages get no
+  "next page" hint.
 - Credentials stay in `~/.api-anything`, and specs hold references, never values. Read each
   site's terms: you are responsible for how you use it.
 

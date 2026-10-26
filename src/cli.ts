@@ -35,10 +35,19 @@ import { type Outline, outline } from "./outline.js";
 import { plan, submit, writeOutbox } from "./publish.js";
 import { pull } from "./registry.js";
 import { loadSession } from "./session.js";
-import { CheckSchema, HtmlRecipeSchema, MatchSchema, type Operation, type Param, TriggerStepSchema } from "./spec.js";
+import {
+  CheckSchema,
+  HtmlRecipeSchema,
+  MatchSchema,
+  type Operation,
+  type Paging,
+  type Param,
+  type Readback,
+  TriggerStepSchema,
+} from "./spec.js";
 import { exportSite, listSites, loadSite, siteNotes, updateSite } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
-import { SHARED_NOTE } from "./vet.js";
+import { readbackProblems, SHARED_NOTE } from "./vet.js";
 
 const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string })
   .version;
@@ -126,7 +135,14 @@ const HELP: Record<string, string> = {
   --enum name=a,b,c  the values a param takes: the site's whole set (its picker's options), not only the
                   example's; a call with another is refused as input, and nothing is sent
   --min name=n, --max name=n  bounds on a param's value read as a number (a page, a count, a price)
-                  An op learned again keeps its params' allowed values and descriptions, and its checks.
+  --paging <param>[=<path>]  a read whose list pages: <param> takes the next page, and <path> (in the
+                  whole response, before --extract) is where the response gives the next page's cursor,
+                  which a call returns as nextPage (hasMore false: the site said there is no next page).
+                  Without =<path> the pages are numbered, and a call says nothing about the next one.
+                  The param must be in the request: to page by a cursor, learn the op from the request
+                  that loads page 2 ("Show more"), so the cursor is a param
+                  An op learned again keeps its params' allowed values and descriptions, its checks,
+                  its paging and its readback.
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.
   replaced: an op of that name was learned again. unproven: example 2 was answered with example 1's
   data, so nothing shows the server reads those params (publish refuses the op until it does).
@@ -135,7 +151,9 @@ const HELP: Record<string, string> = {
   call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, ms, next?}; a failure also says retry
   (safe, after_wait, after_fix, no), retryAfterMs and nextCall, and a write says write (not_sent,
-  not_applied, accepted, may_have_applied). --dry prints the request with credentials redacted.
+  not_applied, accepted, may_have_applied, applied: its readback found it). A paged read says
+  nextPage (pass it as the op's paging param) and hasMore. --dry prints the request with
+  credentials redacted.
   --again           send a write refused as a duplicate (the same args within 10 minutes, and the
                     first may have gone through): only when the user checked the site
   --idempotency-key <k>  a repeat of a write with the same key returns the first call's record`,
@@ -144,13 +162,22 @@ const HELP: Record<string, string> = {
   judges each case: pass, fail, or inconclusive (a challenge, a sign-in page, a rate limit, or a server
   that failed or could not be reached: it says nothing about the op). The outcomes are kept per op, for
   publish. An op marked unproven loses the mark when two passing cases that differ only in its
-  unproven params answer differently.`,
+  unproven params answer differently. A paged read also asks for the page after its example's
+  ("next page"): an answer with only page 1's items again fails.`,
   check: `api-anything check <site> <op> [k=v ...] --expect result|empty|input [--purpose <text>]
   Records a check on a read: args a human confirmed on the site, and what the site answers them with
   (result: data; empty: no data, the site's own no-results; input: the site refuses the args). verify
   runs it; publish refuses while one fails, and shares the checks with the spec, so use only public
   values. Choose values that exclude something: an empty check (a filter no row passes) shows a param
   the server ignores. A check with the same args replaces the old one; remove one by editing the spec.`,
+  readback: `api-anything readback <site> <write-op> <read-op> [k=v ...] [--find <field>=<value>]
+  How a write's call proves it landed: after the write is sent and accepted (or may have run), the
+  call runs <read-op> once with these args (a read, never a second send). Finding it makes the
+  call's write "applied"; not finding it changes nothing (the site may show it later). A value may
+  be {param}, filled from the write's args: list={list}. --find title={title}: an item of the read's
+  result whose title equals the write's; without --find, any data counts. Use something only this
+  write makes (a title the caller chose, an id), or an older item can pass for it. Replaces the op's
+  readback; remove one by editing the spec.`,
   sites: `api-anything sites
   Lists known sites (user specs in ~/.api-anything/sites win over bundled ones).`,
   ops: `api-anything ops <site>
@@ -190,6 +217,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything inspect <captureId> [<requestId>]
   api-anything pull <site> | publish <site> [--yes]
   api-anything check <site> <op> [k=v ...] --expect result|empty|input
+  api-anything readback <site> <write-op> <read-op> [k=v ...] [--find field=value]
   api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site> | mcp
 
 api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
@@ -307,6 +335,8 @@ const OPTIONS = {
   max: { type: "string", multiple: true },
   expect: { type: "string" },
   purpose: { type: "string" },
+  paging: { type: "string" },
+  find: { type: "string" },
 } as const;
 
 /** What a command gets: the flags, the positionals after the command name, and the parsed --steps. */
@@ -648,6 +678,17 @@ function allowedOf(v: Parsed["v"]): Record<string, Pick<Param, "enum" | "min" | 
   return out;
 }
 
+/** --paging <param>[=<path to the next cursor>] */
+function pagingOf(flag: string | undefined): Paging | undefined {
+  if (flag === undefined) return undefined;
+  const eq = flag.indexOf("=");
+  const param = (eq < 0 ? flag : flag.slice(0, eq)).trim();
+  const next = eq < 0 ? undefined : flag.slice(eq + 1).trim();
+  if (!param || next === "")
+    throw new Fail(`--paging ${flag}: give <param> or <param>=<path>`, "api-anything add --help");
+  return { param, ...(next ? { next } : {}) };
+}
+
 /** What a repair says it changed: the op was kept, and one thing in it replaced. */
 async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   const [site, name] = pos;
@@ -701,6 +742,7 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
       : undefined,
     from2: v.from2 ? loadCapture(v.from2) : undefined,
     allowed: allowedOf(v),
+    paging: pagingOf(v.paging),
   });
   const op = r.operation;
   out({
@@ -714,6 +756,8 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     minTier: op.minTier,
     match: op.match,
     ...(op.response.extract ? { extract: op.response.extract } : {}),
+    ...(op.paging ? { paging: op.paging } : {}),
+    ...(op.readback ? { readback: op.readback } : {}),
     ...(r.preview ? { preview: r.preview } : {}),
     ...(op.unproven ? { unproven: op.unproven.params } : {}),
     warnings: r.warnings,
@@ -851,6 +895,38 @@ async function cmdCheck({ v, pos }: Parsed): Promise<number> {
   return 0;
 }
 
+/** readback <site> <write> <read> [k=v ...] [--find field=value]: how a write's call proves it landed. */
+function cmdReadback({ v, pos }: Parsed): number {
+  const [site, name, readOp, ...rest] = pos;
+  if (!site || !name || !readOp) throw new Fail("missing <site> <write-op> <read-op>", "api-anything readback --help");
+  const s = requireSite(site).site;
+  const op = s.operations.find((o) => o.name === name);
+  if (!op) throw new Fail(`no operation "${name}" on ${site}`, `api-anything ops ${site}`);
+  let find: Readback["find"];
+  if (v.find !== undefined) {
+    const eq = v.find.indexOf("=");
+    if (eq < 1) throw new Fail(`--find ${v.find}: give <field>=<value>`, "api-anything readback --help");
+    find = { field: v.find.slice(0, eq), equals: v.find.slice(eq + 1) };
+  }
+  const readback: Readback = { op: readOp, args: kv(rest), ...(find ? { find } : {}) };
+  const problems = readbackProblems(s, { ...op, readback });
+  if (problems.length)
+    throw new Fail(problems.join("; "), `api-anything ops ${site} shows the params of ${name} and ${readOp}`);
+  const path = updateSite(site, (cur) => {
+    if (!cur) throw new Error(`site "${site}" disappeared`);
+    return { ...cur, operations: cur.operations.map((o) => (o.name === name ? { ...o, readback } : o)) };
+  });
+  out({
+    ok: true,
+    site,
+    op: name,
+    readback,
+    saved: path,
+    next: `api-anything call ${site} ${name} ... --allow-writes`,
+  });
+  return 0;
+}
+
 function cmdSites(): number {
   out(
     listSites().map((name) => {
@@ -893,6 +969,10 @@ function cmdOps({ pos }: Parsed): number {
       ),
       ...(o.minTier > 1 ? { minTier: o.minTier } : {}),
       ...(o.checks?.length ? { checks: o.checks.length } : {}),
+      ...(o.paging
+        ? { pages: o.paging.next ? `by ${o.paging.param}: pass the result's nextPage` : `by ${o.paging.param}` }
+        : {}),
+      ...(o.readback ? { readback: o.readback.op } : {}),
       ...(o.unproven ? { unproven: o.unproven.reason } : {}),
       trigger: o.trigger.url,
     })),
@@ -1040,11 +1120,13 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "enum",
       "min",
       "max",
+      "paging",
     ],
   },
   call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "dry"] },
   verify: { run: cmdVerify, flags: [] },
   check: { run: cmdCheck, flags: ["expect", "purpose"] },
+  readback: { run: cmdReadback, flags: ["find"] },
   sites: { run: cmdSites, flags: [] },
   ops: { run: cmdOps, flags: [] },
   heal: { run: cmdHeal, flags: [] },

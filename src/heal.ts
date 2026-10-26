@@ -39,9 +39,10 @@ import {
   siteOf,
   writePrivate,
 } from "./session.js";
-import type { Match, Operation, Param, ResponseSpec, Site, Slot, Trigger, Volatile } from "./spec.js";
+import type { Match, Operation, Paging, Param, ResponseSpec, Site, Slot, Trigger, Volatile } from "./spec.js";
 import { appendHeal, clearStale, loadSite, rememberTier, updateSite } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
+import { pagingProblems, readbackProblems } from "./vet.js";
 
 export const profileDir = () => join(home(), "profile");
 
@@ -52,6 +53,9 @@ export interface Attempt {
   reason: string;
   status?: number;
   data?: unknown;
+  /** see Judged.nextPage and Judged.hasMore */
+  nextPage?: string | number;
+  hasMore?: boolean;
   ambiguous?: boolean;
   /** the args may be the problem (data missing, or a bare 403); see Classified.missing */
   missing?: boolean;
@@ -483,6 +487,8 @@ export interface AddInput {
   from2?: CaptureFile;
   /** by param name: the values it allows, set on top of what the op had */
   allowed?: Record<string, Pick<Param, "enum" | "min" | "max">>;
+  /** a read's paging, set on top of what the op had */
+  paging?: Paging;
   fetchImpl?: typeof fetch;
 }
 
@@ -892,6 +898,31 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     params,
     ...(checks?.length && !i.write ? { checks } : {}),
   };
+  // Paging and a readback are the caller's contract too: kept while they still fit the op learned again.
+  const paging = i.paging ?? old?.paging;
+  if (paging && !i.write) {
+    // A cursor is left out for the first page, which is also what verify starts from: a captured
+    // cursor is no example (it can expire, or carry the session it was made for).
+    const paged: Operation = {
+      ...operation,
+      paging,
+      params: params.map((p) => {
+        if (!paging.next || p.name !== paging.param) return p;
+        const { example: _captured, ...cursor } = p;
+        return { ...cursor, required: false };
+      }),
+    };
+    const problems = pagingProblems(paged);
+    if (i.paging && problems.length) throw new Error(`--paging: ${problems.join("; ")}`);
+    if (!problems.length) operation = paged;
+  }
+  if (
+    old?.readback &&
+    i.write &&
+    existing &&
+    !readbackProblems(existing, { ...operation, readback: old.readback }).length
+  )
+    operation = { ...operation, readback: old.readback };
   const session = mergeCapture(
     i.site,
     (run2 ?? run1).cookies,
@@ -1343,6 +1374,8 @@ export async function healOperation(
     readOnly: op.readOnly,
     ...(op.public ? { public: op.public } : {}),
     ...(op.checks ? { checks: op.checks } : {}),
+    ...(op.paging ? { paging: op.paging } : {}),
+    ...(op.readback ? { readback: op.readback } : {}),
     ...(op.unproven ? { unproven: op.unproven } : {}),
     minTier: Math.max(op.minTier, fresh.minTier) as Operation["minTier"],
     response: {

@@ -326,7 +326,9 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    a number). `add --enum name=a,b --min name=n --max name=n` sets the last three, and editing the spec
    sets any of them. A call whose arg fails one is `input` before anything is sent, and the examples
    must fit them at add. An op learned again keeps them, and the param's description, for params of
-   the same name, and keeps its `checks` whose args are all still params.
+   the same name, and keeps its `checks` whose args are all still params. It also keeps its `paging`
+   (Response extraction), which `add --paging` sets, and a write keeps its `readback` (Writes), as
+   long as the shared rules still pass for them.
 
 ## Writes
 
@@ -480,16 +482,37 @@ built, the browser profile busy, a tier-2 origin page that did not load, a tier-
 nothing after its confirm was told no, or the ledger below held it back). `not_applied`: the site answered that it did not run it (a definite non-execution as above,
 or an attempt flagged `rejected`: a clear refusal in a 2xx body, which the classifier sets).
 `accepted`: a 2xx judged ok, which proves the site took it and not that it took effect.
-`may_have_applied`: anything else that may have reached the site. A failed write that is `accepted`
-or `may_have_applied` always says `retry: "no"` and `nextCall: check_site`.
+`may_have_applied`: anything else that may have reached the site. `applied`: the op's readback
+(below) found it. A failed write that is `accepted` or `may_have_applied` always says `retry: "no"`
+and `nextCall: check_site`.
+
+Writes are aborted while they are learned, so learning never sees a write's success answer, and a
+2xx is the only evidence a call has. A write op can carry `readback: {op, args, find?}`, a read of
+the same site that proves it landed: after a call whose write is `accepted` or `may_have_applied`,
+that read runs once through `call` (healing and tiers as any read, `allowWrites` off). It is a read,
+never a resend, so send-once holds. Each arg and `find.equals` may hold `{param}`, filled from the
+write's args. With `find: {field, equals}`, some item of the read's result (or the result itself,
+when it is not a list) must have `field` equal to `equals`, compared as text with the ends trimmed.
+Without `find`, any data counts, which proves something only when a read arg comes from the write
+(a lookup by the id the caller chose). Found, the call becomes `ok`, class `ok`, `write: "applied"`,
+with no `retry` or `nextCall`, even after a lost answer (a timeout, a 502): the site shows the write.
+Not found, or a read that fails, changes nothing but `reason`, which says the site may not show it
+yet: it stays `accepted` or `may_have_applied`, and the second is still never sent again.
+Pomerado saves again when its read-back does not match (`typescript/authoring/writes/SKILL.md`);
+that is a second send, so here a miss only leaves the status as it was. The readback has to find
+something only this write makes (a title the caller chose, an id it returns elsewhere), or an older
+item with the same value passes for it. `api-anything readback <site> <write> <read> [k=v ...]
+[--find field=value]` sets it, checked by the shared rules below. An op learned again keeps its
+readback while those rules still pass.
 
 An agent that skims an unclear answer sends the write again, so a write is recorded before it is
 sent (`writes.json` in `~/.api-anything`, under its lock, written atomically): site, op, time, a
 status (`sending` until the call settles it) and an HMAC-SHA256 of `[site, op, args]` (defaults
 filled, keys sorted) under a random key made on first use (`write.key`, 0600), so a short arg (a
 comment, a vote) cannot be guessed back from the file. The args are never stored. The same digest
-within 10 minutes of a record that is `accepted`, `may_have_applied` or still `sending` (its process
-died mid-send) is refused with class `duplicate`, `write: "not_sent"`, and a `next` to check the site.
+within 10 minutes of a record that is `accepted`, `applied`, `may_have_applied` or still `sending`
+(its process died mid-send) is refused with class `duplicate`, `write: "not_sent"`, and a `next` to
+check the site.
 Ten minutes covers an agent's re-send after an unclear answer, a login or a heal in between, and the
 user looking at the site; a repeat placed on purpose later (the same comment an hour on) goes
 through. `again` (CLI `--again`, MCP `again`, library option) skips the check, for a user who
@@ -750,6 +773,28 @@ the page. For data embedded in the HTML document (for example Google's `AF_initD
 "embedded"` with a regex whose capture group is JSON, followed by `extract`. Seroval/JS-literal
 payloads are out of scope for v1.
 
+A read whose list pages carries `paging: {param, next?}`. `param` is the arg that asks for the
+next page. `next` is a path in the whole answer, read before `extract` and `pick` throw the rest
+away (for `embedded`, in the embedded JSON; never for `html`), to the next page's cursor or number.
+A call returns that value as `nextPage`, with `hasMore: true`. When the answer has `null`, `""` or
+`false` there, the site says this is the last page: `hasMore: false` and no `nextPage`. When the
+path finds nothing, neither field is set, because a moved path must not read as the last page.
+Without `next` the pages are numbered, and a call says nothing about the next one. `nextPage =
+page + 1` while the list is non-empty would be a guess: the last page is non-empty too, and many
+sites answer a page past the end with the last page again, so an agent paging by it might never
+stop. The agent sets the param itself, and `verify` checks that page n+1 is not page n.
+
+A cursor op is learned from the request that loads page 2 ("Show more"), since page 1's request
+often has no cursor field. `add --paging <param>=<path>` makes that param optional and drops its
+example, since a captured cursor can expire or carry the session it was made for. A call that
+leaves the cursor out gets the first page: the slot is emptied (`null` in a JSON leaf, `""`
+elsewhere), so the template's captured page-2 cursor is never sent. Calls are stateless replays,
+so the cursor is the site's own value, passed through untouched. It is not signed or re-windowed
+as Pomerado's list cursors are (`docs/how-it-works.md`): there is no server state for a cursor to
+point into. When the output cap cuts a page, `truncated` says that `nextPage` starts after the
+page's last item, cut or not. The cut items are on neither page, so a smaller page size (a
+`limit` param) is the fix.
+
 ## Spec files and where they live
 
 One JSON file per site: `{ name, displayName, baseUrl, description, operations[] }`, zod-validated.
@@ -835,7 +880,13 @@ anywhere in the spec or the notes, by the key's own prefix (`providerKeys`): Git
 random run so a slug like `sk-hynix-ddr5-...` is no key), AWS access key ids (`AKIA`/`ASIA` and 16
 more), Slack (`xox[abposr]-`) and `-----BEGIN ... PRIVATE KEY-----`, raw or percent-encoded. A
 provider issues each to one account and no site ships one to every visitor, so `public` waives none;
-the error names the key by its first 8 characters only. Warnings, shown to the human and put in the pull
+the error names the key by its first 8 characters only; `paging` only
+on a read, its param one of the op's that goes into a slot (and optional when `next` names a cursor,
+since the first page leaves it out), its `next` a path to one value (no `[*]`, at most 200
+characters) on a JSON or embedded answer; a `readback` only on a write, naming a read of the same
+spec, setting only that read's params and every required one, filling `{name}` only from the
+write's params and from at least one of them (otherwise any answer would pass for this write), each
+value at most 500 characters. Warnings, shown to the human and put in the pull
 request for the reviewer: reads sent as POST, writes, ops learned logged in, literal `public` values
 (a shared bearer makes every user's calls that account's), requests or triggers off the spec's own
 site (Algolia behind Hacker News, AppSync behind Goodreads), the export scan's shape heuristics over
@@ -895,7 +946,14 @@ does, and judges every case: `pass`, `fail`, or `inconclusive` when the answer i
 about the op. Its outcomes are kept per op in `~/.api-anything/checks/<site>.json`, with a hash of
 the op as it was after the run (a heal during verify included; `learnedAt` and `unproven` aside),
 so an op changed since has no record. When two passing cases whose args differ only in an op's
-`unproven` params answer differently, verify clears the mark. `publish` refuses an op marked
+`unproven` params answer differently, verify clears the mark. A read with `paging` gets one more
+case after its example, `next page`: the call again with the paging param set to the example's
+`nextPage` (or, for numbered pages, the example's page number plus one). It fails when the answer
+has rows and every one of them was on page 1 (`got: "page 1 again"`), the sign of a server that
+ignores the param where the request puts it. One new row is enough to pass (Pomerado's rule,
+`typescript/src/mint/live-tests.ts`). It is inconclusive when there is no page 1 to go on from (the
+example failed or was empty), no next page to ask for (no cursor in page 1's answer, or no page
+number in the example), or an empty page 2, which some lists end with. `publish` refuses an op marked
 `unproven`, an op with checks and no record for its current version, and any counted case that
 failed: every counted case must pass, with no percentage bar, because there are two or three
 human-confirmed cases, not a suite in which one wrong case should be outvoted. Inconclusive cases
@@ -905,6 +963,24 @@ args, which export strips. An op with neither examples nor checks is shown as no
 does not block. Check args are literals the publisher typed, shared with the spec: the personal
 scan lists every check's args for the publisher to confirm, and an `enum` value holding a run of 5+
 digits (an account's id rather than one of the site's options).
+
+**Recorded answers (`test/fixture/sites/<site>.json`).** CI cannot reach the sites, so for every
+bundled op it can, it keeps an answer trimmed to what the recipe reads: `{op, args, status,
+contentType, note, body}`, the body as text or as JSON. One test in `test/sites.test.ts` checks
+each one: `buildRequest` puts every arg in its slot (or a hole of another slot's template), and
+`judge` answers `ok` with every field the op returns present in some item. A fixture proves the
+recipe still parses that body, not that the site still answers that way. The files live under
+`test/`, not `sites/`. `listSites` would read a `sites/*.json` as a spec, `pull` and `publish`
+would have to carry them, and the npm package ships `sites/`. More to the point, a recorded answer
+is a page as the recorder's browser saw it (their location, their language, their session), which
+a maintainer trims by hand. `publish` never gathers one. The test refuses a fixture for an op
+learned signed in or one that sends a cookie or session value, a body over 8 KB, and anything the
+publish scans flag: `scanSecrets`'s token shapes (a JWT, a bearer, a long hex or base64 blob) and
+`personalIn`'s email addresses, UUIDs and IP addresses, in the args and in the body. Trimming
+rebuilds HTML from the elements each field selector matches, never whole rows, so a form's
+per-visitor token does not ride along. JSON keeps a few items (with a learned `shape`, their keys
+too, or the classifier calls it drift). Where a site test already built a body from a real answer
+(YouTube's ad layout, Google Flights' results), that body is the fixture.
 
 **Nudges, not automation.** Once `verify <site>` passes for a site the user learned, its output
 says it can be shared (`next: api-anything publish <site>`). The skill tells the agent to try `pull`
@@ -1024,7 +1100,7 @@ independent alternative.
     form. Any other page that shows a sign-in form (a public page's login box; a login page served in
     place) gets the recommendation, with a clause that says so, redirect or not; the clause is stronger
     when `--example` values were given and no candidate's response holds one
-  - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--write]`
+  - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--paging ...] [--write]`
   - `call <site> <op> [k=v ...] [--allow-writes] [--again] [--idempotency-key <k>]`
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
     flags (`--extract`, `--pick`, `--html`, `--embedded`): what the recipe would return, or a failure
@@ -1058,6 +1134,8 @@ independent alternative.
     hides only from screen readers and is often the visible copy (a rating shown beside its spoken
     label). A stylesheet's hiding is not computed.
   - `verify [site]` (health-checks every read op with its example, healing as needed)
+  - `readback <site> <write> <read> [k=v ...] [--find field=value]` (how a write's call proves it
+    landed; see Writes)
   - `sites`, `ops <site>` (params with their description and format, `returns` where the recipe names them: the keys a result item
     can carry, read from the op's `pick`, else from an HTML recipe's fields when no `extract` reshapes its
     items, so it cannot disagree with the recipe; a key the site leaves out is absent, and the site's notes: `<site>.md` beside its
@@ -1070,8 +1148,9 @@ independent alternative.
     `sign_in_browser` (the user signs in again in the everyday browser profile `profile`, since a
     re-import from it brought back the same cookies: "Self-healing auth" under Logging in), `heal`,
     `relearn`, `fix_args`, `list_sites`, `check_site`, `allow_writes`, `raise_tier`,
-    `install_browser`, `report`), and for
-    a write `write` (see Writes). `next` stays, for a reader; `nextCall` is the same step for a
+    `install_browser`, `report`), for a write `write` (see Writes), and for a paged read
+    `nextPage` and `hasMore` (see Response extraction). `next` stays, for a reader; `nextCall` is
+    the same step for a
     program. `test/execute.test.ts` checks the fields over every class, a read and a write, and
     what was sent.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `list_operations`,

@@ -1,0 +1,115 @@
+[
+  {
+    "op": "frontPage",
+    "args": {},
+    "status": 200,
+    "contentType": "text/html; charset=utf-8",
+    "note": "recorded live 2026-10-25, signed out; trimmed to what the recipe reads",
+    "body": "<!doctype html><html><body><table><tr class=\"athing\" id=\"50238884\"><td class=\"title\"><span class=\"titleline\"><a href=\"https://fred.stlouisfed.org/series/W270RE1A156NBEA\">US Wages Share of GDI at 75 Year Low</a></span></td></tr><tr><td class=\"subtext\"><span class=\"subline\"><span class=\"score\">74 points</span> | <a href=\"item?id=50238884\">30&nbsp;comments</a></span></td></tr><tr class=\"athing\" id=\"50238708\"><td class=\"title\"><span class=\"titleline\"><a href=\"https://titleart.dvy.io/\">Show HN: TitleArt – Make text like it&#x27;s 1997</a></span></td></tr><tr><td class=\"subtext\"><span class=\"subline\"><span class=\"score\">58 points</span> | <a href=\"item?id=50238708\">10&nbsp;comments</a></span></td></tr></table></body></html>"
+  },
+  {
+    "op": "search",
+    "args": {
+      "query": "sqlite"
+    },
+    "status": 200,
+    "contentType": "application/json; charset=UTF-8",
+    "note": "recorded live 2026-10-25, signed out; trimmed to what the recipe reads",
+    "body": {
+      "hits": [
+        {
+          "title": "Hosting SQLite databases on GitHub Pages or any static file hoster",
+          "url": "https://phiresky.github.io/blog/2021/hosting-sqlite-databases-on-github-pages/",
+          "author": "phiresky",
+          "points": 1812,
+          "num_comments": 244,
+          "story_id": 27016630,
+          "created_at_i": 1619973795,
+          "created_at": "2021-05-02T16:43:15Z",
+          "updated_at": "2026-08-18T07:11:34Z",
+          "_tags": ["story", "author_phiresky", "story_27016630"],
+          "children": [27016787, 27017108, 27017243],
+          "objectID": "27016630",
+          "_highlightResult": {
+            "title": {
+              "value": "Hosting <em>SQLite</em> databases on GitHub Pages or any static file hoster",
+              "matchLevel": "full",
+              "fullyHighlighted": false,
+              "matchedWords": ["sqlite"]
+            },
+            "url": {
+              "value": "https://phiresky.github.io/blog/2021/hosting-<em>sqlite</em>-databases-on-github-pages/",
+              "matchLevel": "full",
+              "fullyHighlighted": false,
+              "matchedWords": ["sqlite"]
+            },
+            "author": {
+              "value": "phiresky",
+              "matchLevel": "none",
+              "matchedWords": []
+            }
+          },
+          "_rankingInfo": {
+            "nbTypos": 0,
+            "firstMatchedWord": 0,
+            "proximityDistance": 0,
+            "userScore": 95,
+            "geoDistance": 0,
+            "geoPrecision": 1,
+            "nbExactWords": 0,
+            "words": 1,
+            "filters": 1
+          }
+        },
+        {
+          "title": "I'm all-in on server-side SQLite",
+          "url": "https://fly.io/blog/all-in-on-sqlite-litestream/",
+          "author": "dpeck",
+          "points": 1353,
+          "num_comments": 404,
+          "story_id": 31318708,
+          "created_at_i": 1652124941,
+          "created_at": "2022-05-09T19:35:41Z",
+          "updated_at": "2026-05-05T09:01:54Z",
+          "_tags": ["story", "author_dpeck", "story_31318708"],
+          "children": [31318842, 31319014, 31319021],
+          "objectID": "31318708",
+          "_highlightResult": {
+            "title": {
+              "value": "I'm all-in on server-side <em>SQLite</em>",
+              "matchLevel": "full",
+              "fullyHighlighted": false,
+              "matchedWords": ["sqlite"]
+            },
+            "url": {
+              "value": "https://fly.io/blog/all-in-on-<em>sqlite</em>-litestream/",
+              "matchLevel": "full",
+              "fullyHighlighted": false,
+              "matchedWords": ["sqlite"]
+            },
+            "author": {
+              "value": "dpeck",
+              "matchLevel": "none",
+              "matchedWords": []
+            }
+          },
+          "_rankingInfo": {
+            "nbTypos": 0,
+            "firstMatchedWord": 0,
+            "proximityDistance": 0,
+            "userScore": 94,
+            "geoDistance": 0,
+            "geoPrecision": 1,
+            "nbExactWords": 0,
+            "words": 1,
+            "filters": 1
+          }
+        }
+      ],
+      "nbHits": 4515,
+      "page": 0,
+      "nbPages": 34,
+      "hitsPerPage": 30
+    }
+  }
+]

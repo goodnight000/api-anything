@@ -1,0 +1,63 @@
+[
+  {
+    "op": "searchBooks",
+    "args": {
+      "q": "piranesi"
+    },
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "note": "recorded live 2026-10-25, signed out; trimmed to what the recipe reads",
+    "body": [
+      {
+        "bookId": "50202953",
+        "title": "Piranesi",
+        "author": {
+          "id": 8842,
+          "name": "Susanna Clarke"
+        },
+        "avgRating": "4.19",
+        "ratingsCount": 599397
+      },
+      {
+        "bookId": "332151",
+        "title": "The Dark Brain of Piranesi and Other Essays",
+        "author": {
+          "id": 7732,
+          "name": "Marguerite Yourcenar"
+        },
+        "avgRating": "4.14",
+        "ratingsCount": 202
+      }
+    ]
+  },
+  {
+    "op": "getBook",
+    "args": {
+      "bookId": "77566"
+    },
+    "status": 200,
+    "contentType": "text/html; charset=utf-8",
+    "note": "recorded live 2026-10-25, signed out; trimmed to what the recipe reads",
+    "body": "<!doctype html><html><body><h1 class=\"Text Text__title1\" data-testid=\"bookTitle\" aria-label=\"Book title: Hyperion\">Hyperion</h1><a class=\"ContributorLink\" href=\"https://www.goodreads.com/author/show/2687.Dan_Simmons\"><span data-testid=\"name\">Dan Simmons</span></a><div class=\"RatingStatistics__rating\">4.28</div><span data-testid=\"ratingsCount\">322,090 ratings</span><p data-testid=\"pagesFormat\">482 pages, Mass Market Paperback</p><p data-testid=\"publicationInfo\">First published May 26, 1989</p><div data-testid=\"genresList\"><a><span class=\"Button__labelItem\">Science Fiction</span></a><a><span class=\"Button__labelItem\">Fiction</span></a><a><span class=\"Button__labelItem\">Fantasy</span></a></div><div data-testid=\"description\"><span class=\"Formatted\">On the world called Hyperion, beyond the law of the Hegemony of Man, there waits the creature called the Shrike. There are those who worship it. There are those who fear it. And there are those who have vowed to destroy it. In the Valley of the Time Tombs, where huge, brooding structures move backward through time, the Shrike waits for them all. On the eve of Armageddon, with the entire galaxy at </span></div></body></html>"
+  },
+  {
+    "op": "getWorkId",
+    "args": {
+      "bookId": "77566"
+    },
+    "status": 200,
+    "contentType": "text/html; charset=utf-8",
+    "note": "recorded live 2026-10-25, signed out; trimmed to what the recipe reads",
+    "body": "<!doctype html><html><body><script id=\"__NEXT_DATA__\" type=\"application/json\">{\"props\":{\"pageProps\":{\"apolloState\":{\"Work:kca://work/amzn1.gr.work.v1.xIT2_7WWJ119Me44O0dVMg\":{\"__typename\":\"Work\",\"id\":\"kca://work/amzn1.gr.work.v1.xIT2_7WWJ119Me44O0dVMg\",\"legacyId\":1383900}}}}}</script></body></html>"
+  },
+  {
+    "op": "authorBooks",
+    "args": {
+      "authorId": "2687"
+    },
+    "status": 200,
+    "contentType": "text/html; charset=utf-8",
+    "note": "recorded live 2026-10-25, signed out; trimmed to what the recipe reads",
+    "body": "<!doctype html><html><body><table class=\"tableList\"><tr><td><a class=\"bookTitle\" href=\"/book/show/77566.Hyperion\"><span>Hyperion (Hyperion Cantos, #1)</span></a><span class=\"minirating\">4.28 avg rating — 322,033 ratings</span></td></tr><tr><td><a class=\"bookTitle\" href=\"/book/show/77565.The_Fall_of_Hyperion\"><span>The Fall of Hyperion (Hyperion Cantos, #2)</span></a><span class=\"minirating\">4.25 avg rating — 159,010 ratings</span></td></tr></table></body></html>"
+  }
+]

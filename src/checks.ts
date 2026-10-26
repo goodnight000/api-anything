@@ -92,6 +92,61 @@ function answersDiffer(op: Operation, params: string[], answers: { args: Record<
   );
 }
 
+/**
+ * Whether page 2 holds rows and every one was on page 1, as when the server ignored the cursor or
+ * page number and answered page 1 again. A page 2 with one new row moves on (Pomerado's rule).
+ */
+function repeats(first: unknown, second: unknown): boolean {
+  const rows = (d: unknown) => (Array.isArray(d) ? d : [d]).map((x) => JSON.stringify(x));
+  const seen = new Set(rows(first));
+  return rows(second).every((r) => seen.has(r));
+}
+
+/** A paged read's page after its example's: it must answer, and not with page 1 again. */
+async function nextPageCase(
+  site: string,
+  op: Operation,
+  args: Record<string, unknown>,
+  first: CallResult,
+  opts: CallOptions,
+): Promise<CaseResult> {
+  const p = op.paging!;
+  const base = { op: op.name, case: "next page", expect: "result" as const };
+  const number = Number(asText(args[p.param] ?? ""));
+  const next = p.next
+    ? first.nextPage
+    : args[p.param] !== undefined && Number.isInteger(number)
+      ? number + 1
+      : undefined;
+  if (!first.ok || isEmpty(first.data) || next === undefined)
+    return {
+      ...base,
+      outcome: "inconclusive",
+      got: "no next page",
+      reason: !first.ok
+        ? "the example did not answer, so there is no page 1 to go on from"
+        : isEmpty(first.data)
+          ? "page 1 is empty"
+          : p.next
+            ? `page 1 answered no next page at ${p.next}: give ${op.name} an example with more than one page, or fix paging.next`
+            : `the example sets no page number in ${p.param} to add one to`,
+    };
+  const r = await call(site, op.name, { ...args, [p.param]: next }, opts);
+  const j = judgeCase("result", r);
+  const one: CaseResult = { ...base, ...j, ...(r.tier ? { tier: r.tier } : {}), ms: r.ms };
+  // a cursor to an empty page is how some lists end: it shows nothing about the param
+  if (j.got === "empty") return { ...one, outcome: "inconclusive", reason: "the next page is empty" };
+  if (j.outcome !== "pass") return { ...one, reason: r.reason ?? `answered ${j.got}`, next: r.next };
+  if (repeats(first.data, r.data))
+    return {
+      ...one,
+      outcome: "fail",
+      got: "page 1 again",
+      reason: `${p.param}=${asText(next)} answered page 1's items again: the server does not read ${p.param} where the request puts it`,
+    };
+  return one;
+}
+
 export interface Verified {
   results: (CaseResult | { op: string; skipped: string })[];
   /** ops whose `unproven` mark this run cleared: their cases answered differently for different args */
@@ -142,6 +197,11 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
       };
       results.push(one);
       ran[op.name]!.push(one);
+      if (op.paging && label === "example") {
+        const page = await nextPageCase(name, op, args, r, opts);
+        results.push(page);
+        ran[op.name]!.push(page);
+      }
     }
     if (op.unproven && answersDiffer(op, op.unproven.params, answers)) proven.push(op.name);
   }

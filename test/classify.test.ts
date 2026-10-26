@@ -575,6 +575,19 @@ test("a list the pick empties is missing data, not 'no results'; html items with
   assert.equal(cls(embedded, html(200, "<script>x({data:[]})</script>")), "ok");
 });
 
+test("paging reads the next cursor from the whole answer, past extract and pick; a pick-emptied page is drift with none", () => {
+  const paged = op({
+    response: { format: "json", extract: "data.edges", pick: ["id"] },
+    paging: { param: "screen_name", next: "data.pageInfo.next" },
+  });
+  const page = (edges: unknown[]) => json(200, { data: { edges, pageInfo: { next: "c2" } } });
+  const ok = judge(paged, page([{ id: 1, text: "a" }]));
+  assert.deepEqual([ok.class, ok.data, ok.nextPage, ok.hasMore], ["ok", [{ id: 1 }], "c2", true]);
+  // the site renamed the picked field: no page to go on from, so no cursor to page past it with
+  const renamed = judge(paged, page([{ identifier: 1 }]));
+  assert.deepEqual([renamed.class, renamed.nextPage, renamed.hasMore], ["drift", undefined, undefined]);
+});
+
 test("a signed-in JSON read redirected to a same-site page with no login or challenge is unfinished, not drift", () => {
   const me = op({
     request: { method: "GET", url: "https://www.s.test/api/me", headers: {} },

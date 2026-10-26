@@ -146,7 +146,13 @@ don't capture pages the user didn't ask for.
      api-anything add site list --trigger "https://site.com/list?q={q}&page={page}" \
        --example q=kittens --example page=2 --example2 q=kittens --example2 page=3
      ```
-     Use pages 2 and 3: many sites leave the page number out of the first page's request.
+     Use pages 2 and 3: many sites leave the page number out of the first page's request. Add
+     `--paging page` so `ops` shows the op pages and `verify` checks page 3 isn't page 2 again.
+   - A list paged by a cursor ("Show more", infinite scroll): capture after clicking "Show more",
+     pick the request that loaded page 2, give the cursor it sent as the example, and say where the
+     answer holds the next one: `--example after=<cursor> --paging after=data.list.pageInfo.endCursor`
+     (find the path with `inspect --outline`). A call without `after` then gets page 1 and
+     returns `nextPage`. Propose paging only when the user needs more than one page.
    - An op with no args (a feed, a list) needs `--match path=/api/feed` to say which request.
    - If `add` warns that the match is ambiguous, or picks the wrong request, run `capture` again
      and use `add --from <captureId> --pick-request <id>`. A capture holds one run, so a second
@@ -248,7 +254,12 @@ Every failure carries:
   `tool` and `args` when one of the server's tools takes the step.
 - `write` (writes only, ok or not): `not_sent` (nothing left), `not_applied` (the site answered
   that it did not run it), `accepted` (a 2xx judged ok: the site took it, which doesn't prove it took
-  effect), `may_have_applied` (anything else that may have reached the site).
+  effect), `may_have_applied` (anything else that may have reached the site), `applied` (the op's
+  readback found it on the site: done).
+- `nextPage`, `hasMore` (paged reads): pass `nextPage` as the op's paging param (`ops` shows it
+  under `pages`) for the next page. `hasMore: false` means the site said this is the last page.
+  Neither field means the answer didn't say: stop, or ask for the next page number yourself. When
+  the result is also `truncated`, the cut items are skipped by `nextPage`: ask for fewer per page.
 
 `reason` and `next` never hold a live cookie or session value: one the site echoed is replaced by
 `[redacted]`. `data` is not redacted.
@@ -273,10 +284,14 @@ Every failure carries:
 - Calling a write needs `--allow-writes` (or an MCP server started with `--allow-writes`). Add
   it only when the user asked for **that specific action with that content**. Confirm the exact
   text or target with the user first if there is any doubt.
-- A successful response is a service acknowledgement; confirm the receipt or read back the
-  resulting object before claiming delivery. An explicit `ok: false` or `success: false` in a
+- A successful response is a service acknowledgement; `write: "applied"` is the only proof of
+  delivery. Give a write a readback once a read op shows its result:
+  `api-anything readback <site> <write-op> <read-op> [k={param}] --find field={param}`, with a value
+  only this write makes (the title the user chose, not a status every item shares). The call then
+  reads it back once (never a resend). An explicit `ok: false` or `success: false` in a
   write response is a failure even with HTTP 200. When `write` is `accepted` or `may_have_applied`,
-  `retry` is `no`: don't send it again, whatever the class. Tell the user to check the site.
+  `retry` is `no`: don't send it again, whatever the class, even when its readback did not find it
+  (the site may show it later). Tell the user to check the site.
 - A write with the same args as one sent in the last 10 minutes that was accepted or may have gone
   through is refused (`class: "duplicate"`, nothing sent). Pass `--again` (MCP: `again: true`) only
   when the user checked the site, the write isn't there, and they want it sent again. To make your

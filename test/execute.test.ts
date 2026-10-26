@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { type CallResult, call, finish, stepOf } from "../src/execute.js";
 import { type Attempt, PROFILE_HINT } from "../src/heal.js";
+import { buildRequest } from "../src/http.js";
 import { saveSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
 import { saveSite, staleMark } from "../src/store.js";
@@ -59,6 +60,7 @@ const fake = (h: Handler): typeof fetch =>
 const json = (v: unknown, status = 200) =>
   new Response(JSON.stringify(v), { status, headers: { "content-type": "application/json" } });
 const opts = (h: Handler) => ({ fetchImpl: fake(h), maxTier: 1 as const, minIntervalMs: 0 });
+const NO_SESSION = { cookies: [], values: {} };
 const heals = () => {
   try {
     return readFileSync(join(HOME, "heals.jsonl"), "utf8")
@@ -814,6 +816,9 @@ test("contract: class x read/write x sent says consistent write, retry and nextC
       if (r.write === "may_have_applied") assert.deepEqual([r.nextCall?.action, r.retry], ["check_site", "no"], row);
       else assert.deepEqual([r.nextCall, r.retry], [{ ...signIn, site: "t", op: op.name }, "after_fix"], row);
     }
+  // a readback that found the write: the strongest status, kept as said, and nothing left to do
+  const applied = finish({ ok: true, class: "ok", write: "applied" }, write, "t", sends.at(-1)![1]);
+  assert.deepEqual([applied.write, applied.retry, applied.nextCall], ["applied", undefined, undefined]);
 });
 
 test("contract through call(): a read's rate limit and a write's three outcomes", async () => {
@@ -845,4 +850,233 @@ test("contract through call(): a read's rate limit and a write's three outcomes"
     w(() => json({})),
   );
   assert.deepEqual([unknown.class, unknown.write, unknown.nextCall?.action], ["input", "not_sent", "fix_args"]);
+});
+
+/** A read whose list pages by `after`, and a to-do write whose readback is a read of the same site. */
+const pagedAndTodos = (paging: Record<string, unknown>, readback?: Record<string, unknown>) =>
+  parseSite({
+    name: "t",
+    baseUrl: "https://t.test",
+    operations: [
+      {
+        name: "reviews",
+        readOnly: true,
+        request: { method: "GET", url: "https://t.test/api/reviews?after=", headers: {} },
+        slots: [{ param: "after", at: ["query:after"] }],
+        params: [{ name: "after", required: false }],
+        trigger: { url: "https://t.test/reviews" },
+        response: { extract: "data.edges", pick: ["id"] },
+        paging,
+      },
+      {
+        name: "todos",
+        readOnly: true,
+        request: { method: "GET", url: "https://t.test/api/todos", headers: {} },
+        trigger: { url: "https://t.test/todos" },
+        response: { extract: "todos" },
+      },
+      {
+        name: "add",
+        readOnly: false,
+        request: {
+          method: "POST",
+          url: "https://t.test/api/todos",
+          headers: { "content-type": "application/json" },
+          body: '{"title":"x"}',
+        },
+        slots: [{ param: "title", at: ["body", "json:/title"] }],
+        trigger: { url: "https://t.test/todos" },
+        params: [{ name: "title" }],
+        ...(readback ? { readback } : {}),
+      },
+    ],
+  });
+
+test("paging: a call returns the next page's cursor, read from the whole answer before extract and pick", async () => {
+  saveSite(pagedAndTodos({ param: "after", next: "data.pageInfo.next" }));
+  const page = (next: unknown) => () =>
+    json({ data: { edges: [{ id: 1, text: "a" }], pageInfo: next === undefined ? {} : { next } } });
+  const r = await call("t", "reviews", {}, opts(page("c2")));
+  assert.deepEqual([r.ok, r.data, r.nextPage, r.hasMore], [true, [{ id: 1 }], "c2", true]);
+  // the cursor goes where the param goes
+  const second = await call("t", "reviews", { after: "c2" }, opts(page(3)));
+  assert.equal(new URL(seen.at(-1)!.url).searchParams.get("after"), "c2");
+  assert.equal(second.nextPage, 3);
+  // the site says there is no next page
+  for (const end of [null, ""]) {
+    const last = await call("t", "reviews", { after: "c9" }, opts(page(end)));
+    assert.deepEqual([last.ok, last.nextPage, last.hasMore], [true, undefined, false], JSON.stringify(end));
+  }
+  // nothing at the path: unknown, so neither field is said
+  const silent = await call("t", "reviews", {}, opts(page(undefined)));
+  assert.deepEqual([silent.ok, "nextPage" in silent, "hasMore" in silent], [true, false, false]);
+
+  // learned from the request that loads page 2, the template holds page 2's cursor: left out, the
+  // cursor is cleared (empty, or null in JSON), never the captured one sent
+  const learned = pagedAndTodos({ param: "after", next: "data.pageInfo.next" });
+  learned.operations[0]!.request.url = "https://t.test/api/reviews?after=Y2Fw";
+  saveSite(learned);
+  await call("t", "reviews", {}, opts(page("c2")));
+  assert.equal(new URL(seen.at(-1)!.url).searchParams.get("after"), "");
+  const graphql = {
+    ...learned.operations[0]!,
+    request: {
+      method: "POST",
+      url: "https://t.test/graphql",
+      headers: {},
+      body: '{"pagination":{"after":"Y2Fw","limit":30}}',
+    },
+    slots: [{ param: "after", at: ["body", "json:/pagination/after"] }],
+  };
+  assert.equal(buildRequest(graphql, {}, NO_SESSION).body, '{"pagination":{"after":null,"limit":30}}');
+  assert.equal(buildRequest(graphql, { after: "c2" }, NO_SESSION).body, '{"pagination":{"after":"c2","limit":30}}');
+
+  // numbered pages: an answer says nothing about the next one, and page+1 is no evidence there is one
+  saveSite(pagedAndTodos({ param: "after" }));
+  const numbered = await call("t", "reviews", { after: "1" }, opts(page("c2")));
+  assert.deepEqual([numbered.ok, "nextPage" in numbered, "hasMore" in numbered], [true, false, false]);
+});
+
+test("paging: a page cut to fit the output cap says the cut items are not on the next page either", async () => {
+  saveSite(pagedAndTodos({ param: "after", next: "data.pageInfo.next" }));
+  const edges = Array.from({ length: 40 }, (_, i) => ({ id: `${i}-${"x".repeat(1000)}` }));
+  const r = await call(
+    "t",
+    "reviews",
+    {},
+    opts(() => json({ data: { edges, pageInfo: { next: "c2" } } })),
+  );
+  assert.equal(r.nextPage, "c2");
+  assert.match(r.truncated ?? "", /nextPage starts after the last item of this page, cut or not/);
+});
+
+test("readback: a write the read finds is applied, sent once; the ledger settles it, so a repeat is refused", async () => {
+  saveSite(pagedAndTodos({ param: "after" }, { op: "todos", find: { field: "title", equals: "{title}" } }));
+  const list: { title: string }[] = [];
+  const answer = (_url: string, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      list.push(JSON.parse(String(init.body)));
+      return json({ ok: true });
+    }
+    return json({ todos: list });
+  };
+  const w = { ...opts(answer), allowWrites: true };
+  const r = await call("t", "add", { title: "milk" }, w);
+  assert.deepEqual([r.ok, r.class, r.write], [true, "ok", "applied"], JSON.stringify(r));
+  assert.match(r.reason ?? "", /read back with todos: found it/);
+  assert.deepEqual(
+    seen.map((s) => s.method),
+    ["POST", "GET"],
+  );
+  const ledger = JSON.parse(readFileSync(join(HOME, "writes.json"), "utf8"));
+  assert.equal(ledger.at(-1).status, "applied");
+  const dup = await call("t", "add", { title: "milk" }, w);
+  assert.deepEqual([dup.class, dup.write], ["duplicate", "not_sent"]);
+  assert.match(dup.reason ?? "", /read back/);
+  assert.equal(seen.length, 2, "not sent again");
+  // an idempotency key answers with the applied record
+  assert.equal((await call("t", "add", { title: "eggs" }, { ...w, idempotencyKey: "k1" })).write, "applied");
+  const replay = await call("t", "add", { title: "eggs" }, { ...w, idempotencyKey: "k1" });
+  assert.deepEqual([replay.ok, replay.write], [true, "applied"]);
+  assert.equal(seen.filter((s) => s.method === "POST").length, 2);
+});
+
+test("readback: not found, or a read that fails, changes nothing; a write that may have run and is found is applied", async () => {
+  saveSite(pagedAndTodos({ param: "after" }, { op: "todos", find: { field: "title", equals: "{title}" } }));
+  const w = (h: Handler) => ({ ...opts(h), allowWrites: true, again: true });
+  const notYet = await call(
+    "t",
+    "add",
+    { title: "milk" },
+    w((_u, i) => (i?.method === "POST" ? json({ ok: true }) : json({ todos: [{ title: "bread" }] }))),
+  );
+  assert.deepEqual([notYet.ok, notYet.write], [true, "accepted"]);
+  assert.match(notYet.reason ?? "", /read back with todos: not found.*may not show it yet/);
+
+  const readFails = await call(
+    "t",
+    "add",
+    { title: "milk" },
+    w((_u, i) => (i?.method === "POST" ? json({ ok: true }) : json({}, 500))),
+  );
+  assert.deepEqual([readFails.ok, readFails.write], [true, "accepted"]);
+  assert.match(readFails.reason ?? "", /could not read it back with todos/);
+
+  // the write's answer was lost, but the list shows it: it ran
+  const lost = await call(
+    "t",
+    "add",
+    { title: "milk" },
+    w((_u, i) => (i?.method === "POST" ? json({ error: "boom" }, 502) : json({ todos: [{ title: "milk" }] }))),
+  );
+  assert.deepEqual(
+    [lost.ok, lost.class, lost.write, lost.retry, lost.nextCall],
+    [true, "ok", "applied", undefined, undefined],
+  );
+  assert.match(lost.reason ?? "", /502.*read back with todos: found it/);
+  // a lost answer and nothing in the list: still may_have_applied, still never sent again
+  const unknown = await call(
+    "t",
+    "add",
+    { title: "milk" },
+    w((_u, i) => (i?.method === "POST" ? json({ error: "boom" }, 502) : json({ todos: [] }))),
+  );
+  assert.deepEqual([unknown.ok, unknown.write, unknown.retry], [false, "may_have_applied", "no"]);
+
+  // a write that did not run, or was not sent, is not read back
+  seen = [];
+  const refused = await call(
+    "t",
+    "add",
+    { title: "milk" },
+    w(() => json({ error: "no" }, 403)),
+  );
+  assert.equal(refused.write, "not_applied");
+  assert.deepEqual(
+    seen.map((s) => s.method),
+    ["POST"],
+  );
+  // a 200 whose body refuses the write (rejected): it did not run, so there is nothing to read back
+  seen = [];
+  const rejected = await call(
+    "t",
+    "add",
+    { title: "milk" },
+    w((_u, i) =>
+      i?.method === "POST" ? json({ ok: false, error: "title taken" }) : json({ todos: [{ title: "milk" }] }),
+    ),
+  );
+  assert.deepEqual([rejected.ok, rejected.write], [false, "not_applied"], JSON.stringify(rejected));
+  assert.deepEqual(
+    seen.map((s) => s.method),
+    ["POST"],
+  );
+  seen = [];
+  await call(
+    "t",
+    "add",
+    { title: "milk" },
+    opts(() => json({})),
+  );
+  assert.equal(seen.length, 0);
+});
+
+test("readback: with no find, any data counts; read args take the write's values", async () => {
+  saveSite(pagedAndTodos({ param: "after" }, { op: "reviews", args: { after: "{title}" } }));
+  const w = (h: Handler) => ({ ...opts(h), allowWrites: true, again: true });
+  const r = await call(
+    "t",
+    "add",
+    { title: "c7" },
+    w((_u, i) => (i?.method === "POST" ? json({ ok: true }) : json({ data: { edges: [{ id: 7 }] } }))),
+  );
+  assert.equal(r.write, "applied");
+  assert.equal(new URL(seen.at(-1)!.url).searchParams.get("after"), "c7");
+  const empty = await call(
+    "t",
+    "add",
+    { title: "c8" },
+    w((_u, i) => (i?.method === "POST" ? json({ ok: true }) : json({ data: { edges: [] } }))),
+  );
+  assert.equal(empty.write, "accepted");
 });

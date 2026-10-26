@@ -1,0 +1,26 @@
+[
+  {
+    "op": "search",
+    "args": {
+      "origin": "SFO",
+      "destination": "NYC",
+      "date": "2026-10-21"
+    },
+    "status": 200,
+    "contentType": "text/html; charset=utf-8",
+    "note": "built from one real result (SFO to EWR via ATL), trimmed; other results: a nonstop to LGA (no via) and a cheaper EWR one",
+    "body": "<html><script nonce=\"x\">AF_initDataCallback({key: 'ds:0', hash: '1', data:[[null,null,0,\"x\"]], sideChannel: {}});</script><script nonce=\"x\">AF_initDataCallback({key: 'ds:1', hash: '9', data:[[null,[[1,2,3]]],[[[[[\"SFO\",0],\"San Francisco International Airport\"]],[[[\"/m/02_286\",4],\"New York\"]]]],[[[[\"F9\",[\"Frontier\"],[],\"SFO\",[2026,10,21],[22,14],\"EWR\",[2026,10,22],[10,33],559,1,null,0,[[129,\"ATL\",\"ATL\",null,\"Hartsfield-Jackson Atlanta International Airport\",\"Atlanta\"]]],[[null,219],\"tok\"]]]],[[[[\"F9\",[\"Frontier\"],[],\"SFO\",[2026,10,21],[22,14],\"EWR\",[2026,10,22],[10,33],559,1,null,0,[[129,\"ATL\",\"ATL\",null,\"Hartsfield-Jackson Atlanta International Airport\",\"Atlanta\"]]],[[null,149],\"tok\"]],[[\"F9\",[\"Frontier\"],[],\"SFO\",[2026,10,21],[22,14],\"LGA\",[2026,10,22],[10,33],559,1,null,0,null],[[null,204],\"tok\"]]]]], sideChannel: {}});</script></html>"
+  },
+  {
+    "op": "top",
+    "args": {
+      "origin": "SFO",
+      "destination": "NYC",
+      "date": "2026-10-21"
+    },
+    "status": 200,
+    "contentType": "text/html; charset=utf-8",
+    "note": "built from one real result (SFO to EWR via ATL), trimmed; other results: a nonstop to LGA (no via) and a cheaper EWR one",
+    "body": "<html><script nonce=\"x\">AF_initDataCallback({key: 'ds:0', hash: '1', data:[[null,null,0,\"x\"]], sideChannel: {}});</script><script nonce=\"x\">AF_initDataCallback({key: 'ds:1', hash: '9', data:[[null,[[1,2,3]]],[[[[[\"SFO\",0],\"San Francisco International Airport\"]],[[[\"/m/02_286\",4],\"New York\"]]]],[[[[\"F9\",[\"Frontier\"],[],\"SFO\",[2026,10,21],[22,14],\"EWR\",[2026,10,22],[10,33],559,1,null,0,[[129,\"ATL\",\"ATL\",null,\"Hartsfield-Jackson Atlanta International Airport\",\"Atlanta\"]]],[[null,219],\"tok\"]]]],[[[[\"F9\",[\"Frontier\"],[],\"SFO\",[2026,10,21],[22,14],\"EWR\",[2026,10,22],[10,33],559,1,null,0,[[129,\"ATL\",\"ATL\",null,\"Hartsfield-Jackson Atlanta International Airport\",\"Atlanta\"]]],[[null,149],\"tok\"]],[[\"F9\",[\"Frontier\"],[],\"SFO\",[2026,10,21],[22,14],\"LGA\",[2026,10,22],[10,33],559,1,null,0,null],[[null,204],\"tok\"]]]]], sideChannel: {}});</script></html>"
+  }
+]

@@ -152,7 +152,7 @@
           "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
           "x-api-key": ""
         },
-        "body": "{\"operationName\":\"getReviews\",\"variables\":{\"filters\":{\"resourceType\":\"WORK\",\"resourceId\":\"{workId}\"},\"pagination\":{\"limit\":30}},\"extensions\":{\"clientLibrary\":{\"name\":\"@apollo/client\",\"version\":\"4.1.6\"}},\"query\":\"query getReviews($filters: BookReviewsFilterInput!, $pagination: PaginationInput) {\\n  getReviews(filters: $filters, pagination: $pagination) {\\n    ...BookReviewsFragment\\n    __typename\\n  }\\n}\\n\\nfragment BookReviewsFragment on BookReviewsConnection {\\n  totalCount\\n  edges {\\n    node {\\n      ...ReviewCardFragment\\n      __typename\\n    }\\n    __typename\\n  }\\n  pageInfo {\\n    prevPageToken\\n    nextPageToken\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment ReviewCardFragment on Review {\\n  __typename\\n  id\\n  creator {\\n    ...ReviewerProfileFragment\\n    __typename\\n  }\\n  recommendFor\\n  updatedAt\\n  createdAt\\n  spoilerStatus\\n  lastRevisionAt\\n  text\\n  rating\\n  preciseRating\\n  preReleaseBookSource\\n  shelving {\\n    creator {\\n      id\\n      __typename\\n    }\\n    book {\\n      id\\n      __typename\\n    }\\n    shelf {\\n      name\\n      displayName\\n      editable\\n      default\\n      actionType\\n      sortOrder\\n      webUrl\\n      __typename\\n    }\\n    taggings {\\n      tag {\\n        name\\n        webUrl\\n        __typename\\n      }\\n      __typename\\n    }\\n    webUrl\\n    __typename\\n  }\\n  likeCount\\n  viewerHasLiked\\n  commentCount\\n}\\n\\nfragment ReviewerProfileFragment on User {\\n  id: legacyId\\n  imageUrlSquare\\n  isAuthor\\n  ...SocialUserFragment\\n  textReviewsCount\\n  viewerRelationshipStatus {\\n    isBlockedByViewer\\n    __typename\\n  }\\n  name\\n  webUrl\\n  contributor {\\n    id\\n    works {\\n      totalCount\\n      __typename\\n    }\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment SocialUserFragment on User {\\n  viewerRelationshipStatus {\\n    isFollowing\\n    isFriend\\n    __typename\\n  }\\n  followersCount\\n  __typename\\n}\"}"
+        "body": "{\"operationName\":\"getReviews\",\"variables\":{\"filters\":{\"resourceType\":\"WORK\",\"resourceId\":\"{workId}\"},\"pagination\":{\"limit\":30,\"after\":null}},\"extensions\":{\"clientLibrary\":{\"name\":\"@apollo/client\",\"version\":\"4.1.6\"}},\"query\":\"query getReviews($filters: BookReviewsFilterInput!, $pagination: PaginationInput) {\\n  getReviews(filters: $filters, pagination: $pagination) {\\n    ...BookReviewsFragment\\n    __typename\\n  }\\n}\\n\\nfragment BookReviewsFragment on BookReviewsConnection {\\n  totalCount\\n  edges {\\n    node {\\n      ...ReviewCardFragment\\n      __typename\\n    }\\n    __typename\\n  }\\n  pageInfo {\\n    prevPageToken\\n    nextPageToken\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment ReviewCardFragment on Review {\\n  __typename\\n  id\\n  creator {\\n    ...ReviewerProfileFragment\\n    __typename\\n  }\\n  recommendFor\\n  updatedAt\\n  createdAt\\n  spoilerStatus\\n  lastRevisionAt\\n  text\\n  rating\\n  preciseRating\\n  preReleaseBookSource\\n  shelving {\\n    creator {\\n      id\\n      __typename\\n    }\\n    book {\\n      id\\n      __typename\\n    }\\n    shelf {\\n      name\\n      displayName\\n      editable\\n      default\\n      actionType\\n      sortOrder\\n      webUrl\\n      __typename\\n    }\\n    taggings {\\n      tag {\\n        name\\n        webUrl\\n        __typename\\n      }\\n      __typename\\n    }\\n    webUrl\\n    __typename\\n  }\\n  likeCount\\n  viewerHasLiked\\n  commentCount\\n}\\n\\nfragment ReviewerProfileFragment on User {\\n  id: legacyId\\n  imageUrlSquare\\n  isAuthor\\n  ...SocialUserFragment\\n  textReviewsCount\\n  viewerRelationshipStatus {\\n    isBlockedByViewer\\n    __typename\\n  }\\n  name\\n  webUrl\\n  contributor {\\n    id\\n    works {\\n      totalCount\\n      __typename\\n    }\\n    __typename\\n  }\\n  __typename\\n}\\n\\nfragment SocialUserFragment on User {\\n  viewerRelationshipStatus {\\n    isFollowing\\n    isFriend\\n    __typename\\n  }\\n  followersCount\\n  __typename\\n}\"}"
       },
       "slots": [
         {
@@ -160,6 +160,20 @@
           "at": [
             "body",
             "json:/variables/filters/resourceId"
+          ]
+        },
+        {
+          "param": "after",
+          "at": [
+            "body",
+            "json:/variables/pagination/after"
+          ]
+        },
+        {
+          "param": "limit",
+          "at": [
+            "body",
+            "json:/variables/pagination/limit"
           ]
         },
         {
@@ -196,13 +210,32 @@
           "required": true,
           "example": "kca://work/amzn1.gr.work.v1.xIT2_7WWJ119Me44O0dVMg",
           "description": "work id from getWorkId, e.g. kca://work/amzn1.gr.work.v1...."
+        },
+        {
+          "name": "after",
+          "type": "string",
+          "required": false,
+          "description": "the nextPage of the previous getReviews call; leave out for the first page"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 3,
+          "min": 1,
+          "max": 30,
+          "description": "reviews a page (the site's own page asks 30). Lower it when the result is truncated: a cut review is skipped, since nextPage starts after the page's last one"
         }
       ],
       "readOnly": true,
       "minTier": 1,
       "learnedLoggedIn": false,
       "learnedAt": "2026-09-28T06:43:53.650Z",
-      "description": "Top community reviews of a work: reviewer, rating (1-5) and text (HTML). Long reviews make the result truncated after a few."
+      "description": "Community reviews of a work, 3 a page by default (long ones fill the output): reviewer, rating (1-5) and text (HTML). For the next page, call again with after set to the result's nextPage (hasMore false: no more).",
+      "paging": {
+        "param": "after",
+        "next": "data.getReviews.pageInfo.nextPageToken"
+      }
     },
     {
       "name": "getWorkId",

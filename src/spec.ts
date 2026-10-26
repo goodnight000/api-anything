@@ -140,6 +140,30 @@ export const CheckSchema = z.object({
   purpose: z.string().optional(),
 });
 
+/** How a read's list continues: the param that takes the next page, and where the answer says what that is. */
+export const PagingSchema = z.object({
+  /** the param a call sets to get the next page: a cursor, or a page number */
+  param: z.string().min(1),
+  /**
+   * path in the whole answer (before `extract`; for `embedded`, the embedded JSON) to the next page's
+   * cursor or number. Without it the pages are numbered and the answer says nothing about the next one.
+   */
+  next: z.string().min(1).optional(),
+});
+
+/**
+ * How a write's call proves it landed: one read of the same site, run once after the write was sent.
+ * Every value may hold `{writeParam}`, filled from the write's args.
+ */
+export const ReadbackSchema = z.object({
+  /** a read op of the same site */
+  op: z.string().min(1),
+  /** the read's args */
+  args: z.record(z.string(), z.string()).default({}),
+  /** an item of the read's answer (or the answer itself) whose `field` equals `equals`; without it, any data counts */
+  find: z.object({ field: z.string().min(1), equals: z.string() }).optional(),
+});
+
 export const OperationSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -161,6 +185,10 @@ export const OperationSchema = z.object({
   learnedAt: z.string().optional(),
   /** run by `verify` beside the examples; `publish` refuses while one fails */
   checks: z.array(CheckSchema).optional(),
+  /** a read's list pages: a call returns the next page's cursor (nextPage), and verify checks page 2 is not page 1 again */
+  paging: PagingSchema.optional(),
+  /** a write's proof: a read run once after it is sent; finding it makes the call's `write` "applied" */
+  readback: ReadbackSchema.optional(),
   /**
    * Learning could not show these params change the answer: example 2, which gave them other values,
    * was answered with example 1's data. `publish` refuses while it is set; a `verify` clears it when
@@ -194,6 +222,8 @@ export type Match = z.infer<typeof MatchSchema>;
 export type ResponseSpec = z.infer<typeof ResponseSchema>;
 export type Param = z.infer<typeof ParamSchema>;
 export type Check = z.infer<typeof CheckSchema>;
+export type Paging = z.infer<typeof PagingSchema>;
+export type Readback = z.infer<typeof ReadbackSchema>;
 export type Operation = z.infer<typeof OperationSchema>;
 export type Site = z.infer<typeof SiteSchema>;
 

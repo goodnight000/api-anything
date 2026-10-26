@@ -582,6 +582,103 @@ test("the shared rules cap allowed values and checks, and refuse checks on a wri
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
 });
 
+test("the shared rules check paging: a param of the read that goes in a slot, and a path to one value", () => {
+  const optional = [{ name: "q", required: false }];
+  assert.deepEqual(
+    errors(spec({}, { params: optional, paging: { param: "q", next: 'data.search["page-info"].next' } })),
+    [],
+  );
+  // numbered pages: the caller gives the page number
+  assert.deepEqual(errors(spec({}, { paging: { param: "q" } })), []);
+  const html = { format: "html", html: { items: "li", fields: { t: "a" } } };
+  const refused: [string, Site, RegExp][] = [
+    [
+      "a required cursor",
+      spec({}, { paging: { param: "q", next: "next" } }),
+      /paging param q is required, so the first page cannot be asked for/,
+    ],
+    ["no such param", spec({}, { paging: { param: "page" } }), /search: paging param page is no param of it/],
+    [
+      "a param in no slot",
+      spec({}, { params: [{ name: "q" }, { name: "page", required: false }], paging: { param: "page" } }),
+      /paging param page goes in no slot of its request/,
+    ],
+    [
+      "a write",
+      spec(
+        {},
+        {
+          readOnly: false,
+          request: { method: "POST", url: "https://news.example.com/api/s?q=x", headers: {} },
+          paging: { param: "q" },
+        },
+      ),
+      /a write has no pages/,
+    ],
+    ["html", spec({}, { response: html, paging: { param: "q", next: "next" } }), /paging next reads JSON/],
+    ["many values", spec({}, { paging: { param: "q", next: "hits[*].cursor" } }), /paging next .* one value/],
+    ["not a path", spec({}, { paging: { param: "q", next: "a..b" } }), /paging next "a\.\.b" is not a path/],
+    ["long", spec({}, { paging: { param: "q", next: "a".repeat(201) } }), /paging next is 201 characters/],
+  ];
+  for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
+});
+
+test("the shared rules check a write's readback: a read of the same site, given the write's values", () => {
+  const read = spec().operations[0]!;
+  const withWrite = (readback: Record<string, unknown>, onRead?: Record<string, unknown>) =>
+    spec({
+      operations: [
+        { ...read, ...(onRead ? { readback: onRead } : {}) },
+        {
+          name: "post",
+          readOnly: false,
+          request: { method: "POST", url: "https://news.example.com/api/post", headers: {}, body: '{"title":"x"}' },
+          slots: [{ param: "title", at: ["body", "json:/title"] }],
+          params: [{ name: "title" }],
+          trigger: { url: "https://news.example.com/submit" },
+          match: { host: "news.example.com", path: "/api/post" },
+          readback,
+        },
+      ],
+    });
+  assert.deepEqual(errors(withWrite({ op: "search", args: { q: "{title}" } })), []);
+  assert.deepEqual(
+    errors(withWrite({ op: "search", args: { q: "new" }, find: { field: "title", equals: "{title}" } })),
+    [],
+  );
+  const refused: [string, Site, RegExp][] = [
+    ["no such op", withWrite({ op: "nope", args: { q: "{title}" } }), /post: readback op nope is no operation of demo/],
+    ["a write", withWrite({ op: "post", args: { title: "{title}" } }), /readback op post is a write/],
+    [
+      "on a read",
+      withWrite({ op: "search", args: { q: "{title}" } }, { op: "search", args: { q: "{q}" } }),
+      /search: a read has no readback/,
+    ],
+    [
+      "an arg no param takes",
+      withWrite({ op: "search", args: { q: "{title}", page: "2" } }),
+      /readback sets page, which is no param of search/,
+    ],
+    [
+      "a required param unset",
+      withWrite({ op: "search", find: { field: "title", equals: "{title}" } }),
+      /readback leaves search's required q unset/,
+    ],
+    [
+      "a hole no write param fills",
+      withWrite({ op: "search", args: { q: "{name}" } }),
+      /readback fills \{name\}, which is no param of post/,
+    ],
+    [
+      "nothing of this write",
+      withWrite({ op: "search", args: { q: "kittens" } }),
+      /readback uses none of post's params/,
+    ],
+    ["long", withWrite({ op: "search", args: { q: `{title}${"x".repeat(500)}` } }), /readback arg q is 507 characters/],
+  ];
+  for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
+});
+
 test("publish runs on verify's record: every counted check passes, inconclusive ones are shown, and the record goes in the pull request", async () => {
   const answers: Record<string, () => Response> = {
     kittens: () => json({ hits: [{ title: "kittens everywhere" }] }),
@@ -652,6 +749,66 @@ test("publish runs on verify's record: every counted check passes, inconclusive 
   s.operations[0]!.checks = s.operations[0]!.checks!.slice(0, 1);
   saveSite(s);
   assert.match(plan("demo").errors.join("\n"), /its checks have not run on this version/);
+});
+
+test("verify asks a paged read for its next page: page 1 again fails and holds publish back", async () => {
+  const pages: Record<string, unknown> = {
+    "": { hits: [{ t: "a" }, { t: "b" }], next: "c2" },
+    c2: { hits: [{ t: "c" }], next: null },
+  };
+  let answer = (after: string) => pages[after];
+  const fetchImpl = (async (u: string | URL | Request) =>
+    json(answer(new URL(String(u)).searchParams.get("after") ?? ""))) as typeof fetch;
+  const opts = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl };
+  const paged = (paging: Record<string, unknown>, example?: string) =>
+    spec(
+      {},
+      {
+        request: { method: "GET", url: "https://news.example.com/api/search?q=kittens&after=", headers: {} },
+        slots: [
+          { param: "q", at: ["query:q"] },
+          { param: "after", at: ["query:after"] },
+        ],
+        params: [
+          { name: "q", example: "kittens" },
+          { name: "after", required: false, ...(example ? { example } : {}) },
+        ],
+        paging,
+      },
+    );
+  const cases = async () =>
+    (await verifySite("demo", opts)).results.map((r) => ("outcome" in r ? [r.case, r.outcome, r.got] : r));
+
+  saveSite(paged({ param: "after", next: "next" }));
+  assert.deepEqual(await cases(), [
+    ["example", "pass", "result"],
+    ["next page", "pass", "result"],
+  ]);
+  // a server that ignores the cursor answers page 1 again
+  answer = () => pages[""];
+  assert.deepEqual((await cases())[1], ["next page", "fail", "page 1 again"]);
+  assert.match(
+    plan("demo", { keepExamples: true }).errors.join("\n"),
+    /search: next page expects result, and answered page 1 again/,
+  );
+  // one page only: nothing to go on to, which tests nothing
+  answer = () => pages.c2;
+  const one = (await verifySite("demo", opts)).results[1]!;
+  assert.deepEqual("outcome" in one && [one.outcome, one.got], ["inconclusive", "no next page"]);
+  assert.match(
+    "reason" in one ? (one.reason ?? "") : "",
+    /page 1 answered no next page at next: give search an example with more than one page/,
+  );
+
+  // numbered pages: the example's page plus one
+  answer = (page) => ({ hits: [{ t: `p${page}` }] });
+  saveSite(paged({ param: "after" }, "1"));
+  assert.deepEqual((await cases())[1], ["next page", "pass", "result"]);
+  answer = () => ({ hits: [{ t: "p1" }] });
+  assert.deepEqual((await cases())[1], ["next page", "fail", "page 1 again"]);
+  // and with no page number to add one to, it is not asked
+  saveSite(paged({ param: "after" }));
+  assert.deepEqual((await cases())[1], ["next page", "inconclusive", "no next page"]);
 });
 
 test("a server that failed or could not be reached is inconclusive: call says server, through every finishing step", async () => {

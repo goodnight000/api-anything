@@ -1,7 +1,7 @@
 /** Classify every response, never by status code alone. See DESIGN.md "Failure classifier". */
 import { type HTMLElement, parse as parseHtml } from "node-html-parser";
 import { templateRefs } from "./codec.js";
-import { extract, extractHtml, getPath, inferShape, parseBody, pick } from "./extract.js";
+import { extract, extractEmbedded, extractHtml, getPath, inferShape, parseBody, pick } from "./extract.js";
 import { siteOf } from "./session.js";
 import type { Operation } from "./spec.js";
 
@@ -726,6 +726,29 @@ function classifyResponse(
 export interface Judged extends Classified {
   /** extracted and picked; only when ok */
   data?: unknown;
+  /** the next page's cursor or number, from `paging.next` in the whole answer; only when ok */
+  nextPage?: string | number;
+  /** true with a nextPage; false when the answer says there is none (null, "" or false there) */
+  hasMore?: boolean;
+}
+
+/**
+ * What the whole answer says about the next page. Nothing at the path says nothing: a moved path
+ * must not read as the last page.
+ */
+function pageOf(op: Operation, body: string, json: () => unknown): Pick<Judged, "nextPage" | "hasMore"> {
+  const at = op.paging?.next;
+  const res = op.response;
+  if (!at || res.format === "html") return {};
+  try {
+    const whole = res.format === "embedded" ? res.embedded && extractEmbedded(body, res.embedded.regex) : json();
+    const v = getPath(whole, at);
+    if ((typeof v === "string" && v !== "") || (typeof v === "number" && Number.isFinite(v)))
+      return { nextPage: v, hasMore: true };
+    return v === null || v === "" || v === false ? { hasMore: false } : {};
+  } catch {
+    return {};
+  }
 }
 
 /** classify, then extract when ok. Never throws: a bad selector or regex in the spec is an error. */
@@ -756,10 +779,16 @@ export function judge(op: Operation, r: Observed): Judged {
   }
   if (c.class !== "ok") return c;
   try {
+    // from the whole answer, before extract and pick throw the rest away
+    const page = pageOf(op, r.body, readJson);
     // r.url is the page's final address (redirects included): it is where a relative @href/@src lives
-    if (op.response.format !== "json") return { ...c, data: extract(op.response, r.body, r.url) };
+    if (op.response.format !== "json") return { ...c, data: extract(op.response, r.body, r.url), ...page };
     const data = readTarget(readJson());
-    return { ...c, data: data !== undefined && op.response.pick?.length ? pick(data, op.response.pick) : data };
+    return {
+      ...c,
+      data: data !== undefined && op.response.pick?.length ? pick(data, op.response.pick) : data,
+      ...page,
+    };
   } catch (e) {
     // a write's non-JSON answer: hand back its text
     if (!op.readOnly) return { ...c, data: r.body.trim() ? r.body.slice(0, 1000) : null };

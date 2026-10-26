@@ -150,6 +150,10 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
   for (const slot of op.slots) {
     const name = slot.param ?? slot.ref!;
     let v: unknown = slot.param !== undefined ? vals[slot.param] : resolveRef(slot.ref!, session, op.request.url);
+    // No cursor is the first page. An op learned from the request that loads page 2 holds page 2's
+    // cursor, which must not go: the slot is emptied (null in a JSON leaf).
+    if (v === undefined && op.paging?.next && slot.param === op.paging.param)
+      v = slot.template === undefined && slot.at.at(-1)!.startsWith("json:") ? null : "";
     if (v === undefined) {
       // A missing session value: drop the header rather than send it blank.
       const only = slot.at.length === 1 ? slot.at[0]! : "";

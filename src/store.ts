@@ -233,7 +233,7 @@ export function rememberedTier(site: string, op: string): 1 | 2 | 3 | undefined 
 /* ------------------------------------------------------------ write ledger */
 
 /** What a write did, as far as the caller can know; see CallResult.write. */
-export type WriteStatus = "not_sent" | "not_applied" | "accepted" | "may_have_applied";
+export type WriteStatus = "not_sent" | "not_applied" | "accepted" | "may_have_applied" | "applied";
 
 /** One write call, kept in writes.json. Never the args or a credential: an HMAC digest of the args. */
 export interface WriteRecord {
@@ -263,7 +263,7 @@ const KEEP_WRITES_MS = 24 * 60 * 60_000;
 
 const writesFile = () => join(home(), "writes.json");
 const unsettled = (r: WriteRecord) =>
-  r.status === "accepted" || r.status === "may_have_applied" || r.status === "sending";
+  r.status === "accepted" || r.status === "applied" || r.status === "may_have_applied" || r.status === "sending";
 
 /** This machine's HMAC key, made on first use: a digest of short args (a comment, a vote) cannot be guessed back without it. */
 function ledgerKey(): Buffer {

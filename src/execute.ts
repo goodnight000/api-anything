@@ -12,8 +12,8 @@ import {
   profileCookies,
 } from "./browser.js";
 import { type Class, judge } from "./classify.js";
-import { asText } from "./codec.js";
-import { capOutput } from "./extract.js";
+import { asText, fillTemplate } from "./codec.js";
+import { capOutput, getPath } from "./extract.js";
 import {
   type Attempt,
   challengePage,
@@ -126,6 +126,13 @@ export interface CallResult {
   /** extracted, picked, capped */
   data?: unknown;
   truncated?: string;
+  /**
+   * reads with `paging.next` only: the value to pass as the op's paging param for the next page,
+   * as the site's answer gave it
+   */
+  nextPage?: string | number;
+  /** true with nextPage; false when the site's answer says this is the last page; absent when it says neither */
+  hasMore?: boolean;
   tier?: Tier;
   healed?: boolean;
   ms: number;
@@ -135,7 +142,8 @@ export interface CallResult {
   /**
    * writes only, ok or not: `not_sent` nothing left; `not_applied` the site answered that it did not
    * run it; `accepted` a 2xx judged ok (proof the site took it, not that it took effect);
-   * `may_have_applied` anything else that may have reached the site
+   * `may_have_applied` anything else that may have reached the site; `applied` the op's readback
+   * found it after it was sent (always ok)
    */
   write?: WriteStatus;
   /** failures only; never `safe` or `after_wait` for a write that is accepted or may_have_applied */
@@ -275,13 +283,21 @@ function nextFor(
   }
 }
 
-const success = (a: Attempt, extra: Partial<Result> = {}): Result => ({
-  ok: true,
-  class: "ok",
-  tier: a.tier,
-  ...capOutput(a.data),
-  ...extra,
-});
+function success(a: Attempt, extra: Partial<Result> = {}): Result {
+  const capped = capOutput(a.data);
+  // the site's cursor points past the page it sent, not past what fitted in the output
+  if (capped.truncated && a.nextPage !== undefined)
+    capped.truncated += "; nextPage starts after the last item of this page, cut or not";
+  return {
+    ok: true,
+    class: "ok",
+    tier: a.tier,
+    ...capped,
+    ...(a.nextPage !== undefined ? { nextPage: a.nextPage } : {}),
+    ...(a.hasMore !== undefined ? { hasMore: a.hasMore } : {}),
+    ...extra,
+  };
+}
 
 /** The op's stored example args, with defaults; undefined when a required param has none. */
 function exampleArgs(op: Operation): Record<string, unknown> | undefined {
@@ -647,10 +663,58 @@ function resolve(siteName: string, opName: string): { site: Site; op: Operation;
   return { site: r.site, op, theirs: r.source !== "user" || !!r.site.shared };
 }
 
+/**
+ * A write's readback: the op's read, run once after the write was sent. It is a read, never a
+ * resend. Finding the write makes the result `applied` (and ok, whatever its own answer was); not
+ * finding it, or a read that fails, changes nothing but `reason`: the site may show it later.
+ */
+async function readBack(
+  site: string,
+  op: Operation,
+  args: Record<string, unknown>,
+  r: Result,
+  opts: CallOptions,
+): Promise<Result> {
+  const rb = op.readback!;
+  const readArgs = Object.fromEntries(Object.entries(rb.args).map(([k, v]) => [k, fillTemplate(v, args)]));
+  const read = await call(site, rb.op, readArgs, {
+    ...opts,
+    allowWrites: false,
+    again: undefined,
+    idempotencyKey: undefined,
+  });
+  const noted = (note: string): Result => ({ ...r, reason: r.reason ? `${r.reason}; ${note}` : note });
+  if (!read.ok)
+    return noted(
+      `could not read it back with ${rb.op} (${read.class}: ${read.reason ?? "no reason"}), so it stays ${r.write}`,
+    );
+  const items = Array.isArray(read.data) ? read.data : read.data == null ? [] : [read.data];
+  const want = rb.find && fillTemplate(rb.find.equals, args).trim();
+  const found = rb.find
+    ? items.some((item) => {
+        const v = getPath(item, rb.find!.field);
+        return v != null && typeof v !== "object" && asText(v).trim() === want;
+      })
+    : !(read.data == null || read.data === "" || (typeof read.data === "object" && !Object.keys(read.data).length));
+  if (!found)
+    return noted(
+      `read back with ${rb.op}: not found${read.truncated ? " in the part of its answer that fitted" : ""}, so it stays ${r.write}: the site may not show it yet; check the site before any retry`,
+    );
+  const { retry: _retry, nextCall: _next, next: _hint, server: _server, ...kept } = r;
+  const note = `read back with ${rb.op}: found it`;
+  return { ...kept, ok: true, class: "ok", write: "applied", reason: r.reason ? `${r.reason}; ${note}` : note };
+}
+
 /** The answer to a write the ledger held back: nothing is sent. */
 function heldBack(g: Exclude<WriteGate, { send: true }>, op: Operation): Result {
   const when = new Date(g.earlier.at).toISOString();
   const was: WriteStatus = g.earlier.status === "sending" ? "may_have_applied" : g.earlier.status;
+  const did =
+    was === "applied"
+      ? "a read back found it"
+      : was === "accepted"
+        ? "the site accepted it"
+        : "it may have gone through";
   const again = "repeat the call with again (CLI --again, MCP again: true)";
   if (g.why === "key_reused")
     return {
@@ -661,12 +725,12 @@ function heldBack(g: Exclude<WriteGate, { send: true }>, op: Operation): Result 
       next: "give each different write its own idempotency key",
     };
   if (g.why === "replay") {
-    const ok = g.earlier.ok === true && was === "accepted";
+    const ok = g.earlier.ok === true && (was === "accepted" || was === "applied");
     return {
       ok,
       class: ok ? "ok" : ((g.earlier.class as CallResult["class"] | undefined) ?? "error"),
       write: was,
-      reason: `not sent again: this idempotency key was sent at ${when}, and this is that call's record (${was === "accepted" ? "the site accepted it" : "it may have gone through"})`,
+      reason: `not sent again: this idempotency key was sent at ${when}, and this is that call's record (${did})`,
       ...(ok ? {} : { next: "the write may have gone through: check the site before any retry" }),
     };
   }
@@ -674,7 +738,7 @@ function heldBack(g: Exclude<WriteGate, { send: true }>, op: Operation): Result 
     ok: false,
     class: "duplicate",
     write: "not_sent",
-    reason: `not sent: the same write (same args) was sent at ${when} and ${was === "accepted" ? "the site accepted it" : "may have gone through"}`,
+    reason: `not sent: the same write (same args) was sent at ${when} and ${did}`,
     next: `check the site: the write is probably there. Only if it is not, and the user wants it sent again, ${again}`,
   };
 }
@@ -693,8 +757,11 @@ export async function call(
   let jar: Session | undefined;
   /** this write's ledger record, settled with what the call did */
   let ledger: string | undefined;
-  const done = (r: Result): CallResult => {
-    const f = finish(r, resolved, resolved ? siteName : undefined, log);
+  const done = async (r: Result): Promise<CallResult> => {
+    let f = finish(r, resolved, resolved ? siteName : undefined, log);
+    // log: something was sent this call (a ledger hold-back sends nothing, and reads nothing back)
+    if (resolved?.readback && log.length && (f.write === "accepted" || f.write === "may_have_applied"))
+      f = await readBack(siteName, resolved, args, f, opts);
     const sessions = [jar, resolved ? sessionOrNone(siteName) : undefined];
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
@@ -851,7 +918,7 @@ export async function call(
       return done(noted(a));
     }
     const reason = a.note ? `${a.reason}; ${a.note}` : a.reason;
-    const fail = (): CallResult =>
+    const fail = (): Promise<CallResult> =>
       done({
         ok: false,
         class: a.class,
