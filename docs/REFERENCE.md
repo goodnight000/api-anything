@@ -217,7 +217,7 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 | tool | what it does | hints |
 |---|---|---|
 | `list_sites` | the sites, with how many operations each has | read-only |
-| `list_operations` | a site's operations, each with a JSON Schema of its args (`inputSchema`) and the keys its items carry (`returns`), and the site's notes | read-only |
+| `list_operations` | a site's operations, each with a JSON Schema of its args (`inputSchema`) the keys its items carry (`returns`), how it pages (`pages`) and the read a write is confirmed by (`readback`), and the site's notes | read-only |
 | `call_operation` | call a read; a write op is refused and nothing is sent | read-only, idempotent |
 | `call_write_operation` | call a write, with `again` and `idempotencyKey`; only with `--allow-writes` | destructive, not idempotent |
 | `get_job` | wait up to 25 s for a pending call's result | read-only |

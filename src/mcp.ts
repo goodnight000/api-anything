@@ -25,7 +25,7 @@ import {
   windowLogin,
   windowRetry,
 } from "./login.js";
-import type { Operation, Param } from "./spec.js";
+import type { Operation, Paging, Param } from "./spec.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
 import { SHARED_NOTE } from "./vet.js";
 
@@ -65,6 +65,10 @@ export function toolName(site: string, op: Pick<Operation, "name">): string {
 }
 
 type JsonSchema = Record<string, unknown>;
+
+/** How an op pages, as `ops` says it: by its paging param, from the result's nextPage when the site gives one. */
+const pagesOf = (p: Paging) =>
+  p.next ? `by ${p.param}: pass the result's nextPage (hasMore false: the last page)` : `by ${p.param}`;
 
 /** One param as JSON Schema: what call() accepts, so a client that validates refuses nothing call() would take. */
 function paramSchema(p: Param): JsonSchema {
@@ -359,6 +363,8 @@ export function createServer({
               ...(o.description ? { description: o.description } : {}),
               ...(o.readOnly ? {} : { write: true }),
               ...(returnedFields(o.response) ? { returns: returnedFields(o.response) } : {}),
+              ...(o.paging ? { pages: pagesOf(o.paging) } : {}),
+              ...(o.readback ? { readback: o.readback.op } : {}),
               inputSchema: inputSchema(o),
             })),
           ...(r.site.shared ? { shared: SHARED_NOTE } : {}),
@@ -368,7 +374,7 @@ export function createServer({
   );
 
   const RESULT =
-    "Returns {ok, class, data, tier, healed?, ms, reason?, next?, nextCall?, retry?, retryAfterMs?, write?}; a list of two or more records comes back as data {columns, rows} when that shortens the JSON (one row per item, null for a missing field); otherwise it stays a list. `reason` also explains a slow success. On failure follow `next` (nextCall is the same step as data, with the tool to use) at most once, then stop and report. `retry` says whether to send the same call again: safe, after_wait (retryAfterMs), after_fix (once the step is done) or no. A call still running after about 25 s answers class pending with a job: call get_job with it. " +
+    "Returns {ok, class, data, tier, healed?, ms, reason?, next?, nextCall?, retry?, retryAfterMs?, write?, nextPage?, hasMore?}; a list of two or more records comes back as data {columns, rows} when that shortens the JSON (one row per item, null for a missing field); otherwise it stays a list. `reason` also explains a slow success. On failure follow `next` (nextCall is the same step as data, with the tool to use) at most once, then stop and report. `retry` says whether to send the same call again: safe, after_wait (retryAfterMs), after_fix (once the step is done) or no. An op that pages (list_operations: pages) answers nextPage, the value its paging param takes for the next page, and hasMore (false: the last page). A call still running after about 25 s answers class pending with a job: call get_job with it. " +
     UNTRUSTED_NOTE;
 
   server.registerTool(
@@ -389,7 +395,7 @@ export function createServer({
   );
 
   const WRITE_DESCRIPTION =
-    "A write changes the user's account: only call it when the user asked for that exact action. A write's `write` says what it did: not_sent, not_applied, accepted or may_have_applied; never send one again that is accepted or may_have_applied without checking the site.";
+    "A write changes the user's account: only call it when the user asked for that exact action. A write's `write` says what it did: not_sent, not_applied, accepted, applied (its readback found it) or may_have_applied; never send one again that is accepted, applied or may_have_applied without checking the site.";
   if (allowWrites)
     server.registerTool(
       "call_write_operation",
@@ -452,6 +458,8 @@ export function createServer({
         s.shared ? `(${SHARED_NOTE}.)` : "",
         o.description ?? `${o.name} on ${s.name}.`,
         returns ? `Items carry: ${returns.join(", ")}.` : "",
+        o.paging ? `Pages ${pagesOf(o.paging)}.` : "",
+        o.readback ? `Its readback, ${o.readback.op}, looks for it after it is sent: write applied when found.` : "",
         o.readOnly ? "" : `${WRITE_DESCRIPTION} again and idempotencyKey: use call_write_operation.`,
         `The site's notes: list_operations {"site":"${s.name}"}. Answers as call_operation does.`,
       ]

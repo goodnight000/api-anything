@@ -1178,7 +1178,8 @@ independent alternative.
     args: `type`, `enum`, `minimum`/`maximum`, `pattern` anchored as `^(?:p)$` since a spec's
     pattern matches the whole value, `default`, `examples`, the format `hint` in `description`,
     `required` for a required param with no default, `additionalProperties: false`), the site's
-    notes, and `shared` for a pulled spec. The schema replaces the old `params` list, so each param
+    notes, `pages` and `readback` as `ops` shows them, and `shared` for a pulled spec. A per-op tool's
+    description says the same, and the call tools name `nextPage`/`hasMore` and write `applied`. The schema replaces the old `params` list, so each param
     is sent once.
   - **Per-op tools**: `mcp --sites a,b` also registers each op of those sites as a tool of its own,
     `<site>__<op>` (any character outside `[A-Za-z0-9_-]` becomes `_`), taking the op's args

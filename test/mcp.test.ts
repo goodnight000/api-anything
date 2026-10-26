@@ -52,8 +52,8 @@ async function connect(opts: ServerOptions = {}) {
   };
 }
 
-/** A site with one read and one write against `base`. */
-function saveMixed(base: string, name = "mw"): void {
+/** A site with one read and one write against `base`; `readback`: the write is read back with the read. */
+function saveMixed(base: string, name = "mw", readback = false): void {
   saveSite(
     parseSite({
       name,
@@ -72,6 +72,7 @@ function saveMixed(base: string, name = "mw"): void {
             { name: "kind", description: "what to find", enum: ["book", "film"], example: "book" },
             { name: "page", type: "number", required: false, default: 1, min: 1, max: 50 },
           ],
+          paging: { param: "page", next: "next" },
           trigger: { url: `${base}/` },
         },
         {
@@ -85,6 +86,7 @@ function saveMixed(base: string, name = "mw"): void {
           },
           slots: [{ param: "id", at: ["body", "json:/id"] }],
           params: [{ name: "id", pattern: "\\d+", hint: "digits" }],
+          ...(readback ? { readback: { op: "find", args: { kind: "book" } } } : {}),
           trigger: { url: `${base}/` },
         },
       ],
@@ -235,7 +237,7 @@ test("MCP list_operations gives each op a JSON Schema of its args: types, enum, 
   const site = await localSite();
   const s = await connect();
   try {
-    saveMixed(site.base);
+    saveMixed(site.base, "mw", true);
     await s.start({ allowWrites: true });
     const r = await s.tool("list_operations", { site: "mw" });
     const find = r.operations.find((o: { name: string }) => o.name === "find");
@@ -253,6 +255,13 @@ test("MCP list_operations gives each op a JSON Schema of its args: types, enum, 
     // a spec's pattern must match the whole value; a JSON Schema pattern matches anywhere
     assert.deepEqual(vote.inputSchema.properties.id, { type: "string", pattern: "^(?:\\d+)$", description: "digits" });
     assert.equal(vote.write, true);
+    assert.equal(find.pages, "by page: pass the result's nextPage (hasMore false: the last page)");
+    assert.equal(vote.readback, "find");
+    // the result fields an agent pages and confirms a write with are named where it reads them
+    const { tools } = await s.client.listTools();
+    const described = (n: string) => tools.find((t) => t.name === n)?.description ?? "";
+    assert.match(described("call_operation"), /nextPage\?, hasMore\?/);
+    assert.match(described("call_write_operation"), /applied \(its readback found it\)/);
   } finally {
     await s.done();
     site.close();
@@ -303,6 +312,7 @@ test("MCP --sites registers each op as a tool of its own, with its schema and a 
     });
     assert.deepEqual(find.inputSchema.required, ["kind"]);
     assert.match(find.description ?? "", /find things by kind/);
+    assert.match(find.description ?? "", /Pages by page: pass the result's nextPage/);
     const ok = await s.tool("mw__find", { kind: "film", page: 2 });
     assert.deepEqual([ok.ok, ok.data], [true, [{ title: "a" }]]);
     // the args are judged by call(), as through call_operation: nothing sent, the format said, a next step
