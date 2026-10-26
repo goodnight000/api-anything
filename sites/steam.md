@@ -37,5 +37,4 @@ The exported spec replayed unseen `term=hades` from a separate fresh home with n
 or imported cookies. It returned Hades, `App_1145360`, at tier 1 in 1875 ms. Final shared
 vetting of the spec and these notes returned zero errors and zero warnings.
 
-The [discovery report](../docs/research/discovery/broad-search.md) records the run. Raw browser
-exchanges and response documents remain local and are not part of the shared spec.
+Raw browser exchanges and response documents remain local and are not part of the shared spec.
