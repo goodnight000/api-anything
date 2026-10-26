@@ -1,0 +1,100 @@
+{
+  "name": "rightmove",
+  "displayName": "Rightmove",
+  "baseUrl": "https://www.rightmove.co.uk",
+  "description": "Public UK property-search location lookup from the Rightmove frontend.",
+  "operations": [
+    {
+      "name": "locations",
+      "description": "Find public UK property-search locations by name.",
+      "request": {
+        "method": "GET",
+        "url": "https://los.rightmove.co.uk/typeahead?query=%7Blocation%7D&limit=10&exclude=STREET",
+        "headers": {
+          "accept": "*/*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://www.rightmove.co.uk",
+          "priority": "u=1, i",
+          "referer": "https://www.rightmove.co.uk/",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "location",
+          "at": [
+            "query:query"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.rightmove.co.uk/",
+        "steps": [
+          {
+            "action": "wait",
+            "ms": 5000
+          },
+          {
+            "action": "fill",
+            "selector": "[data-monitor-testid=for-sale-search-input]",
+            "value": "{location}"
+          },
+          {
+            "action": "wait",
+            "ms": 2000
+          }
+        ]
+      },
+      "match": {
+        "method": "GET",
+        "host": "los.rightmove.co.uk",
+        "path": "/typeahead"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "matches",
+        "pick": [
+          "id",
+          "type",
+          "displayName"
+        ]
+      },
+      "params": [
+        {
+          "name": "location",
+          "type": "string",
+          "required": true,
+          "description": "UK place, postcode area, or station name; for example Cambridge or Bath.",
+          "example": "Cambridge"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "location": "Bath"
+          },
+          "expect": "result",
+          "purpose": "Bath returns Bath, Somerset region 116, excluding the Cambridge region 274 example."
+        },
+        {
+          "args": {
+            "location": "zzqxwyvpr"
+          },
+          "expect": "empty",
+          "purpose": "A nonsense place excludes the Cambridge and Bath results."
+        }
+      ]
+    }
+  ]
+}
