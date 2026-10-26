@@ -174,7 +174,7 @@ Pull what someone else learned. Publish yours as a pull request, after the same 
 | `get_job` | the result of a call that was still running after about 25 s |
 | `login` | refresh a session from the browser profile you chose, or open a window to sign in |
 
-Answers are JSON text, and also `structuredContent` for clients that read fields. To **create** operations, an
+Each answer is JSON text, and an object answer is also sent as `structuredContent`. To **create** operations, an
 agent needs a shell and the [skill](skills/api-anything/SKILL.md).
 
 <details>
@@ -204,7 +204,7 @@ A tool call still running after about 25 s (a sign-in window, a long repair) ans
 The same call made while it runs joins it, so a second `login` doesn't open a second window, and a
 write still in flight is never sent beside itself.
 
-Client timeouts and fixes for common problems: [QUICKSTART.md](docs/QUICKSTART.md).
+[Client timeouts](docs/QUICKSTART.md#client-timeouts) · [troubleshooting](docs/QUICKSTART.md#troubleshooting)
 
 </details>
 
