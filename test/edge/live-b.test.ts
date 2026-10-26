@@ -133,19 +133,21 @@ describe("bot-wall classification", () => {
     );
   });
 
-  test("add on a page that served a bot challenge does not tell the agent to fix its recipe", async () => {
+  test("add on a page that served a bot challenge saves nothing, and does not tell the agent to fix its recipe", async () => {
     const url = "https://www.yelp.com/search?find_desc=pizza&find_loc=SF";
-    const r = await addOperation({
+    const err = await addOperation({
       site: "yelp-edge",
       op: "search",
       examples: [{ q: "pizza" }],
       response: { html: { items: "[data-testid=serp-ia-card]", fields: { name: "h3 a" } } },
       from: { capture: capture(url, [htmlDoc(url, DATADOME_403, 403)]), id: undefined },
-    });
-    const w = r.warnings.find((x) => /blocked/.test(x));
-    assert.ok(w, `a blocked warning: ${r.warnings.join(" | ")}`);
-    assert.doesNotMatch(w, /Fix --extract/, "a bot wall is not fixed by editing --extract/--html");
-    assert.match(w, /login/, "points at api-anything login to clear the challenge");
+    }).then(
+      () => assert.fail("an op learned from a bot challenge was saved"),
+      (e: Error) => e.message,
+    );
+    assert.match(err, /refusing to save search: the captured response is blocked/);
+    assert.doesNotMatch(err, /Fix --extract/, "a bot wall is not fixed by editing --extract/--html");
+    assert.match(err, /login/, "points at api-anything login to clear the challenge");
   });
 });
 

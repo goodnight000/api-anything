@@ -895,6 +895,83 @@ describe("add from a saved capture", () => {
   });
 });
 
+describe("checks: an op that must prove it works before it is shared", () => {
+  before(async () => {
+    for (const city of ["Sydney", "Hobart"])
+      seed(`cstores-${city.toLowerCase()}`, {
+        url: `${fx.url}/stores?city=${city}`,
+        exchanges: [
+          await answered(1, "document", `/stores?city=${city}`),
+          await answered(2, "fetch", `/api/stores?city=${city}`),
+        ],
+      });
+  });
+  const run = async (...args: string[]) => {
+    const r = await cli(...args);
+    return { ...r, out: JSON.parse(r.stdout) };
+  };
+
+  test("a server that ignores the city: add marks it unproven, an empty check fails, and publish refuses", async () => {
+    const add = await run(
+      "add",
+      "stores",
+      "near",
+      "--from",
+      "cstores-sydney",
+      "--from2",
+      "cstores-hobart",
+      "--example",
+      "city=Sydney",
+      "--example2",
+      "city=Hobart",
+      "--extract",
+      "stores",
+      "--enum",
+      "city=Sydney,Hobart,Nowhere",
+    );
+    assert.equal(add.code, 0, add.stdout);
+    assert.deepEqual(add.out.unproven, ["city"]);
+    assert.match(add.out.warnings.join("\n"), /example 2 \(city=Hobart\) was answered with example 1's data/);
+
+    const refused = await run("call", "stores", "near", "city=Perth");
+    assert.equal(refused.out.class, "input");
+    assert.match(refused.out.reason, /must be one of "Sydney", "Hobart", "Nowhere", got "Perth"/);
+    const ops = await run("ops", "stores");
+    assert.match(ops.out.operations[0].params[0], /one of Sydney, Hobart, Nowhere/);
+
+    assert.match((await run("check", "stores", "near", "city=Nowhere")).out.error, /missing --expect/);
+    assert.match(
+      (await run("check", "stores", "near", "town=Nowhere", "--expect", "empty")).out.error,
+      /unknown arg town; near takes city/,
+    );
+    const check = await run("check", "stores", "near", "city=Nowhere", "--expect", "empty", "--purpose", "no store");
+    assert.equal(check.code, 0, check.stdout);
+    assert.equal((await run("check", "stores", "near", "city=Nowhere", "--expect", "empty")).out.replaced, true);
+    await run("check", "stores", "near", "city=Perth", "--expect", "input");
+
+    const verify = await run("verify", "stores");
+    assert.equal(verify.code, 1);
+    assert.deepEqual(verify.out.counts, { pass: 2, fail: 1, inconclusive: 0, skipped: 0 });
+    assert.deepEqual(
+      verify.out.results.map((r: { case: string; outcome: string; got: string }) => [r.case, r.outcome, r.got]),
+      [
+        ["example", "pass", "result"],
+        ["check 1", "fail", "result"],
+        ["check 2", "pass", "input"],
+      ],
+    );
+    assert.match(verify.stderr, /a failing case is a broken op or a wrong check/);
+
+    const publish = await run("publish", "stores");
+    const errors = publish.out.errors.join("\n");
+    assert.match(
+      errors,
+      /near: example 2 \(city=Hobart\) was answered with example 1's data, so nothing shows the server reads city/,
+    );
+    assert.match(errors, /near: check 1 \(city=Nowhere\) expects empty, and answered result/);
+  });
+});
+
 const noChrome = !browserAvailable() && "no Chromium browser installed";
 
 describe("capture's next hint", { skip: noChrome }, () => {

@@ -59,6 +59,29 @@ recommended all the same, and `blocked` is the bot challenge the site served.
 <capture> --pick-request <id> --example k=v`. A capture holds one run, so the second example needs a
 second capture of the page, made with its values: `--from2 <capture2> --example2 k=v2`.
 
+`add` does not save an op whose captured answer is a bot challenge, a sign-in page, a rate limit or
+a server failure: log in (`api-anything login <site>`) or wait, then add again. When example 2 is
+answered with example 1's data, the op is saved with a warning and marked `unproven`: the server may
+not read those params at all (it goes by a cookie or the IP). Pick an example 2 that excludes
+something example 1 returned, such as another place or a filter value one of its rows fails.
+
+`--enum name=a,b,c` lists the values a param takes (the site's whole set, such as a picker's
+options), and `--min name=n` / `--max name=n` bound a numeric one. A call with another value is
+`input` and nothing is sent; `ops` and MCP `list_operations` show them. Set them on an existing op by
+editing its spec. An op learned again keeps its params' allowed values and descriptions.
+
+Record what a human confirmed on the site as checks, then let `verify` run them with the examples:
+
+```sh
+api-anything check hn-search search query=zzqqxxnothing --expect empty --purpose "no story matches"
+api-anything verify hn-search
+```
+
+`--expect` is `result` (data), `empty` (the site's own no-results) or `input` (the args are
+refused). `verify` reports each case as `pass`, `fail` or `inconclusive`: a challenge, a sign-in
+page, a rate limit or a server that failed or could not be reached tests nothing. Check args are
+shared with the spec, so use public values only.
+
 ## Replay, fallback and repair
 
 Besides its request template, each operation stores two things:
@@ -209,8 +232,13 @@ Known limits:
   missing data as `drift`. An empty result is `ok` with `[]` when the page shows it structurally:
   an empty JSON list at the extract path, or, for `--html`, an items selector written as
   `"<container> <item>"` whose container is on the page with no item-tag element in it.
-- A param may declare a `pattern` (a regex the whole value must match) and a `hint`; a call whose
-  arg fails it is `input`, with the hint, and nothing is sent.
+- A param may declare a `pattern` (a regex the whole value must match) and a `hint`, an `enum` of
+  the values it takes, and a `min`/`max`; a call whose arg fails one is `input`, and nothing is sent.
+- Two examples that the site answers with the same data mark the op `unproven`, which may be a
+  false alarm (two places with the same stores). `publish` refuses it until a re-add with a better
+  example 2, or until `verify` sees two passing cases that differ only in those params answer
+  differently. A param the server ignores is not caught when the two answers differ for another
+  reason (a timestamp, a shuffled order).
 - Request pacing (1 s per site) holds within one process: separate CLI runs are not paced
   against each other.
 - Chrome locks its profile to one process. An MCP server releases it after 3 s idle; another

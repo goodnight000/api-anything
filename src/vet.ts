@@ -15,6 +15,8 @@ export const LIMITS = {
   file: 256 * 1024,
   regex: 200,
   confirms: 8,
+  enum: 100,
+  checks: 10,
 } as const;
 
 const READ_METHODS = new Set(["GET", "HEAD", "POST"]);
@@ -196,6 +198,26 @@ export function vetShared(site: Site, notes?: string): Vetted {
     for (const p of op.params) {
       long(at(`param ${p.name} description`), p.description);
       long(at(`param ${p.name} hint`), p.hint);
+      if ((p.enum?.length ?? 0) > LIMITS.enum)
+        errors.push(at(`param ${p.name} lists ${p.enum!.length} values; at most ${LIMITS.enum}`));
+      for (const v of p.enum ?? []) long(at(`param ${p.name} enum value`), v);
+    }
+    // a doubt learning raised about the op: refused on publish, and on pull and in CI for a hand-made spec
+    if (op.unproven)
+      errors.push(
+        at(
+          `${op.unproven.reason}, so nothing shows the server reads ${op.unproven.params.join(", ")}: add it again with an example 2 that excludes something example 1 returned, or record a check that changes only ${op.unproven.params.join(", ")} and answers differently, then run verify`,
+        ),
+      );
+    const checks = op.checks ?? [];
+    if (checks.length && !op.readOnly) errors.push(at("a write has checks, which would send it"));
+    if (checks.length > LIMITS.checks) errors.push(at(`${checks.length} checks; at most ${LIMITS.checks}`));
+    for (const [j, c] of checks.entries()) {
+      long(at(`check ${j + 1} purpose`), c.purpose);
+      for (const [k, v] of Object.entries(c.args)) {
+        if (!op.params.some((p) => p.name === k)) errors.push(at(`check ${j + 1} sets ${k}, which is no param`));
+        long(at(`check ${j + 1} arg ${k}`), String(v));
+      }
     }
     const offSite = new Set<string>();
     for (const [where, url] of addresses(op)) {

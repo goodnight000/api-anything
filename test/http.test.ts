@@ -82,6 +82,35 @@ test("buildRequest: defaults, missing required params, bad types, missing sessio
   assert.throws(() => buildRequest(op(), { text: "a", tweet_id: "1", dark: "yes" }, session), /must be boolean/);
 });
 
+test("buildRequest: an arg outside the param's enum or min/max is refused, so nothing is sent", () => {
+  const limited = op({
+    params: [
+      { name: "text", enum: ["hello", "goodbye"] },
+      { name: "tweet_id", min: 1, max: 1000 },
+      { name: "count", type: "number", default: 20, min: 1, max: 50 },
+      { name: "dark", type: "boolean", required: false },
+    ],
+  });
+  const ok = buildRequest(limited, { text: "goodbye", tweet_id: "1000", count: 1 }, session);
+  assert.match(ok.body!, /"tweet_text":"goodbye".*"in_reply_to_tweet_id":"1000".*"count":1,/);
+  assert.throws(
+    () => buildRequest(limited, { text: "hi", tweet_id: "5" }, session),
+    /param "text" must be one of "hello", "goodbye", got "hi"/,
+  );
+  assert.throws(
+    () => buildRequest(limited, { text: "hello", tweet_id: "1001" }, session),
+    /param "tweet_id" must be at most 1000, got "1001"/,
+  );
+  assert.throws(
+    () => buildRequest(limited, { text: "hello", tweet_id: "abc" }, session),
+    /param "tweet_id" must be a number from 1 to 1000, got "abc"/,
+  );
+  assert.throws(
+    () => buildRequest(limited, { text: "hello", tweet_id: "5", count: 0 }, session),
+    /param "count" must be at least 1, got 0/,
+  );
+});
+
 test("a session value goes only back to the host it was captured from; a cookie's fallback skips HttpOnly", () => {
   const bound: Session = { ...session, valueHosts: { authorization: "x.com" } };
   const to = (url: string, s = bound) =>

@@ -8,7 +8,7 @@ import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { capOutput, extract } from "./extract.js";
-import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, send } from "./http.js";
+import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, refusal, send } from "./http.js";
 import {
   type Args,
   ASSET_EXT,
@@ -39,7 +39,7 @@ import {
   siteOf,
   writePrivate,
 } from "./session.js";
-import type { Match, Operation, ResponseSpec, Site, Slot, Trigger, Volatile } from "./spec.js";
+import type { Match, Operation, Param, ResponseSpec, Site, Slot, Trigger, Volatile } from "./spec.js";
 import { appendHeal, clearStale, loadSite, rememberTier, updateSite } from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
 
@@ -470,8 +470,14 @@ export interface AddInput {
   from?: { capture: CaptureFile; id?: number };
   /** a second saved capture, made with examples[1], for the two-run diff */
   from2?: CaptureFile;
+  /** by param name: the values it allows, set on top of what the op had */
+  allowed?: Record<string, Pick<Param, "enum" | "min" | "max">>;
   fetchImpl?: typeof fetch;
 }
+
+/** What a param says about its values that no capture tells, kept when its op is learned again. */
+const KEPT = ["description", "pattern", "hint", "enum", "min", "max"] as const;
+type Allowed = Partial<Pick<Param, (typeof KEPT)[number]>>;
 
 export interface AddResult {
   operation: Operation;
@@ -613,6 +619,19 @@ function resolves(spec: ResponseSpec, body: string | undefined): boolean {
   }
 }
 
+/** Both runs answered, through the op's recipe, with the same data, and it is not empty. */
+function sameAnswer(op: Operation, run1: Exchange, run2: Exchange | undefined): boolean {
+  const data = (e: Exchange | undefined) => {
+    const r = e?.response;
+    if (!e || !r) return undefined;
+    const j = judge(op, { status: r.status, headers: r.headers, body: r.body ?? "", url: e.request.url });
+    return j.class === "ok" ? j.data : undefined;
+  };
+  const one = data(run1);
+  if (one === undefined || one === null || (Array.isArray(one) && !one.length)) return false;
+  return JSON.stringify(one) === JSON.stringify(data(run2));
+}
+
 function previewOf(data: unknown): AddResult["preview"] {
   const first = Array.isArray(data) ? data[0] : data;
   const cut = capOutput(first, 600);
@@ -655,13 +674,13 @@ function saveOperation(
       url: exchange.request.url,
     });
     if (j.class === "ok") preview = previewOf(j.data);
-    else if (j.class === "blocked" || j.class === "auth" || j.class === "rate") {
-      // a bot wall or a login page is not fixed by editing the recipe
-      warnings.push(
-        `the captured response is ${j.class}: ${j.reason}. The op was learned from ${j.class === "rate" ? "a throttled answer" : "a challenge or sign-in page"}: ` +
-          (j.class === "rate"
-            ? "wait a few minutes, then add again"
-            : `ask the user to run api-anything login ${site} (and clear any challenge), then add again`),
+    else if (learnedNothing(j)) {
+      // A wall's request is not the op's (heal treats it the same way), and editing the recipe fixes nothing.
+      throw new Error(
+        `refusing to save ${operation.name}: the captured response is ${j.class}: ${j.reason}, so it was learned from ${j.class === "rate" ? "a throttled answer" : j.class === "error" ? "a server failure" : "a challenge or sign-in page"}, not the op's own answer. ` +
+          (j.class === "rate" || j.class === "error"
+            ? "Wait a few minutes, then add again"
+            : `Ask the user to run api-anything login ${site} (and clear any challenge), then add again`),
       );
     } else
       warnings.push(
@@ -711,6 +730,28 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   // before any browser run: a too-short or duplicate example would only fail after it
   if (ex1) checkExamples(ex1, "example", ex2);
   if (ex2) checkExamples(ex2, "example 2", ex1);
+  // What a param allows, which no capture tells: the stored op's, with the add's own on top. The examples must fit it.
+  const allowedOf = (name: string): Allowed => {
+    const was = old?.params.find((p) => p.name === name);
+    const kept = Object.fromEntries(KEPT.flatMap((k) => (was?.[k] !== undefined ? [[k, was[k]]] : [])));
+    return { ...kept, ...i.allowed?.[name] };
+  };
+  for (const name of Object.keys(i.allowed ?? {}))
+    if (!(name in ex1))
+      throw new Error(`${name} is no param of ${i.op}; its params are ${Object.keys(ex1).join(", ") || "none"}`);
+  for (const name of Object.keys(ex1)) {
+    const a = allowedOf(name);
+    if (a.min !== undefined && a.max !== undefined && a.min > a.max)
+      throw new Error(`${name}'s min ${a.min} is above its max ${a.max}`);
+    for (const [label, ex] of [
+      ["example", ex1],
+      ["example 2", ex2],
+    ] as const) {
+      const wrong = ex?.[name] !== undefined && refusal(a, asText(ex[name]));
+      if (wrong)
+        throw new Error(`${label} ${name}=${asText(ex![name])} is not a value ${name} allows: it must be ${wrong}`);
+    }
+  }
   for (const c of [i.from?.capture, i.from2]) {
     if (i.write && c && !c.write)
       throw new Error(
@@ -827,12 +868,17 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     warnings.push(
       "the page's confirm dialogs differ between the two runs by more than the example values (another question, step or count): a tier-3 call accepts only the ones run 1 saw, asked the same way, and dismisses any other",
     );
+  // Learned again, an op also keeps what its params allow, and the checks whose args are all still params.
+  const params = learned.operation.params.map((p) => ({ ...p, ...allowedOf(p.name) }));
+  const checks = old?.checks?.filter((c) => Object.keys(c.args).every((k) => params.some((p) => p.name === k)));
   let operation: Operation = {
     ...learned.operation,
     trigger: confirms.length ? { ...asTriggered, confirms } : asTriggered,
     ...(description ? { description } : {}),
     ...(prior && !run2 && prior.minTier > learned.operation.minTier ? { minTier: prior.minTier } : {}),
     response: withRecipe(learned.operation.response, r),
+    params,
+    ...(checks?.length && !i.write ? { checks } : {}),
   };
   const session = mergeCapture(
     i.site,
@@ -858,6 +904,18 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     } catch {
       /* keep minTier 3 */
     }
+  }
+
+  // The second run proves its args reach the request, not that the server reads them there.
+  const changed = Object.keys(ex1).filter((k) => ex2?.[k] !== undefined && asText(ex2[k]) !== asText(ex1[k]));
+  if (ex2 && changed.length && operation.readOnly && sameAnswer(operation, learned.exchange, learned.exchange2)) {
+    const reason = `example 2 (${changed.map((k) => `${k}=${asText(ex2[k])}`).join(", ")}) was answered with example 1's data`;
+    operation = { ...operation, unproven: { params: changed, reason } };
+    warnings.push(
+      `${reason}: the server may not read ${changed.join(", ")} from this request (it may go by a cookie, the IP or the page it was loaded from). ` +
+        "If the two examples just have the same answer, add it again with an example 2 that excludes something example 1 returned (another place, a filter value one of its rows fails). " +
+        `Until then publish refuses ${operation.name}`,
+    );
   }
 
   const again = captures[0] ?? i.from?.capture.id;
@@ -1269,6 +1327,8 @@ export async function healOperation(
     match: op.match,
     readOnly: op.readOnly,
     ...(op.public ? { public: op.public } : {}),
+    ...(op.checks ? { checks: op.checks } : {}),
+    ...(op.unproven ? { unproven: op.unproven } : {}),
     minTier: Math.max(op.minTier, fresh.minTier) as Operation["minTier"],
     response: {
       ...fresh.response,

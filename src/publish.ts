@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { checksTable, type Gate, gate } from "./checks.js";
 import { REPO, summarize } from "./registry.js";
 import { besideOrigins, credentialsOf, ipIn, opUrls, scanSecrets } from "./secrets.js";
 import { home, loadSession, safeName, writePrivate } from "./session.js";
@@ -49,8 +50,19 @@ function personal(spec: Site, notes: string | undefined): string[] {
     for (const [j, s] of (op.trigger.steps ?? []).entries())
       if (s.action === "fill" && s.value && !s.value.includes("{"))
         found.push(`${at}.trigger.steps[${j}] types the literal "${s.value}" into the page`);
-    for (const p of op.params)
+    for (const p of op.params) {
       if (p.default !== undefined) found.push(`${at} param ${p.name} defaults to ${JSON.stringify(p.default)}`);
+      for (const v of p.enum ?? [])
+        if (/\d{5,}/.test(v))
+          found.push(`${at} param ${p.name} allows "${v}": is it your account's, or one of the site's own options?`);
+    }
+    // a check's args are typed by the publisher, as a fill step's value is
+    for (const [j, c] of (op.checks ?? []).entries())
+      found.push(
+        `${at}.checks[${j}] sends ${Object.entries(c.args)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(" ")}: is every value public, none of them yours?`,
+      );
   }
   if (notes) check(notes, "the notes");
   return found;
@@ -68,6 +80,8 @@ export interface Plan {
   warnings: string[];
   /** to the publisher only: may be their own, never put in the pull request */
   personal: string[];
+  /** each op's last verify on its current version: put in the pull request */
+  checks: Gate["rows"];
 }
 
 /** The preview: the export, the shared rules, a live-secret scan no `public` name waives, and the privacy checks. */
@@ -82,6 +96,8 @@ export function plan(name: string, o: { keepExamples?: boolean } = {}): Plan {
     besideOrigins(loadSession(name), [ex.spec.baseUrl, ...ex.spec.operations.flatMap(opUrls)]),
   );
   const vet = vetShared(ex.spec, notes);
+  // the user's own copy, examples and all: what verify ran
+  const checked = gate(r.site);
   const json = `${JSON.stringify(ex.spec, null, 2)}\n`;
   const files = [
     { path: `sites/${name}.json`, text: json },
@@ -110,9 +126,10 @@ export function plan(name: string, o: { keepExamples?: boolean } = {}): Plan {
       "when each op was learned",
       ...(r.site.shared ? ["where it was pulled from"] : []),
     ],
-    errors: [...new Set([...ex.secrets, ...strict])].concat(vet.errors, big),
+    errors: [...new Set([...ex.secrets, ...strict])].concat(vet.errors, big, checked.errors),
     warnings: [...new Set([...ex.warnings, ...vet.warnings])],
     personal: personal(ex.spec, notes),
+    checks: checked.rows,
   };
 }
 
@@ -198,6 +215,10 @@ function prBody(p: Plan, update: boolean): string {
     ...ops,
     "",
     `Stripped before sending: ${p.stripped.join(", ")}. The shared rules passed, and no live cookie or session value of the publisher's was found in it.`,
+    "",
+    "What `api-anything verify` answered on the publisher's machine (every counted case passed; an inconclusive one, a challenge, sign-in page, rate limit or server failure, counts neither way):",
+    "",
+    ...checksTable(p.checks),
     ...(p.warnings.length ? ["", "For the reviewer:", ...p.warnings.map((w) => `- ${w}`)] : []),
   ].join("\n");
 }

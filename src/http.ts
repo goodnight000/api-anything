@@ -109,6 +109,22 @@ export function withDefaults(op: Operation, args: Record<string, unknown>): Reco
   return out;
 }
 
+/** What a value the param does not allow should be instead (its pattern, enum or bounds), or undefined when it is allowed. */
+export function refusal(p: Pick<Param, "pattern" | "hint" | "enum" | "min" | "max">, text: string): string | undefined {
+  if (p.pattern !== undefined && !new RegExp(`^(?:${p.pattern})$`).test(text))
+    return p.hint ?? `a value matching /${p.pattern}/`;
+  if (p.enum && !p.enum.includes(text)) return `one of ${p.enum.map((x) => JSON.stringify(x)).join(", ")}`;
+  if (p.min === undefined && p.max === undefined) return undefined;
+  const n = text.trim() === "" ? Number.NaN : Number(text);
+  if (Number.isNaN(n))
+    return p.min !== undefined && p.max !== undefined
+      ? `a number from ${p.min} to ${p.max}`
+      : `a number ${p.min !== undefined ? `of at least ${p.min}` : `of at most ${p.max}`}`;
+  if (p.min !== undefined && n < p.min) return `at least ${p.min}`;
+  if (p.max !== undefined && n > p.max) return `at most ${p.max}`;
+  return undefined;
+}
+
 /** The fully materialized request: params, cookie/session refs, and the jar's Cookie header. */
 export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session): Request {
   const given = withDefaults(op, args);
@@ -120,11 +136,8 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
       continue;
     }
     vals[p.name] = coerce(p, v);
-    if (p.pattern !== undefined && !new RegExp(`^(?:${p.pattern})$`).test(asText(vals[p.name]))) {
-      throw new Error(
-        `param "${p.name}" must be ${p.hint ?? `a value matching /${p.pattern}/`}, got ${JSON.stringify(v)}`,
-      );
-    }
+    const wrong = refusal(p, asText(vals[p.name]));
+    if (wrong) throw new Error(`param "${p.name}" must be ${wrong}, got ${JSON.stringify(v)}`);
   }
 
   let req: Request = { ...op.request, method: op.request.method.toUpperCase(), headers: { ...op.request.headers } };

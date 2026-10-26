@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { browserAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
+import { verifySite } from "./checks.js";
 import { botWall, emptyResults, loginPath, signInForm } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
@@ -26,8 +27,8 @@ import { type Outline, outline } from "./outline.js";
 import { plan, submit, writeOutbox } from "./publish.js";
 import { pull } from "./registry.js";
 import { loadSession, loggedIn, saveSession, sessionFile, withLock } from "./session.js";
-import { HtmlRecipeSchema, MatchSchema, type Operation, TriggerStepSchema } from "./spec.js";
-import { exportSite, listSites, loadSite, siteNotes } from "./store.js";
+import { CheckSchema, HtmlRecipeSchema, MatchSchema, type Operation, type Param, TriggerStepSchema } from "./spec.js";
+import { exportSite, listSites, loadSite, siteNotes, updateSite } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { SHARED_NOTE } from "./vet.js";
 
@@ -110,8 +111,15 @@ const HELP: Record<string, string> = {
                   --write capture aborted, or an existing write learned again, needs --write: neither is
                   ever saved as a read
   --description <text>  what the op is for; an op added again with no --example keeps the one it had ("" clears it)
+  --enum name=a,b,c  the values a param takes: the site's whole set (its picker's options), not only the
+                  example's; a call with another is refused as input, and nothing is sent
+  --min name=n, --max name=n  bounds on a param's value read as a number (a page, a count, a price)
+                  An op learned again keeps its params' allowed values and descriptions, and its checks.
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.
-  replaced: an op of that name was learned again.`,
+  replaced: an op of that name was learned again. unproven: example 2 was answered with example 1's
+  data, so nothing shows the server reads those params (publish refuses the op until it does).
+  An op whose captured response is a bot challenge, a sign-in page, a rate limit or a server failure
+  is not saved.`,
   call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, ms, next?}; a failure also says retry
   (safe, after_wait, after_fix, no), retryAfterMs and nextCall, and a write says write (not_sent,
@@ -120,7 +128,17 @@ const HELP: Record<string, string> = {
                     first may have gone through): only when the user checked the site
   --idempotency-key <k>  a repeat of a write with the same key returns the first call's record`,
   verify: `api-anything verify [site]
-  Calls every read operation with its stored example args, healing as needed.`,
+  Calls every read operation with its stored example args and its checks, healing as needed, and
+  judges each case: pass, fail, or inconclusive (a challenge, a sign-in page, a rate limit, or a server
+  that failed or could not be reached: it says nothing about the op). The outcomes are kept per op, for
+  publish. An op marked unproven loses the mark when two passing cases that differ only in its
+  unproven params answer differently.`,
+  check: `api-anything check <site> <op> [k=v ...] --expect result|empty|input [--purpose <text>]
+  Records a check on a read: args a human confirmed on the site, and what the site answers them with
+  (result: data; empty: no data, the site's own no-results; input: the site refuses the args). verify
+  runs it; publish refuses while one fails, and shares the checks with the spec, so use only public
+  values. Choose values that exclude something: an empty check (a filter no row passes) shows a param
+  the server ignores. A check with the same args replaces the old one; remove one by editing the spec.`,
   sites: `api-anything sites
   Lists known sites (user specs in ~/.api-anything/sites win over bundled ones).`,
   ops: `api-anything ops <site>
@@ -159,6 +177,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything call <site> <op> [k=v ...] [--allow-writes]
   api-anything inspect <captureId> [<requestId>]
   api-anything pull <site> | publish <site> [--yes]
+  api-anything check <site> <op> [k=v ...] --expect result|empty|input
   api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site> | mcp
 
 api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
@@ -271,6 +290,11 @@ const OPTIONS = {
   cookies: { type: "string" },
   profile: { type: "string" },
   outline: { type: "boolean" },
+  enum: { type: "string", multiple: true },
+  min: { type: "string", multiple: true },
+  max: { type: "string", multiple: true },
+  expect: { type: "string" },
+  purpose: { type: "string" },
 } as const;
 
 /** What a command gets: the flags, the positionals after the command name, and the parsed --steps. */
@@ -588,6 +612,25 @@ function captureAgain(
   ].join(" ");
 }
 
+/** --enum, --min and --max, by param name. */
+function allowedOf(v: Parsed["v"]): Record<string, Pick<Param, "enum" | "min" | "max">> {
+  const out: Record<string, Pick<Param, "enum" | "min" | "max">> = {};
+  for (const [k, x] of Object.entries(kv(v.enum))) {
+    const values = x
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!values.length) throw new Fail(`--enum ${k}= lists no value`, "api-anything add --help");
+    out[k] = { ...out[k], enum: values };
+  }
+  for (const flag of ["min", "max"] as const)
+    for (const [k, x] of Object.entries(kv(v[flag]))) {
+      if (!/^-?\d+(\.\d+)?$/.test(x)) throw new Fail(`--${flag} ${k}=${x}: not a number`, "api-anything add --help");
+      out[k] = { ...out[k], [flag]: Number(x) };
+    }
+  return out;
+}
+
 /** What a repair says it changed: the op was kept, and one thing in it replaced. */
 async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   const [site, name] = pos;
@@ -640,6 +683,7 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
       ? { capture: loadCapture(v.from), id: v["pick-request"] ? Number(v["pick-request"]) : undefined }
       : undefined,
     from2: v.from2 ? loadCapture(v.from2) : undefined,
+    allowed: allowedOf(v),
   });
   const op = r.operation;
   out({
@@ -654,6 +698,7 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     match: op.match,
     ...(op.response.extract ? { extract: op.response.extract } : {}),
     ...(r.preview ? { preview: r.preview } : {}),
+    ...(op.unproven ? { unproven: op.unproven.params } : {}),
     warnings: r.warnings,
     ...(r.captures.length ? { captures: r.captures } : {}),
     saved: r.path,
@@ -699,51 +744,94 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
 
 async function cmdVerify({ pos }: Parsed): Promise<number> {
   const names = pos[0] ? [requireSite(pos[0]).site.name] : listSites();
-  const results = [];
+  const results: Record<string, unknown>[] = [];
+  const proven: string[] = [];
   for (const name of names) {
-    let ops: Operation[];
     try {
-      ops = requireSite(name).site.operations;
+      const v = await verifySite(name);
+      results.push(...v.results.map((r) => ({ site: name, ...r, ok: "outcome" in r && r.outcome === "pass" })));
+      proven.push(...v.proven.map((op) => `${name}/${op}`));
     } catch (e) {
-      results.push({ site: name, ok: false, error: (e as Error).message });
-      continue;
-    }
-    for (const op of ops) {
-      if (!op.readOnly) continue;
-      const args = examplesOf(op);
-      const missing = op.params
-        .filter((p) => p.required && args[p.name] === undefined && p.default === undefined)
-        .map((p) => p.name);
-      if (missing.length) {
-        results.push({ site: name, op: op.name, ok: false, skipped: `no example for ${missing.join(", ")}` });
-        continue;
-      }
-      const r = await call(name, op.name, args);
-      results.push({
-        site: name,
-        op: op.name,
-        ok: r.ok,
-        class: r.class,
-        tier: r.tier,
-        ...(r.healed ? { healed: true } : {}),
-        ...(r.ok ? {} : { reason: r.reason, next: r.next }),
-        ms: r.ms,
-      });
+      results.push({ site: name, ok: false, error: oneLine((e as Error).message) });
     }
   }
+  const count = (o: string) => results.filter((r) => r.outcome === o).length;
   const ok = results.every((r) => r.ok);
   const own = pos[0] ? loadSite(pos[0]) : undefined;
   // a site the user learned and just saw work is one others could use
   const share = ok && own?.source === "user" && !own.site.shared;
   out({
     ok,
+    counts: {
+      pass: count("pass"),
+      fail: count("fail"),
+      inconclusive: count("inconclusive"),
+      skipped: results.filter((r) => r.skipped).length,
+    },
     results,
+    ...(proven.length ? { proven } : {}),
     ...(share
       ? { next: `api-anything publish ${own.site.name} previews sharing it, so others need not learn it` }
       : {}),
   });
-  if (!ok) process.stderr.write("next: follow each failing op's own next hint once, then report what still fails\n");
+  if (!ok)
+    process.stderr.write(
+      count("fail")
+        ? "next: a failing case is a broken op or a wrong check: follow each failing case's own next hint once (change a check only when the site's own page answers its args the other way), then report what still fails\n"
+        : "next: an inconclusive case tested nothing: follow its next hint (login, or wait), then verify again\n",
+    );
   return ok ? 0 : 1;
+}
+
+async function cmdCheck({ v, pos }: Parsed): Promise<number> {
+  const [site, name, ...rest] = pos;
+  if (!site || !name) throw new Fail("missing <site> <op>", "api-anything check --help");
+  const op = requireSite(site).site.operations.find((o) => o.name === name);
+  if (!op) throw new Fail(`no operation "${name}" on ${site}`, `api-anything ops ${site}`);
+  if (!op.readOnly) throw new Fail(`${name} is a write: a check would send it`, "checks are for reads only");
+  const parsed = CheckSchema.safeParse({
+    args: kv(rest),
+    expect: v.expect,
+    ...(v.purpose ? { purpose: v.purpose } : {}),
+  });
+  if (!parsed.success)
+    throw new Fail(
+      v.expect === undefined ? "missing --expect" : `--expect must be result, empty or input, got "${v.expect}"`,
+      "api-anything check --help",
+    );
+  const check = parsed.data;
+  const unknown = Object.keys(check.args).filter((k) => !op.params.some((p) => p.name === k));
+  if (unknown.length)
+    throw new Fail(
+      `unknown arg ${unknown.join(", ")}; ${name} takes ${op.params.map((p) => p.name).join(", ") || "no args"}`,
+      `api-anything ops ${site}`,
+    );
+  const missing = op.params.filter((p) => p.required && p.default === undefined && check.args[p.name] === undefined);
+  if (missing.length && check.expect !== "input")
+    throw new Fail(`missing ${missing.map((p) => p.name).join(", ")}`, "a check gives every required param");
+  const key = (a: Record<string, unknown>) => JSON.stringify(Object.entries(a).sort());
+  let replaced = false;
+  const path = updateSite(site, (cur) => {
+    if (!cur) throw new Error(`site "${site}" disappeared`);
+    return {
+      ...cur,
+      operations: cur.operations.map((o) => {
+        if (o.name !== name) return o;
+        replaced = !!o.checks?.some((c) => key(c.args) === key(check.args));
+        return { ...o, checks: [...(o.checks ?? []).filter((c) => key(c.args) !== key(check.args)), check] };
+      }),
+    };
+  });
+  out({
+    ok: true,
+    site,
+    op: name,
+    check,
+    ...(replaced ? { replaced: true } : {}),
+    saved: path,
+    next: `api-anything verify ${site}`,
+  });
+  return 0;
 }
 
 function cmdSites(): number {
@@ -772,6 +860,8 @@ function cmdOps({ pos }: Parsed): number {
     ...(p.description ? [p.description] : []),
     ...(p.example !== undefined ? [`e.g. ${JSON.stringify(p.example)}`] : []),
     ...(p.hint ? [p.hint] : p.pattern ? [`matches /${p.pattern}/`] : []),
+    ...(p.enum ? [`one of ${p.enum.join(", ")}`] : []),
+    ...(p.min !== undefined || p.max !== undefined ? [`${p.min ?? ""}..${p.max ?? ""}`] : []),
   ];
   out({
     site: site.name,
@@ -785,6 +875,8 @@ function cmdOps({ pos }: Parsed): number {
         (p) => `${p.name}:${p.type}${p.required ? "" : "?"}${about(p).length ? ` (${about(p).join("; ")})` : ""}`,
       ),
       ...(o.minTier > 1 ? { minTier: o.minTier } : {}),
+      ...(o.checks?.length ? { checks: o.checks.length } : {}),
+      ...(o.unproven ? { unproven: o.unproven.reason } : {}),
       trigger: o.trigger.url,
     })),
     ...(site.shared ? { shared: SHARED_NOTE } : {}),
@@ -866,6 +958,7 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
       stripped: p.stripped,
       warnings: p.warnings,
       personal: p.personal,
+      checks: p.checks,
       public: "the files and the pull request are public, under your GitHub account",
       next: `show the user the files and every warning and personal item; only with their explicit OK: ${again} --yes`,
     });
@@ -927,10 +1020,14 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "public",
       "write",
       "description",
+      "enum",
+      "min",
+      "max",
     ],
   },
   call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "dry"] },
   verify: { run: cmdVerify, flags: [] },
+  check: { run: cmdCheck, flags: ["expect", "purpose"] },
   sites: { run: cmdSites, flags: [] },
   ops: { run: cmdOps, flags: [] },
   heal: { run: cmdHeal, flags: [] },

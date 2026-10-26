@@ -112,17 +112,32 @@ export const ResponseSchema = z.object({
   embedded: z.object({ regex: z.string() }).optional(),
 });
 
-export const ParamSchema = z.object({
-  name: z.string().min(1),
-  type: z.enum(["string", "number", "boolean", "object", "array"]).default("string"),
-  required: z.boolean().default(true),
-  description: z.string().optional(),
-  example: z.unknown().optional(),
-  default: z.unknown().optional(),
-  /** a regex the whole value must match; a call with an arg that doesn't is `input`, and nothing is sent */
-  pattern: z.string().refine(validRegex, "pattern must be a valid regular expression").optional(),
-  /** what a valid value looks like, said to the agent when an arg fails `pattern` ("YYYY-MM-DD") */
-  hint: z.string().optional(),
+export const ParamSchema = z
+  .object({
+    name: z.string().min(1),
+    type: z.enum(["string", "number", "boolean", "object", "array"]).default("string"),
+    required: z.boolean().default(true),
+    description: z.string().optional(),
+    example: z.unknown().optional(),
+    default: z.unknown().optional(),
+    /** a regex the whole value must match; a call with an arg that doesn't is `input`, and nothing is sent */
+    pattern: z.string().refine(validRegex, "pattern must be a valid regular expression").optional(),
+    /** what a valid value looks like, said to the agent when an arg fails `pattern` ("YYYY-MM-DD") */
+    hint: z.string().optional(),
+    /** the site's whole set of values for it (not just the example's); any other is `input`, and nothing is sent */
+    enum: z.array(z.string()).min(1).optional(),
+    /** bounds on the value read as a number; a value outside them, or not a number, is `input` */
+    min: z.number().optional(),
+    max: z.number().optional(),
+  })
+  .refine((p) => p.min === undefined || p.max === undefined || p.min <= p.max, "a param's min is above its max");
+
+/** A call a human confirmed, and what the site answers it with: data, no data, or a refusal of the args. */
+export const CheckSchema = z.object({
+  args: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+  expect: z.enum(["result", "empty", "input"]),
+  /** why this case: which value excludes what ("open=no leaves out the open store in example 1") */
+  purpose: z.string().optional(),
 });
 
 export const OperationSchema = z.object({
@@ -144,6 +159,14 @@ export const OperationSchema = z.object({
   minTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
   learnedLoggedIn: z.boolean().default(false),
   learnedAt: z.string().optional(),
+  /** run by `verify` beside the examples; `publish` refuses while one fails */
+  checks: z.array(CheckSchema).optional(),
+  /**
+   * Learning could not show these params change the answer: example 2, which gave them other values,
+   * was answered with example 1's data. `publish` refuses while it is set; a `verify` clears it when
+   * two of its passing cases that differ only in these params answer differently.
+   */
+  unproven: z.object({ params: z.array(z.string()), reason: z.string() }).optional(),
 });
 
 export const SiteSchema = z.object({
@@ -170,6 +193,7 @@ export type Confirm = z.infer<typeof ConfirmSchema>;
 export type Match = z.infer<typeof MatchSchema>;
 export type ResponseSpec = z.infer<typeof ResponseSchema>;
 export type Param = z.infer<typeof ParamSchema>;
+export type Check = z.infer<typeof CheckSchema>;
 export type Operation = z.infer<typeof OperationSchema>;
 export type Site = z.infer<typeof SiteSchema>;
 

@@ -137,6 +137,13 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    run 1's was: what the response recipe reads, when there is one, and for a read an answer that is data: a captured 2xx,
    not a bare acknowledgement, an error, or a request nobody answered (unless run 1's own answer, pinned by the caller, is no data either). Among the requests that pass, the one on run 1's own path that carries the args comes first (the
    wildcard a false path param puts in the match fits sibling endpoints too). When none passes, run 2 disproves nothing.
+   The diff proves an arg reaches the request, not that the server reads it there. So `add` then judges run 2's
+   answer with the op's recipe: when a read's example 2 gave a param another value and its data equals run 1's,
+   and is not empty, the server may go by a cookie, the IP or the page instead. The op is saved with a warning
+   and marked `unproven: {params, reason}` (the params whose values differed). It can be a false alarm: two
+   places with the same stores answer alike. The warning asks for an example 2 that excludes something example
+   1 returned; `publish` refuses the op while the mark stands, and `verify` clears it (below). Two answers that
+   differ for another reason (a timestamp, a shuffled order) hide an ignored param: the check finds a copy, no more.
 4. **Session references.** A header, query or JSON leaf whose value equals a cookie value (raw,
    quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Capture also snapshots the
    final page origin's localStorage and sessionStorage; a leaf equal to a stored value (or to a
@@ -308,6 +315,16 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
 8. **Response.** Store the content type, the XSSI prefix to strip (`)]}'`), a suggested `extract` path (the
    richest array/object carrying the example value), and an inferred **shape** (key paths + types)
    for drift detection. The agent may set `pick` (fields per item) for token efficiency.
+9. **Judge the answer, then save.** `add` judges the op on the answer it was learned from. One that
+   is `blocked`, `auth`, `rate` or a server failure (what a heal counts as having learned nothing) is
+   not saved: the request answered was a wall's, so the error says to log in or wait, then add again.
+   Any other failure saves with a warning that says which recipe flag to fix.
+10. **Allowed values.** A param may carry what no capture tells: `pattern` and `hint`, `enum` (the
+   site's whole set of values, never only the example's) and `min`/`max` (bounds on the value read as
+   a number). `add --enum name=a,b --min name=n --max name=n` sets the last three, and editing the spec
+   sets any of them. A call whose arg fails one is `input` before anything is sent, and the examples
+   must fit them at add. An op learned again keeps them, and the param's description, for params of
+   the same name, and keeps its `checks` whose args are all still params.
 
 ## Writes
 
@@ -775,7 +792,9 @@ request whose document a param fills; a `match` naming a host, path or operation
 lets through as the op's own request); op and param names a letter then letters, digits, `_ . -`;
 regexes (`pick` `~`, `embedded`, param `pattern`) at most 200 characters with no quantified group
 inside a quantified group; at most 50 operations, descriptions and hints at most 500 characters,
-notes at most 8 KB, the file at most 256 KB. Warnings, shown to the human and put in the pull
+notes at most 8 KB, the file at most 256 KB; a param's `enum` at most 100 values of at most 500
+characters each; at most 10 checks per op, each arg a param of the op and at most 500 characters, a
+purpose at most 500; no checks on a write (verify would send it); no `unproven` mark. Warnings, shown to the human and put in the pull
 request for the reviewer: reads sent as POST, writes, ops learned logged in, literal `public` values
 (a shared bearer makes every user's calls that account's), requests or triggers off the spec's own
 site (Algolia behind Hacker News, AppSync behind Goodreads), and the export scan's shape heuristics.
@@ -820,6 +839,29 @@ the same content reuses the branch and reports the open pull request. A failure 
 may have reached the fork (an upload whose answer was lost counts) says the files may be public
 there, and on which branch. The agent skill shows the
 preview to the user and runs `--yes` only on their explicit OK.
+
+**Proof before sharing (`checks.ts`).** A read may carry `checks: [{args, expect, purpose?}]`:
+args a human confirmed on the site and what it answers them with, `result` (data), `empty` (its own
+no-results) or `input` (it refuses them). `api-anything check <site> <op> k=v --expect ...` records
+one (the same args replace the old one). The most useful check excludes something: every optional
+param set at once, each value chosen so one row the example returned fails it, or a value no row
+matches, expecting `empty`, so a param the server ignores shows up as a failing case. `verify` runs
+each read's stored example (expecting `result`) and its checks through `call`, healing as any call
+does, and judges every case: `pass`, `fail`, or `inconclusive` when the answer is `blocked`, `auth`,
+`rate` or a server that failed or could not be reached (`CallResult.server`), which says nothing
+about the op. Its outcomes are kept per op in `~/.api-anything/checks/<site>.json`, with a hash of
+the op as it was after the run (a heal during verify included; `learnedAt` and `unproven` aside),
+so an op changed since has no record. When two passing cases whose args differ only in an op's
+`unproven` params answer differently, verify clears the mark. `publish` refuses an op marked
+`unproven`, an op with checks and no record for its current version, and any counted case that
+failed: every counted case must pass, with no percentage bar, because there are two or three
+human-confirmed cases, not a suite in which one wrong case should be outvoted. Inconclusive cases
+count neither way. The pull request carries the record as a table (case, args of checks, expect,
+outcome), never a failure's reason, which may quote the publisher's pages, nor the example's
+args, which export strips. An op with neither examples nor checks is shown as not verified, and
+does not block. Check args are literals the publisher typed, shared with the spec: the personal
+scan lists every check's args for the publisher to confirm, and an `enum` value holding a run of 5+
+digits (an account's id rather than one of the site's options).
 
 **Nudges, not automation.** Once `verify <site>` passes for a site the user learned, its output
 says it can be shared (`next: api-anything publish <site>`). The skill tells the agent to try `pull`

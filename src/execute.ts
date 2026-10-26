@@ -136,6 +136,8 @@ export interface CallResult {
   retryAfterMs?: number;
   /** failures only: `next` as data */
   nextCall?: NextCall;
+  /** the server failed or could not be reached: the answer says nothing about the request or the args */
+  server?: true;
 }
 
 type Result = Omit<CallResult, "ms">;
@@ -462,6 +464,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     reason: b.reason,
     next: nextFor(b.class, ctx.site, op, b),
     ...stepOf(b),
+    ...(b.server ? { server: true as const } : {}),
     ...extra,
   });
 
@@ -794,7 +797,15 @@ export async function call(
     }
     const reason = a.note ? `${a.reason}; ${a.note}` : a.reason;
     const fail = (): CallResult =>
-      done({ ok: false, class: a.class, tier, reason, next: nextFor(a.class, siteName, op, a), ...stepOf(a) });
+      done({
+        ok: false,
+        class: a.class,
+        tier,
+        reason,
+        next: nextFor(a.class, siteName, op, a),
+        ...stepOf(a),
+        ...(a.server ? { server: true as const } : {}),
+      });
     if (write && !notRun(a)) return fail();
     // A bare 403 is a wall or a refusal of this one entity (a private profile): if the example args
     // answer through the same tier, the args are the problem, and a browser run would not help.

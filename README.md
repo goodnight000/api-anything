@@ -98,7 +98,8 @@ To share one you learned, `publish` previews exactly what would become public: t
 host the spec sends to, and anything that may be yours, such as an email or an account id. Nothing
 is sent until you add `--yes`. Then it opens a pull request from your fork with the GitHub CLI,
 committed under your account's noreply address. A maintainer reviews it, CI runs the same rules,
-and once it merges anyone can pull it.
+and once it merges anyone can pull it. The pull request carries what `verify` answered, and
+`publish` refuses an op whose recorded checks (`api-anything check`) fail.
 
 ```sh
 api-anything publish hn-demo            # preview only
@@ -199,6 +200,8 @@ window. [Details](docs/REFERENCE.md#logging-in)
 - It knows only the operations it was taught. It doesn't support every feature of every site.
 - Repair can fail. There is no CAPTCHA solving, and if a site challenges real Chrome, you have
   to clear the challenge by hand.
+- `verify` proves an op only as far as its examples and checks go: two to three cases a human
+  confirmed, not a test suite. A spec without them is published unverified.
 - No write operations are bundled. LinkedIn messaging isn't bundled and hasn't been tested
   against LinkedIn. Writes are tested only against a local fixture, and they need
   `--allow-writes`. An HTTP 2xx doesn't prove a message was delivered.

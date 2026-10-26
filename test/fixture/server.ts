@@ -82,6 +82,10 @@ if((m=p.match(/^\\/u\\/([^/]+)$/))){
   // Not named like a credential: a random value under a credential's name is a session: ref instead.
   const ei=Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);
   fetch("/api/scoped?q="+encodeURIComponent(new URLSearchParams(location.search).get("q")||"")+"&ei="+ei).then(r=>r.json()).then(out);
+}else if(p==="/stores"){
+  // a store finder whose server answers by the visitor's IP, whatever city the page sends
+  const q=new URLSearchParams(location.search);
+  fetch("/api/stores?city="+encodeURIComponent(q.get("city")||"")+(q.get("open")?"&open="+q.get("open"):"")).then(r=>r.json()).then(out);
 }else if((m=p.match(/^\\/follow\\/([^/]+)$/))){
   document.getElementById("follow").addEventListener("click",()=>fetch("/api/follow?user="+m[1]).then(r=>r.json()).then(out,()=>{}));
 }else if(p==="/walled"){
@@ -190,7 +194,7 @@ export async function startFixture(): Promise<Fixture> {
     if (p === "/search" || p === "/cal") return html(200, page(state.build));
     if (p === "/compose")
       return html(200, page(state.build, '<textarea id="text"></textarea><button id="post">Post</button>'));
-    if (p === "/feed" || p === "/scoped" || p === "/walled" || p.startsWith("/spa/"))
+    if (p === "/feed" || p === "/scoped" || p === "/stores" || p === "/walled" || p.startsWith("/spa/"))
       return html(200, page(state.build));
     if (/^\/follow\/[^/]+$/.test(p)) return html(200, page(state.build, '<button id="follow">Follow</button>'));
     // Native dialogs. A delete behind the browser's own confirm(), which sends only once it is
@@ -410,6 +414,14 @@ export async function startFixture(): Promise<Fixture> {
     if (p === "/api/scoped")
       return json(res, 200, {
         data: { results: [`${u.searchParams.get("q")} one`, `${u.searchParams.get("q")} two`] },
+      });
+    // The stores near the caller's IP: `city` is sent and ignored. `open=no` does filter, so a check can show it.
+    if (p === "/api/stores")
+      return json(res, 200, {
+        stores: [
+          { name: "Central Station", open: true },
+          { name: "Harbour Bridge", open: false },
+        ].filter((x) => u.searchParams.get("open") !== "no" || !x.open),
       });
     // An answer keyed by the visitor's session id ("guest" without one), as a per-session cache key
     // is: a recipe suggested from a signed-in visitor's answer would carry the cookie's value.

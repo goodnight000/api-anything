@@ -336,7 +336,11 @@
         {
           "name": "serviceMethod",
           "type": "string",
-          "required": true
+          "required": true,
+          "enum": [
+            "Pickup",
+            "Delivery"
+          ]
         }
       ],
       "readOnly": true,

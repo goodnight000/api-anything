@@ -8,12 +8,14 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, describe, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 import { browserAvailable, closeBrowser } from "../src/browser.js";
 import { call } from "../src/execute.js";
-import { addOperation } from "../src/heal.js";
+import { addOperation, type CaptureFile } from "../src/heal.js";
 import { parseSite } from "../src/spec.js";
 import { loadSite, saveSite, staleMark } from "../src/store.js";
+import type { Exchange } from "../src/types.js";
+import { type Fixture, startFixture } from "./fixture/server.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-heal-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -24,6 +26,127 @@ async function serve(handler: Parameters<typeof createServer>[1]): Promise<{ ser
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   return { server, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
 }
+
+/** A capture of `page` as a browser makes it: the document, then the request its script sends. */
+async function captureOf(fx: Fixture, page: string, api: string): Promise<CaptureFile> {
+  const exchange = async (id: number, resourceType: string, path: string): Promise<Exchange> => {
+    const res = await fetch(`${fx.url}${path}`);
+    const body = await res.text();
+    const contentType = res.headers.get("content-type") ?? "";
+    return {
+      id,
+      resourceType,
+      request: { method: "GET", url: `${fx.url}${path}`, headers: {} },
+      response: { status: res.status, headers: { "content-type": contentType }, body, contentType },
+    };
+  };
+  const url = `${fx.url}${page}`;
+  return {
+    id: `c-heal-${captureCount++}`,
+    at: new Date().toISOString(),
+    url,
+    finalUrl: url,
+    cookies: [],
+    exchanges: [await exchange(1, "document", page), await exchange(2, "fetch", api)],
+  };
+}
+let captureCount = 0;
+
+describe("add: what it refuses to save, and what it doubts", () => {
+  let fx: Fixture;
+  before(async () => (fx = await startFixture()));
+  after(() => fx.close());
+
+  test("a server that answers both examples with the same data: saved with a warning, and marked unproven", async () => {
+    const r = await addOperation({
+      site: "stores",
+      op: "near",
+      examples: [{ city: "Sydney" }, { city: "Hobart" }],
+      from: { capture: await captureOf(fx, "/stores?city=Sydney", "/api/stores?city=Sydney") },
+      from2: await captureOf(fx, "/stores?city=Hobart", "/api/stores?city=Hobart"),
+      response: { extract: "stores" },
+    });
+    const w = r.warnings.find((x) => /example 1's data/.test(x));
+    assert.ok(w, r.warnings.join(" | "));
+    assert.match(w, /example 2 \(city=Hobart\) was answered with example 1's data/);
+    assert.match(w, /excludes something example 1 returned/);
+    assert.deepEqual(r.operation.unproven?.params, ["city"]);
+    assert.deepEqual(loadSite("stores")!.site.operations[0]!.unproven, r.operation.unproven);
+  });
+
+  test("examples answered with different data prove nothing is ignored: no mark", async () => {
+    const r = await addOperation({
+      site: "scoped",
+      op: "search",
+      examples: [{ q: "kittens" }, { q: "puppies" }],
+      from: { capture: await captureOf(fx, "/scoped?q=kittens", "/api/scoped?q=kittens") },
+      from2: await captureOf(fx, "/scoped?q=puppies", "/api/scoped?q=puppies"),
+    });
+    assert.equal(r.operation.unproven, undefined);
+    assert.equal(
+      r.warnings.some((x) => /example 1's data/.test(x)),
+      false,
+      r.warnings.join(" | "),
+    );
+  });
+
+  test("allowed values are set at add, must fit the examples, and stay with checks when the op is learned again", async () => {
+    const from = async () => ({ capture: await captureOf(fx, "/scoped?q=kittens", "/api/scoped?q=kittens") });
+    await assert.rejects(
+      addOperation({
+        site: "allowed",
+        op: "search",
+        examples: [{ q: "kittens" }],
+        from: await from(),
+        allowed: { q: { enum: ["cats", "dogs"] } },
+      }),
+      /example q=kittens is not a value q allows: it must be one of "cats", "dogs"/,
+    );
+    await assert.rejects(
+      addOperation({
+        site: "allowed",
+        op: "search",
+        examples: [{ q: "kittens" }],
+        from: await from(),
+        allowed: { page: { max: 5 } },
+      }),
+      /page is no param of search; its params are q/,
+    );
+    const r = await addOperation({
+      site: "allowed",
+      op: "search",
+      examples: [{ q: "kittens" }],
+      from: await from(),
+      allowed: { q: { enum: ["kittens", "puppies"] } },
+    });
+    assert.deepEqual(r.operation.params[0]!.enum, ["kittens", "puppies"]);
+    const site = loadSite("allowed")!.site;
+    site.operations[0]!.checks = [{ args: { q: "puppies" }, expect: "result" }];
+    saveSite(site);
+    const again = await addOperation({
+      site: "allowed",
+      op: "search",
+      examples: [{ q: "kittens" }],
+      from: await from(),
+    });
+    assert.deepEqual(again.operation.params[0]!.enum, ["kittens", "puppies"]);
+    assert.deepEqual(again.operation.checks, [{ args: { q: "puppies" }, expect: "result" }]);
+  });
+
+  test("an op learned from a sign-in page is not saved: add says to log in, then add again", async () => {
+    await assert.rejects(
+      addOperation({
+        site: "walled-add",
+        op: "secret",
+        examples: [{ q: "kittens" }],
+        from: { capture: await captureOf(fx, "/stores?city=x", "/private?q=kittens"), id: 2 },
+        response: { html: { items: "li", fields: { name: "" } } },
+      }),
+      /refusing to save .*sign-in page.*api-anything login walled-add.*then add again/,
+    );
+    assert.equal(loadSite("walled-add"), undefined);
+  });
+});
 
 describe("heal", { skip: !browserAvailable() && "no Chromium browser installed" }, () => {
   const servers: Server[] = [];

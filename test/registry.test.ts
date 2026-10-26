@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
+import { verifySite } from "../src/checks.js";
 import { call, heal } from "../src/execute.js";
 import { healOperation } from "../src/heal.js";
 import { plan, submit, writeOutbox } from "../src/publish.js";
@@ -460,6 +461,170 @@ test("publish previews what may be the publisher's own, and strips their history
     p.files.map((f) => f.path),
     ["sites/demo.json", "sites/demo.md"],
   );
+});
+
+test("the shared rules cap allowed values and checks, and refuse checks on a write and an unproven op", () => {
+  assert.deepEqual(
+    errors(
+      spec(
+        {},
+        {
+          params: [{ name: "q", enum: ["kittens", "puppies"] }],
+          checks: [{ args: { q: "zzzz" }, expect: "empty", purpose: "no story is called zzzz" }],
+        },
+      ),
+    ),
+    [],
+  );
+  const refused: [string, Site, RegExp][] = [
+    [
+      "a huge enum",
+      spec({}, { params: [{ name: "q", enum: Array.from({ length: 101 }, (_, i) => `v${i}`) }] }),
+      /param q lists 101 values; at most 100/,
+    ],
+    [
+      "a long enum value",
+      spec({}, { params: [{ name: "q", enum: ["x".repeat(501)] }] }),
+      /enum value is 501 characters/,
+    ],
+    [
+      "many checks",
+      spec({}, { checks: Array.from({ length: 11 }, (_, i) => ({ args: { q: `q${i}xx` }, expect: "result" })) }),
+      /11 checks; at most 10/,
+    ],
+    [
+      "a long check arg",
+      spec({}, { checks: [{ args: { q: "x".repeat(501) }, expect: "result" }] }),
+      /check 1 arg q is 501/,
+    ],
+    [
+      "a check arg no param takes",
+      spec({}, { checks: [{ args: { page: "2" }, expect: "result" }] }),
+      /sets page, which is no param/,
+    ],
+    [
+      "a check on a write",
+      spec(
+        {},
+        {
+          readOnly: false,
+          request: { method: "POST", url: "https://news.example.com/api/s", headers: {} },
+          checks: [{ args: { q: "abc" }, expect: "result" }],
+        },
+      ),
+      /a write has checks/,
+    ],
+    [
+      "unproven",
+      spec({}, { unproven: { params: ["q"], reason: "example 2 (q=cats) was answered with example 1's data" } }),
+      /nothing shows the server reads q/,
+    ],
+  ];
+  for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
+});
+
+test("publish runs on verify's record: every counted check passes, inconclusive ones are shown, and the record goes in the pull request", async () => {
+  const answers: Record<string, () => Response> = {
+    kittens: () => json({ hits: [{ title: "kittens everywhere" }] }),
+    zzzz: () => json({ hits: [] }),
+    cats: () => new Response("slow down", { status: 429 }),
+  };
+  const fetchImpl = (async (u: string | URL | Request) =>
+    answers[new URL(String(u)).searchParams.get("q")!]!()) as typeof fetch;
+  const opts = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl };
+  saveSite(
+    spec(
+      {},
+      {
+        params: [{ name: "q", example: "kittens" }],
+        unproven: { params: ["q"], reason: "example 2 (q=cats) was answered with example 1's data" },
+        checks: [
+          { args: { q: "zzzz" }, expect: "empty", purpose: "no story is called zzzz" },
+          { args: { q: "cats" }, expect: "result" },
+        ],
+      },
+    ),
+  );
+  const before = plan("demo", { keepExamples: true }).errors.join("\n");
+  assert.match(
+    before,
+    /search: example 2 \(q=cats\) was answered with example 1's data, so nothing shows the server reads q: add it again/,
+  );
+  assert.match(before, /search: its checks have not run on this version of it: api-anything verify demo/);
+
+  const v = await verifySite("demo", opts);
+  assert.deepEqual(
+    v.results.map((r) => ("outcome" in r ? [r.case, r.outcome, r.got] : r)),
+    [
+      ["example", "pass", "result"],
+      ["check 1", "pass", "empty"],
+      ["check 2", "inconclusive", "rate"],
+    ],
+  );
+  // the example and check 1 differ only in q and answer differently: q is read after all
+  assert.deepEqual(v.proven, ["search"]);
+  assert.equal(loadSite("demo")!.site.operations[0]!.unproven, undefined);
+  const p = plan("demo", { keepExamples: true });
+  assert.deepEqual(p.errors, []);
+  assert.match(p.personal.join("\n"), /checks\[0\] sends q=zzzz: is every value public/);
+
+  writeOutbox(p);
+  const up = "repos/goodnight000/api-anything";
+  const gh = fakeGh({
+    "GET user": { login: "octo", id: 42 },
+    [`POST ${up}/forks`]: { full_name: "octo/api-anything" },
+    [`GET ${up}/git/ref/heads/main`]: { object: { sha: "a".repeat(40) } },
+    "POST repos/octo/api-anything/git/refs": {},
+    "PUT repos/octo/api-anything/contents/sites/demo.json": {},
+    [`POST ${up}/pulls`]: { html_url: "https://github.com/goodnight000/api-anything/pull/8" },
+  });
+  await submit("demo", { keepExamples: true, retryMs: 1 });
+  const body = String(gh.log().find((c) => c.args[3] === `${up}/pulls`)!.input?.body);
+  assert.match(body, /\| `search` \| example \| result \| pass \|/);
+  assert.match(body, /\| `search` \| check 1 \(q=zzzz\): no story is called zzzz \| empty \| pass \|/);
+  assert.match(body, /\| `search` \| check 2 \(q=cats\) \| result \| inconclusive \(rate\) \|/);
+
+  // a check that fails holds the spec back
+  answers.cats = () => json({ hits: [] });
+  await verifySite("demo", opts);
+  assert.match(plan("demo").errors.join("\n"), /search: check 2 \(q=cats\) expects result, and answered empty/);
+  // and a changed op has no record until verify runs on it again
+  const s = loadSite("demo")!.site;
+  s.operations[0]!.checks = s.operations[0]!.checks!.slice(0, 1);
+  saveSite(s);
+  assert.match(plan("demo").errors.join("\n"), /its checks have not run on this version/);
+});
+
+test("a server that failed or could not be reached is inconclusive: call says server, through every finishing step", async () => {
+  saveSite(spec({}, { params: [{ name: "q" }], checks: [{ args: { q: "kittens" }, expect: "result" }] }));
+  for (const fetchImpl of [
+    (async () => new Response("upstream down", { status: 503 })) as unknown as typeof fetch,
+    (async () => {
+      throw new TypeError("fetch failed: connection reset");
+    }) as unknown as typeof fetch,
+  ]) {
+    const opts = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl };
+    const r = await call("demo", "search", { q: "kittens" }, opts);
+    assert.equal(r.ok, false);
+    assert.equal(r.server, true, JSON.stringify(r));
+    const v = await verifySite("demo", opts);
+    assert.deepEqual(
+      v.results.map((x) => ("outcome" in x ? [x.case, x.outcome] : x)),
+      [["check 1", "inconclusive"]],
+    );
+  }
+  // a refusal of the request itself is the op's answer, not the server's failure
+  const r = await call(
+    "demo",
+    "search",
+    { q: "kittens" },
+    {
+      maxTier: 1,
+      minIntervalMs: 0,
+      fetchImpl: (async () => new Response("bad request", { status: 422 })) as unknown as typeof fetch,
+    },
+  );
+  assert.equal(r.server, undefined, JSON.stringify(r));
 });
 
 /** A stand-in for `gh`: logs each call and answers from a route table, 404 for anything else. */

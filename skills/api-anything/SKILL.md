@@ -123,7 +123,15 @@ don't capture pages the user didn't ask for.
      --example q=kittens --example2 q=puppies --pick title,url
    ```
    - Give two different example sets whenever you can. The second run separates params from
-     nonces and signatures.
+     nonces and signatures. Pick example 2 so its answer must differ: it excludes something example
+     1 returned (another place, a filter value one of example 1's rows fails). If `add` warns that
+     example 2 was answered with example 1's data (`unproven`), the server may ignore that param (it
+     goes by a cookie or the IP): add again with an example 2 that should answer differently. If
+     the answers still match, tell the user the param may do nothing; `publish` refuses the op.
+   - When the site offers a fixed set of values for a param (a picker, a radio group, a service
+     method), list all of them with `--enum name=a,b,c`, never only the example's. Bound a number
+     with `--min name=n --max name=n`. Never list a value of the user's own account (a saved
+     address id).
    - Example values must be at least 3 characters (a second example lifts this, see the next
      point) and distinct from each other, and they must appear in the request. `add` fails if an
      example is not in the chosen request: pick another request rather than dropping the param.
@@ -161,12 +169,26 @@ don't capture pages the user didn't ask for.
      (`--extract`, `--pick`, `--html`, `--embedded`). That needs no browser and no `--example`:
      the op's stored examples are used, so its params stay (`replaced: true`). If it says the
      capture does not carry them, the capture was made with other values: pass those with `--example`.
-   - If a warning says the captured response is `blocked` or `auth`, or `add` fails because the
-     trigger landed on a sign-in page, the recipe is not the problem: ask the user to run
-     `api-anything login <site>`, then add again.
+   - If `add` refuses because the captured response is a challenge or sign-in page (`blocked`,
+     `auth`), or the trigger landed on a sign-in page, nothing was saved and the recipe is not the
+     problem: ask the user to run `api-anything login <site>`, then add again. A rate limit or a
+     server failure: wait a few minutes, then add again.
 3. **Call** it with a new value: `api-anything call site search q=otters`. Check that `data` is what
    the user wanted.
-4. **Verify.** `api-anything verify site` calls every read op with its example args.
+4. **Check.** Record one or two checks that would catch a param the server ignores, with values
+   the site shows (never the user's own name, address, account id or email: checks are shared):
+   ```
+   api-anything check site search q=kittens type=video sort=new --expect result --purpose "type=video drops the article in the example; sort=new reorders"
+   api-anything check site search q=zzqqxxnothing --expect empty
+   ```
+   Set every optional param in one `result` check, each value chosen so at least one row the
+   example returned fails it while some rows pass. Add an `empty` check (a value nothing matches),
+   and an `input` check where the site refuses a value. Then read the check's answer with `call`:
+   every row must satisfy every value you set.
+5. **Verify.** `api-anything verify site` runs every read op's example and checks: each case is
+   `pass`, `fail` or `inconclusive` (a challenge, sign-in, rate limit or server failure: it tested
+   nothing; follow its `next`, then verify again). A failing case means the op is broken, or the check
+   is wrong: change a check only if the site's own page answers those args the other way.
 
 The `add` output lists `warnings`. Read them. A warning such as "minTier 3" means every call runs
 the browser. Verify new arguments there too; the runtime refuses captures whose parameter
@@ -286,7 +308,8 @@ don't edit the spec to get past it; learn the site yourself instead.
 `next` suggests publishing. Publishing is the user's decision, every time:
 
 1. `api-anything publish <site>` (add `--keep-examples` only if the examples are public and
-   harmless) only previews. Show the user the `files` it lists, every `warnings` item, every
+   harmless) only previews. It refuses while an op is `unproven`, has checks `verify` has not run on
+   its current version, or has a failing check; the pull request shows what `verify` answered. Show the user the `files` it lists, every `warnings` item, every
    `personal` item (an email, an account id, a literal typed into the page: what may be theirs), and
    that the pull request is public under their GitHub account.
 2. Only on their explicit OK, run the same command with `--yes`. It needs the GitHub CLI signed in
