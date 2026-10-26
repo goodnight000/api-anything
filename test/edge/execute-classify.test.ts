@@ -1084,13 +1084,14 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
       assert.deepEqual(r.data, [{ me: "second" }]);
       assert.equal(me(), 2, "one retry");
 
-      // logged out with nothing new to import: one retry, then the login hint
+      // logged out with nothing new to import: the same cookies again are not retried, and the hint
+      // names the profile to sign in to again, since login would import the same ones
       fx.state.sid = "third";
       fx.hits.length = 0;
       const out = await call("t2auth", "me", {}, o);
       assert.equal(out.class, "auth", JSON.stringify(out));
-      assert.match(out.next ?? "", /api-anything login t2auth/);
-      assert.equal(me(), 2, "at most once per call");
+      assert.match(out.next ?? "", /sign in to 127\.0\.0\.1 in Chrome profile "Default"/);
+      assert.equal(me(), 1, "no retry with the same cookies");
 
       // a write answered 200 with the login page may have run: never resent
       fx.hits.length = 0;
@@ -1154,13 +1155,13 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
       assert.deepEqual(r.data, [{ me: "second" }]);
       assert.equal(me(), 2, "one retry");
 
-      // logged out with nothing new to import: one retry, then the login hint
+      // logged out with nothing new to import: no retry, and the hint names the profile
       fx.state.sid = "third";
       fx.hits.length = 0;
       const out = await call("t3auth", "me", {}, o);
       assert.equal(out.class, "auth", JSON.stringify(out));
-      assert.match(out.next ?? "", /api-anything login t3auth/);
-      assert.equal(me(), 2, "at most once per call");
+      assert.match(out.next ?? "", /sign in to 127\.0\.0\.1 in Chrome profile "Default"/);
+      assert.equal(me(), 1, "no retry with the same cookies");
     } finally {
       delete process.env.API_ANYTHING_BROWSER_ROOTS;
     }

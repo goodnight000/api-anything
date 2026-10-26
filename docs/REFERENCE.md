@@ -150,7 +150,22 @@ api-anything login linkedin.com --profile "Chrome/Profile 1"
 ```
 
 The choice is remembered: when a call later returns `class: "auth"`, api-anything re-imports from
-that same profile once on its own before asking you to log in again.
+that same profile once on its own before asking you to log in again. It retries the call only if the
+re-import brought new login cookies. If they are the same ones, the site has ended that sign-in in
+your browser too, so the call's `next` says where to sign in, for example `sign in to linkedin.com in
+Chrome profile "Work"`, rather than sending you back to `login`, which would import them again.
+
+**What counts as signed in.** Many sites give every visitor a session cookie named like a login
+(`laravel_session`, a Rails `_app_session`, `ci_session`). Before it imports or opens a window,
+`login` fetches the site once with no cookies and records the names of the cookies it is given
+(names only, in the session file). Those never count as a sign-in. The output says `loggedIn` and
+`renewed`, plus a `warning` when the imported cookies show no sign-in or are the same login cookies
+the session already had. If a site's real login cookie has an unusual name, list it in the spec's
+`loginCookies`; that list always wins.
+
+A write learned while signed in is checked before it is sent: if the session has no live login
+cookie (expired or missing), api-anything re-imports first, and if there is still none the call
+returns `class: "auth"` and sends nothing.
 
 On macOS the first import shows one Keychain prompt ("security wants to use the … Safe Storage" key);
 allow it. The imported session is the *same* one as your browser, so if the site logs it out, both
@@ -158,7 +173,10 @@ go — avoid heavy automated traffic on it. Other ways in:
 
 - `--window` opens a visible Chrome window to sign in by hand (an independent session). Use it when
   the site asks for 2FA or a captcha, or when you don't want to share your browser's session. It is
-  also the automatic fallback when nothing is importable.
+  also the automatic fallback when nothing is importable. Finish signing in, 2FA included, then close
+  the window or press Enter: it does not close itself, because some sites set their login cookie before
+  the second factor is done. It counts only if a login cookie appeared or changed while it was open;
+  otherwise `login` answers `ok: false`, says why, and keeps the session you had.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
 - `api-anything logout <site>` clears the stored session.
 

@@ -814,6 +814,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       trigger,
       readOnly: !i.write,
       loginCookies: existing?.loginCookies,
+      guestCookies: loadSession(i.site).guestCookies,
       public: i.public,
       // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
       ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
@@ -1297,6 +1298,7 @@ export async function healOperation(
       trigger: op.trigger,
       readOnly: op.readOnly,
       loginCookies: o.loginCookies,
+      guestCookies: loadSession(site).guestCookies,
       public: op.public,
       established,
     }));

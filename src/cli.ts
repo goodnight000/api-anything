@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { z } from "zod";
-import { browserAvailable, closeBrowser, login, ProfileInUse } from "./browser.js";
+import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { verifySite } from "./checks.js";
 import { botWall, emptyResults, loginPath, signInForm } from "./classify.js";
 import { call, heal, type Tier } from "./execute.js";
@@ -16,17 +16,25 @@ import {
   fillTrigger,
   loadCapture,
   PROFILE_HINT,
-  profileDir,
   unplaced,
 } from "./heal.js";
 import { buildRequest } from "./http.js";
 import { AmbiguousProfile } from "./import.js";
 import { type Candidate, capturePages, pageUrls, rankCandidates } from "./learn.js";
-import { cookieNames, importSession, logout, resolveLoginTarget } from "./login.js";
+import {
+  cookieNames,
+  importSession,
+  importWarning,
+  knownGuests,
+  logout,
+  resolveLoginTarget,
+  windowLogin,
+  windowRetry,
+} from "./login.js";
 import { type Outline, outline } from "./outline.js";
 import { plan, submit, writeOutbox } from "./publish.js";
 import { pull } from "./registry.js";
-import { loadSession, loggedIn, saveSession, sessionFile, withLock } from "./session.js";
+import { loadSession } from "./session.js";
 import { CheckSchema, HtmlRecipeSchema, MatchSchema, type Operation, type Param, TriggerStepSchema } from "./spec.js";
 import { exportSite, listSites, loadSite, siteNotes, updateSite } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
@@ -62,7 +70,11 @@ const HELP: Record<string, string> = {
               remembered: a later automatic re-import uses the same profile.
   --window    open a visible browser window to sign in by hand (an independent session); also the
               automatic fallback when nothing is importable. This is where you solve 2FA/captchas.
-  --cookies   import a cookies.txt (Netscape) or JSON export (Cookie-Editor / Playwright), for CI`,
+              It counts only if a login cookie appears or changes while it is open; else ok:false
+              and the stored session is kept.
+  --cookies   import a cookies.txt (Netscape) or JSON export (Cookie-Editor / Playwright), for CI
+  Output: loggedIn, renewed (new login cookies), and a warning when the cookies show no sign-in or
+  are the ones the session already had. Cookies every signed-out visitor gets never count.`,
   logout: `api-anything logout <site>
   Clears the stored cookie jar and this site's cookies in api-anything's browser profile.`,
   capture: `api-anything capture <url> [--steps <json>] [--soft-from <url>] [--example k=v]... [--write] [--limit n] [--outline]
@@ -324,23 +336,24 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
     process.stderr.write(
       `${reason ? `${reason} ` : ""}Sign in to ${url} in the browser window, then close it or press Enter here.\n`,
     );
-    const cookies = await login({ url, profileDir: profileDir() });
-    withLock(sessionFile(site), () => saveSession(site, { ...loadSession(site), cookies, source: "window" }));
-    out({
-      ok: true,
-      site,
-      source: "window",
-      cookies: cookieNames(cookies),
-      loggedIn: loggedIn(cookies, loginCookies),
-    });
+    const w = await windowLogin(site, url, { loginCookies });
+    if (!w.ok)
+      throw new Fail(w.reason, windowRetry(site, `api-anything login ${site} --window`), {
+        site,
+        source: "window",
+        cookies: cookieNames(w.cookies),
+      });
+    out({ ok: true, site, source: "window", cookies: cookieNames(w.cookies), loggedIn: true, renewed: w.renewed });
     return 0;
   };
 
   if (v.window) return runWindow();
 
+  // what a signed-out visit is given, so those names do not pass for a sign-in
+  const guest = await knownGuests(site, url, loginCookies);
   let imported: Awaited<ReturnType<typeof importSession>>;
   try {
-    imported = await importSession(site, url, { loginCookies, profile: v.profile, file: v.cookies });
+    imported = await importSession(site, url, { loginCookies, profile: v.profile, file: v.cookies, guest });
   } catch (e) {
     if (!(e instanceof AmbiguousProfile)) throw e;
     throw new Fail(
@@ -366,10 +379,14 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
     ...(imported.name ? { profileName: imported.name } : {}),
     ...(imported.email ? { account: imported.email } : {}),
     cookies: cookieNames(imported.cookies),
-    loggedIn: loggedIn(imported.cookies, loginCookies),
+    loggedIn: imported.signedIn,
+    renewed: imported.renewed,
+    ...withWarning(importWarning(url, imported)),
   });
   return 0;
 }
+
+const withWarning = (warning: string | undefined) => (warning ? { warning } : {});
 
 async function cmdLogout({ pos }: Parsed): Promise<number> {
   const site = pos[0];

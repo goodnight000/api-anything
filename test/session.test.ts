@@ -11,7 +11,10 @@ import {
   loggedIn,
   mergeCapture,
   parseCookieHeader,
+  renewedSignIn,
   safeName,
+  saveSession,
+  signInCookies,
 } from "../src/session.js";
 import type { StoredCookie } from "../src/types.js";
 
@@ -84,6 +87,57 @@ test("loggedIn heuristic and explicit loginCookies", () => {
     false,
     "expired does not count",
   );
+});
+
+test("a cookie every signed-out visitor is given is no evidence of a sign-in; a pinned loginCookies still wins", () => {
+  // what Laravel, Rails, CodeIgniter and GitHub hand a guest, every name matching the login heuristic
+  const visitor = [
+    c("laravel_session", "eyJpdiI6IkJ4b2V3", ".shop.test"),
+    c("_myapp_session", "c2Vzc2lvbi1kYXRh", ".shop.test"),
+    c("ci_session", "a1b2c3d4e5f6a7b8", ".shop.test"),
+    c("_gh_sess", "Z3Vlc3Qtc2Vzc2lvbg", ".shop.test"),
+    c("logged_in", "no", ".shop.test"),
+  ];
+  const guest = ["_gh_sess", "_myapp_session", "ci_session", "laravel_session", "logged_in"];
+  assert.equal(loggedIn(visitor), true, "the name heuristic alone takes a guest's session for a login");
+  assert.equal(loggedIn(visitor, undefined, guest), false);
+  assert.deepEqual(signInCookies(visitor, undefined, guest), []);
+  const member = [...visitor, c("remember_web_59ba36", "eyJpdiI6Ik1lbWJlcg", ".shop.test")];
+  assert.equal(loggedIn(member, undefined, guest), true, "a login cookie no visitor is given counts");
+  assert.equal(loggedIn([...visitor, c("logged_in", "yes", "shop.test")], undefined, guest), true, "by value");
+  assert.equal(loggedIn(visitor, ["laravel_session"], guest), true, "a pinned name is the site's own word");
+  assert.equal(
+    loggedIn(
+      [c("remember_web_59ba36", "eyJpdiI6Ik1lbWJlcg", ".shop.test", { expires: 1 }), ...visitor],
+      undefined,
+      guest,
+    ),
+    false,
+    "an expired login cookie is none",
+  );
+});
+
+test("renewedSignIn names the login cookies that appeared or changed, never a visitor's", () => {
+  const guest = ["app_session"];
+  const before = [c("app_session", "visitor-000000001", "x.test"), c("auth_token", "dead-token-0000001", "x.test")];
+  assert.deepEqual(renewedSignIn(before, before, undefined, guest), [], "the same cookies renew nothing");
+  const rotated = [c("app_session", "visitor-000000002", "x.test"), before[1]!];
+  assert.deepEqual(renewedSignIn(before, rotated, undefined, guest), [], "a visitor's cookie rotating is not a login");
+  assert.deepEqual(
+    renewedSignIn(before, [rotated[0]!, c("auth_token", "fresh-token-000001", "x.test")], undefined, guest),
+    ["auth_token"],
+  );
+  assert.deepEqual(renewedSignIn([], [c("auth_token", "fresh-token-000001", "x.test")], undefined, guest), [
+    "auth_token",
+  ]);
+});
+
+test("guest cookie names live in the session file, kept by every merge", () => {
+  process.env.API_ANYTHING_HOME = mkdtempSync(join(tmpdir(), "aa-"));
+  saveSession("g", { cookies: [], values: {}, guestCookies: ["app_session"] });
+  mergeCapture("g", [c("auth_token", "0123456789abcdef", "x.test")]);
+  assert.deepEqual(loadSession("g").guestCookies, ["app_session"]);
+  assert.equal(loadSession("g").cookies.length, 1);
 });
 
 test("session store: API_ANYTHING_HOME override, 0700 dirs, 0600 files, merge by name/domain/path", () => {

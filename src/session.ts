@@ -43,6 +43,12 @@ export interface Session {
   origins?: string[];
   /** where the cookies came from: "<browser>:<profile>" (import), "window", or "file"; drives self-heal re-import */
   source?: string;
+  /**
+   * The names, never the values, of the cookies a signed-out visit to the site is given (`knownGuests`,
+   * saved by a login). A framework hands every visitor a `laravel_session` or an `_app_session`, so a name here
+   * is no evidence of a sign-in.
+   */
+  guestCookies?: string[];
   updatedAt?: string;
 }
 
@@ -156,6 +162,7 @@ export function loadSession(site: string): Session {
     ...(s.valueHosts && typeof s.valueHosts === "object" ? { valueHosts: s.valueHosts } : {}),
     ...(s.kinds ? { kinds: s.kinds } : {}),
     ...(Array.isArray(s.origins) ? { origins: s.origins } : {}),
+    ...(Array.isArray(s.guestCookies) ? { guestCookies: s.guestCookies } : {}),
     source: s.source,
     updatedAt: s.updatedAt,
   };
@@ -256,6 +263,7 @@ export function mergeCapture(
       source: s.source,
       ...(Object.keys(kinds).length ? { kinds } : {}),
       ...(s.origins ? { origins: s.origins } : {}),
+      ...(s.guestCookies ? { guestCookies: s.guestCookies } : {}),
     };
     return saveSession(site, merged, learned?.urls);
   });
@@ -399,10 +407,45 @@ export function parseCookieHeader(raw: string): Record<string, string> {
 export const AUTH_COOKIE =
   /^(auth_token|sessionid|session_id|li_at|sid|ssid|__secure-\dpsid|user_session|reddit_session|remember_\w+|\w*_session|\w*_sess)$/i;
 
-export function loggedIn(cookies: StoredCookie[], loginCookies?: string[], now = Date.now()): boolean {
+/**
+ * The live cookies that show a sign-in: the pinned `loginCookies`; else auth-looking ones whose name a
+ * signed-out visitor is not also given (`guest`), since a name every visitor gets proves nothing.
+ */
+export function signInCookies(
+  cookies: StoredCookie[],
+  loginCookies?: string[],
+  guest: string[] = [],
+  now = Date.now(),
+): StoredCookie[] {
   const live = cookies.filter((c) => !expired(c, now) && c.value);
-  if (loginCookies?.length) return loginCookies.every((n) => live.some((c) => c.name === n));
-  return live.some(
-    (c) => (AUTH_COOKIE.test(c.name) && c.value.length >= 8) || (c.name === "logged_in" && c.value === "yes"),
+  if (loginCookies?.length) return live.filter((c) => loginCookies.includes(c.name));
+  return live.filter(
+    (c) =>
+      (c.name === "logged_in" && c.value === "yes") ||
+      (!guest.includes(c.name) && AUTH_COOKIE.test(c.name) && c.value.length >= 8),
   );
+}
+
+export function loggedIn(
+  cookies: StoredCookie[],
+  loginCookies?: string[],
+  guest?: string[],
+  now = Date.now(),
+): boolean {
+  const found = signInCookies(cookies, loginCookies, guest, now);
+  if (loginCookies?.length) return loginCookies.every((n) => found.some((c) => c.name === n));
+  return found.length > 0;
+}
+
+/** The names of the sign-in cookies `after` holds that `before` did not, or held with another value. */
+export function renewedSignIn(
+  before: StoredCookie[],
+  after: StoredCookie[],
+  loginCookies?: string[],
+  guest?: string[],
+  now = Date.now(),
+): string[] {
+  const had = new Set(signInCookies(before, loginCookies, guest, now).map((c) => `${c.name}=${c.value}`));
+  const fresh = signInCookies(after, loginCookies, guest, now).filter((c) => !had.has(`${c.name}=${c.value}`));
+  return [...new Set(fresh.map((c) => c.name))].sort();
 }

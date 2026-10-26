@@ -1318,7 +1318,8 @@ export async function pageFetch(o: {
 
 /**
  * Open `url` headed so the user can sign in. Resolves when they close the window or press Enter
- * in the terminal; what counts as logged in is the caller's call. Returns the site's cookies.
+ * in the terminal; what counts as logged in is the caller's call. Returns the site's cookies as the
+ * window opened, before the page loaded, and as it closed.
  */
 export async function login({
   url,
@@ -1328,7 +1329,7 @@ export async function login({
   url: string;
   profileDir: string;
   waitForEnter?: boolean;
-}): Promise<StoredCookie[]> {
+}): Promise<{ opened: StoredCookie[]; closed: StoredCookie[] }> {
   const release = hold();
   try {
     return await loginWindow(url, profileDir, waitForEnter);
@@ -1337,8 +1338,16 @@ export async function login({
   }
 }
 
-async function loginWindow(url: string, profileDir: string, waitForEnter: boolean): Promise<StoredCookie[]> {
+// It does not close itself once a login cookie appears: a site can set its session cookie before a
+// second factor, a consent page or a redirect back from the identity provider is done, and closing
+// then would keep a half-finished sign-in.
+async function loginWindow(
+  url: string,
+  profileDir: string,
+  waitForEnter: boolean,
+): Promise<{ opened: StoredCookie[]; closed: StoredCookie[] }> {
   const ctx = await openBrowser({ profileDir, headless: false });
+  const opened = siteCookies(await ctx.cookies(), url);
   const page = ctx.pages()[0] ?? (await ctx.newPage());
   await page.goto(url);
   // Closing the last window closes the context, after which cookies can't be read, so keep a snapshot.
@@ -1372,5 +1381,5 @@ async function loginWindow(url: string, profileDir: string, waitForEnter: boolea
     }
     await closeBrowser();
   }
-  return siteCookies(snapshot, url);
+  return { opened, closed: siteCookies(snapshot, url) };
 }

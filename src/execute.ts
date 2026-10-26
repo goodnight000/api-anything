@@ -90,6 +90,7 @@ export type Retry = "no" | "safe" | "after_wait" | "after_fix";
 export type NextAction =
   | "retry"
   | "login"
+  | "sign_in_browser"
   | "heal"
   | "relearn"
   | "fix_args"
@@ -109,6 +110,12 @@ export interface NextCall {
   mode?: "window";
   /** raise_tier: the tier the call needs */
   tier?: Tier;
+  /**
+   * sign_in_browser: the everyday browser profile the session is imported from ("Chrome/Profile 1"),
+   * where the user signs in again by hand. A re-import from it brought back the same login cookies, so
+   * `login` would only import them once more; the call re-imports by itself on the retry.
+   */
+  profile?: string;
 }
 
 export interface CallResult {
@@ -229,7 +236,14 @@ export function finish(r: Result, op: Operation | undefined, site: string | unde
   return out;
 }
 
-function nextFor(c: CallResult["class"], site: string, op: Operation, a?: Attempt): string | undefined {
+/** `signIn`: how the user signs in again, when it is not `api-anything login` (`reimportIfBrowser`) */
+function nextFor(
+  c: CallResult["class"],
+  site: string,
+  op: Operation,
+  a?: Attempt,
+  signIn = `run: api-anything login ${site}`,
+): string | undefined {
   if (c === "ok") return undefined;
   if (c === "refused")
     return "only if the user asked for this write: rerun with --allow-writes (MCP: start the server with --allow-writes)";
@@ -241,7 +255,7 @@ function nextFor(c: CallResult["class"], site: string, op: Operation, a?: Attemp
     return `the site refused the write, so it did not run: read reason, check the args against: api-anything ops ${site}; do not send it again unchanged`;
   switch (c) {
     case "auth":
-      return `ask the user to run: api-anything login ${site}; then ${ran ? "check the site, and retry only if the write is not there" : "retry once"}`;
+      return `ask the user to ${signIn}; then ${ran ? "check the site, and retry only if the write is not there" : "retry once"}`;
     case "rate":
       return a?.retryAfterMs !== undefined
         ? "rate limited: do not retry before retryAfterMs (the time in reason)"
@@ -724,6 +738,35 @@ export async function call(
         : nextFor("input", siteName, op);
     return done({ ok: false, class: "input", reason: (e as Error).message, next });
   }
+  // auth recovery steps taken this call: 1 re-import, 2 the profile's cookies, 3 a trigger run
+  let authStep = 0;
+  /** where the user signs in again when a re-import brought back no new login (`reimportIfBrowser`) */
+  let signIn: { text: string; step: NextCall } | undefined;
+  const reimport = async () => {
+    authStep = 1;
+    const r = await reimportIfBrowser(siteName, op.request.url, site.loginCookies);
+    signIn =
+      r.signIn && r.profile ? { text: r.signIn, step: { action: "sign_in_browser", profile: r.profile } } : undefined;
+    return r.renewed;
+  };
+  // A write learned signed in, with no live login cookie in the jar (expired, or never there), would be
+  // refused, or run as a guest: re-import first, and send nothing while none is back. Before the
+  // duplicate guard records it, since it is not sent. The check leaves `guestCookies` out: a spec
+  // learned before they were recorded, or on someone else's machine, may have counted a guest name as
+  // its login, and a signed-in write must not be refused for that. A guest's write the server answers
+  // 401 or 403 is still retried as below.
+  if (write && op.learnedLoggedIn && !loggedIn(session.cookies, site.loginCookies)) {
+    await reimport();
+    if (!loggedIn(loadSession(siteName).cookies, site.loginCookies))
+      return done({
+        ok: false,
+        class: "auth",
+        reason: `${op.name} is a write learned signed in, and the session holds no live login cookie (expired or missing)${signIn ? `, nor does a re-import bring one back` : ""}: nothing was sent`,
+        next: nextFor("auth", siteName, op, undefined, signIn?.text),
+        write: "not_sent",
+        ...(signIn ? { nextCall: signIn.step } : {}),
+      });
+  }
   if (write) {
     let gate: WriteGate | undefined;
     try {
@@ -751,7 +794,7 @@ export async function call(
     if (op.slots.some(holdsRef) || op.learnedLoggedIn) return false;
     try {
       const s = loadSession(siteName);
-      return !s.source && !loggedIn(s.cookies, site.loginCookies);
+      return !s.source && !loggedIn(s.cookies, site.loginCookies, s.guestCookies);
     } catch {
       return false;
     }
@@ -763,8 +806,6 @@ export async function call(
   // Why a call ran above tier 1, so a slow call explains itself.
   const notes: string[] = tier > op.minTier ? [`started at tier ${tier}: an earlier call escalated there`] : [];
   const noted = (a: Attempt) => success(a, notes.length ? { reason: notes.join("; ") } : {});
-  // auth recovery steps taken this call: 1 re-import, 2 the profile's cookies, 3 a trigger run
-  let authStep = 0;
   let examplesChecked = false;
   for (;;) {
     if (tier > ctx.maxTier) {
@@ -802,7 +843,8 @@ export async function call(
         class: a.class,
         tier,
         reason,
-        next: nextFor(a.class, siteName, op, a),
+        next: nextFor(a.class, siteName, op, a, signIn?.text),
+        ...(a.class === "auth" && signIn ? { nextCall: signIn.step } : {}),
         ...stepOf(a),
         ...(a.server ? { server: true as const } : {}),
       });
@@ -838,10 +880,7 @@ export async function call(
       // An imported session is a mirror of the everyday browser: silently re-import from the same
       // profile once (browserless), in case the human re-signed in there. It lands in the jar and
       // in the Chrome profile tiers 2 and 3 send from. Then retry.
-      if (authStep < 1) {
-        authStep = 1;
-        if (await reimportIfBrowser(siteName, op.request.url, site.loginCookies)) continue;
-      }
+      if (authStep < 1 && (await reimport())) continue;
       // tier 3 ran the site's own page: the profile's cookies and session values are what it just used
       if (tier === 3 || ctx.maxTier <= 1) return fail();
       if (authStep < 2) {

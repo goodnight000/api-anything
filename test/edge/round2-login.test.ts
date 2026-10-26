@@ -134,7 +134,10 @@ describe("login", () => {
       assert.equal(r?.name, "Sam Rivera");
       assert.equal(loadSession("linkedin").source, "chrome:Profile 2");
       saveSession("linkedin", { ...loadSession("linkedin"), cookies: [] }); // the site logged the jar out
-      assert.equal(await reimportIfBrowser("linkedin", "https://www.linkedin.com", ["li_at", "JSESSIONID"]), true);
+      assert.equal(
+        (await reimportIfBrowser("linkedin", "https://www.linkedin.com", ["li_at", "JSESSIONID"])).renewed,
+        true,
+      );
       assert.equal(cookieValue(loadSession("linkedin").cookies, "li_at"), "AQEDmy-own-token-value");
     } finally {
       delete process.env.API_ANYTHING_BROWSER_ROOTS;

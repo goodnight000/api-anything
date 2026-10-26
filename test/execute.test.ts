@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, beforeEach, test } from "node:test";
+import { after, before, beforeEach, describe, test } from "node:test";
 import { type CallResult, call, finish, stepOf } from "../src/execute.js";
 import { type Attempt, PROFILE_HINT } from "../src/heal.js";
 import { saveSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
 import { saveSite, staleMark } from "../src/store.js";
+import type { StoredCookie } from "../src/types.js";
+import { makeChromiumDb } from "./fixture/cookie-db.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-exec-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -257,6 +259,128 @@ test("a write answered 204, HTML or plain text is ok, sent once", async () => {
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(seen.length, 1);
   }
+});
+
+describe("a session learned signed in", () => {
+  const members = parseSite({
+    name: "m",
+    baseUrl: "https://members.test",
+    operations: [
+      {
+        name: "me",
+        readOnly: true,
+        request: { method: "GET", url: "https://members.test/api/me", headers: {} },
+        trigger: { url: "https://members.test/" },
+        response: { extract: "data" },
+        learnedLoggedIn: true,
+      },
+      {
+        name: "post",
+        readOnly: false,
+        request: { method: "POST", url: "https://members.test/api/post", headers: {}, body: "x" },
+        trigger: { url: "https://members.test/compose" },
+        learnedLoggedIn: true,
+      },
+    ],
+  });
+  const token = (value: string, extra: Partial<StoredCookie> = {}): StoredCookie => ({
+    name: "auth_token",
+    value,
+    domain: ".members.test",
+    path: "/",
+    expires: -1,
+    httpOnly: true,
+    secure: false,
+    ...extra,
+  });
+  const browser = mkdtempSync(join(tmpdir(), "api-anything-exec-browser-"));
+  /** what the everyday browser's Chrome "Default" profile holds for the site */
+  const profile = (...rows: { name: string; value: string }[]) =>
+    makeChromiumDb(
+      join(browser, "Default"),
+      rows.map((r) => ({ host_key: ".members.test", ...r })),
+      { password: "pw" },
+    );
+  /** the server takes only this login */
+  let live = "";
+  const server: Handler = (url, init) =>
+    new Headers(init?.headers).get("cookie")?.includes(`auth_token=${live}`)
+      ? json(url.endsWith("/me") ? { data: { name: "alice" } } : { ok: true })
+      : json({ error: "unauthenticated" }, 401);
+  const write = (): Promise<CallResult> => call("m", "post", {}, { ...opts(server), allowWrites: true });
+  before(() => {
+    process.env.API_ANYTHING_BROWSER = "no-such-browser"; // a re-import pushes into no browser profile
+    process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify([
+      { name: "Chrome", family: "chromium", root: browser, password: "pw" },
+    ]);
+  });
+  beforeEach(() => saveSite(members));
+  after(() => {
+    delete process.env.API_ANYTHING_BROWSER;
+    delete process.env.API_ANYTHING_BROWSER_ROOTS;
+    rmSync(browser, { recursive: true, force: true });
+  });
+
+  test("a write is not sent while the session holds no live login cookie, and is once one is back", async () => {
+    live = "token-live-0001";
+    saveSession("m", { cookies: [token(live, { expires: 1 })], values: {} });
+    const expired = await write();
+    assert.equal(expired.class, "auth");
+    assert.equal(seen.length, 0, "nothing sent");
+    assert.match(
+      expired.reason ?? "",
+      /learned signed in.*no live login cookie \(expired or missing\): nothing was sent/,
+    );
+    assert.match(expired.next ?? "", /ask the user to run: api-anything login m; then retry once/);
+    assert.deepEqual(
+      [expired.write, expired.retry, expired.nextCall],
+      ["not_sent", "after_fix", { action: "login", site: "m", op: "post" }],
+    );
+
+    // imported from a browser profile that is signed out too: still nothing sent, and where to sign in
+    profile({ name: "theme", value: "dark" });
+    saveSession("m", { cookies: [], values: {}, source: "chrome:Default" });
+    const out = await write();
+    assert.equal(out.class, "auth");
+    assert.equal(seen.length, 0, "nothing sent");
+    assert.match(out.reason ?? "", /nor does a re-import bring one back: nothing was sent/);
+    assert.match(
+      out.next ?? "",
+      /ask the user to sign in to members\.test in Chrome profile "Default"; then retry once/,
+    );
+    assert.deepEqual(
+      [out.write, out.retry, out.nextCall],
+      ["not_sent", "after_fix", { action: "sign_in_browser", profile: "Chrome/Default", site: "m", op: "post" }],
+    );
+
+    // signed in again there: the re-import brings the login back before the one send, and the
+    // refusals left no record for the duplicate guard to hold it back with
+    profile({ name: "auth_token", value: live });
+    const sent = await write();
+    assert.equal(sent.ok, true, JSON.stringify(sent));
+    assert.equal(seen.length, 1);
+  });
+
+  test("an auth answer is not retried on a re-import that brought back the same login cookie", async () => {
+    live = "token-live-0002";
+    profile({ name: "auth_token", value: "token-dead-0001" });
+    saveSession("m", { cookies: [token("token-dead-0001")], values: {}, source: "chrome:Default" });
+    const r = await call("m", "me", {}, opts(server));
+    assert.equal(r.class, "auth");
+    assert.equal(seen.length, 1, "the same request again would get the same answer");
+    assert.match(r.next ?? "", /ask the user to sign in to members\.test in Chrome profile "Default"; then retry once/);
+    assert.deepEqual(
+      [r.retry, r.nextCall],
+      ["after_fix", { action: "sign_in_browser", profile: "Chrome/Default", site: "m", op: "me" }],
+    );
+
+    // signed in again in that profile: a renewed cookie is worth the retry
+    seen = [];
+    profile({ name: "auth_token", value: live });
+    const ok = await call("m", "me", {}, opts(server));
+    assert.equal(ok.ok, true, JSON.stringify(ok));
+    assert.equal(seen.length, 2);
+  });
 });
 
 test("add --from a capture judges the op on the captured response: a wrong --extract is a warning, a right one a preview", async () => {
@@ -548,6 +672,7 @@ test("contract: class x read/write x sent says consistent write, retry and nextC
   const ACTIONS = new Set([
     "retry",
     "login",
+    "sign_in_browser",
     "heal",
     "relearn",
     "fix_args",
@@ -597,6 +722,17 @@ test("contract: class x read/write x sent says consistent write, retry and nextC
         if (c === "duplicate") assert.equal(r.retry, "no", row);
       }
   assert.ok(rows > 100, String(rows));
+
+  // an auth whose re-import brought back the same cookies: the user signs in again in that profile,
+  // unless a write may have run, which comes first
+  const signIn = { action: "sign_in_browser" as const, profile: "Chrome/Profile 1" };
+  for (const op of [read, write])
+    for (const [what, log] of sends.filter(([w]) => w !== "accepted")) {
+      const r = finish({ ok: false, class: "auth", nextCall: signIn }, op, "t", log);
+      const row = `${op.readOnly ? "read" : "write"} auth after ${what}: ${JSON.stringify(r)}`;
+      if (r.write === "may_have_applied") assert.deepEqual([r.nextCall?.action, r.retry], ["check_site", "no"], row);
+      else assert.deepEqual([r.nextCall, r.retry], [{ ...signIn, site: "t", op: op.name }, "after_fix"], row);
+    }
 });
 
 test("contract through call(): a read's rate limit and a write's three outcomes", async () => {

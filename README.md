@@ -176,12 +176,19 @@ password to type. If several profiles are signed in it asks which one, and if no
 imported it opens a browser window to sign in by hand. A saved operation holds references to
 cookies and tokens, never their values, so a refreshed session works without re-learning anything.
 
+Many sites give every visitor a session cookie named like a login (`laravel_session`,
+`_app_session`), so `login` first notes which cookie names a signed-out visit gets, and those never
+count as signed in. A window sign-in counts only when a login cookie appears or changes while the
+window is open; otherwise `login` says no sign-in happened and keeps the session you had. An import
+says when the cookies show no sign-in, or are the same ones the session already had.
+
 A session is kept current where that is possible. Cookies a site sets on a plain-HTTP response,
 or while API Anything runs the site's page in the browser, are saved. When a plain-HTTP call comes back
 unauthorized, API Anything tries these in order, each at most once, retrying the call after each
 one that changes something:
 
-1. re-import from the browser profile you chose at login;
+1. re-import from the browser profile you chose at login, retrying only if that brought new login
+   cookies (if it brought the same ones, the call asks you to sign in again in that profile);
 2. take the cookies from its own browser profile, if they differ from the saved ones;
 3. for an operation that uses session tokens (a bearer, a CSRF token the page issues), reload
    the page so the site issues fresh ones. For a write, the page's own request is stopped, so it
@@ -189,6 +196,8 @@ one that changes something:
 
 A read whose only credential is a key the site gives every visitor (X's web-app bearer) is
 re-learned from the page when the site rotates it. If the call is still unauthorized, it returns `class: "auth"` with the `login` command to run.
+A write learned while signed in is not sent while the session has no live login cookie: API
+Anything re-imports first, and if there is still none it returns `class: "auth"` with nothing sent.
 
 Import reads Chrome, Arc, Brave, Edge, Chromium and Firefox profiles on macOS and Linux (on
 Linux, not cookies encrypted with the desktop keyring). On Windows, `login` opens the browser

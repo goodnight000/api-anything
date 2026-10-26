@@ -64,6 +64,8 @@ export interface LearnInput {
   trigger: Trigger;
   readOnly: boolean;
   loginCookies?: string[];
+  /** cookie names a signed-out visit is given (`Session.guestCookies`): none is evidence of a sign-in */
+  guestCookies?: string[];
   /** header or field names a human marked as public constants: kept literal, never session refs */
   public?: string[];
   /** the page origin's localStorage/sessionStorage at capture time: a request repeating a value is a session: ref */
@@ -1847,7 +1849,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
     ...(publicNames.length ? { public: publicNames } : {}),
     minTier,
     // 7. whether the session it was learned in was signed in
-    learnedLoggedIn: loggedIn(input.cookies, input.loginCookies),
+    learnedLoggedIn: loggedIn(input.cookies, input.loginCookies, input.guestCookies),
     learnedAt: new Date().toISOString(),
   });
   return {

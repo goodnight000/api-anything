@@ -348,7 +348,7 @@ export function parsePin(text: string): ImportPin {
 }
 
 /** A chromium profile's display name and signed-in Google account, from the browser's "Local State". */
-function profileInfo(c: Candidate): { name?: string; email?: string } {
+function profileInfo(c: Pick<Candidate, "family" | "root" | "profile">): { name?: string; email?: string } {
   if (c.family !== "chromium") return {};
   try {
     const state = JSON.parse(readFileSync(join(c.root.root, "Local State"), "utf8")) as {
@@ -362,16 +362,38 @@ function profileInfo(c: Candidate): { name?: string; email?: string } {
 }
 
 /**
+ * A session source ("chrome:Profile 1") as a human knows it, `Chrome profile "Work" (me@example.com)`,
+ * and as `--profile` takes it, "Chrome/Profile 1".
+ */
+export function profileLabel(source: string): { label: string; profile: string } {
+  const pin = parsePin(source);
+  let root: BrowserRoot | undefined;
+  try {
+    root = browserRoots().find((r) => r.name.toLowerCase() === pin.browser?.toLowerCase());
+  } catch {
+    // a malformed API_ANYTHING_BROWSER_ROOTS: the bare source still names the profile
+  }
+  const info = root ? profileInfo({ family: root.family, root, profile: pin.profile }) : {};
+  const browser = root?.name ?? pin.browser ?? "the browser";
+  return {
+    label: `${browser} profile "${info.name ?? pin.profile}"${info.email ? ` (${info.email})` : ""}`,
+    profile: `${browser}/${pin.profile}`,
+  };
+}
+
+/**
  * Import the site's cookies from the everyday browser: the one profile that holds the site's
- * `loginCookies` (for an unknown site, auth-looking cookies, else any cookies for it), or the
- * `pin`ned one. Never a guess: when several profiles qualify (two people's accounts), it throws
- * AmbiguousProfile with their display names and emails. Undefined when nothing is importable
- * (the caller falls back to the window flow).
+ * `loginCookies` (for an unknown site, auth-looking cookies no signed-out visitor is also given, else
+ * any cookies for it), or the `pin`ned one. Never a guess: when several profiles qualify (two people's
+ * accounts), it throws AmbiguousProfile with their display names and emails. Undefined when nothing
+ * is importable (the caller falls back to the window flow).
  */
 export function importFromBrowsers(o: {
   url: string;
   loginCookies?: string[];
   pin?: ImportPin;
+  /** the names a signed-out visit is given (`Session.guestCookies`): a profile holding only these is not signed in */
+  guest?: string[];
 }): ImportedSession | undefined {
   const site = siteOf(new URL(o.url).hostname.toLowerCase());
   const candidates = candidatesFor(site, o.pin);
@@ -382,7 +404,7 @@ export function importFromBrowsers(o: {
   const signedIn = candidates.filter((c) =>
     o.loginCookies?.length
       ? o.loginCookies.every((n) => c.names.has(n))
-      : [...c.names].some((n) => AUTH_COOKIE.test(n)),
+      : [...c.names].some((n) => AUTH_COOKIE.test(n) && !o.guest?.includes(n)),
   );
   const pool = signedIn.length ? signedIn : candidates;
   if (pool.length > 1)

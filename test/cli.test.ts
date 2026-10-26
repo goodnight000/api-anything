@@ -972,6 +972,41 @@ describe("checks: an op that must prove it works before it is shared", () => {
   });
 });
 
+describe("login from a cookies file", () => {
+  const saved = process.env.API_ANYTHING_BROWSER;
+  before(() => {
+    process.env.API_ANYTHING_BROWSER = "no-such-browser"; // nothing pushed into a profile
+  });
+  after(() => {
+    if (saved === undefined) delete process.env.API_ANYTHING_BROWSER;
+    else process.env.API_ANYTHING_BROWSER = saved;
+  });
+  const file = join(HOME, "cookies.json");
+  const login = async (...cookies: [string, string][]) => {
+    writeFileSync(
+      file,
+      JSON.stringify(cookies.map(([name, value]) => ({ name, value, domain: "127.0.0.1", path: "/" }))),
+    );
+    const r = await cli("login", `${fx.url}/members`, "--cookies", file);
+    assert.equal(r.code, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+
+  test("says when the cookies show no sign-in, and when they renew nothing", async () => {
+    // a signed-out visitor's cookie, named like a login
+    const guest = await login(["app_session", "visitor-session-0001"]);
+    assert.equal(guest.loggedIn, false, JSON.stringify(guest));
+    assert.match(guest.warning, /none of the cookies imported from the cookies file .* shows a sign-in/);
+    const member = await login(["app_session", "visitor-session-0002"], ["auth_token", "member-token-0001"]);
+    assert.equal(member.loggedIn, true, JSON.stringify(member));
+    assert.equal(member.renewed, true);
+    assert.equal(member.warning, undefined);
+    const same = await login(["app_session", "visitor-session-0003"], ["auth_token", "member-token-0001"]);
+    assert.equal(same.renewed, false);
+    assert.match(same.warning, /are the ones the session already held: nothing was renewed/);
+  });
+});
+
 const noChrome = !browserAvailable() && "no Chromium browser installed";
 
 describe("capture's next hint", { skip: noChrome }, () => {

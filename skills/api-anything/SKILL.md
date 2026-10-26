@@ -239,7 +239,9 @@ Every failure carries:
   `retryAfterMs` (the site's own Retry-After), or a few minutes when that is absent. `after_fix`:
   once the `nextCall` step is done. `no`: don't send it again as it is.
 - `nextCall`: `{action, site, op}`, with `action` one of `retry`, `login` (with `mode: "window"`
-  for a challenge the user clears by hand), `heal`, `relearn`, `fix_args`, `list_sites`,
+  for a challenge the user clears by hand), `sign_in_browser` (ask the user to sign in to the site
+  again in the browser profile named by `profile`, then retry; running `login` would only import the
+  same signed-out cookies), `heal`, `relearn`, `fix_args`, `list_sites`,
   `check_site`, `allow_writes`, `raise_tier`, `install_browser`, `report`. Over MCP it also names the
   `tool` and `args` when one of the server's tools takes the step.
 - `write` (writes only, ok or not): `not_sent` (nothing left), `not_applied` (the site answered

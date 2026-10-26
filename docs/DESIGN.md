@@ -310,8 +310,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    site-global: a globally promoted x-twitter-auth-type broke every X guest read. At call time a
    filled header whose value holds a line break or a NUL is not sent: the call fails naming the
    header, never the value (fetch's own error would quote a session's token into the result).
-7. Record `learnedLoggedIn` (whether the session had auth cookies). If an op learned signed in comes
-   back without its data and the jar has no login cookie, the call is `auth`, not drift.
+7. Record `learnedLoggedIn` (whether the session had auth cookies, not counting the names a signed-out
+   visit is given: "Guest cookies" under Logging in). If an op learned signed in comes back without its
+   data and the jar has no login cookie, the call is `auth`, not drift; a write learned signed in is
+   not sent at all while the jar has none ("Before a write" under Logging in).
 8. **Response.** Store the content type, the XSSI prefix to strip (`)]}'`), a suggested `extract` path (the
    richest array/object carrying the example value), and an inferred **shape** (key paths + types)
    for drift detection. The agent may set `pick` (fields per item) for token efficiency.
@@ -888,8 +890,24 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
   SHA-256 of `host_key`, which is stripped. `expires_utc` is microseconds since 1601.
 - **Firefox**: `cookies.sqlite` `moz_cookies` is plaintext on every OS.
 - **Windows chromium** uses app-bound encryption and is not supported: `login` falls back to the window.
+- **Guest cookies**: a framework hands every visitor a session cookie named like a login
+  (`laravel_session`, a Rails `_app_session`, `ci_session`, `_gh_sess`), so a name proves nothing by
+  itself: a sign-in marker counts only if a signed-out visitor does not get it too. Every `login`
+  first GETs the target URL with no cookies, following up to five redirects within the site, and the
+  names of the cookies it is given join the session file's `guestCookies` (names only, a union kept
+  across logins) when that login saves its cookies; a login that fails leaves the file as it was. A
+  site whose spec pins `loginCookies` is not probed, since those names decide alone. Guest names are
+  not login evidence anywhere: `loggedIn`, profile choice, the window
+  check, and `learnedLoggedIn` at add and heal. A pinned `loginCookies` still decides on its own, and
+  `logged_in=yes` still counts by its value. A plain fetch sees only `Set-Cookie`, never a cookie page
+  script sets, but the cookies frameworks give every visitor are the server's, and a signed-out browser
+  visit would cost a launch and a profile of its own. A probe that gets no answer records nothing, and
+  a site never logged in has no list: the name heuristic decides there, as before. Two checks leave the
+  list out on purpose, because they compare the jar with an op's `learnedLoggedIn`, which may have been
+  learned with a guest name as its only login, before the list existed or on someone else's machine:
+  the pre-write check below and the drift check for an op learned signed in.
 - **Profile choice**: scan every profile of every installed browser for the site's `loginCookies`
-  (for an unknown site, auth-looking cookie names, else any cookie for the site). One profile holds
+  (for an unknown site, auth-looking cookie names that are not guest names, else any cookie for the site). One profile holds
   them: it is used. Several do (a work and a personal profile, or another person's account in the
   same Chrome): never a guess. `login` answers `ok: false` with each candidate's profile, display name
   and Google account email (from Chrome's `Local State` `profile.info_cache`) and a `next` of
@@ -902,14 +920,40 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
 - Imported cookies go into the jar **and** into api-anything's own browser profile (`addCookies`), so
   tier 2/3 and heals are logged in too.
 - `--window` opens a visible browser window on api-anything's profile for a by-hand sign-in (an
-  independent session). It is also the automatic fallback when nothing is importable.
+  independent session). It is also the automatic fallback when nothing is importable. The site's
+  cookies are read as the window opens, before its page loads, and as it closes. The sign-in counts
+  only when a login cookie (not a guest name) appeared or changed in between: a profile that already
+  held one proves nothing, since it may be the very cookie the site has signed out. Then the jar is
+  replaced and `login` answers `ok: true` with the `renewed` names. Otherwise it answers `ok: false`
+  with why (no login cookie appeared, or the ones held at opening did not change) and keeps the stored
+  session. The window does not close itself when a login cookie appears: a site can set its session
+  cookie before a second factor, a consent page or the redirect back from an identity provider is done,
+  and closing then would keep a half-finished sign-in. The human closes it, or presses Enter. A site
+  whose only login cookie is one every visitor gets cannot be told apart by name: list that name in the
+  spec's `loginCookies`, and a change in it counts.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON array (Cookie-Editor / Playwright)
   export, for servers/CI with no browser.
 - **Self-healing auth**: when a call classifies `auth` and the session came from a browser import,
   exactly the recorded profile is silently re-imported once (browserless) and the call retried (a write
-  only when it certainly did not run, so never one the page sent at tier 3); only if it is
-  still `auth` does the result carry the "run `api-anything login`" hint. This runs at tiers 2 and 3 as at
+  only when it certainly did not run, so never one the page sent at tier 3). The retry happens only
+  when the re-import renewed something: login cookies the jar did not hold, or held with other values.
+  For a site where neither side holds a cookie any rule names as a login, any changed cookie counts. The
+  same dead cookies again would only get the same answer, and `api-anything login` would import them
+  once more, so a call still `auth` after a re-import from a browser profile says where to sign in
+  instead: `ask the user to sign in to linkedin.com in Chrome profile "Work" (me@example.com); then
+  retry once`, with `nextCall` `{action: "sign_in_browser", profile: "Chrome/Profile 1"}` and `retry`
+  `after_fix`. Other sources keep the "run `api-anything login`" hint. This runs at tiers 2 and 3 as at
   tier 1: the import also lands in the browser profile those tiers send their cookies from.
+- **Import results**: `login` by import reports `loggedIn` (guest names aside) and `renewed`, and a
+  `warning` when the imported cookies show no sign-in ("Chrome profile "Work" looks signed out") or are
+  the login cookies the session already held, so nothing was renewed and a call that said `auth` will
+  say it again. It still answers `ok: true`: the cookies were imported and saved.
+- **Before a write**: a write learned signed in whose jar holds no live login cookie (expired, or never
+  there) is not sent as it stands. The recorded browser profile is re-imported first; if there is still
+  none, the call answers `auth` with `write: "not_sent"`, and the reason says so. It comes before the
+  duplicate guard records the write, so a call that sends nothing leaves nothing for a repeat to be
+  held back by. Nothing sent means the send-once rule is untouched. This check ignores `guestCookies` (see above), so a guest's write still
+  reaches the server, whose 401 or 403 is retried as any write's is.
 - **`logout <site>`** clears the jar and that site's cookies in the profile.
 
 `node:sqlite` is chosen over the `sqlite3` CLI: it is built in (no dependency, present on every
@@ -967,8 +1011,11 @@ independent alternative.
   - All output is JSON-first, compact, and ends with a `next` hint on failure.
   - A call's result says what happened in fields as well as prose: `retry` (`safe`, `after_wait`,
     `after_fix`, `no`), `retryAfterMs`, `nextCall` (`{action, site, op}`, with `mode` for a window
-    login and `tier` for a raised cap; actions `retry`, `login`, `heal`, `relearn`, `fix_args`,
-    `list_sites`, `check_site`, `allow_writes`, `raise_tier`, `install_browser`, `report`), and for
+    login, `tier` for a raised cap and `profile` for a browser sign-in; actions `retry`, `login`,
+    `sign_in_browser` (the user signs in again in the everyday browser profile `profile`, since a
+    re-import from it brought back the same cookies: "Self-healing auth" under Logging in), `heal`,
+    `relearn`, `fix_args`, `list_sites`, `check_site`, `allow_writes`, `raise_tier`,
+    `install_browser`, `report`), and for
     a write `write` (see Writes). `next` stays, for a reader; `nextCall` is the same step for a
     program. `test/execute.test.ts` checks the fields over every class, a read and a write, and
     what was sent.

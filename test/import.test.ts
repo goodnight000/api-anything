@@ -6,9 +6,12 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, before, beforeEach, describe, test } from "node:test";
 import { AmbiguousProfile, type BrowserRoot, cookiesFromFile, importFromBrowsers } from "../src/import.js";
+import { guestCookieNames, importSession, importWarning, knownGuests, reimportIfBrowser } from "../src/login.js";
+import { loadSession, saveSession } from "../src/session.js";
 import { makeChromiumDb, makeFirefoxDb } from "./fixture/cookie-db.js";
+import { startFixture } from "./fixture/server.js";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "aa-import-"));
 const inject = (roots: BrowserRoot[]) => (process.env.API_ANYTHING_BROWSER_ROOTS = JSON.stringify(roots));
@@ -141,6 +144,121 @@ test("one profile signed in, another with only tracking cookies: the signed-in o
   );
   inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
   assert.equal(importFromBrowsers({ url: "https://www.reddit.com" })?.source, "chrome:Profile 1");
+});
+
+test("a profile holding only the session cookie every visitor is given is not signed in: the one with a login is chosen", () => {
+  const root = tmp();
+  const visitor = { host_key: ".myshop.com", name: "laravel_session", value: "eyJpdiI6InZpc2l0b3Ii" };
+  makeChromiumDb(join(root, "Default"), [visitor], { password: "pw" });
+  makeChromiumDb(
+    join(root, "Profile 1"),
+    [visitor, { host_key: ".myshop.com", name: "remember_web_59ba36", value: "eyJpdiI6Im1lbWJlciJ9" }],
+    { password: "pw" },
+  );
+  inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]);
+  assert.throws(() => importFromBrowsers({ url: "https://www.myshop.com" }), AmbiguousProfile, "by name alone");
+  const r = importFromBrowsers({ url: "https://www.myshop.com", guest: ["laravel_session"] });
+  assert.equal(r?.source, "chrome:Profile 1");
+});
+
+describe("re-import", () => {
+  const url = "https://www.myshop.com/";
+  const root = tmp();
+  const visitor = (value: string) => ({ host_key: ".myshop.com", name: "laravel_session", value });
+  const login = (value: string) => ({ host_key: ".myshop.com", name: "remember_web_59ba36", value });
+  const profile = (...rows: { host_key: string; name: string; value: string }[]) =>
+    makeChromiumDb(join(root, "Profile 3"), rows, { password: "pw" });
+  const work = 'Chrome profile "Work" (me@work.example)';
+  before(() => {
+    process.env.API_ANYTHING_HOME = tmp();
+    process.env.API_ANYTHING_BROWSER = "no-such-browser"; // nothing pushed into a browser profile
+    writeFileSync(
+      join(root, "Local State"),
+      JSON.stringify({ profile: { info_cache: { "Profile 3": { name: "Work", user_name: "me@work.example" } } } }),
+    );
+  });
+  beforeEach(() => inject([{ name: "Chrome", family: "chromium", root, password: "pw" }]));
+  after(() => delete process.env.API_ANYTHING_BROWSER);
+
+  test("the same login cookies again are no recovery: the hint names the profile to sign in to", async () => {
+    saveSession("myshop", { cookies: [], values: {}, guestCookies: ["laravel_session"] });
+    profile(visitor("eyJ2aXNpdG9yIjoxfQ"), login("eyJsb2dpbiI6MX0xx"));
+    const first = await importSession("myshop", url, { pushProfile: false });
+    assert.equal(first?.signedIn, true);
+    assert.equal(first?.renewed, true);
+    assert.equal(importWarning(url, first!), undefined);
+
+    // the site ended that sign-in, and the browser still holds its cookie
+    assert.deepEqual(await reimportIfBrowser("myshop", url), {
+      renewed: false,
+      signIn: `sign in to myshop.com in ${work}`,
+      profile: "Chrome/Profile 3",
+    });
+    const again = await importSession("myshop", url, { pushProfile: false });
+    assert.equal(again?.renewed, false);
+    assert.match(
+      importWarning(url, again!) ?? "",
+      /imported from Chrome profile "Work" .*are the ones the session already held: nothing was renewed.*sign in to myshop\.com in Chrome profile "Work"/,
+    );
+    // a page load renews the visitor's cookie, not the login
+    profile(visitor("eyJ2aXNpdG9yIjoyfQ"), login("eyJsb2dpbiI6MX0xx"));
+    assert.equal((await reimportIfBrowser("myshop", url)).renewed, false);
+    // signed in again in that profile
+    profile(visitor("eyJ2aXNpdG9yIjoyfQ"), login("eyJsb2dpbiI6Mn0xx"));
+    assert.equal((await reimportIfBrowser("myshop", url)).renewed, true);
+    // signed out there: only the visitor's cookie is left
+    profile(visitor("eyJ2aXNpdG9yIjozfQ"));
+    assert.deepEqual(await reimportIfBrowser("myshop", url), {
+      renewed: false,
+      signIn: `sign in to myshop.com in ${work}`,
+      profile: "Chrome/Profile 3",
+    });
+    const out = await importSession("myshop", url, { pushProfile: false });
+    assert.equal(out?.signedIn, false);
+    assert.match(
+      importWarning(url, out!) ?? "",
+      /none of the cookies imported from Chrome profile "Work" .*shows a sign-in/,
+    );
+  });
+
+  test("a site whose login cookie no rule can name: any changed cookie is worth one retry, the same jar is not", async () => {
+    saveSession("plain", { cookies: [], values: {} });
+    const uid = (value: string) => ({ host_key: ".plainsite.com", name: "uid", value });
+    makeChromiumDb(join(root, "Profile 3"), [uid("1001")], { password: "pw" });
+    await importSession("plain", "https://plainsite.com/", { pushProfile: false });
+    assert.equal((await reimportIfBrowser("plain", "https://plainsite.com/")).renewed, false);
+    makeChromiumDb(join(root, "Profile 3"), [uid("1002")], { password: "pw" });
+    assert.equal((await reimportIfBrowser("plain", "https://plainsite.com/")).renewed, true);
+  });
+});
+
+test("guest cookie names: what a cookie-less visit is given, across the site's redirects, kept as a union", async () => {
+  process.env.API_ANYTHING_HOME = tmp();
+  const fx = await startFixture();
+  try {
+    assert.deepEqual(await guestCookieNames(`${fx.url}/members`), ["app_session"]);
+    // /community redirects to /forum, whose page hands out ct0
+    assert.ok((await guestCookieNames(`${fx.url}/community`))?.includes("ct0"));
+    saveSession("members", { cookies: [], values: {}, guestCookies: ["older"] });
+    const guest = await knownGuests("members", `${fx.url}/members`);
+    assert.deepEqual(guest, ["app_session", "older"]);
+    assert.deepEqual(loadSession("members").guestCookies, ["older"], "saved only with a login that uses them");
+    // pinned login cookies decide alone: no probe
+    assert.deepEqual(await knownGuests("members", `${fx.url}/members`, ["auth_token"]), ["older"]);
+    // a login saves them with its cookies
+    writeFileSync(join(process.env.API_ANYTHING_HOME!, "c.json"), JSON.stringify([{ name: "a", value: "1" }]));
+    await importSession("members", `${fx.url}/`, {
+      file: join(process.env.API_ANYTHING_HOME!, "c.json"),
+      guest,
+      pushProfile: false,
+    });
+    assert.deepEqual(loadSession("members").guestCookies, ["app_session", "older"]);
+  } finally {
+    await fx.close();
+  }
+  // no answer: nothing learned, nothing dropped
+  assert.equal(await guestCookieNames("http://127.0.0.1:1/"), undefined);
+  assert.deepEqual(await knownGuests("members", "http://127.0.0.1:1/"), ["app_session", "older"]);
 });
 
 test("--profile pin overrides selection; a missing pin throws", () => {

@@ -266,6 +266,38 @@ test("X-like GraphQL GET: params, cookie/session refs, volatile anchor, match, h
   assert.match(req.headers.cookie!, /auth_token=a1b2c3d4e5f60718293a/);
 });
 
+test("learned signed in only on a login cookie no signed-out visitor is given", () => {
+  const cookie = (name: string, value: string) => ({
+    name,
+    value,
+    domain: "shop.test",
+    path: "/",
+    expires: -1,
+    httpOnly: true,
+    secure: false,
+  });
+  const learn = (cookies: ReturnType<typeof cookie>[]) =>
+    learnOperation({
+      name: "items",
+      readOnly: true,
+      trigger: { url: "https://shop.test/items" },
+      match: { path: "/api/items" },
+      examples: [{}],
+      cookies,
+      guestCookies: ["app_session"],
+      exchanges: [
+        {
+          id: 1,
+          resourceType: "fetch",
+          request: { method: "GET", url: "https://shop.test/api/items", headers: {} },
+          response: { status: 200, headers: {}, contentType: "application/json", body: '{"items":[1]}' },
+        },
+      ],
+    }).operation.learnedLoggedIn;
+  assert.equal(learn([cookie("app_session", "visitor-session-0001")]), false);
+  assert.equal(learn([cookie("app_session", "visitor-session-0001"), cookie("auth_token", "member-token-0001")]), true);
+});
+
 test("rankCandidates drops noise and puts the XHR carrying the args first", () => {
   const ranked = rankCandidates(xExchanges("nasa", "t"), { screen_name: "nasa" });
   assert.deepEqual(

@@ -265,6 +265,23 @@ export async function startFixture(): Promise<Fixture> {
       return jar.session && !revoked.has(jar.session)
         ? json(res, 200, { data: { secret: "only for you" } })
         : html(200, LOGIN_PAGE);
+    // A framework app (Laravel, Rails): every visitor is given a session cookie named like a login,
+    // app_session, renewed on each page, and only a sign-in adds the login cookie, auth_token.
+    const member = !!jar.auth_token && !revoked.has(jar.auth_token);
+    const visitor = (extra: string[] = []) => [`app_session=${mint()}; Path=/; HttpOnly`, ...extra];
+    if (p === "/members")
+      return send(res, 200, "text/html; charset=utf-8", member ? "<p>Welcome back</p>" : LOGIN_PAGE, {
+        "set-cookie": visitor(),
+      });
+    if (p === "/members/signin")
+      return send(res, 302, "text/plain", "", {
+        location: "/members",
+        "set-cookie": visitor([`auth_token=${mint()}; Path=/; HttpOnly; Max-Age=86400`]),
+      });
+    if (p === "/api/members/me")
+      return member ? json(res, 200, { data: { name: "alice" } }) : json(res, 401, { error: "unauthenticated" });
+    if (p === "/api/members/post")
+      return member ? json(res, 200, { ok: true }) : json(res, 401, { error: "unauthenticated" });
     // The other login wall: a redirect to the sign-in page.
     if (p === "/account") return send(res, 302, "text/plain", "", { location: "/signin?next=%2Faccount" });
     if (p === "/signin") return html(200, LOGIN_PAGE);

@@ -8,12 +8,19 @@ import { readFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { closeBrowser, login } from "./browser.js";
+import { closeBrowser } from "./browser.js";
 import { call, type NextCall } from "./execute.js";
 import { returnedFields } from "./extract.js";
-import { profileDir } from "./heal.js";
-import { browserSource, cookieNames, importSession, loggedIn, resolveLoginTarget } from "./login.js";
-import { loadSession, saveSession, sessionFile, withLock } from "./session.js";
+import {
+  browserSource,
+  cookieNames,
+  importSession,
+  importWarning,
+  knownGuests,
+  resolveLoginTarget,
+  windowLogin,
+  windowRetry,
+} from "./login.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
 import { SHARED_NOTE } from "./vet.js";
 
@@ -268,14 +275,26 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
       }
       if (mode === "window") {
         // a human signs in by hand: they see which site and which account
-        const cookies = await login({ url: t.url, profileDir: profileDir(), waitForEnter: false });
-        withLock(sessionFile(t.site), () => saveSession(t.site, { ...loadSession(t.site), cookies, source: "window" }));
+        const w = await windowLogin(t.site, t.url, { loginCookies: t.loginCookies, waitForEnter: false });
+        if (!w.ok)
+          return reply(
+            {
+              ok: false,
+              site: t.site,
+              source: "window",
+              error: w.reason,
+              cookies: cookieNames(w.cookies),
+              next: windowRetry(t.site, 'ask the user, then call login with mode "window" again'),
+            },
+            true,
+          );
         return reply({
           ok: true,
           site: t.site,
           source: "window",
-          cookies: cookieNames(cookies),
-          loggedIn: loggedIn(cookies, t.loginCookies),
+          cookies: cookieNames(w.cookies),
+          loggedIn: true,
+          renewed: w.renewed,
         });
       }
       // An agent may be acting on injected page text: it may only refresh a known site's session from
@@ -294,7 +313,8 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
       }
       let imported: Awaited<ReturnType<typeof importSession>>;
       try {
-        imported = await importSession(t.site, t.url, { loginCookies: t.loginCookies, profile: source });
+        const guest = await knownGuests(t.site, t.url, t.loginCookies);
+        imported = await importSession(t.site, t.url, { loginCookies: t.loginCookies, profile: source, guest });
       } catch (e) {
         return reply(
           {
@@ -316,6 +336,7 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
           },
           true,
         );
+      const warning = importWarning(t.url, imported);
       return reply({
         ok: true,
         site: t.site,
@@ -323,7 +344,9 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
         profile: `${imported.browser}/${imported.profile}`,
         ...(imported.name ? { profileName: imported.name } : {}),
         cookies: cookieNames(imported.cookies),
-        loggedIn: loggedIn(imported.cookies, t.loginCookies),
+        loggedIn: imported.signedIn,
+        renewed: imported.renewed,
+        ...(warning ? { warning } : {}),
       });
     }),
   );
