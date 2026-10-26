@@ -1358,18 +1358,23 @@ async function loginWindow(
   // The cookies are read while the window is open, never after it closed: closing Chrome's last window
   // on Linux or Windows quits it, and a quitting Chrome's jar has lost its session cookies (a login
   // cookie among them, on many sites). So the jar is read on every response, where a Set-Cookie lands,
-  // and every half second for one a script sets; the newest read started is the one kept.
+  // and every half second for one a script sets. A read counts only if it completed while the window
+  // was open (one in flight when it closed may answer from the quitting jar), and of those the newest
+  // started is kept.
   let snapshot: Cookie[] = [];
   let started = 0;
   let kept = 0;
+  /** no more reads start */
   let shut = false;
+  /** the window began closing: no read that completes from here counts */
+  let closing = false;
   const reads = new Set<Promise<void>>();
   const read = () => {
     if (shut) return;
     const n = ++started;
     const r = ctx.cookies().then(
       (c) => {
-        if (n > kept) [kept, snapshot] = [n, c];
+        if (!closing && n > kept) [kept, snapshot] = [n, c];
       },
       () => {},
     );
@@ -1386,6 +1391,7 @@ async function loginWindow(
       resolve();
     };
     const close = () => {
+      closing = true;
       shut = true;
       resolve();
     };
@@ -1402,7 +1408,7 @@ async function loginWindow(
     await page.goto(url).catch(() => {});
     read();
     await done;
-    // Enter leaves the window open, so one more read is current; a closed one gets none.
+    // Enter leaves the window open, so one more read is current (unless the user closes it meanwhile).
     if (entered && !shut) read();
     shut = true;
     await Promise.all(reads);

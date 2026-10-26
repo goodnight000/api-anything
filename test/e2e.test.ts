@@ -487,7 +487,8 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
      * Open the window, let the user do `act` in it as soon as it shows the site, then close it as the
      * user would. Closing Chrome's last window on Linux or Windows quits it, and a read of a quitting
      * Chrome's jar misses its session cookies (app_session has no expiry; CI's Linux run lost it). Here
-     * every read that starts once the page has closed sees that, on every OS: none may count.
+     * that holds on every OS, for a read that starts once the page has closed and for one in flight
+     * across the close, made sure of by a response just before it: neither may count.
      */
     const inWindow = async (act: (page: Page) => Promise<unknown> = async () => {}) => {
       const pending = windowLogin(site, url, { waitForEnter: false });
@@ -499,12 +500,23 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
         page = ctx.pages().find((p) => p.url() === url);
       }
       assert.ok(page && ctx, "the window opened on the site");
-      const shut = ctx;
-      page.once("close", () => {
-        shut.cookies = async () => [];
+      const shown = page;
+      await act(shown);
+      // from here every read of the jar answers only once the page has closed, and then empty
+      let closed = false;
+      let reads = 0;
+      shown.once("close", () => {
+        closed = true;
       });
-      await act(page);
-      await page.close({ runBeforeUnload: true }); // as a human closing it: the page may ask first
+      ctx.cookies = () => {
+        reads++;
+        return new Promise((resolve) => (closed ? resolve([]) : shown.once("close", () => resolve([]))));
+      };
+      const before = reads;
+      await shown.evaluate(() => fetch("/members?late").then((r) => r.text()));
+      for (let i = 0; i < 100 && reads === before; i++) await new Promise((r) => setTimeout(r, 20));
+      assert.ok(reads > before, "a read of the jar is in flight as the window closes");
+      await shown.close({ runBeforeUnload: true }); // as a human closing it: the page may ask first
       return pending;
     };
 

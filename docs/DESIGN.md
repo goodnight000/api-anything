@@ -922,8 +922,9 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
 - `--window` opens a visible browser window on api-anything's profile for a by-hand sign-in (an
   independent session). It is also the automatic fallback when nothing is importable. The site's
   cookies are read as the window opens, before its page loads, and then while it is open: on every
-  response (where a `Set-Cookie` lands) and every half second (for one a script sets), keeping the
-  newest read, and once more on Enter. Never after it has closed: closing Chrome's last window on
+  response (where a `Set-Cookie` lands) and every half second (for one a script sets), and once more
+  on Enter. Of the reads that completed while it was open, the newest started is kept; one still in
+  flight when it began closing never counts, nor does any read after. Closing Chrome's last window on
   Linux or Windows quits it, and a quitting Chrome's jar has already lost its session cookies, often
   the login among them (CI caught this). The sign-in counts
   only when a login cookie (not a guest name) appeared or changed in between: a profile that already
