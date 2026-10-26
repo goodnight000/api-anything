@@ -1,0 +1,107 @@
+{
+  "name": "pinterest",
+  "displayName": "Pinterest",
+  "baseUrl": "https://www.pinterest.com",
+  "description": "Public signed-out Pinterest search suggestions from the frontend typeahead.",
+  "operations": [
+    {
+      "name": "searchSuggestions",
+      "description": "Suggest public Pinterest search phrases for a query.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.pinterest.com/resource/AdvancedTypeaheadResource/get/?source_url=%2Fsearch%2Fpins%2F%3Fq%3D%7Bq%7D&data=%7B%22options%22%3A%7B%22pin_scope%22%3A%22pins%22%2C%22autocomplete_request_surface%22%3A0%2C%22count%22%3A5%2C%22term%22%3A%22%7Bq%7D%22%7D%2C%22context%22%3A%7B%7D%7D&_=1793004484404",
+        "headers": {
+          "accept": "application/json, text/javascript, */*, q=0.01",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=1, i",
+          "referer": "https://www.pinterest.com/",
+          "screen-dpr": "1",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-full-version-list": "\"Google Chrome\";v=\"155.0.8059.85\", \"Chromium\";v=\"155.0.8059.85\", \"Not(A:Brand\";v=\"24.0.0.0\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "x-app-version": "472496f",
+          "x-b3-flags": "0",
+          "x-b3-parentspanid": "35145554dbdb9bd6",
+          "x-b3-spanid": "78c36060c1c7171b",
+          "x-b3-traceid": "35145554dbdb9bd6",
+          "x-pinterest-appstate": "active",
+          "x-pinterest-pws-handler": "www/search/[scope].js",
+          "x-pinterest-source-url": "/search/pins/?q={q}",
+          "x-requested-with": "XMLHttpRequest"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:data",
+            "json:/options/term"
+          ]
+        },
+        {
+          "param": "q",
+          "at": [
+            "query:source_url"
+          ],
+          "template": "/search/pins/?q={q}",
+          "escape": "url"
+        },
+        {
+          "param": "q",
+          "at": [
+            "header:x-pinterest-source-url"
+          ],
+          "template": "/search/pins/?q={q}",
+          "escape": "url"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.pinterest.com/search/pins/?q={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.pinterest.com",
+        "path": "/resource/AdvancedTypeaheadResource/get/"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "resource_response.data.items",
+        "pick": [
+          "query",
+          "label",
+          "type"
+        ]
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Words to expand into Pinterest search suggestions.",
+          "example": "ceramics"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "origami"
+          },
+          "expect": "result",
+          "purpose": "Origami suggestions replace the ceramics example; returned phrases concern paper folding."
+        }
+      ]
+    }
+  ]
+}
