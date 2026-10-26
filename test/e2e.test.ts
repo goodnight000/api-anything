@@ -483,17 +483,26 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     const site = "members";
     // the session a failed window sign-in must leave as it was
     saveSession(site, { cookies: [], values: {}, source: "chrome:Default" });
-    /** open the window, let the user do `act` in it, then close it as the user would */
+    /**
+     * Open the window, let the user do `act` in it as soon as it shows the site, then close it as the
+     * user would. Closing Chrome's last window on Linux or Windows quits it, and a read of a quitting
+     * Chrome's jar misses its session cookies (app_session has no expiry; CI's Linux run lost it). Here
+     * every read that starts once the page has closed sees that, on every OS: none may count.
+     */
     const inWindow = async (act: (page: Page) => Promise<unknown> = async () => {}) => {
       const pending = windowLogin(site, url, { waitForEnter: false });
       let page: Page | undefined;
+      let ctx: Awaited<ReturnType<typeof openBrowser>> | undefined;
       for (let i = 0; i < 300 && !page; i++) {
         await new Promise((r) => setTimeout(r, 100));
-        page = (await openBrowser({ profileDir: profileDir(), headless: false })).pages().find((p) => p.url() === url);
+        ctx = await openBrowser({ profileDir: profileDir(), headless: false });
+        page = ctx.pages().find((p) => p.url() === url);
       }
-      assert.ok(page, "the window opened on the site");
-      await page.waitForLoadState("load");
-      await new Promise((r) => setTimeout(r, 300)); // the window's own navigation has finished
+      assert.ok(page && ctx, "the window opened on the site");
+      const shut = ctx;
+      page.once("close", () => {
+        shut.cookies = async () => [];
+      });
       await act(page);
       await page.close({ runBeforeUnload: true }); // as a human closing it: the page may ask first
       return pending;

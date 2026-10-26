@@ -1355,32 +1355,60 @@ async function loginWindow(
   const onPage = (p: Page) => p.on("dialog", onDialog);
   onPage(page);
   ctx.on("page", onPage); // a sign-in popup (an identity provider) too
-  await page.goto(url);
-  // Closing the last window closes the context, after which cookies can't be read, so keep a snapshot.
-  let snapshot = await ctx.cookies();
-  const poll = setInterval(
-    () =>
-      ctx.cookies().then(
-        (c) => (snapshot = c),
-        () => {},
-      ),
-    1000,
-  );
+  // The cookies are read while the window is open, never after it closed: closing Chrome's last window
+  // on Linux or Windows quits it, and a quitting Chrome's jar has lost its session cookies (a login
+  // cookie among them, on many sites). So the jar is read on every response, where a Set-Cookie lands,
+  // and every half second for one a script sets; the newest read started is the one kept.
+  let snapshot: Cookie[] = [];
+  let started = 0;
+  let kept = 0;
+  let shut = false;
+  const reads = new Set<Promise<void>>();
+  const read = () => {
+    if (shut) return;
+    const n = ++started;
+    const r = ctx.cookies().then(
+      (c) => {
+        if (n > kept) [kept, snapshot] = [n, c];
+      },
+      () => {},
+    );
+    reads.add(r);
+    void r.finally(() => reads.delete(r));
+  };
+  ctx.on("response", read);
+  const poll = setInterval(read, 500);
   let onEnter = () => {};
+  let entered = false;
+  const done = new Promise<void>((resolve) => {
+    onEnter = () => {
+      entered = true;
+      resolve();
+    };
+    const close = () => {
+      shut = true;
+      resolve();
+    };
+    ctx.once("close", close);
+    page.once("close", close);
+    // The MCP server's stdin is its transport; only the CLI reads Enter.
+    if (waitForEnter) {
+      process.stdin.once("data", onEnter);
+      process.stdin.resume();
+    }
+  });
   try {
-    await new Promise<void>((resolve) => {
-      onEnter = resolve;
-      ctx.once("close", () => resolve());
-      page.once("close", () => resolve());
-      // The MCP server's stdin is its transport; only the CLI reads Enter.
-      if (waitForEnter) {
-        process.stdin.once("data", onEnter);
-        process.stdin.resume();
-      }
-    });
-    snapshot = await ctx.cookies().catch(() => snapshot);
+    // A user who clicks away before the page has loaded interrupts this navigation; the window stays theirs.
+    await page.goto(url).catch(() => {});
+    read();
+    await done;
+    // Enter leaves the window open, so one more read is current; a closed one gets none.
+    if (entered && !shut) read();
+    shut = true;
+    await Promise.all(reads);
   } finally {
     clearInterval(poll);
+    ctx.off("response", read);
     ctx.off("page", onPage);
     if (waitForEnter) {
       process.stdin.off("data", onEnter);
