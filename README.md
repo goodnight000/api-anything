@@ -131,8 +131,8 @@ Two example inputs. What changed becomes a parameter; the rest is kept byte for 
 </td>
 <td width="50%" valign="top">
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/media/feature-fast-dark.svg"><img src="docs/media/feature-fast-light.svg" width="48" alt=""></picture>
-<br><b>Calls in a fraction of a second</b><br>
-Tier 1 is one HTTP request from Node: 0.1 to 0.4 s for a Hacker News search. No browser starts.
+<br><b>Plain HTTP, no browser</b><br>
+Tier 1 is one request from Node: typically 0.1 to 0.4 s for a Hacker News search, 1.2 s for a Google Flights page.
 </td>
 </tr>
 <tr>

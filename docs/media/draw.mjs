@@ -272,7 +272,7 @@ function hero(t) {
     `<path d="M650,362h20" stroke="${t.browser}" stroke-width="2.5" stroke-dasharray="1.5 6" stroke-linecap="round"/>` +
     text(680, 367, "a browser: click, wait, read, repeat", { size: 15, fill: t.text2 }) +
     `<path d="M958,362h20" stroke="${t.api}" stroke-width="3" stroke-linecap="round"/>` +
-    text(988, 367, "one HTTP call, ~100 ms", { size: 15, fill: t.text2 });
+    text(988, 367, "one HTTP call, no browser", { size: 15, fill: t.text2 });
 
   return doc(
     W,
@@ -431,7 +431,7 @@ function howItWorks(t) {
     t,
   );
   const steps = [
-    { x: 56, y: 396, tier: "TIER 1", title: "Node fetch, plain HTTP", right: "~100 ms" },
+    { x: 56, y: 396, tier: "TIER 1", title: "Node fetch, plain HTTP", right: "no browser" },
     { x: 136, y: 492, tier: "TIER 2", title: "fetch from inside a browser page" },
     { x: 216, y: 588, tier: "TIER 3", title: "run the page, read its response", right: "reads only" },
   ];
@@ -542,7 +542,7 @@ function howItWorks(t) {
   return doc(
     W,
     H,
-    "How API Anything works. 1, Learn: the browser loads the page for two example inputs; what changed becomes a slot, and cookies become references. 2, Call: tier 1 sends plain HTTP with Node fetch in about 100 ms; if the site blocks that, tier 2 fetches from inside a browser page; as a last resort for reads, tier 3 runs the page and reads its response. Every result carries class, write, retry and nextCall. 3, Repair: when a request drifts, re-learn it, replay it, and save it only if the replay succeeds.",
+    "How API Anything works. 1, Learn: the browser loads the page for two example inputs; what changed becomes a slot, and cookies become references. 2, Call: tier 1 sends plain HTTP with Node fetch, with no browser; if the site blocks that, tier 2 fetches from inside a browser page; as a last resort for reads, tier 3 runs the page and reads its response. Every result carries class, write, retry and nextCall. 3, Repair: when a request drifts, re-learn it, replay it, and save it only if the replay succeeds.",
     t,
     b,
     css,

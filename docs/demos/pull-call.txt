@@ -7,11 +7,11 @@ getReviews(workId, after?, limit?) -> reviewer, rating, text
 getWorkId(bookId) -> workId, legacyWorkId
 authorBooks(authorId) -> bookId, title, avgRating, ratingsCount
 $ api-anything call goodreads searchBooks q=piranesi | jq -c '{ok, class, tier, ms}, .data[0]'
-{"ok":true,"class":"ok","tier":1,"ms":440}
+{"ok":true,"class":"ok","tier":1,"ms":805}
 {"bookId":"50202953","title":"Piranesi","author":"Susanna Clarke","authorId":8842,"avgRating":"4.19",
 "ratingsCount":599466}
 $ api-anything call hacker-news search query=sqlite | jq -c '{ok, class, tier, ms}, (.data[0] | {titl
 e, points})'
-{"ok":true,"class":"ok","tier":1,"ms":185}
+{"ok":true,"class":"ok","tier":1,"ms":265}
 {"title":"Hosting SQLite databases on GitHub Pages or any static file hoster","points":1812}
 $

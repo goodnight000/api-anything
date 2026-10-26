@@ -153,17 +153,18 @@ api-anything call hacker-news search query=sqlite | jq -c '{ok, class, tier, ms}
 ```
 
 ```text
-{"ok":true,"class":"ok","tier":1,"ms":440}
+{"ok":true,"class":"ok","tier":1,"ms":805}
 {"bookId":"50202953","title":"Piranesi","author":"Susanna Clarke","authorId":8842,"avgRating":"4.19","ratingsCount":599466}
-{"ok":true,"class":"ok","tier":1,"ms":185}
+{"ok":true,"class":"ok","tier":1,"ms":265}
 {"title":"Hosting SQLite databases on GitHub Pages or any static file hoster","points":1812}
 ```
 
 `pull` fetched `sites/goodreads.json` from this repository's main branch, checked it against the
 shared rules, and listed its operations. Both calls went over tier 1, with no browser. `ms` covers
-the whole call in a new process, DNS and TLS included. Over a few runs the same day, the Hacker
-News search took 133 to 412 ms and the Goodreads search 440 to 590 ms; one Goodreads book page
-(`getBook`, not in the recording) took 1.3 to 1.5 s, and once 15.9 s.
+the whole call in a new process, DNS and TLS included. Over several runs the same day, the Hacker
+News search took 133 to 412 ms, and once 1.7 s; the Goodreads search took 440 to 805 ms; one
+Goodreads book page (`getBook`, not in the recording) took 1.3 to 1.5 s, and once 15.9 s. On Google
+Flights, a server-rendered page, a call took a median of 1.17 s ([benchmark](../../bench/README.md)).
 
 ## 5. A write: refused by default, sent once, never twice
 

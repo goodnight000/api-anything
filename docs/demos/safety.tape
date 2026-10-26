@@ -6,7 +6,7 @@ Set Shell bash
 Set FontFamily "Menlo"
 Set FontSize 16
 Set Width 1080
-Set Height 420
+Set Height 360
 Set Padding 20
 Set TypingSpeed 20ms
 Set WaitPattern /\$$/
