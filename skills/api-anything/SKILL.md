@@ -14,11 +14,17 @@ local, under `~/.api-anything` (`API_ANYTHING_HOME` overrides it).
 
 Run the CLI as `api-anything` (or `npx -y github:goodnight000/api-anything`). Its output is one line of JSON. A failure also
 prints a `next:` line on stderr. If the MCP server is connected, `list_sites`, `list_operations`
-and `call_operation` do the same as `sites`, `ops` and `call`, and `login` refreshes a session.
-`call_operation` sends a list of two or more records as `data: {columns, rows}`, one row per item,
-when that shortens the JSON; otherwise `data` stays a list of records. MCP
-cannot create operations: `capture` and `add` are CLI only. Over MCP, `next` names the tools to
-use. Run CLI-only commands yourself when you have shell access; otherwise give the command to the user.
+and `call_operation` do the same as `sites`, `ops` and `call` (for reads), and `login` refreshes a
+session. `list_operations` gives each op's args as a JSON Schema (`inputSchema`). A server started
+with `--allow-writes` also has `call_write_operation`, the only tool that sends a write; it takes
+`again` and `idempotencyKey`. A server started with `--sites <site,...>` also has a tool per op of
+those sites, named `<site>__<op>`, that takes the op's args directly. `call_operation` sends a list
+of two or more records as `data: {columns, rows}`, one row per item, when that shortens the JSON;
+otherwise `data` stays a list of records. A tool call still running after about 25 s answers
+`class: "pending"` with a `job`: call `get_job` with it (it waits up to 25 s more each time), and
+don't call the tool again, since nothing failed. MCP cannot create operations: `capture` and `add`
+are CLI only. Over MCP, `next` names the tools to use. Run CLI-only commands yourself when you have
+shell access; otherwise give the command to the user.
 
 ## Using an existing operation
 
@@ -251,7 +257,9 @@ Every failure carries:
   again in the browser profile named by `profile`, then retry; running `login` would only import the
   same signed-out cookies), `heal`, `relearn`, `fix_args`, `list_sites`,
   `check_site`, `allow_writes`, `raise_tier`, `install_browser`, `report`. Over MCP it also names the
-  `tool` and `args` when one of the server's tools takes the step.
+  `tool` and `args` when one of the server's tools takes the step (for `retry`, the same tool and
+  arguments; for a write sent to `call_operation` on a server that allows writes,
+  `call_write_operation`), and a `pending` answer's is `get_job`.
 - `write` (writes only, ok or not): `not_sent` (nothing left), `not_applied` (the site answered
   that it did not run it), `accepted` (a 2xx judged ok: the site took it, which doesn't prove it took
   effect), `may_have_applied` (anything else that may have reached the site), `applied` (the op's
@@ -273,6 +281,7 @@ Every failure carries:
 | `input` | bad, unknown or missing args, or the thing does not exist / has no results (the op's example still answers) | fix the args per `api-anything ops <site>`; never heal or re-add for this |
 | `refused` | a write without permission | see the write rules below |
 | `duplicate` | the same write (same args) was sent in the last 10 minutes and may have gone through; nothing was sent | tell the user to check the site; see the write rules below |
+| `pending` | MCP only: still running after about 25 s; nothing failed | call `get_job` with its `job`, again while it says `pending`; don't call the tool again |
 | `error` | anything else | retry once at most, then report |
 
 ## Write safety
@@ -281,7 +290,8 @@ Every failure carries:
   one, it aborts the request in the browser, so learning never performs the action. Learning an
   existing write again, or a request a `--write` capture aborted, needs `--write`: `add` refuses to
   save either as a read.
-- Calling a write needs `--allow-writes` (or an MCP server started with `--allow-writes`). Add
+- Calling a write needs `--allow-writes` (over MCP, a server started with `--allow-writes`, and the
+  `call_write_operation` tool or the write's own tool; `call_operation` never sends one). Add
   it only when the user asked for **that specific action with that content**. Confirm the exact
   text or target with the user first if there is any doubt.
 - A successful response is a service acknowledgement; `write: "applied"` is the only proof of

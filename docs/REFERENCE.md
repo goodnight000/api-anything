@@ -6,6 +6,7 @@ Details behind the [README](../README.md). The design and its reasons are in
 - [Creating an operation from captured traffic](#creating-an-operation-from-captured-traffic)
 - [Replay, fallback and repair](#replay-fallback-and-repair)
 - [Logging in](#logging-in)
+- [MCP server](#mcp-server)
 - [Safety and terms of service](#safety-and-terms-of-service)
 - [Status and known limits](#status-and-known-limits)
 - [Prior art](#prior-art)
@@ -209,13 +210,39 @@ go — avoid heavy automated traffic on it. Other ways in:
 
 Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 
+## MCP server
+
+`api-anything mcp` serves these tools over stdio:
+
+| tool | what it does | hints |
+|---|---|---|
+| `list_sites` | the sites, with how many operations each has | read-only |
+| `list_operations` | a site's operations, each with a JSON Schema of its args (`inputSchema`) and the keys its items carry (`returns`), and the site's notes | read-only |
+| `call_operation` | call a read; a write op is refused and nothing is sent | read-only, idempotent |
+| `call_write_operation` | call a write, with `again` and `idempotencyKey`; only with `--allow-writes` | destructive, not idempotent |
+| `get_job` | wait up to 25 s for a pending call's result | read-only |
+| `login` | refresh a session from the profile chosen with the CLI, or open a window to sign in by hand | changes the local session only |
+
+- `--sites goodreads,hacker-news` also serves each operation of those sites as a tool of its own,
+  `<site>__<op>` (at most 40 characters, any other character as `_`), that takes the op's args
+  directly. A write is one only with `--allow-writes`.
+- A tool call still running after about 25 s answers `{ok: false, class: "pending", job}` and keeps
+  running; `get_job {job}` returns its result, or pending again, and never runs it again. The same
+  call while it runs joins it, so a second `login` for a site whose window is open returns that
+  job. Jobs end when the server does; a finished one is kept 15 minutes. A sign-in window nobody
+  closes is closed after 10 minutes.
+- Each answer is JSON text, and the same object as `structuredContent`.
+- `--print-config` prints how to add the server to Claude Code, Codex, Gemini CLI, VS Code, Cursor
+  and Claude Desktop, with absolute paths. Client timeouts and fixes for common problems are in
+  [QUICKSTART.md](QUICKSTART.md#client-timeouts).
+
 ## Safety and terms of service
 
 - api-anything automates your own browser session on your own accounts. It is meant for things you
   could do by hand, at human pace. HTTP replays to one site are paced at 1 s within one process; browser navigation may fire multiple requests.
 - **Writes** (posting, sending, buying) are learned by intercepting the request and aborting it
   in the browser, so learning never performs them. Calling a write needs `--allow-writes` on the
-  CLI, the MCP server, or the library. A write is sent once and is retried only when the
+  CLI, the MCP server (whose `call_write_operation` sends it; `call_operation` never does), or the library. A write is sent once and is retried only when the
   server certainly did not run it (a 400, 401, 403 or 404 answered to the write itself, not after
   a redirect). Timeouts and 5xx errors are reported,
   not retried. The result's `write` says what happened (`not_sent`, `not_applied`, `accepted`,

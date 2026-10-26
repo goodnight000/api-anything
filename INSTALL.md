@@ -66,13 +66,17 @@ codex mcp add api-anything -- api-anything mcp
 mkdir -p ~/.agents/skills/api-anything && cp "$(npm root -g)/api-anything/skills/api-anything/SKILL.md" ~/.agents/skills/api-anything/
 ```
 
-Any other MCP client: merge this server into its MCP config. If the client can't find the
-command, use the absolute path from `command -v api-anything`. If the client loads skills,
-install `SKILL.md` from the path above.
+Any other MCP client (Gemini CLI, VS Code, Cursor, Claude Desktop): run this and use the entry it
+prints for that client. It names `node` and the installed CLI by absolute path, because a client
+started from the Dock or a menu may not get the shell's `PATH`. If the client loads skills, install
+`SKILL.md` from the path above.
 
-```json
-{ "mcpServers": { "api-anything": { "command": "api-anything", "args": ["mcp"] } } }
+```sh
+api-anything mcp --print-config
 ```
+
+If a client later fails to start the server or times out, the per-client timeouts and a list of
+fixes are in [docs/QUICKSTART.md](docs/QUICKSTART.md#client-timeouts).
 
 ## 5. Tell the user
 

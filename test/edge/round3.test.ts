@@ -505,7 +505,7 @@ describe("agent surface", () => {
     );
   });
 
-  test("over MCP, call_operation's next and list_operations' notes and param hints", async () => {
+  test("over MCP, call_operation's next and list_operations' notes and param formats", async () => {
     const home = newHome();
     saveSite(
       parseSite({
@@ -533,7 +533,11 @@ describe("agent surface", () => {
         JSON.parse((r.content as { text: string }[])[0]!.text);
       const ops = text(await client.callTool({ name: "list_operations", arguments: { site: "notes" } }));
       assert.match(ops.notes, /Airport codes only/);
-      assert.equal(ops.operations[0].params[0].hint, "a date as YYYY-MM-DD");
+      assert.deepEqual(ops.operations[0].inputSchema.properties.d, {
+        type: "string",
+        description: "a date as YYYY-MM-DD",
+        pattern: "^(?:\\d{4}-\\d{2}-\\d{2})$",
+      });
       const bad = text(
         await client.callTool({
           name: "call_operation",

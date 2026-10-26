@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /** api-anything CLI. Compact JSON on stdout; every failure also prints one `next:` line on stderr. */
 import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { verifySite } from "./checks.js";
 import { botWall, emptyResults, loginPath, signInForm } from "./classify.js";
+import { launchOf, printConfig } from "./clients.js";
 import { call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
 import {
@@ -202,9 +204,16 @@ const HELP: Record<string, string> = {
   session value. --yes sends that preview, unchanged, with the GitHub CLI (gh, signed in): a fork, a
   branch, commits under your account's noreply address, and a public pull request under your account.
   --keep-examples keeps param examples you confirmed are public (so verify works for others).`,
-  mcp: `api-anything mcp [--allow-writes]
-  Serves list_sites, list_operations, call_operation and login over stdio MCP. MCP cannot create
-  operations (use capture/add here), and its login only refreshes a session a human imported here.`,
+  mcp: `api-anything mcp [--allow-writes] [--sites a,b] [--print-config]
+  Serves list_sites, list_operations, call_operation, get_job and login over stdio MCP, and
+  call_write_operation with --allow-writes. MCP cannot create operations (use capture/add here), and
+  its login only refreshes a session a human imported here. A call still running after about 25 s
+  answers class pending with a job, which get_job waits for.
+  --sites a,b     also serve each operation of these sites as a tool of its own (goodreads__searchBooks),
+                  with its args' JSON Schema: no list_operations step first. Costs tokens per op
+  --print-config  print the command or config entry that adds this server to Claude Code, Codex,
+                  Gemini CLI, VS Code, Cursor and Claude Desktop, with absolute paths and the other
+                  flags given, instead of serving`,
 };
 
 const USAGE = `api-anything ${VERSION}: turn a website into operations an agent can call.
@@ -218,7 +227,8 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything pull <site> | publish <site> [--yes]
   api-anything check <site> <op> [k=v ...] --expect result|empty|input
   api-anything readback <site> <write-op> <read-op> [k=v ...] [--find field=value]
-  api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site> | mcp
+  api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site>
+  api-anything mcp [--allow-writes] [--sites a,b] [--print-config]
 
 api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
 
@@ -337,6 +347,8 @@ const OPTIONS = {
   purpose: { type: "string" },
   paging: { type: "string" },
   find: { type: "string" },
+  sites: { type: "string" },
+  "print-config": { type: "boolean" },
 } as const;
 
 /** What a command gets: the flags, the positionals after the command name, and the parsed --steps. */
@@ -1086,8 +1098,21 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
 }
 
 async function cmdMcp({ v }: Parsed): Promise<number> {
+  const sites = (v.sites ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const s of sites) if (!loadSite(s)) throw new Fail(`no site "${s}"`, "api-anything sites lists them");
+  if (v["print-config"]) {
+    const flags = [
+      ...(v["allow-writes"] ? ["--allow-writes"] : []),
+      ...(sites.length ? ["--sites", sites.join(",")] : []),
+    ];
+    process.stdout.write(`${printConfig(launchOf(fileURLToPath(import.meta.url), flags))}\n`);
+    return 0;
+  }
   const { serveStdio } = await import("./mcp.js");
-  await serveStdio({ allowWrites: v["allow-writes"] });
+  await serveStdio({ allowWrites: v["allow-writes"], sites });
   return -1; // keep serving
 }
 
@@ -1133,7 +1158,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   export: { run: cmdExport, flags: ["out", "keep-examples", "force"] },
   pull: { run: cmdPull, flags: [] },
   publish: { run: cmdPublish, flags: ["keep-examples", "yes"] },
-  mcp: { run: cmdMcp, flags: ["allow-writes"] },
+  mcp: { run: cmdMcp, flags: ["allow-writes", "sites", "print-config"] },
 };
 
 async function run(argv: string[]): Promise<number> {

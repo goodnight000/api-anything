@@ -60,8 +60,9 @@ api-anything call hacker-news search query=sqlite
 
 </details>
 
-Over MCP an agent **calls** operations, using four tools: `list_sites`, `list_operations`,
-`call_operation` and `login`. To **create** operations, an agent needs a shell and the
+Over MCP an agent **calls** operations, using five tools: `list_sites`, `list_operations`,
+`call_operation`, `get_job` and `login`, plus `call_write_operation` on a server started with
+`--allow-writes`. To **create** operations, an agent needs a shell and the
 [skill](skills/api-anything/SKILL.md). A Chromium browser is needed only for creating operations
 and for the browser tier — Google Chrome by default, or Brave, Edge, Chromium, Vivaldi, Arc; any
 Chromium executable works via `API_ANYTHING_BROWSER`. [Setup details](docs/QUICKSTART.md).

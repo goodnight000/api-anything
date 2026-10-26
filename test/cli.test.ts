@@ -5,11 +5,16 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { browserAvailable } from "../src/browser.js";
+import { printConfig } from "../src/clients.js";
 import { addOperation } from "../src/heal.js";
 import type { TriggerStep } from "../src/types.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
@@ -180,6 +185,82 @@ describe("flags and command names", () => {
       (await cli("add", "plain", "x", "--from", "c", "--match", "{")).stderr,
       /^next: api-anything add --help/,
     );
+  });
+});
+
+describe("mcp setup", () => {
+  /** The JSON entry the printout gives Cursor: the same launch every client gets. */
+  const cursorEntry = (out: string) => {
+    const block = out.slice(out.indexOf("Cursor:")).split("\n").slice(1);
+    const end = block.indexOf("  }");
+    return JSON.parse(block.slice(0, end + 1).join("\n")).mcpServers["api-anything"];
+  };
+
+  test("--print-config gives each client its add command, with absolute paths and the flags given", async () => {
+    const r = await cli("mcp", "--print-config", "--allow-writes", "--sites", "hacker-news");
+    assert.equal(r.code, 0, r.stderr);
+    // the test's home is passed on as an env flag: -e API_ANYTHING_HOME=...
+    for (const line of [
+      /claude mcp add --scope user -e \S+ api-anything -- /,
+      /codex mcp add api-anything --env \S+ -- /,
+      /gemini mcp add --scope user -e \S+ api-anything \S+ -- /,
+      /code --add-mcp '/,
+      /~\/\.cursor\/mcp\.json/,
+      /claude_desktop_config\.json/,
+    ])
+      assert.match(r.stdout, line);
+    const entry = cursorEntry(r.stdout);
+    assert.equal(entry.command, process.execPath);
+    assert.deepEqual(entry.args.slice(-5), [CLI, "mcp", "--allow-writes", "--sites", "hacker-news"]);
+    assert.deepEqual(entry.env, { API_ANYTHING_HOME: HOME }, "a GUI client would not pass on the shell's home");
+    const unknown = await cli("mcp", "--print-config", "--sites", "nope");
+    assert.equal(unknown.code, 1);
+    assert.match(unknown.stderr, /^next: api-anything sites/);
+  });
+
+  test("the printed commands survive a shell: a path with a space or a quote stays one word", () => {
+    const launch = {
+      command: "/opt/my node/bin/node",
+      args: ["/it's/cli.js", "mcp"],
+      env: { API_ANYTHING_HOME: "/a b" },
+    };
+    const printed = printConfig(launch).split("\n");
+    /** the words a shell hands `client` for its printed line */
+    const argv = (client: string) => {
+      const line = printed.find((l) => l.trim().startsWith(`${client} mcp add`))!.trim();
+      const words = execFileSync("sh", ["-c", line.replace(/^\S+ /, `printf '%s\\n' `)], { encoding: "utf8" });
+      return words.trimEnd().split("\n").slice(2); // after "mcp add"
+    };
+    const server = ["/opt/my node/bin/node", "--", "/it's/cli.js", "mcp"];
+    const home = "API_ANYTHING_HOME=/a b";
+    assert.deepEqual(argv("claude"), ["--scope", "user", "-e", home, "api-anything", "--", ...server.toSpliced(1, 1)]);
+    assert.deepEqual(argv("codex"), ["api-anything", "--env", home, "--", ...server.toSpliced(1, 1)]);
+    // gemini: the command is a positional of its own, and its args follow --
+    assert.deepEqual(argv("gemini"), ["--scope", "user", "-e", home, "api-anything", ...server]);
+  });
+
+  test("the printed entry starts a server a client can call, per-op tools included", async () => {
+    const api = createServer((_req, res) => res.writeHead(200, { "content-type": "application/json" }).end('{"n":7}'));
+    await new Promise<void>((r) => api.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
+    mkdirSync(join(HOME, "sites"), { recursive: true });
+    const op = { name: "get", readOnly: true, request: { method: "GET", url: `${base}/n` }, trigger: { url: base } };
+    writeFileSync(
+      join(HOME, "sites", "local.json"),
+      JSON.stringify({ name: "local", baseUrl: base, operations: [op] }),
+    );
+    const entry = cursorEntry((await cli("mcp", "--print-config", "--sites", "local")).stdout);
+    const client = new Client({ name: "probe", version: "0" });
+    try {
+      await client.connect(new StdioClientTransport({ ...entry, env: { ...entry.env, PATH: "/usr/bin:/bin" } }));
+      const { tools } = await client.listTools();
+      assert.ok(tools.some((t) => t.name === "local__get"));
+      const r = await client.callTool({ name: "local__get", arguments: {} });
+      assert.deepEqual(JSON.parse((r.content as { text: string }[])[0]!.text).data, { n: 7 });
+    } finally {
+      await client.close();
+      api.close();
+    }
   });
 });
 

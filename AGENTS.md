@@ -26,6 +26,8 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/registry.ts`, `src/publish.ts` | pull a shared spec from the registry (`sites/` on GitHub); publish one as a pull request via `gh` |
 | `src/login.ts`, `src/import.ts` | sign in by importing the everyday browser's cookies; re-import on `auth` |
 | `src/cli.ts`, `src/mcp.ts`, `src/index.ts` | entry points |
+| `src/jobs.ts` | an MCP call still running at its deadline answers with a job; identical calls join it |
+| `src/clients.ts` | `mcp --print-config`: how each MCP client adds the server, with absolute paths |
 
 ## Rules
 

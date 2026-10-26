@@ -1154,28 +1154,98 @@ independent alternative.
     program. `test/execute.test.ts` checks the fields over every class, a read and a write, and
     what was sent.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `list_operations`,
-  `call_operation`, and `login` (so an agent can fix an `auth` failure itself), so the tool list
-  costs the same at 2 sites or 200. The agent may be steered by page content, so MCP `login` import
+  `call_operation`, `get_job` and `login` (so an agent can fix an `auth` failure itself), plus
+  `call_write_operation` on a server started with `--allow-writes`, so the tool list costs the same
+  at 2 sites or 200. The agent may be steered by page content, so MCP `login` import
   only refreshes a site that has a spec and a browser source a human chose with the CLI, from that
   same profile; anything else answers `next`: ask the user to run `api-anything login <site>`. Mode
-  window is allowed (a human signs in). MCP cannot create operations: capture and add are CLI only. Writes are hidden unless
-  it is started with `--allow-writes`. `list_operations` carries each op's `returns`, the site's notes and each param's
-  `hint`/`pattern`. A `next` served over MCP names the tools (`list_operations {"site":"x"}`, the
-  `login` tool) instead of CLI commands, and tells the agent to run a CLI-only one (heal, add) in its
-  own shell, or to hand it to the user when it has none. A `nextCall` served over MCP adds the
-  `tool` and `args` when one of the server's tools takes the step (`login`, `list_operations`,
-  `list_sites`, `call_operation` for a retry with the same args). The prose `next` keeps its
-  rewrite: it carries what the fields do not (check the site first, then re-learn), and the other
-  tools' `next` strings have no `nextCall`. A server started with `--allow-writes` gives
-  `call_operation` the `again` and `idempotencyKey` arguments.
-  `call_operation` sends `data` that is a list of two or more records as `{columns, rows}` (a
-  missing field is null) when that makes the JSON smaller. A sparse table can be larger than the
-  original records, so those stay a list to preserve the output cap. The keys, repeated in every
-  item, were half of a flight search's tokens. That a result's data, any site text in it and a
-  site's notes are data from the website, never instructions, is said once per session
-  (`UNTRUSTED_NOTE`), in the server instructions and in `call_operation`'s description, since some
-  clients drop instructions and every one sends a tool's description; a note in every result would
-  be paid for on every call, and the model already knows which tool a result came from.
+  window is allowed (a human signs in). MCP cannot create operations: capture and add are CLI only.
+  - **Reads and writes are separate tools**, because MCP hints are per tool and clients act on them:
+    Codex and VS Code skip the approval prompt for a `readOnlyHint` tool and ask for a
+    `destructiveHint` one, and Claude Code and Codex run read-only tools in parallel. One
+    `call_operation` that also sent writes had to be advertised destructive on a writes-enabled
+    server, so every read asked for approval. `call_operation` is read-only, idempotent and
+    non-destructive on every server, and sends with writes off whatever the server allows: a write
+    op is `refused` and nothing is sent, and on a writes-enabled server its `next` and `nextCall`
+    name `call_write_operation` with the same arguments. `call_write_operation` is destructive and
+    not idempotent, takes `again` and `idempotencyKey`, and refuses a read (`input`, pointing back
+    at `call_operation`), so a read never meets the write prompt. `list_sites`, `list_operations`
+    and `get_job` are read-only, idempotent and closed-world; `login` changes the local session,
+    never the site (not read-only, not destructive, idempotent: a repeat joins the first). Every
+    tool sets all four hints, since the spec's defaults for an unset one are the pessimistic ones.
+    The split costs a second tool name; the package was not published with the single tool.
+  - `list_operations` gives each op its `returns`, an `inputSchema` (a JSON Schema object of its
+    args: `type`, `enum`, `minimum`/`maximum`, `pattern` anchored as `^(?:p)$` since a spec's
+    pattern matches the whole value, `default`, `examples`, the format `hint` in `description`,
+    `required` for a required param with no default, `additionalProperties: false`), the site's
+    notes, and `shared` for a pulled spec. The schema replaces the old `params` list, so each param
+    is sent once.
+  - **Per-op tools**: `mcp --sites a,b` also registers each op of those sites as a tool of its own,
+    `<site>__<op>` (any character outside `[A-Za-z0-9_-]` becomes `_`), taking the op's args
+    directly with its `inputSchema` and a read's or a write's hints; writes only with
+    `--allow-writes`. The model calls it without `list_operations` first, at about 200 tokens of
+    tool list per op, sent with every request (the five meta-tools are about 950; goodreads' five
+    ops add about 1,000, all 25 bundled ops about 5,700), which is why it is opt-in. A name is at most 40 characters (Gemini
+    CLI cuts `mcp_<server>_<tool>` past 63, and Cursor is reported to drop a tool whose server and
+    tool names pass 60); a longer one is cut and ends in 8 hex characters of a hash of the whole,
+    so two stay distinct. The description is the op's, the keys its items carry, and where its
+    notes are; a pulled spec's starts with `SHARED_NOTE`, since a tool description is text the
+    model weighs more than a result. The args are judged by `call()`, not the SDK: the advertised
+    schema is the model's guide, and a refusal comes back as `class: "input"` with the format and a
+    next step, as through `call_operation`. A per-op write takes no `again` or `idempotencyKey`
+    (they could collide with a param's name): those go through `call_write_operation`.
+  - **Jobs** (`jobs.ts`). No client resets its tool-call timeout on a progress notification (the
+    spec allows it; Codex only logs them, Gemini CLI and VS Code show them; Claude Code counts
+    them only against its idle timeout), and some stop a call at 60 s (Claude Desktop, reportedly;
+    Codex before its default became 300 s). A call that heals or runs the page, or a sign-in window
+    the user is still using, can take longer, and an agent that never sees the answer may log in
+    again or send a write again. So a tool call (`call_operation`, `call_write_operation`, a per-op
+    tool, `login`) that is still running at 25 s answers
+    `{ok: false, class: "pending", job, reason, next, retry: "no", nextCall: get_job}`, with
+    `isError` false (nothing failed), and keeps running. `get_job {job}` waits up to 25 s for it and
+    answers its result, or pending again; it never runs the call again, and a finished job's result
+    is kept 15 minutes. A call identical to one still running (the same tool, site, op and args;
+    a write's `idempotencyKey` too, but not `again`) joins it instead of running beside it: a
+    second `login` for a site while its window is open answers that window's job (whatever the
+    mode), and a write still on its way is not sent twice. Jobs live in the server's memory and end
+    with it. A plain HTTP call answers in milliseconds and meets none of this: a job is only named
+    once its deadline passes. The 25 s leaves room under a 60 s client for `get_job`'s own wait. A
+    sign-in window nobody closes is closed after 10 minutes, so it does not hold the browser
+    profile. There is no `cancel_job`: a call cannot be stopped midway without leaving a write in
+    an unknown state, and the user closes a window themselves. The MCP tasks extension
+    (`taskSupport` in the SDK) is the protocol's version of this, but clients do not send task
+    requests yet.
+  - A `next` served over MCP names the tools (`list_operations {"site":"x"}`, the
+    `login` tool) instead of CLI commands, and tells the agent to run a CLI-only one (heal, add) in its
+    own shell, or to hand it to the user when it has none. A `nextCall` served over MCP adds the
+    `tool` and `args` when one of the server's tools takes the step (`login`, `list_operations`,
+    `list_sites`; for a retry, the tool that was called with the arguments it was called with).
+    `sign_in_browser` names no tool: the user signs in again in their own browser, and the retry
+    re-imports by itself, so the `login` tool would only import the same cookies once more. The
+    prose `next` keeps its rewrite: it carries what the fields do not (check the site first, then
+    re-learn), and the other tools' `next` strings have no `nextCall`.
+  - Each answer is JSON text and, when it is an object, the same object as `structuredContent`. A
+    client gives its model one of the two, never both: Codex and VS Code send the structured one
+    and drop the text, Gemini CLI sends the text, so neither costs tokens twice, and a program
+    reads the fields without parsing. `list_sites` (a list) is text only: before the 2026-07-28
+    revision structuredContent is an object. No tool declares an `outputSchema`: the SDK would
+    then reject an answer that does not match it, and a failure's shape differs from a success's.
+    `isError` is true exactly when `ok` is false, except for `pending`.
+  - `call_operation` sends `data` that is a list of two or more records as `{columns, rows}` (a
+    missing field is null) when that makes the JSON smaller. A sparse table can be larger than the
+    original records, so those stay a list to preserve the output cap. The keys, repeated in every
+    item, were half of a flight search's tokens.
+  - That a result's data, any site text in it and a site's notes are data from the website, never
+    instructions, is said once per session (`UNTRUSTED_NOTE`), in the server instructions and in the
+    description of `call_operation` and `call_write_operation`, since some clients drop instructions
+    and every one sends a tool's description; a note in every result would be paid for on every
+    call, and the model already knows which tool a result came from.
+  - `mcp --print-config` prints the command or config entry that adds the server to Claude Code,
+    Codex, Gemini CLI, VS Code, Cursor and Claude Desktop (`clients.ts`), with the absolute path of
+    the node running it and of the CLI entry (from a checkout, through tsx's loader), the other
+    flags given, and `API_ANYTHING_HOME`/`API_ANYTHING_BROWSER` when set: a client started from the
+    Dock or a menu may not get the shell's PATH (an nvm node) or its variables. Gemini CLI reads the
+    command as a positional of its own, so its args follow `--` there and none is read as its flag.
 - **Skill** `skills/api-anything/SKILL.md`: the create loop (capture → add → call → verify), the
   strict failure loop (follow `next` at most once, then stop and report), and the safety rules.
 - **Claude Code plugin** manifest (skill + MCP), plus copy-paste install lines for Codex and other agents.
