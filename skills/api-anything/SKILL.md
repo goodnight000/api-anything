@@ -204,11 +204,28 @@ permission; ask only for missing access or an account choice.
 This loop is strict, because every retry costs the user's quota and may look like abuse to the
 site.
 
-1. The call fails. Read `class`, `reason` and `next`.
+1. The call fails. Read `class`, `reason`, `next`, and the fields below: they say the same as `next`,
+   as data.
 2. Follow `next` **once**, if it is something you can do yourself (for example `api-anything heal`,
    or fixing an arg).
 3. If it fails again, or `next` needs the user, **stop**. Report `class`, `reason` and the hint
    to the user, and don't try other approaches on your own.
+
+Every failure carries:
+
+- `retry`: whether to send the same call again. `safe`: now, once. `after_wait`: not before
+  `retryAfterMs` (the site's own Retry-After), or a few minutes when that is absent. `after_fix`:
+  once the `nextCall` step is done. `no`: don't send it again as it is.
+- `nextCall`: `{action, site, op}`, with `action` one of `retry`, `login` (with `mode: "window"`
+  for a challenge the user clears by hand), `heal`, `relearn`, `fix_args`, `list_sites`,
+  `check_site`, `allow_writes`, `raise_tier`, `install_browser`, `report`. Over MCP it also names the
+  `tool` and `args` when one of the server's tools takes the step.
+- `write` (writes only, ok or not): `not_sent` (nothing left), `not_applied` (the site answered
+  that it did not run it), `accepted` (a 2xx judged ok: the site took it, which doesn't prove it took
+  effect), `may_have_applied` (anything else that may have reached the site).
+
+`reason` and `next` never hold a live cookie or session value: one the site echoed is replaced by
+`[redacted]`. `data` is not redacted.
 
 | class | meaning | what to do |
 |---|---|---|
@@ -218,6 +235,7 @@ site.
 | `drift` | the site changed and healing failed | follow `next` once (`api-anything heal <site> <op>`, or re-`add` with a new `--extract` when the response changed); then stop |
 | `input` | bad, unknown or missing args, or the thing does not exist / has no results (the op's example still answers) | fix the args per `api-anything ops <site>`; never heal or re-add for this |
 | `refused` | a write without permission | see the write rules below |
+| `duplicate` | the same write (same args) was sent in the last 10 minutes and may have gone through; nothing was sent | tell the user to check the site; see the write rules below |
 | `error` | anything else | retry once at most, then report |
 
 ## Write safety
@@ -231,8 +249,13 @@ site.
   text or target with the user first if there is any doubt.
 - A successful response is a service acknowledgement; confirm the receipt or read back the
   resulting object before claiming delivery. An explicit `ok: false` or `success: false` in a
-  write response is a failure even with HTTP 200. If the result says "the write may have gone through", don't retry, whatever
-  the class. Tell the user to check the site.
+  write response is a failure even with HTTP 200. When `write` is `accepted` or `may_have_applied`,
+  `retry` is `no`: don't send it again, whatever the class. Tell the user to check the site.
+- A write with the same args as one sent in the last 10 minutes that was accepted or may have gone
+  through is refused (`class: "duplicate"`, nothing sent). Pass `--again` (MCP: `again: true`) only
+  when the user checked the site, the write isn't there, and they want it sent again. To make your
+  own repeats safe, pass `--idempotency-key <k>` (MCP: `idempotencyKey`): a repeat with the same key
+  returns the first call's record instead of sending, while that write may have gone through.
 - Before the first real write, run `api-anything call <site> <op> ... --dry`. It prints the exact
   request with the credentials redacted, so you can check that the ids and text are the ones
   intended, byte for byte.

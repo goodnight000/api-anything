@@ -288,6 +288,10 @@ describe("dialogs in browser runs", { skip: !browserAvailable() && "no Chromium 
       /fired no request matching .*\(the page went quiet on http:\/\/127\.0\.0\.1:\d+\/delete\/70707 \(HTTP 200\); 0 requests still open; dialogs: confirm dismissed at steps\[0\]\): the page asked to confirm at steps\[0\] and was told no, since it is not one this write's learning recorded; nothing is confirmed on the user's behalf/,
     );
     assert.doesNotMatch(reworded.reason ?? "", /Really remove/, "page text in the reason");
+    // told no, the page sent nothing: the contract says so, and that learning again is the fix
+    assert.equal(reworded.write, "not_sent");
+    assert.equal(reworded.nextCall?.action, "relearn");
+    assert.equal(reworded.retry, "after_fix");
 
     // a spec learned before confirms were recorded asks the old question, and is told no all the same
     updateSite("dlg", (s) => ({

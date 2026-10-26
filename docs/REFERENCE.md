@@ -150,7 +150,17 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
   CLI, the MCP server, or the library. A write is sent once and is retried only when the
   server certainly did not run it (a 400, 401, 403 or 404 answered to the write itself, not after
   a redirect). Timeouts and 5xx errors are reported,
-  not retried.
+  not retried. The result's `write` says what happened (`not_sent`, `not_applied`, `accepted`,
+  `may_have_applied`), and `retry` says whether to send it again (`no` for one accepted or that may
+  have gone through). The same write with the same args within 10 minutes of one that was accepted
+  or may have gone through is refused (`class: "duplicate"`), unless the caller passes `--again`
+  (MCP `again`, library `again`). `--idempotency-key <k>` makes a repeat return the first call's
+  record instead of sending. The record (`~/.api-anything/writes.json`, kept 24 hours) holds the
+  site, the op, the time, the outcome and an HMAC of the args under a random local key, never the args.
+- A failure's `reason` quotes the site's answer, and `next` can name values too: both have every
+  live cookie and session value replaced by `[redacted]` (as stored, URL-encoded, JSON- or
+  HTML-escaped, or base64), including what is left of one the 160-character quote cut short. So do
+  stale marks and the heal log. `data`, the answer you asked for, is not redacted.
 - **Native dialogs** in the browser: leaving a page ("unsaved changes") is accepted, since leaving
   sends nothing; alerts and prompts are dismissed; a `confirm()` is dismissed during reads. While a
   write is learned its request is intercepted, so its confirm is accepted and recorded as a digest

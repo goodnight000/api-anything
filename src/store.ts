@@ -1,9 +1,28 @@
-/** Site specs (user dir, then pulled, then bundled), heal log, stale marks, and remembered tiers. */
-import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync } from "node:fs";
+/** Site specs (user dir, then pulled, then bundled), heal log, stale marks, remembered tiers, and the write ledger. */
+import { createHmac, randomBytes } from "node:crypto";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  linkSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Leaf, setAt, walk } from "./codec.js";
-import { besideOrigins, credentialsOf, ipIn, leafName, literalCredentials, opUrls, scanSecrets } from "./secrets.js";
+import {
+  besideOrigins,
+  credentialsOf,
+  ipIn,
+  leafName,
+  literalCredentials,
+  opUrls,
+  redact,
+  scanSecrets,
+} from "./secrets.js";
 import { ensureDir, home, loadSession, readJson, safeName, withLock, writePrivate } from "./session.js";
 import { parseSite, type Site } from "./spec.js";
 import { vetShared } from "./vet.js";
@@ -141,11 +160,21 @@ export interface HealEntry {
   diff: string;
 }
 
+/** `text` without the site's live session values: what is kept on disk is read by agents too. */
+function hidden(site: string, text: string): string {
+  try {
+    return redact(text, loadSession(site));
+  } catch {
+    return text; // an unreadable session file: no live value to look for
+  }
+}
+
 /** Append to heals.jsonl and remember when the op was last healed (for the heal-loop guard). */
 export function appendHeal(entry: HealEntry, now = Date.now()): void {
   ensureDir(home());
   const file = join(home(), "heals.jsonl");
-  appendFileSync(file, `${JSON.stringify({ at: new Date(now).toISOString(), ...entry })}\n`, { mode: 0o600 });
+  const line = { at: new Date(now).toISOString(), ...entry, diff: hidden(entry.site, entry.diff) };
+  appendFileSync(file, `${JSON.stringify(line)}\n`, { mode: 0o600 });
   chmodSync(file, 0o600);
   updateState((s) => {
     s.healedAt[key(entry.site, entry.op)] = now;
@@ -164,8 +193,9 @@ export function markStale(
   now = Date.now(),
   extra: { tier3?: boolean } = {},
 ): void {
+  const why = hidden(site, reason);
   updateState((s) => {
-    s.stale[key(site, op)] = { until: now + ttlMs, reason, ...extra };
+    s.stale[key(site, op)] = { until: now + ttlMs, reason: why, ...extra };
   });
 }
 
@@ -198,6 +228,142 @@ export function rememberTier(site: string, op: string, tier: 1 | 2 | 3 | undefin
 
 export function rememberedTier(site: string, op: string): 1 | 2 | 3 | undefined {
   return loadState().tier[key(site, op)];
+}
+
+/* ------------------------------------------------------------ write ledger */
+
+/** What a write did, as far as the caller can know; see CallResult.write. */
+export type WriteStatus = "not_sent" | "not_applied" | "accepted" | "may_have_applied";
+
+/** One write call, kept in writes.json. Never the args or a credential: an HMAC digest of the args. */
+export interface WriteRecord {
+  id: string;
+  site: string;
+  op: string;
+  /** HMAC-SHA256 of [site, op, args] under this machine's random key */
+  digest: string;
+  /** HMAC of the caller's idempotency key, when it gave one */
+  key?: string;
+  at: number;
+  /** "sending" until the call settles it; a process that died mid-send leaves it so, and it counts as may_have_applied */
+  status: WriteStatus | "sending";
+  ok?: boolean;
+  class?: string;
+}
+
+/**
+ * A repeat of a write that may have gone through is refused for this long. Long enough for an agent
+ * that re-sends after an unclear answer (seconds to minutes later, often after a login or a heal) and
+ * for the user to look at the site; short enough that the same comment or order placed again later
+ * on purpose goes through without the override.
+ */
+export const DUPLICATE_WINDOW_MS = 10 * 60_000;
+// An idempotency key is answered from its record this long; older records are dropped.
+const KEEP_WRITES_MS = 24 * 60 * 60_000;
+
+const writesFile = () => join(home(), "writes.json");
+const unsettled = (r: WriteRecord) =>
+  r.status === "accepted" || r.status === "may_have_applied" || r.status === "sending";
+
+/** This machine's HMAC key, made on first use: a digest of short args (a comment, a vote) cannot be guessed back without it. */
+function ledgerKey(): Buffer {
+  const file = join(home(), "write.key");
+  if (!existsSync(file)) {
+    ensureDir(home());
+    // written whole, then linked into place: a concurrent first use reads one key or the other, never half of one
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, randomBytes(32).toString("hex"), { mode: 0o600 });
+    try {
+      linkSync(tmp, file);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    } finally {
+      rmSync(tmp, { force: true });
+    }
+  }
+  return Buffer.from(readFileSync(file, "utf8").trim(), "hex");
+}
+
+/** The same value whatever the order of its object keys. */
+const canonical = (v: unknown): unknown =>
+  Array.isArray(v)
+    ? v.map(canonical)
+    : v && typeof v === "object"
+      ? Object.fromEntries(
+          Object.keys(v)
+            .sort()
+            .map((k) => [k, canonical((v as Record<string, unknown>)[k])]),
+        )
+      : v;
+
+const hmac = (key: Buffer, value: unknown) =>
+  createHmac("sha256", key).update(JSON.stringify(value)).digest("hex").slice(0, 32);
+
+export type WriteGate =
+  | { send: true; id: string }
+  /** an unsettled write with the same args within the window */
+  | { send: false; why: "duplicate"; earlier: WriteRecord }
+  /** the idempotency key's write may have gone through: its record answers */
+  | { send: false; why: "replay"; earlier: WriteRecord }
+  /** the idempotency key was used for other args */
+  | { send: false; why: "key_reused"; earlier: WriteRecord };
+
+/**
+ * Record a write before it is sent, under the ledger's lock so two processes cannot both pass, or
+ * say why it must not be sent. `again` skips both checks (the user saw the site and wants it sent).
+ * With an idempotency key the key decides, not the args' digest: the caller says which calls are one.
+ * Throws when the record cannot be written (a read-only home).
+ */
+export function beginWrite(
+  site: string,
+  op: string,
+  args: Record<string, unknown>,
+  o: { again?: boolean; idempotencyKey?: string } = {},
+  now = Date.now(),
+): WriteGate {
+  const secret = ledgerKey();
+  const digest = hmac(secret, [site, op, canonical(args)]);
+  const key = o.idempotencyKey !== undefined ? hmac(secret, ["key", site, op, o.idempotencyKey]) : undefined;
+  return withLock(writesFile(), () => {
+    let all: WriteRecord[];
+    try {
+      all = readJson<WriteRecord[]>(writesFile(), []);
+      if (!Array.isArray(all)) all = [];
+    } catch {
+      all = []; // a corrupt ledger is started over, like state.json, rather than refusing every write
+    }
+    all = all.filter((r) => now - r.at < KEEP_WRITES_MS);
+    const mine = all.filter((r) => r.site === site && r.op === op);
+    if (!o.again) {
+      if (key) {
+        const used = mine.findLast((r) => r.key === key);
+        if (used && used.digest !== digest) return { send: false, why: "key_reused", earlier: used };
+        if (used && unsettled(used)) return { send: false, why: "replay", earlier: used };
+      } else {
+        const earlier = mine.findLast((r) => r.digest === digest && now - r.at < DUPLICATE_WINDOW_MS && unsettled(r));
+        if (earlier) return { send: false, why: "duplicate", earlier };
+      }
+    }
+    const id = randomBytes(8).toString("hex");
+    all.push({ id, site, op, digest, ...(key ? { key } : {}), at: now, status: "sending" });
+    writePrivate(writesFile(), JSON.stringify(all, null, 1));
+    return { send: true, id };
+  });
+}
+
+/** What the write did, once its call returns. */
+export function settleWrite(id: string, status: WriteStatus, outcome: { ok: boolean; class: string }): void {
+  try {
+    withLock(writesFile(), () => {
+      const all = readJson<WriteRecord[]>(writesFile(), []);
+      const r = all.find((x) => x.id === id);
+      if (!r) return;
+      Object.assign(r, { status, ok: outcome.ok, class: outcome.class });
+      writePrivate(writesFile(), JSON.stringify(all, null, 1));
+    });
+  } catch {
+    // ponytail: the record stays "sending", which a repeat treats as may_have_applied: the safe side
+  }
 }
 
 /* ----------------------------------------------------------------- export */

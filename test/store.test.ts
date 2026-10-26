@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { saveSession } from "../src/session.js";
 import type { Site } from "../src/spec.js";
 import {
   appendHeal,
+  beginWrite,
   clearStale,
   lastHealAt,
   listSites,
@@ -14,6 +17,7 @@ import {
   rememberedTier,
   rememberTier,
   saveSite,
+  settleWrite,
   siteNotes,
   staleList,
   staleMark,
@@ -120,6 +124,67 @@ test("stale marks expire after their TTL and carry a reason; tiers are remembere
   assert.equal(rememberedTier("x", "getUser"), undefined);
   rememberTier("x", "getUser", 2);
   assert.equal(rememberedTier("x", "getUser"), 2);
+});
+
+test("a stale mark and the heal log never keep a live session value", () => {
+  const { home } = fresh();
+  const live = "Qa7Ws2Ed9Rf4Tg6Yh1Uj";
+  saveSession("x", {
+    cookies: [{ name: "sid", value: live, domain: "x.test", path: "/", expires: -1, httpOnly: true, secure: true }],
+    values: {},
+  });
+  markStale("x", "getUser", `heal failed: HTTP 401: bad session ${live}`);
+  assert.equal(staleMark("x", "getUser")?.reason, "heal failed: HTTP 401: bad session [redacted]");
+  appendHeal({ site: "x", op: "getUser", strategy: "recapture", diff: `token ${encodeURIComponent(live)} -> ref` });
+  const log = readFileSync(join(home, "heals.jsonl"), "utf8");
+  assert.ok(!log.includes(live) && log.includes("[redacted]"), log);
+});
+
+test("write ledger: an unsettled write holds back its repeat, under a local key and without the args", () => {
+  const { home } = fresh();
+  const args = { comment: "nice post" };
+  const first = beginWrite("x", "comment", args, {}, 1000);
+  assert.equal(first.send, true);
+  // the same args in another key order are the same write; it is still "sending"
+  const repeat = beginWrite("x", "comment", { ...args }, {}, 2000);
+  assert.deepEqual([repeat.send, !repeat.send && repeat.why], [false, "duplicate"]);
+  assert.equal(beginWrite("x", "comment", { comment: "other" }, {}, 2000).send, true);
+  assert.equal(beginWrite("x", "comment", args, { again: true }, 2000).send, true);
+  if (first.send) settleWrite(first.id, "not_applied", { ok: false, class: "auth" });
+
+  const text = readFileSync(join(home, "writes.json"), "utf8");
+  assert.ok(!text.includes("nice post") && !text.includes("other"), text);
+  assert.equal(statSync(join(home, "writes.json")).mode & 0o777, 0o600);
+  assert.equal(statSync(join(home, "write.key")).mode & 0o777, 0o600);
+  // another machine's key gives another digest: the digest cannot be checked against guessed args elsewhere
+  const digest = (JSON.parse(text) as { digest: string }[])[0]!.digest;
+  writeFileSync(join(home, "write.key"), "00".repeat(32));
+  beginWrite("x", "comment", args, { again: true }, 3000);
+  const after = JSON.parse(readFileSync(join(home, "writes.json"), "utf8")) as { digest: string }[];
+  assert.notEqual(after.at(-1)!.digest, digest);
+  // older than a day: dropped
+  beginWrite("x", "other", {}, {}, 3000 + 25 * 60 * 60_000);
+  assert.equal(JSON.parse(readFileSync(join(home, "writes.json"), "utf8")).length, 1);
+});
+
+test("write ledger: processes racing to send the same write let exactly one through", async () => {
+  const { home } = fresh();
+  const store = new URL("../src/store.ts", import.meta.url).href;
+  const script = `const { beginWrite } = await import(${JSON.stringify(store)}); process.stdout.write(String(beginWrite("x", "vote", { id: 7 }).send));`;
+  const runs = Array.from(
+    { length: 6 },
+    () =>
+      new Promise<string>((resolve, reject) => {
+        execFile(
+          process.execPath,
+          ["--import", "tsx", "--input-type=module", "-e", script],
+          { env: { ...process.env, API_ANYTHING_HOME: home } },
+          (e, out) => (e ? reject(e) : resolve(out)),
+        );
+      }),
+  );
+  const sent = await Promise.all(runs);
+  assert.equal(sent.filter((s) => s === "true").length, 1, sent.join(","));
 });
 
 test("secret scan: exact live values are secrets; heuristics only warn, and URL paths do not trip them", async () => {

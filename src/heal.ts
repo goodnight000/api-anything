@@ -23,6 +23,7 @@ import {
 
 export { unplaced };
 
+import type { NextAction } from "./execute.js";
 import { besideOrigins, credentialsOf, opUrls, scanSecrets } from "./secrets.js";
 import {
   cookieHeaderFor,
@@ -62,6 +63,14 @@ export interface Attempt {
   hint?: string;
   /** what the caller should know whatever the outcome (a repeat of the write was stopped) */
   note?: string;
+  /** nothing reached the site (the browser profile was busy, the tier-2 origin page did not load) */
+  unsent?: boolean;
+  /** the site answered that it did not apply the write (a clear refusal in a 2xx body) */
+  rejected?: boolean;
+  /** rate: the wait the server asked for; see Classified.retryAfterMs */
+  retryAfterMs?: number;
+  /** the step `hint` asks for, when it is not the class's usual one; see CallResult.nextCall */
+  step?: NextAction;
 }
 
 export const PROFILE_HINT =

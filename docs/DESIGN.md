@@ -423,6 +423,33 @@ too: its origin is in the digest, and the shared rules already require https add
 Writes need `allowWrites` at every entry point (CLI flag, MCP
 server flag, library option).
 
+What a write did is a field, not prose: `write` is read from every attempt the call made, the most
+any of them may have done. `not_sent`: nothing left (refused, bad args, a request that cannot be
+built, the browser profile busy, a tier-2 origin page that did not load, a tier-3 run that fired
+nothing after its confirm was told no, or the ledger below held it back). `not_applied`: the site answered that it did not run it (a definite non-execution as above,
+or an attempt flagged `rejected`: a clear refusal in a 2xx body, which the classifier sets).
+`accepted`: a 2xx judged ok, which proves the site took it and not that it took effect.
+`may_have_applied`: anything else that may have reached the site. A failed write that is `accepted`
+or `may_have_applied` always says `retry: "no"` and `nextCall: check_site`.
+
+An agent that skims an unclear answer sends the write again, so a write is recorded before it is
+sent (`writes.json` in `~/.api-anything`, under its lock, written atomically): site, op, time, a
+status (`sending` until the call settles it) and an HMAC-SHA256 of `[site, op, args]` (defaults
+filled, keys sorted) under a random key made on first use (`write.key`, 0600), so a short arg (a
+comment, a vote) cannot be guessed back from the file. The args are never stored. The same digest
+within 10 minutes of a record that is `accepted`, `may_have_applied` or still `sending` (its process
+died mid-send) is refused with class `duplicate`, `write: "not_sent"`, and a `next` to check the site.
+Ten minutes covers an agent's re-send after an unclear answer, a login or a heal in between, and the
+user looking at the site; a repeat placed on purpose later (the same comment an hour on) goes
+through. `again` (CLI `--again`, MCP `again`, library option) skips the check, for a user who
+checked. Check and record are one step under the lock, so two processes racing to send the same
+write let one through. An `idempotencyKey` replaces the digest check: the caller says which calls
+are one. A repeat with a key whose write may have gone through returns that call's record (`ok`,
+`class`, `write`) and sends nothing; a key whose write did not run may be sent again; a key used for
+other args is refused as `input`. Records are kept 24 hours. When the record cannot be written (a
+read-only home) the write is not sent unless the caller passed `again`; a corrupt ledger is started
+over, as `state.json` is.
+
 ## Failure classifier (`classify.ts`)
 
 Every response is classified, never by status code alone:
@@ -547,7 +574,21 @@ Heal strategies, cheapest first:
 A healed template is saved to the user's spec dir only after validation. Every heal is
 appended to `~/.api-anything/heals.jsonl` (op, strategy, diff summary). A tier an op escalated to
 (above its own `minTier`) is remembered per op as a speed hint (a lower `--max-tier` still tries
-its own tier), and a call that ran above tier 1 says why in `reason`. The jar, `state.json` and a
+its own tier), and a call that ran above tier 1 says why in `reason`. Every failure also carries
+`retry` and `nextCall`, filled in one place from the class, the attempt (a busy profile is
+`retry: "after_wait"`; a refused redirect `relearn`) and what was sent, so the fields cannot
+disagree: `safe` (now, once), `after_wait` (`retryAfterMs`, from the site's Retry-After, or a few
+minutes), `after_fix` (once the step is done), `no`. A `reason` quotes up to 160 characters of the
+site's answer, and a 401 or a CSRF failure can echo the token it refused. Each attempt's reason is
+redacted (`redact` in `secrets.ts`) against the jar as it was before the send and after it (a
+rotated cookie), and the result's `reason` and `next` again when the call returns, as are stale
+marks and the heal log when they are written. Every stored form of a live value (as stored,
+unquoted, URL-decoded) is replaced as it is, percent- and form-encoded, JSON- and HTML-escaped, and
+base64-encoded at any byte offset; a quote that ends in the first 4 or more characters of a value
+was cut inside it, and those go too. The classifier cuts the quote without the session; redacting
+after the cut and dropping a cut value's prefix gives the same result without passing the session
+to it. A value that is an origin is left. `data` is the answer the user asked for and is not
+redacted. The jar, `state.json` and a
 spec (every add and heal, re-read under the lock) are read-modify-written under a lock file, so
 concurrent processes and calls lose nothing.
 At tier 2 `timeoutMs` is one deadline for the whole call, counted from the moment Chrome is up
@@ -849,7 +890,7 @@ independent alternative.
     place) gets the recommendation, with a clause that says so, redirect or not; the clause is stronger
     when `--example` values were given and no candidate's response holds one
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--write]`
-  - `call <site> <op> [k=v ...] [--allow-writes]`
+  - `call <site> <op> [k=v ...] [--allow-writes] [--again] [--idempotency-key <k>]`
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
     flags (`--extract`, `--pick`, `--html`, `--embedded`): what the recipe would return, or a failure
     when a path or selector finds nothing (an empty list at a path is a result, and so is an `--html`
@@ -882,6 +923,13 @@ independent alternative.
     spec, the user's copy first, up to its `## Maintainer notes` heading; the rest of the file is
     for people working on the spec), `heal <site> <op>`, `export <site>`, `mcp`
   - All output is JSON-first, compact, and ends with a `next` hint on failure.
+  - A call's result says what happened in fields as well as prose: `retry` (`safe`, `after_wait`,
+    `after_fix`, `no`), `retryAfterMs`, `nextCall` (`{action, site, op}`, with `mode` for a window
+    login and `tier` for a raised cap; actions `retry`, `login`, `heal`, `relearn`, `fix_args`,
+    `list_sites`, `check_site`, `allow_writes`, `raise_tier`, `install_browser`, `report`), and for
+    a write `write` (see Writes). `next` stays, for a reader; `nextCall` is the same step for a
+    program. `test/execute.test.ts` checks the fields over every class, a read and a write, and
+    what was sent.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `list_operations`,
   `call_operation`, and `login` (so an agent can fix an `auth` failure itself), so the tool list
   costs the same at 2 sites or 200. The agent may be steered by page content, so MCP `login` import
@@ -891,7 +939,12 @@ independent alternative.
   it is started with `--allow-writes`. `list_operations` carries each op's `returns`, the site's notes and each param's
   `hint`/`pattern`. A `next` served over MCP names the tools (`list_operations {"site":"x"}`, the
   `login` tool) instead of CLI commands, and tells the agent to run a CLI-only one (heal, add) in its
-  own shell, or to hand it to the user when it has none.
+  own shell, or to hand it to the user when it has none. A `nextCall` served over MCP adds the
+  `tool` and `args` when one of the server's tools takes the step (`login`, `list_operations`,
+  `list_sites`, `call_operation` for a retry with the same args). The prose `next` keeps its
+  rewrite: it carries what the fields do not (check the site first, then re-learn), and the other
+  tools' `next` strings have no `nextCall`. A server started with `--allow-writes` gives
+  `call_operation` the `again` and `idempotencyKey` arguments.
   `call_operation` sends `data` that is a list of two or more records as `{columns, rows}` (a
   missing field is null) when that makes the JSON smaller. A sparse table can be larger than the
   original records, so those stay a list to preserve the output cap. The keys, repeated in every

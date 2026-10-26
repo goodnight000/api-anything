@@ -9,7 +9,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { closeBrowser, login } from "./browser.js";
-import { call } from "./execute.js";
+import { call, type NextCall } from "./execute.js";
 import { returnedFields } from "./extract.js";
 import { profileDir } from "./heal.js";
 import { browserSource, cookieNames, importSession, loggedIn, resolveLoginTarget } from "./login.js";
@@ -38,6 +38,27 @@ export function mcpNext(next: string): string {
   return /\bapi-anything (heal|add|capture|verify|export)\b/.test(out)
     ? `${out} (api-anything is a CLI: run it in your shell, as npx -y github:goodnight000/api-anything when the command is not installed; with no shell, ask the user)`
     : out;
+}
+
+/**
+ * A result's `nextCall` in MCP terms: the tool that takes the step and its arguments, when one of
+ * this server's tools does (`retry` is call_operation with the same args). The rest are the CLI's or
+ * the user's, and `next` says how.
+ */
+export function mcpNextCall(nc: NextCall): NextCall & { tool?: string; args?: Record<string, unknown> } {
+  const { site, op } = nc;
+  switch (nc.action) {
+    case "login":
+      return { ...nc, tool: "login", args: { site, ...(nc.mode ? { mode: nc.mode } : {}) } };
+    case "fix_args":
+      return { ...nc, tool: "list_operations", args: { site } };
+    case "list_sites":
+      return { ...nc, tool: "list_sites", args: {} };
+    case "retry":
+      return { ...nc, tool: "call_operation", args: { site, op } };
+    default:
+      return nc;
+  }
 }
 
 /**
@@ -168,28 +189,57 @@ export function createServer({ allowWrites = false }: { allowWrites?: boolean } 
     "call_operation",
     {
       description:
-        "Call a site operation. Returns {ok, class, data, tier, healed?, ms, reason?, next?}; a list of two or more records comes back as data {columns, rows} when that shortens the JSON (one row per item, null for a missing field); otherwise it stays a list. `reason` also explains a slow success. On failure follow `next` at most once, then stop and report." +
+        "Call a site operation. Returns {ok, class, data, tier, healed?, ms, reason?, next?, nextCall?, retry?, retryAfterMs?, write?}; a list of two or more records comes back as data {columns, rows} when that shortens the JSON (one row per item, null for a missing field); otherwise it stays a list. `reason` also explains a slow success. On failure follow `next` (nextCall is the same step as data, with the tool to use) at most once, then stop and report. `retry` says whether to send the same call again: safe, after_wait (retryAfterMs), after_fix (once the step is done) or no." +
         (allowWrites
-          ? " Write operations change the user's account: only call them when the user asked for that exact action."
+          ? " Write operations change the user's account: only call them when the user asked for that exact action. A write's `write` says what it did: not_sent, not_applied, accepted or may_have_applied; never send one again that is accepted or may_have_applied without checking the site. The same write within 10 minutes is refused (class duplicate) unless again is true."
           : " Writes are disabled on this server."),
       inputSchema: {
         site: z.string(),
         op: z.string().describe("operation name from list_operations"),
         args: z.record(z.string(), z.unknown()).optional().describe("param name -> value"),
+        ...(allowWrites
+          ? {
+              again: z
+                .boolean()
+                .optional()
+                .describe(
+                  "send a write that was refused as a duplicate; only when the user checked the site and wants it sent again",
+                ),
+              idempotencyKey: z
+                .string()
+                .optional()
+                .describe("a key of your choosing for this write: a repeat with it returns the first call's record"),
+            }
+          : {}),
       },
       annotations: { readOnlyHint: !allowWrites, destructiveHint: allowWrites, openWorldHint: true },
     },
-    guarded(async ({ site, op, args }: { site: string; op: string; args?: Record<string, unknown> }) => {
-      const r = await call(site, op, args ?? {}, { allowWrites });
-      return reply(
-        {
-          ...r,
-          ...(r.data !== undefined ? { data: asTable(r.data) } : {}),
-          ...(r.next ? { next: mcpNext(r.next) } : {}),
-        },
-        !r.ok,
-      );
-    }),
+    guarded(
+      async ({
+        site,
+        op,
+        args,
+        again,
+        idempotencyKey,
+      }: {
+        site: string;
+        op: string;
+        args?: Record<string, unknown>;
+        again?: boolean;
+        idempotencyKey?: string;
+      }) => {
+        const r = await call(site, op, args ?? {}, { allowWrites, again, idempotencyKey });
+        return reply(
+          {
+            ...r,
+            ...(r.data !== undefined ? { data: asTable(r.data) } : {}),
+            ...(r.next ? { next: mcpNext(r.next) } : {}),
+            ...(r.nextCall ? { nextCall: mcpNextCall(r.nextCall) } : {}),
+          },
+          !r.ok,
+        );
+      },
+    ),
   );
 
   server.registerTool(

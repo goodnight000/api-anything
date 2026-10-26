@@ -2,7 +2,17 @@
 
 export { browserAvailable, browserChoice, closeBrowser } from "./browser.js";
 export { classify } from "./classify.js";
-export { type CallOptions, type CallResult, call, heal, type Tier } from "./execute.js";
+export {
+  type CallOptions,
+  type CallResult,
+  call,
+  heal,
+  type NextAction,
+  type NextCall,
+  type Retry,
+  type Tier,
+  type WriteStatus,
+} from "./execute.js";
 export { type AddInput, addOperation, capturePage, healOperation } from "./heal.js";
 export { learnOperation, rankCandidates } from "./learn.js";
 export { createServer, serveStdio } from "./mcp.js";

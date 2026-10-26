@@ -19,6 +19,8 @@ export interface Classified {
    * could not reach it: nothing is learned about the request
    */
   server?: boolean;
+  /** rate: how long the server's Retry-After asks the caller to wait */
+  retryAfterMs?: number;
 }
 export interface Observed {
   status: number;
@@ -196,13 +198,15 @@ export function emptyResults(body: string, items: string): boolean {
   }
 }
 
-/** " (retry after 120 s)" from a Retry-After header in seconds or as an HTTP date. */
-function retryAfter(headers: Record<string, string>): string {
+/** " (retry after 120 s)" and its wait in ms, from a Retry-After header in seconds or as an HTTP date. */
+function retryAfter(headers: Record<string, string>, now = Date.now()): { text: string; ms?: number } {
   const v = headers["retry-after"]?.trim();
-  if (!v) return "";
-  if (/^\d+$/.test(v)) return ` (the server says retry after ${v} s)`;
+  if (!v) return { text: "" };
+  if (/^\d+$/.test(v)) return { text: ` (the server says retry after ${v} s)`, ms: Number(v) * 1000 };
   const t = Date.parse(v);
-  return Number.isNaN(t) ? "" : ` (the server says retry after ${new Date(t).toISOString()})`;
+  return Number.isNaN(t)
+    ? { text: "" }
+    : { text: ` (the server says retry after ${new Date(t).toISOString()})`, ms: Math.max(0, t - now) };
 }
 
 /** A GraphQL errors array's verdict; `input` for a not-found entity. */
@@ -366,10 +370,14 @@ function classifyResponse(
   const wall = botWall(r, wantsJson, () => recipeFinds(op, body));
   if (wall) return is("blocked", wall);
 
-  const wait = retryAfter(r.headers);
-  if (r.status === 429) return is("rate", `HTTP 429${wait}`);
+  const { text: wait, ms: waitMs } = retryAfter(r.headers);
+  const rate = (reason: string): Classified => ({
+    ...is("rate", reason),
+    ...(waitMs !== undefined ? { retryAfterMs: waitMs } : {}),
+  });
+  if (r.status === 429) return rate(`HTTP 429${wait}`);
   if (r.status >= 400 && REQUIRE_LOGIN.test(body)) return is("auth", `HTTP ${r.status}: ${snippet(body)}`);
-  if (r.status >= 400 && RATE.test(body)) return is("rate", `HTTP ${r.status}${wait}: ${snippet(body)}`);
+  if (r.status >= 400 && RATE.test(body)) return rate(`HTTP ${r.status}${wait}: ${snippet(body)}`);
   // Laravel answers a stale CSRF token with 419, Rails with 422 InvalidAuthenticityToken.
   if (r.status === 419 || ((r.status === 400 || r.status === 422) && CSRF_FAILED.test(body))) {
     return is("auth", `HTTP ${r.status}: CSRF check failed: ${snippet(body)}`);

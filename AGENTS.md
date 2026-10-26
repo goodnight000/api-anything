@@ -12,7 +12,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/codec.ts` | read and write values through decoded request layers; untouched bytes stay identical |
 | `src/learn.ts` | exchanges + example args -> Operation |
 | `src/confirm.ts` | a write's recorded `confirm()` dialogs: the digest, and which ones a tier-3 run accepts |
-| `src/secrets.ts` | what counts as a credential, and the scan that finds one in a spec |
+| `src/secrets.ts` | what counts as a credential, the scan that finds one in a spec, and `redact` for messages |
 | `src/outline.ts` | a compact summary of a captured response, for choosing a request and a recipe |
 | `src/classify.ts` | response -> ok/drift/auth/rate/blocked/input/error; `judge` also extracts |
 | `src/extract.ts` | parse, extract, pick, cap |
@@ -20,7 +20,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login |
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |
 | `src/execute.ts` | `call()`: the tier ladder, classifier actions, heal guards, write rules |
-| `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, export |
+| `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, write ledger, export |
 | `src/vet.ts` | the shared rules a spec someone else wrote must pass: on pull, publish, load and in CI |
 | `src/registry.ts`, `src/publish.ts` | pull a shared spec from the registry (`sites/` on GitHub); publish one as a pull request via `gh` |
 | `src/login.ts`, `src/import.ts` | sign in by importing the everyday browser's cookies; re-import on `auth` |

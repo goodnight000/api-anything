@@ -1,6 +1,7 @@
 /**
  * What counts as a credential, and the scan that finds one in a spec. Learning uses these to turn
  * credentials into references and to check none is left; the store uses them before a save or an export.
+ * `redact` takes live values out of the messages a call returns and keeps.
  */
 import { type Leaf, type Step, walk } from "./codec.js";
 import type { Session } from "./session.js";
@@ -126,9 +127,9 @@ function base64Texts(s: string): string[] {
  * share what is left ("xqbcdef" with "abcdef"): a find only says where to look, and the bytes
  * decoded there, at that offset, must be the value's.
  */
-function inBase64(value: string): (text: string) => boolean {
+function base64Places(value: string) {
   const bytes = Buffer.from(value, "utf8");
-  const places = [0, 1, 2].flatMap((lead) => {
+  return [0, 1, 2].flatMap((lead) => {
     const whole = Buffer.concat([Buffer.alloc(lead), bytes])
       .toString("base64")
       .replace(/=+$/, "");
@@ -138,6 +139,11 @@ function inBase64(value: string): (text: string) => boolean {
     const cores = new Set([core, core.replace(/\+/g, "-").replace(/\//g, "_")]);
     return [...cores].map((c) => ({ core: c, lead, skip, length: whole.length }));
   });
+}
+
+function inBase64(value: string): (text: string) => boolean {
+  const bytes = Buffer.from(value, "utf8");
+  const places = base64Places(value);
   return (text) =>
     places.some(({ core, lead, skip, length }) => {
       for (let i = text.indexOf(core); i >= 0; i = text.indexOf(core, i + 1)) {
@@ -234,6 +240,48 @@ export function besideOrigins<S extends Pick<Session, "cookies" | "values">>(
   };
 }
 
+/** A live value as it is stored, unquoted and URL-decoded: the forms the scan and redaction look for, 6+ chars. */
+const storedForms = (v: string) =>
+  [...new Set([v, v.replace(/^"|"$/g, ""), pctDecode(v, false)])].filter((f) => f.length >= 6);
+
+export const REDACTED = "[redacted]";
+// A cut can leave this much of a value at the end of a text; less says nothing about it.
+const PARTIAL = 4;
+const ORIGIN = /^https?:\/\/[^/?#]+\/?$/i;
+const htmlEscape = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+/**
+ * `text` with every live cookie and session value in it replaced by `[redacted]`: each stored form
+ * (as stored, unquoted, URL-decoded) as it is and percent-encoded, form-encoded, JSON-escaped,
+ * HTML-escaped and base64-encoded at any byte offset (`scanSecrets` reads the same layers by decoding
+ * the text instead, which a replacement cannot do). `cut`: the text was cut short (a body's snippet),
+ * so a value the cut split leaves its first characters at the end: those go too. A value that is an
+ * origin (`https://www.x.test/`, an analytics cookie's last page) is the site's address, not a
+ * credential, and is left (see `besideOrigins`).
+ */
+export function redact(text: string, session: Pick<Session, "cookies" | "values">, o: { cut?: boolean } = {}): string {
+  const forms = new Set<string>();
+  for (const v of [...session.cookies.map((c) => c.value), ...Object.values(session.values)]) {
+    for (const f of storedForms(v)) {
+      if (ORIGIN.test(f)) continue;
+      const pct = encodeURIComponent(f);
+      for (const g of [f, pct, pct.replace(/%20/g, "+"), JSON.stringify(f).slice(1, -1), htmlEscape(f)]) forms.add(g);
+      for (const { core } of base64Places(f)) if (core.length >= 8) forms.add(core);
+    }
+  }
+  if (!forms.size || !text) return text;
+  const longest = [...forms].sort((a, b) => b.length - a.length);
+  let out = text;
+  for (const f of longest) if (out.includes(f)) out = out.split(f).join(REDACTED);
+  if (!o.cut) return out;
+  let drop = 0;
+  for (const f of longest)
+    for (let n = Math.min(f.length - 1, out.length); n >= PARTIAL && n > drop; n--)
+      if (out.endsWith(f.slice(0, n))) drop = n;
+  return drop ? `${out.slice(0, out.length - drop)}${REDACTED}` : out;
+}
+
 /**
  * `secrets`: exact hits of live jar/session values (6+ chars, raw, unquoted or URL-decoded). Each
  * is looked for in the text and in what the text decodes to (three layers of percent-encoding,
@@ -248,8 +296,7 @@ export function scanSecrets(
 ): { secrets: string[]; warnings: string[] } {
   const live: [string, string, (text: string) => boolean][] = [];
   const add = (label: string, v: string) => {
-    for (const f of new Set([v, v.replace(/^"|"$/g, ""), pctDecode(v, false)]))
-      if (f.length >= 6) live.push([label, f, inBase64(f)]);
+    for (const f of storedForms(v)) live.push([label, f, inBase64(f)]);
   };
   for (const c of session.cookies) add(`cookie ${c.name}`, c.value);
   for (const [k, v] of Object.entries(session.values)) add(`session value ${k}`, v);

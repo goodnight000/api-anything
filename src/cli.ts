@@ -112,8 +112,13 @@ const HELP: Record<string, string> = {
   --description <text>  what the op is for; an op added again with no --example keeps the one it had ("" clears it)
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.
   replaced: an op of that name was learned again.`,
-  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--max-tier 1|2|3] [--dry]
-  Calls an operation: {ok, class, data, tier, healed?, ms, next?}. --dry prints the request with credentials redacted.`,
+  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--dry]
+  Calls an operation: {ok, class, data, tier, healed?, ms, next?}; a failure also says retry
+  (safe, after_wait, after_fix, no), retryAfterMs and nextCall, and a write says write (not_sent,
+  not_applied, accepted, may_have_applied). --dry prints the request with credentials redacted.
+  --again           send a write refused as a duplicate (the same args within 10 minutes, and the
+                    first may have gone through): only when the user checked the site
+  --idempotency-key <k>  a repeat of a write with the same key returns the first call's record`,
   verify: `api-anything verify [site]
   Calls every read operation with its stored example args, healing as needed.`,
   sites: `api-anything sites
@@ -254,6 +259,8 @@ const OPTIONS = {
   description: { type: "string" },
   json: { type: "string" },
   "allow-writes": { type: "boolean" },
+  again: { type: "boolean" },
+  "idempotency-key": { type: "string" },
   "max-tier": { type: "string" },
   dry: { type: "boolean" },
   limit: { type: "string" },
@@ -679,7 +686,12 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     return 0;
   }
   const maxTier = v["max-tier"] ? (Number(v["max-tier"]) as Tier) : undefined;
-  const r = await call(site, name, args, { allowWrites: v["allow-writes"], maxTier });
+  const r = await call(site, name, args, {
+    allowWrites: v["allow-writes"],
+    again: v.again,
+    idempotencyKey: v["idempotency-key"],
+    maxTier,
+  });
   out(r);
   if (!r.ok) process.stderr.write(`next: ${r.next}\n`);
   return r.ok ? 0 : 1;
@@ -917,7 +929,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "description",
     ],
   },
-  call: { run: cmdCall, flags: ["json", "allow-writes", "max-tier", "dry"] },
+  call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "dry"] },
   verify: { run: cmdVerify, flags: [] },
   sites: { run: cmdSites, flags: [] },
   ops: { run: cmdOps, flags: [] },

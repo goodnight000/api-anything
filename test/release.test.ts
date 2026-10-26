@@ -215,6 +215,8 @@ test("a write rejected inside an HTTP 200 response is not success and is never r
         {},
         {
           allowWrites: true,
+          // the same write each round: the duplicate guard would hold back every one after the first
+          again: true,
           minIntervalMs: 0,
           fetchImpl: async () => {
             sent++;
