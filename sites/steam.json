@@ -1,0 +1,88 @@
+{
+  "name": "steam",
+  "displayName": "Steam",
+  "baseUrl": "https://store.steampowered.com",
+  "description": "Public Steam storefront product search without an API key.",
+  "operations": [
+    {
+      "name": "search",
+      "description": "Search public Steam store products by words; returns the first page with displayed prices.",
+      "request": {
+        "method": "GET",
+        "url": "https://store.steampowered.com/search/?term=%7Bterm%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "term",
+          "at": [
+            "query:term"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://store.steampowered.com/search/?term={term}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "store.steampowered.com",
+        "path": "/search/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "#search_result_container a.search_result_row",
+          "fields": {
+            "itemKey": "@data-ds-itemkey",
+            "title": ".title",
+            "url": "@href",
+            "price": ".discount_final_price",
+            "releaseDate": ".search_released"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "term",
+          "type": "string",
+          "required": true,
+          "description": "Words to search for in the public Steam store.",
+          "example": "portal"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "term": "celeste"
+          },
+          "expect": "result",
+          "purpose": "Celeste app 504230 replaces the Portal and Stardew search examples."
+        },
+        {
+          "args": {
+            "term": "zzqxwyvpr"
+          },
+          "expect": "empty",
+          "purpose": "Nonsense product words exclude the example search results."
+        }
+      ]
+    }
+  ]
+}
