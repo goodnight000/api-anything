@@ -394,7 +394,33 @@ tiers 1 and 2: a hop that would send the write on (an unsafe method kept, or the
 again) is aborted in the browser, and the result says so; a hop that became a GET passes. What else the
 trigger sends passes (a real write often needs companion requests, and what a trigger does besides
 is its author's choice) until the run ends, when, as in every guarded run, its pages send nothing
-more. An op with no `match` has no request to count. Writes need `allowWrites` at every entry point (CLI flag, MCP
+more. An op with no `match` has no request to count.
+
+A write behind the browser's own `confirm()` ("Delete this post?") is sent only once the dialog is
+accepted. Told no, as Playwright tells every dialog with no listener, the page sends nothing, and
+learning took the page's own GET for the write (seen before this was handled). So while a write is
+learned (`add --write`, `capture --write`, a write's recapture or session refresh), a confirm that
+comes once the steps run is accepted: the guard aborts the request it lets go, so accepting sends
+nothing. Each accepted confirm is recorded in the op's `trigger.confirms` as the step index it came
+at (-1 before the first) and a SHA-256 digest of the page's origin, that step, and the question
+normalized (NFC, whitespace collapsed) with every example value it names, as a whole word or number
+in any letter case, replaced by its param. Run 1's confirms are kept; when run 2's differ by more
+than the values, `add` warns. A tier-3 write call accepts a confirm only when its digest, made with
+the call's own args, matches a record at the same step, each record once per run; any other is
+dismissed, nothing is confirmed on the user's behalf, and the reason says the page asked to confirm
+at which step and why it was told no (no record matches, or the op has none: learned before this).
+The class stays `drift`, whose `next` is to re-learn with `add --write`. A heal never changes the
+records: they are the caller's contract, like the rest of the trigger.
+The spec keeps a digest rather than the question because a shared spec is public, and a question
+can name the person who learned it ("Remove Jane Doe from the team?", an order or an account
+number) beyond the example values the learner knows to abstract. A digest of a short question can
+be confirmed by guessing it, so it hides what is not guessable, which is what matters here; and
+matching needs only equality. What a reviewer can still see is that the write confirms, how many
+times, and at which step. `vetShared` refuses `confirms` on a read, more than 8 on one op, and a
+step the trigger does not have; the schema refuses a digest that is not 64 lowercase hex
+characters, so the field cannot carry page text. Unlike Pomerado, an http page's confirm can match
+too: its origin is in the digest, and the shared rules already require https addresses.
+Writes need `allowWrites` at every entry point (CLI flag, MCP
 server flag, library option).
 
 ## Failure classifier (`classify.ts`)
@@ -576,6 +602,22 @@ send a request again (its own scripts, a retry after a navigation or a connectio
   or more), it waits up to 15 s for the real document, then waits for its data as before; UI steps
   wait for it the same way before they run. It records every URL the main frame had (history API
   changes included) as the capture's `locations`.
+- Native dialogs, in every page a trigger run holds (popups too) and in tier 2's origin page, get
+  one answer each: leaving a page (`beforeunload`) is accepted, since leaving sends nothing and
+  staying would abort the run's own navigation (a `goto` step, or the `about:blank` that empties a
+  guarded page at the end; dismissing it made such a `goto` fail as `ERR_ABORTED`, which a load
+  treats as loaded); `alert` and `prompt` are dismissed; a `confirm` is dismissed unless the run's
+  caller accepts it (see Writes), and always before the steps run and once the run is ending.
+  Every dialog needs an answer once a listener exists, or the page waits on it. Playwright with no
+  listener already accepted `beforeunload` and dismissed the rest, so the alert, prompt and
+  unsaved-changes pages did not hang or leak before; the tests keep it that way. The capture
+  records each dialog's type, message, origin, step and answer as `dialogs` (the message stays in
+  the local capture file; no reason or spec carries page text).
+- Each run records why its wait ended (`wait`): the op's request answered, the page went quiet, or
+  the time ran out, with the requests still open and the status of the first page's last document.
+  A tier-3 call or a recapture that found no matching request appends that to its reason, with the
+  final page's origin and path (never its query, which can carry a token) and each dialog's type,
+  answer and step.
 - A browser locks a profile to one process. The browser is released after 3 s idle, and a second
   process waits up to 15 s for the profile before it fails with a short hint. SIGTERM exits.
 - After every browser run, cookies are exported (full Playwright cookie objects) to

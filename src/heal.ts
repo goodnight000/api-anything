@@ -3,9 +3,10 @@
  * add (create), recapture (heal), and the tier-3 read. Rescan is the browserless heal.
  */
 import { join } from "node:path";
-import { browserAvailable, PageUnreachable, ProfileInUse, runTrigger } from "./browser.js";
+import { atStep, browserAvailable, PageUnreachable, ProfileInUse, runTrigger, waitReport } from "./browser.js";
 import { botWall, type Class, judge } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
+import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { capOutput, extract } from "./extract.js";
 import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, send } from "./http.js";
 import {
@@ -319,7 +320,10 @@ export async function runOpTrigger(
   const once = !o.intercept && !op.readOnly ? sendOnce(op.match) : undefined;
   const shared = !!loadSite(site)?.site.shared;
   const intercept = once ?? (o.intercept ? writeGuard(op.match, { url: t.url, args }) : readGuard(op.match, shared));
-  const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit });
+  // Intercepted, a write's confirm sends nothing, so learning accepts it. For real, only what its
+  // learning recorded is accepted, the question asked with this call's values; a read accepts none.
+  const confirm = o.intercept ? () => true : once ? recordedConfirms(op.trigger.confirms ?? [], args) : undefined;
+  const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit, confirm });
   const hits = capture.exchanges.filter(isHit);
   // a real write's answer is a request that left: a repeat that was stopped answers nothing
   const sent = o.intercept || op.readOnly ? hits : hits.filter((e) => !e.aborted);
@@ -349,6 +353,22 @@ export function pageDown(capture: CaptureResult): Attempt | undefined {
   return status !== undefined && status >= 500
     ? { tier: 3, class: "error", status, server: true, reason: `the trigger page answered HTTP ${status}` }
     : undefined;
+}
+
+/**
+ * Why a trigger run has no request of the op's: what the run saw as its wait ended, and the confirm
+ * it dismissed when there was one, since the request may have been waiting on it.
+ */
+export function firedNothing(op: Operation, capture: CaptureResult): string {
+  const no = `the trigger fired no request matching ${JSON.stringify(op.match)} (${waitReport(capture)})`;
+  const asked = capture.dialogs?.find((d) => d.type === "confirm" && !d.accepted);
+  if (!asked) return no;
+  const why = op.readOnly
+    ? "a read never confirms"
+    : op.trigger.confirms?.length
+      ? "it is not one this write's learning recorded"
+      : "this write's learning recorded none";
+  return `${no}: the page asked to confirm ${atStep(asked.step)} and was told no, since ${why}; nothing is confirmed on the user's behalf`;
 }
 
 /** A tier-3 result: the site's own request, answered. */
@@ -412,6 +432,7 @@ export async function capturePage(o: {
     softFrom: o.softFrom,
     profileDir: profileDir(),
     intercept: o.write ? writeGuard(undefined, { url: o.url, args: o.args }) : undefined,
+    confirm: o.write ? () => true : undefined,
   });
   return saveCapture(o, r);
 }
@@ -563,6 +584,11 @@ function learnOrExplain(
       throw new Error(
         `the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} and clear it, then add again (learning said: ${(e as Error).message})`,
       );
+    const asked = input.readOnly && run.dialogs?.find((d) => d.type === "confirm" && !d.accepted);
+    if (asked)
+      throw new Error(
+        `${(e as Error).message}. The page asked to confirm ${atStep(asked.step)} and a read never confirms: if what it asks about is a write, add it with --write`,
+      );
     throw e;
   }
 }
@@ -703,6 +729,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
         ...t,
         profileDir: profileDir(),
         intercept: i.write ? writeGuard(i.match, { url: t.url, args: a }) : undefined,
+        confirm: i.write ? () => true : undefined,
       });
       const saved = saveCapture({ url: t.url, steps: t.steps, softFrom: t.softFrom, write: i.write }, r);
       captures.push(saved.id);
@@ -783,8 +810,17 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   // Learned again with nothing new said about it, an op keeps what this one capture cannot tell: its
   // description, and a tier an earlier two-run diff raised (--description "" clears the first).
   const description = i.description ?? prior?.description;
+  // The confirms a write's runs accepted (intercepted, so nothing was sent), for its tier-3 calls to
+  // accept again; a read keeps none. Derived from the runs alone, never carried over.
+  const { confirms: _given, ...asTriggered } = learned.operation.trigger;
+  const confirms = i.write ? acceptedConfirms(run1, ex1) : [];
+  if (i.write && run2 && JSON.stringify(acceptedConfirms(run2, ex2 ?? ex1)) !== JSON.stringify(confirms))
+    warnings.push(
+      "the page's confirm dialogs differ between the two runs by more than the example values (another question, step or count): a tier-3 call accepts only the ones run 1 saw, asked the same way, and dismisses any other",
+    );
   let operation: Operation = {
     ...learned.operation,
+    trigger: confirms.length ? { ...asTriggered, confirms } : asTriggered,
     ...(description ? { description } : {}),
     ...(prior && !run2 && prior.minTier > learned.operation.minTier ? { minTier: prior.minTier } : {}),
     response: withRecipe(learned.operation.response, r),
@@ -1142,7 +1178,7 @@ export async function healOperation(
     return {
       outcome: "failed",
       attempt: last,
-      reason: `the trigger fired no request matching ${JSON.stringify(op.match)}`,
+      reason: firedNothing(op, run.capture),
     };
   }
   const seen = run.matched && judgeExchange(op, run.matched);

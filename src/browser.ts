@@ -6,11 +6,11 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
-import type { BrowserContext, Cookie, chromium, Frame, Page, Request, Response, Route } from "playwright-core";
+import type { BrowserContext, Cookie, chromium, Dialog, Frame, Page, Request, Response, Route } from "playwright-core";
 import { botWall } from "./classify.js";
 import { home, siteOf, writePrivate } from "./session.js";
 import type { Request as Hop } from "./spec.js";
-import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
+import type { CaptureResult, Exchange, SeenDialog, StoredCookie, TriggerStep } from "./types.js";
 
 let current: { profileDir: string; headless: boolean; ctx: Promise<BrowserContext> } | undefined;
 let headlessUA: string | undefined;
@@ -558,6 +558,12 @@ export interface TriggerOptions {
    * short settle instead of waiting for the whole page to go quiet
    */
   match?: (e: Exchange) => boolean;
+  /**
+   * whether to accept a confirm() a page of the run shows once its steps run (`step`: the step
+   * running, -1 before the first). Without it, and before the steps or after the run, a confirm is
+   * dismissed. Alerts and prompts are always dismissed, and leaving a page (beforeunload) accepted.
+   */
+  confirm?: (a: { message: string; origin: string; step: number }) => boolean;
   /** extra wait after the network first goes quiet (default 300) */
   settleMs?: number;
   /** overall budget; also the per-action Playwright timeout (default 30000) */
@@ -594,6 +600,12 @@ async function runStep(page: Page, s: TriggerStep): Promise<void> {
       return goto(page, need(s.value ?? s.selector, "a url in value"));
   }
 }
+
+/**
+ * Answer a native dialog. A page waits on one, and Playwright leaves it to the listener once there
+ * is one: every dialog gets an answer, or the page hangs.
+ */
+const answer = (d: Dialog, accept: boolean) => void (accept ? d.accept() : d.dismiss()).catch(() => {});
 
 /** The request body as the server gets it: a gzip/deflate/br-encoded body (YouTube's innertube) decoded. */
 function requestBody(req: Request): string | undefined {
@@ -683,6 +695,28 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     return !asked || !(await within(asked, false)) || strays().length > 0;
   };
 
+  /** the native dialogs the run's pages showed */
+  const dialogs: SeenDialog[] = [];
+  /** the trigger step running: -1 before the first */
+  let step = -1;
+  /** set as the run ends: no confirm is accepted from then on */
+  let over = false;
+  const onDialog = (d: Dialog) => {
+    const type = d.type() as SeenDialog["type"];
+    const message = d.message();
+    let origin = "null";
+    try {
+      origin = new URL(d.page()?.url() ?? "").origin;
+    } catch {
+      /* no page left */
+    }
+    const accepted =
+      type === "beforeunload" || (type === "confirm" && acting && !over && !!o.confirm?.({ message, origin, step }));
+    dialogs.push({ type, message, origin, step, accepted });
+    answer(d, accepted);
+  };
+  page.on("dialog", onDialog);
+
   // This run's pages: its own and any popup they open. The context is shared with concurrent runs.
   const own = new Set<Page>([page]);
   const ownerOf = (req: Request): Page | undefined => {
@@ -711,6 +745,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     if ((opener && own.has(opener)) || (await stray(p))) {
       own.add(p);
       cover(p);
+      p.on("dialog", onDialog);
     }
     return own.has(p);
   };
@@ -992,11 +1027,19 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     acting = true;
     // steps typed into a challenge interstitial would time out on selectors the real page has
     if (o.steps?.length) await outwait();
-    for (const s of o.steps ?? []) await runStep(page, s);
+    for (const [i, s] of (o.steps ?? []).entries()) {
+      step = i;
+      await runStep(page, s);
+    }
     await waitForData();
     // A JS challenge (AWS WAF, Cloudflare) solves itself and reloads, often after a second or more:
     // judging now would take the interstitial for the page. Wait (bounded) for a real document.
     if (await outwait()) await waitForData();
+    const wait: NonNullable<CaptureResult["wait"]> = {
+      ended: o.match && answered() ? "answered" : Date.now() >= deadline ? "deadline" : "quiet",
+      open: pending.size,
+      ...(docs.at(-1)?.response ? { status: docs.at(-1)!.response!.status } : {}),
+    };
     // Bodies still arriving get a short grace, not the whole budget: a hung long poll is not the data.
     const grace = new Promise((r) => setTimeout(r, Math.min(5000, Math.max(0, deadline - Date.now()))).unref());
     const settled = (async () => {
@@ -1023,8 +1066,12 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       finalUrl: page.url(),
       storage,
       locations: [...locations],
+      // a copy: what a page shows while the run closes it is not the run's
+      ...(dialogs.length ? { dialogs: [...dialogs] } : {}),
+      wait,
     };
   } finally {
+    over = true;
     page.off("framenavigated", onNavigated);
     ctx.off("request", onRequest);
     ctx.off("requestfinished", onDone);
@@ -1055,6 +1102,37 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     }
     release();
   }
+}
+
+const ENDED = { answered: "the op's request answered", quiet: "the page went quiet", deadline: "the time ran out" };
+/** "at steps[1]", or before the first step */
+export const atStep = (step: number) => (step < 0 ? "before the steps" : `at steps[${step}]`);
+
+/**
+ * Why a run stopped waiting, in a line for a failure's reason: how the wait ended, where the page
+ * was (origin and path: a query can carry a token) and its document's status, the requests still
+ * open, and the dialogs it showed with their answers. Never page text or a cookie or header value.
+ */
+export function waitReport(c: CaptureResult): string {
+  let where = c.finalUrl;
+  try {
+    const u = new URL(c.finalUrl);
+    where = u.origin === "null" ? u.protocol + u.pathname : u.origin + u.pathname;
+  } catch {
+    /* kept as it is */
+  }
+  if (where.length > 120) where = `${where.slice(0, 120)}...`;
+  const w = c.wait;
+  const parts = [
+    `${w ? `${ENDED[w.ended]} ` : ""}on ${where}${w?.status !== undefined ? ` (HTTP ${w.status})` : ""}`,
+    ...(w ? [`${w.open} request${w.open === 1 ? "" : "s"} still open`] : []),
+  ];
+  const seen = c.dialogs ?? [];
+  if (seen.length) {
+    const said = seen.slice(0, 3).map((d) => `${d.type} ${d.accepted ? "accepted" : "dismissed"} ${atStep(d.step)}`);
+    parts.push(`dialogs: ${said.join(", ")}${seen.length > 3 ? ` and ${seen.length - 3} more` : ""}`);
+  }
+  return parts.join("; ");
 }
 
 export interface PageFetchResult {
@@ -1102,6 +1180,8 @@ async function originPage(ctx: BrowserContext, origin: string, left: () => numbe
     if (left() <= 1) throw new Error("the origin page could not be replaced before the call's deadline");
   }
   page = await ctx.newPage();
+  // the same answers as a trigger run's, with no confirm accepted: this page only fetches
+  page.on("dialog", (d) => answer(d, d.type() === "beforeunload"));
   await page.goto(origin, { waitUntil: "domcontentloaded", timeout: left() }).catch(() => {});
   let here = "";
   try {

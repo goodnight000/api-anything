@@ -53,12 +53,20 @@ export const TriggerStepSchema = z.object({
   ms: z.number().optional(),
 });
 
+/** A confirm() a write's learning accepted: the step it came at (-1: before the first) and its digest (confirm.ts). */
+export const ConfirmSchema = z.object({
+  step: z.number().int().min(-1),
+  digest: z.string().regex(/^[0-9a-f]{64}$/, "digest must be 64 lowercase hex characters"),
+});
+
 export const TriggerSchema = z.object({
   /** URL template, `{param}` filled from args */
   url: z.string(),
   steps: z.array(TriggerStepSchema).optional(),
   /** neutral page to load first, then soft-navigate to `url` */
   softFrom: z.string().optional(),
+  /** a write's confirm() dialogs that a tier-3 run accepts when the page asks them again; any other is dismissed */
+  confirms: z.array(ConfirmSchema).optional(),
 });
 
 /** Stable request identity only. Never a queryId/doc_id/hash. */
@@ -158,6 +166,7 @@ export type Request = z.infer<typeof RequestSchema>;
 export type Slot = z.infer<typeof SlotSchema>;
 export type Volatile = z.infer<typeof VolatileSchema>;
 export type Trigger = z.infer<typeof TriggerSchema>;
+export type Confirm = z.infer<typeof ConfirmSchema>;
 export type Match = z.infer<typeof MatchSchema>;
 export type ResponseSpec = z.infer<typeof ResponseSchema>;
 export type Param = z.infer<typeof ParamSchema>;

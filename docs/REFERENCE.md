@@ -64,7 +64,9 @@ second capture of the page, made with its values: `--from2 <capture2> --example2
 Besides its request template, each operation stores two things:
 
 - **trigger**: how to make the site's own frontend fire the request. This is a URL template,
-  plus optional UI steps.
+  plus optional UI steps. A write's trigger may also hold `confirms`: the `confirm()` dialogs its
+  learning accepted, each as a step index and a SHA-256 digest (no page text), which a tier-3 call
+  accepts again when the page asks the same question.
 - **match**: how to recognize that request in captured traffic by stable identity only
   (method, host, path with hash-like segments wildcarded, GraphQL operation name). It never
   uses a queryId or hash.
@@ -149,6 +151,14 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
   server certainly did not run it (a 400, 401, 403 or 404 answered to the write itself, not after
   a redirect). Timeouts and 5xx errors are reported,
   not retried.
+- **Native dialogs** in the browser: leaving a page ("unsaved changes") is accepted, since leaving
+  sends nothing; alerts and prompts are dismissed; a `confirm()` is dismissed during reads. While a
+  write is learned its request is intercepted, so its confirm is accepted and recorded as a digest
+  of the page's origin, the step and the question with your example values abstracted. A tier-3
+  write call accepts a confirm only when it matches that record with the call's own values; any
+  other is dismissed, and the call's reason says so. A call whose trigger fired no matching request
+  says why the browser stopped waiting: whether the page went quiet or the time ran out, the page's
+  address without its query, its HTTP status, the requests still open and the dialogs it showed.
 - Credentials stay in `~/.api-anything` (directories 0700, files 0600). Specs hold references
   such as `cookie:ct0`, never values. Captures (`~/.api-anything/captures`, kept for `inspect` and
   `add --from`) hold full responses and the run's cookie values, so only the newest 20 are kept and

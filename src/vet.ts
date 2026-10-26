@@ -8,7 +8,14 @@ import { literalCredentials, scanSecrets } from "./secrets.js";
 import { siteOf } from "./session.js";
 import type { Operation, Request, Site } from "./spec.js";
 
-export const LIMITS = { operations: 50, text: 500, notes: 8 * 1024, file: 256 * 1024, regex: 200 } as const;
+export const LIMITS = {
+  operations: 50,
+  text: 500,
+  notes: 8 * 1024,
+  file: 256 * 1024,
+  regex: 200,
+  confirms: 8,
+} as const;
 
 const READ_METHODS = new Set(["GET", "HEAD", "POST"]);
 // Op and param names are spelled in the commands `next` hints give an agent to run.
@@ -212,6 +219,15 @@ export function vetShared(site: Site, notes?: string): Vetted {
       errors.push(at("a read whose GraphQL document a param fills"));
     if (op.readOnly && method === "POST") warnings.push(at("a read sent as POST: check it changes nothing"));
     if (!op.readOnly) warnings.push(at(`a write (${method}): it runs only with --allow-writes`));
+    // A recorded confirm is accepted on the user's behalf at tier 3: only a write's, a few, each at a step it has.
+    const confirms = op.trigger.confirms ?? [];
+    if (confirms.length && op.readOnly) errors.push(at("a read accepts no confirm dialog, and this one records some"));
+    if (confirms.length > LIMITS.confirms)
+      errors.push(at(`${confirms.length} recorded confirm dialogs; at most ${LIMITS.confirms}`));
+    const steps = op.trigger.steps?.length ?? 0;
+    for (const c of confirms)
+      if (c.step >= steps)
+        errors.push(at(`a recorded confirm dialog at steps[${c.step}], a step the trigger does not have`));
     if (op.learnedLoggedIn) warnings.push(at("learned while signed in: calls use the caller's own login"));
     const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
     for (const leaf of literalCredentials(op.request, pub))

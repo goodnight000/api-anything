@@ -11,6 +11,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/spec.ts` | zod schema of a site spec |
 | `src/codec.ts` | read and write values through decoded request layers; untouched bytes stay identical |
 | `src/learn.ts` | exchanges + example args -> Operation |
+| `src/confirm.ts` | a write's recorded `confirm()` dialogs: the digest, and which ones a tier-3 run accepts |
 | `src/secrets.ts` | what counts as a credential, and the scan that finds one in a spec |
 | `src/outline.ts` | a compact summary of a captured response, for choosing a request and a recipe |
 | `src/classify.ts` | response -> ok/drift/auth/rate/blocked/input/error; `judge` also extracts |

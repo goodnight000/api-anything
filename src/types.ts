@@ -48,6 +48,28 @@ export interface CaptureResult {
   storage?: Record<string, string>;
   /** every URL the page had, history API changes (an SPA's pushState) included: echoes of them are not evidence */
   locations?: string[];
+  /** every native dialog the run's pages showed, in order, and how it was answered */
+  dialogs?: SeenDialog[];
+  /** why the run stopped waiting for the page, and how many of its requests were still open then */
+  wait?: {
+    /** the op's request answered, the page went quiet, or the run's time ran out */
+    ended: "answered" | "quiet" | "deadline";
+    open: number;
+    /** HTTP status of the first page's last document */
+    status?: number;
+  };
+}
+
+/** A native dialog a page showed during a run. */
+export interface SeenDialog {
+  type: "alert" | "confirm" | "prompt" | "beforeunload";
+  /** the page's own text (kept in the local capture only; never in a spec or a call's reason) */
+  message: string;
+  /** origin of the page that showed it */
+  origin: string;
+  /** index of the trigger step running when it came; -1 before the first */
+  step: number;
+  accepted: boolean;
 }
 
 /** How to make the site's own frontend fire a request. */

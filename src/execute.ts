@@ -16,6 +16,7 @@ import { asText } from "./codec.js";
 import { capOutput } from "./extract.js";
 import {
   type Attempt,
+  firedNothing,
   type HealResult,
   healOperation,
   judgeExchange,
@@ -169,7 +170,7 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
           : (pageDown(run.capture) ?? {
               tier,
               class: "drift",
-              reason: `the trigger fired no request matching ${JSON.stringify(op.match)}`,
+              reason: firedNothing(op, run.capture),
             }));
       if (!run.repeats) return a;
       const stopped = run.repeats === 1 ? "the repeat was" : `${run.repeats} repeats were`;

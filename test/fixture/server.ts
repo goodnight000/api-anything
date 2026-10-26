@@ -193,6 +193,32 @@ export async function startFixture(): Promise<Fixture> {
     if (p === "/feed" || p === "/scoped" || p === "/walled" || p.startsWith("/spa/"))
       return html(200, page(state.build));
     if (/^\/follow\/[^/]+$/.test(p)) return html(200, page(state.build, '<button id="follow">Follow</button>'));
+    // Native dialogs. A delete behind the browser's own confirm(), which sends only once it is
+    // accepted; ?wording=new is the same page after the site reworded its question.
+    if (/^\/delete\/[^/]+$/.test(p)) {
+      const id = decodeURIComponent(p.slice("/delete/".length));
+      const ask =
+        u.searchParams.get("wording") === "new" ? `Really remove ${id}?` : `Delete post ${id}? This can't be undone.`;
+      return html(
+        200,
+        `<!doctype html><html><body><button id="delete">Delete</button><script>document.getElementById("delete").onclick=()=>{if(confirm(${JSON.stringify(ask)}))fetch("/api/delete?id="+encodeURIComponent(${JSON.stringify(id)}),{method:"POST"}).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)})}</script></body></html>`,
+      );
+    }
+    // An editor that, once touched, asks before the page is left ("unsaved changes") and saves a
+    // draft as it goes, the way autosave does.
+    if (p === "/unsaved")
+      return html(
+        200,
+        `<!doctype html><html><body><button id="edit">Edit</button><script>document.getElementById("edit").onclick=()=>{addEventListener("beforeunload",e=>{e.preventDefault();e.returnValue=""});addEventListener("pagehide",()=>navigator.sendBeacon("/api/autosave","draft"))};fetch("/api/scoped?q=unsaved")</script></body></html>`,
+      );
+    // A page that greets with an alert (or asks with a prompt) before it loads its data.
+    if (p === "/greet") {
+      const say = u.searchParams.get("ask") ? 'prompt("Your name?")' : 'alert("Welcome back!")';
+      return html(
+        200,
+        `<!doctype html><html><body><script>${say};fetch("/api/scoped?q=greeted")</script></body></html>`,
+      );
+    }
     if (p === "/sw") {
       // registers a service worker that proxies every fetch, then posts once it controls the page
       return html(
@@ -388,7 +414,9 @@ export async function startFixture(): Promise<Fixture> {
     // An answer keyed by the visitor's session id ("guest" without one), as a per-session cache key
     // is: a recipe suggested from a signed-in visitor's answer would carry the cookie's value.
     if (p === "/api/mine") return json(res, 200, { [jar.session ?? "guest"]: [{ name: u.searchParams.get("name") }] });
-    if (p === "/api/follow" || p === "/api/sw-write") return json(res, 200, { ok: true });
+    if (p === "/api/follow" || p === "/api/sw-write" || p === "/api/autosave") return json(res, 200, { ok: true });
+    if (p === "/api/delete" && req.method === "POST")
+      return json(res, 200, { data: { deleted: u.searchParams.get("id") } });
     if (p === "/api/spa/user") return json(res, 200, { name: u.searchParams.get("name") });
 
     if (p === "/api/limited") {
