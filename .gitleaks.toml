@@ -1,0 +1,41 @@
+# Secret scan for this public repository, run by the `secrets` job in .github/workflows/ci.yml over
+# the working tree and the full history. It uses gitleaks' default rules. The only exceptions are
+# the values below, each allowed by its exact value, anchored at both ends.
+#
+# To add one: make the value obviously fake (or prove it is a site's public constant), add its exact
+# value with a comment saying where it is and why it is safe. Never allow a path or a broad pattern:
+# in `gitleaks dir` an allowlisted path skips the whole file. A test that needs a provider-key shape
+# builds it at run time instead (test/registry.test.ts), so no literal needs an exception.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake credentials the credential tests learn, scan and redact, and one public site constant"
+regexTarget = "secret"
+regexes = [
+  # test/learn.test.ts, test/session.test.ts, test/import.test.ts: fake auth_token cookies and a fake
+  # keychain password for the cookie-import fixture
+  '''^a1b2c3d4e5f60718293a$''',
+  '''^aB3dEf9hK2Lm8Np5$''',
+  '''^0123456789abcdef$''',
+  '''^s3cret-keychain-pw$''',
+  # test/edge/*.test.ts and fixtures: made-up CSRF, session, AppSync and access-token values
+  '''^csrf-Qx7mK2pL9vR4tZ8w$''',
+  '''^csrf-Zr3nW8yT5bJ1hM6q$''',
+  '''^da2-k7Qm9xLp3Rv8Tz1Wn5Ys6Ub4Hc$''',
+  '''^Uk7pQ2mZ9xVb4NcR8sLd3Tg6$''',
+  '''^Zx81kLmN0pQrStUv2wXyZ3aBcD$''',
+  '''^q2Fz/9kLmT0vX\+Yb7NcW1pRe/Hs3JuQa8Df\+Lg6ZoVy4=$''',
+  '''^EAAGm0PX4ZCpsBAKZCZBw7hjk2ZAn9ZCqZB8ZAzT$''',
+  # test/secrets.test.ts: the made-up session cookie the redaction tests hide from messages
+  '''^Tk4Rf9Lp2Wq7Zx3Nm8Vb$''',
+  # test/edge/*.test.ts: JWTs with fake payloads ({"sub":"anon"}, {"sub":"1234"}, {"sub":"user-1"})
+  # and fake signatures ("anonymous", "signature_123", "foobarbazqux")
+  '''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJhbm9uIn0\.YW5vbnltb3Vz$''',
+  '''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0In0\.c2lnbmF0dXJlXzEyMw$''',
+  '''^eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJ1c2VyLTEifQ\.Zm9vYmFyYmF6cXV4$''',
+  # sites/airbnb.json (and test/edge/learner-r2.test.ts): Airbnb's public web API key, the same
+  # constant every visitor's browser sends as x-airbnb-api-key; the op lists it as `public`
+  '''^d306zoyjsyarp7ifhu67rjxn52tv0t20$''',
+]

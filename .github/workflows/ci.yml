@@ -12,6 +12,8 @@ concurrency:
 permissions:
   contents: read
 
+# Actions are pinned by commit SHA (a tag can be moved), and no job keeps the token in .git or restores
+# a cache: outside code reaches the self-hosted runner once a maintainer approves a fork's run.
 jobs:
   check:
     # CI_RUNS_ON=instabox runs pushes and same-repository pull requests on the self-hosted Instabox
@@ -27,13 +29,63 @@ jobs:
         node: [22, 24]
     name: check (node ${{ matrix.node }})
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
       - run: npm ci
       - run: npm run lint
       - run: npm run check
-      # the browser tests drive the runner's installed Google Chrome; login opens a visible window
+      # the browser tests drive the runner's installed Google Chrome; login opens a visible window.
+      # REQUIRE_BROWSER=1 fails the run when no browser is found, where the browser tests would skip.
       - run: xvfb-run -a npm test
+        env:
+          REQUIRE_BROWSER: "1"
+      # install the packed tarball outside the checkout and run its CLI and library
+      - run: npm run smoke:pack
+
+  secrets:
+    # Runs for every pull request, a fork's included, on GitHub's runner: it needs no browser, and
+    # a fork's commits are the ones most worth scanning before review.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks, verified by SHA-256
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+      # every commit's diff, with --remerge-diff showing what a merge changed beyond an automatic
+      # merge; then the checked-out tree
+      - name: Scan the history and the tree
+        run: |
+          "$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --no-banner --log-opts="--remerge-diff" .
+          "$RUNNER_TEMP/gitleaks" dir --config .gitleaks.toml --redact --no-banner .
+
+  # One check to require in branch protection: a skipped or cancelled job never passes for a green one.
+  ci:
+    name: CI
+    if: always()
+    needs: [check, secrets]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          failed=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<<"$NEEDS")
+          if [ -n "$failed" ]; then
+            echo "::error::Jobs that did not succeed: ${failed//$'\n'/, }"
+            exit 1
+          fi

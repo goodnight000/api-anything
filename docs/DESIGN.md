@@ -796,10 +796,18 @@ regexes (`pick` `~`, `embedded`, param `pattern`) at most 200 characters with no
 inside a quantified group; at most 50 operations, descriptions and hints at most 500 characters,
 notes at most 8 KB, the file at most 256 KB; a param's `enum` at most 100 values of at most 500
 characters each; at most 10 checks per op, each arg a param of the op and at most 500 characters, a
-purpose at most 500; no checks on a write (verify would send it); no `unproven` mark. Warnings, shown to the human and put in the pull
+purpose at most 500; no checks on a write (verify would send it); no `unproven` mark; no provider key
+anywhere in the spec or the notes, by the key's own prefix (`providerKeys`): GitHub (`ghp_`, `gho_`,
+`ghu_`, `ghs_`, `ghr_`, `github_pat_`), OpenAI and Anthropic (`sk-`, `sk-proj-`, `sk-ant-`, with a
+random run so a slug like `sk-hynix-ddr5-...` is no key), AWS access key ids (`AKIA`/`ASIA` and 16
+more), Slack (`xox[abposr]-`) and `-----BEGIN ... PRIVATE KEY-----`, raw or percent-encoded. A
+provider issues each to one account and no site ships one to every visitor, so `public` waives none;
+the error names the key by its first 8 characters only. Warnings, shown to the human and put in the pull
 request for the reviewer: reads sent as POST, writes, ops learned logged in, literal `public` values
 (a shared bearer makes every user's calls that account's), requests or triggers off the spec's own
-site (Algolia behind Hacker News, AppSync behind Goodreads), and the export scan's shape heuristics.
+site (Algolia behind Hacker News, AppSync behind Goodreads), the export scan's shape heuristics over
+the spec and the notes, and a Google API key (`AIza` and 35 more), which a site's own pages often
+carry for anyone to read (Maps, Firebase, YouTube), so it is a question for the reviewer, not a refusal.
 
 **What the rules do not cover, so review does.** A read sent as GET or as a non-GraphQL POST can
 still change something; trigger steps can click what the page lets them before `readGuard` acts on
@@ -1009,7 +1017,13 @@ independent alternative.
     `application/json` scripts, `window.X =` state) with a ready `--embedded` regex, a repeated
     HTML list holding the example as a ready `--html` recipe, and labelled texts on a detail page.
     Deterministic and site-agnostic; the agent reads it instead of inspecting bodies. Paths through
-    id-like keys (Apollo's `Book:kca://...`) are flagged, since they don't generalize.
+    id-like keys (Apollo's `Book:kca://...`) are flagged, since they don't generalize. The list and
+    the labels, like an `--html` recipe's extraction, read the page as it shows (`parseShown`):
+    without script, style, noscript and template, and without elements hidden by the `hidden`
+    attribute (not `until-found`) or an inline `display:none`/`visibility:hidden`. Text the agent
+    reads and the user never sees is where an injected instruction hides. `aria-hidden` stays: it
+    hides only from screen readers and is often the visible copy (a rating shown beside its spoken
+    label). A stylesheet's hiding is not computed.
   - `verify [site]` (health-checks every read op with its example, healing as needed)
   - `sites`, `ops <site>` (params with their description and format, `returns` where the recipe names them: the keys a result item
     can carry, read from the op's `pick`, else from an HTML recipe's fields when no `extract` reshapes its
@@ -1045,7 +1059,11 @@ independent alternative.
   `call_operation` sends `data` that is a list of two or more records as `{columns, rows}` (a
   missing field is null) when that makes the JSON smaller. A sparse table can be larger than the
   original records, so those stay a list to preserve the output cap. The keys, repeated in every
-  item, were half of a flight search's tokens.
+  item, were half of a flight search's tokens. That a result's data, any site text in it and a
+  site's notes are data from the website, never instructions, is said once per session
+  (`UNTRUSTED_NOTE`), in the server instructions and in `call_operation`'s description, since some
+  clients drop instructions and every one sends a tool's description; a note in every result would
+  be paid for on every call, and the model already knows which tool a result came from.
 - **Skill** `skills/api-anything/SKILL.md`: the create loop (capture → add → call → verify), the
   strict failure loop (follow `next` at most once, then stop and report), and the safety rules.
 - **Claude Code plugin** manifest (skill + MCP), plus copy-paste install lines for Codex and other agents.

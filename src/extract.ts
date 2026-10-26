@@ -193,6 +193,35 @@ const address = (v: string, attr: string, base: string): string => {
   }
 };
 
+const UNSHOWN_TAGS = new Set(["script", "style", "noscript", "template"]);
+const HIDDEN_STYLE =
+  /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse))\s*(?:!\s*important\s*)?(?:;|$)/i;
+
+/**
+ * An element the page does not show: script, style, noscript or template, the `hidden` attribute
+ * (but `until-found`, a collapsed section a find reveals), or an inline display:none or
+ * visibility:hidden. Text an agent reads and the user never sees is where injected instructions
+ * hide. `aria-hidden` is shown: it hides from screen readers only, and is often the visible copy.
+ */
+function unshown(el: HTMLElement): boolean {
+  const hidden = el.getAttribute("hidden");
+  return (
+    UNSHOWN_TAGS.has(el.rawTagName?.toLowerCase() ?? "") ||
+    (hidden !== undefined && hidden.toLowerCase() !== "until-found") ||
+    HIDDEN_STYLE.test(el.getAttribute("style") ?? "")
+  );
+}
+
+/** The page parsed, without the elements it does not show; `<head>`'s `<base>` stays. */
+export function parseShown(body: string): HTMLElement {
+  const doc = parseHtml(body);
+  const stack = [doc];
+  for (let el = stack.pop(); el; el = stack.pop())
+    for (const c of [...el.childNodes])
+      if (c.nodeType === 1) unshown(c as HTMLElement) ? c.remove() : stack.push(c as HTMLElement);
+  return doc;
+}
+
 /** What a browser resolves the page's links against: its first `<base href>`, else its own address. */
 function documentBase(doc: HTMLElement, url: string): string {
   const href = doc.querySelector("base[href]")?.getAttribute("href");
@@ -214,7 +243,7 @@ export function extractHtml(
   recipe: { items: string; fields: Record<string, string> },
   base?: string,
 ): Record<string, string | string[] | undefined>[] {
-  const doc = parseHtml(body);
+  const doc = parseShown(body);
   base &&= documentBase(doc, base);
   return doc.querySelectorAll(recipe.items).map((el) => {
     const out: Record<string, string | string[] | undefined> = {};

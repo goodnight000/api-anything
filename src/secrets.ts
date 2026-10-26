@@ -111,6 +111,32 @@ const jsonUnescape = (s: string) =>
     c.length > 1 ? String.fromCharCode(parseInt(c.slice(1), 16)) : (ESC[c] ?? c),
   );
 
+/**
+ * Keys a provider issues to one account, by their own prefix: no site ships one for every visitor.
+ * Where a word can follow the prefix (sk-hynix-ddr5-...), the key must hold a random run: 16+
+ * letters and digits mixing cases with a digit. A site's own Google web key is `public`: it ships
+ * in the site's pages for anyone to read (Maps, Firebase, YouTube's).
+ */
+const PROVIDER_KEYS: { what: string; re: RegExp; random?: true; public?: true }[] = [
+  { what: "a GitHub token", re: /(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})/g },
+  { what: "an OpenAI or Anthropic key", re: /(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}/g, random: true },
+  { what: "an AWS access key", re: /(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])/g },
+  { what: "a Slack token", re: /(?<![A-Za-z0-9])xox[abposr]-[A-Za-z0-9-]{10,}/g },
+  { what: "a private key", re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g },
+  { what: "a Google API key", re: /(?<![A-Za-z0-9_-])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g, public: true },
+];
+
+/** Provider keys in `text` or its percent-decoding, each with a sample that names it without repeating it. */
+export function providerKeys(text: string): { what: string; sample: string; public: boolean }[] {
+  const out = new Map<string, { what: string; sample: string; public: boolean }>();
+  for (const t of new Set([text, pctDecode(text, false)]))
+    for (const k of PROVIDER_KEYS)
+      for (const [m] of t.matchAll(k.re))
+        if (!k.random || (m.match(/[A-Za-z0-9]{16,}/g) ?? []).some(RANDOM))
+          out.set(m, { what: k.what, sample: `${m.slice(0, 8)}...`, public: !!k.public });
+  return [...out.values()];
+}
+
 /** Base64 (or base64url) runs that decode to text. */
 function base64Texts(s: string): string[] {
   return [...s.matchAll(/[A-Za-z0-9+/_-]{16,}={0,2}/g)]

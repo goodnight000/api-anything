@@ -223,6 +223,65 @@ test("the shared rules refuse what a hostile or careless spec could do with some
   assert.match(warned.join("\n"), /a read sent as POST/);
 });
 
+test("a provider key one account owns is refused in a shared spec and in its notes; a Google web key is a warning", () => {
+  // assembled at run time, so no key-shaped literal sits in this file for a secret scanner to find
+  const body = "A1b2C3d4E5f6G7h8J9k0".repeat(3);
+  const keys: [string, string][] = [
+    ["a GitHub token", `ghp_${body.slice(0, 36)}`],
+    ["a GitHub token", `gho_${body.slice(0, 36)}`],
+    ["a GitHub token", `github_pat_${body.slice(0, 22)}_${body}`],
+    ["an OpenAI or Anthropic key", `sk-${body}`],
+    ["an OpenAI or Anthropic key", `sk-proj-${body}`],
+    ["an OpenAI or Anthropic key", `sk-ant-api03-${body}`],
+    ["an AWS access key", `AKIA${"Q7X2M9K4R1T8W3Z6"}`],
+    ["an AWS access key", `ASIA${"Q7X2M9K4R1T8W3Z6"}`],
+    ["a Slack token", `xoxb-${"1234567890"}-${body}`],
+    ["a Slack token", `xoxp-${"1234567890"}-${body}`],
+    ["a private key", `-----BEGIN RSA ${"PRIVATE"} KEY-----\nMIIEpAIBAAKCAQEA${body}`],
+    ["a private key", `-----BEGIN OPENSSH ${"PRIVATE"} KEY-----`],
+  ];
+  const headed = (value: string, op: Record<string, unknown> = {}) =>
+    spec(
+      {},
+      {
+        request: { method: "GET", url: "https://news.example.com/api/search?q=kittens", headers: { "x-k": value } },
+        ...op,
+      },
+    );
+  for (const [what, key] of keys) {
+    const e = errors(headed(key)).join("\n");
+    assert.match(e, new RegExp(`headers\\.x-k holds ${what}`), key);
+    assert.ok(!e.includes(key), "the error does not repeat the key");
+    // `public` waives a shared bearer's warning, never this: no provider issues one of these to every user
+    assert.match(errors(headed(key, { public: ["x-k"] })).join("\n"), new RegExp(`x-k holds ${what}`), key);
+    assert.match(errors(spec(), `## Calling\nset ${key} first\n`).join("\n"), new RegExp(`notes hold ${what}`), key);
+    const url = `https://news.example.com/api/search?q=kittens&k=${encodeURIComponent(key)}`;
+    assert.match(
+      errors(headed("x", { request: { method: "GET", url, headers: {} } })).join("\n"),
+      new RegExp(what),
+      `${key} in a URL`,
+    );
+  }
+  // words and ids that share a prefix are not keys
+  for (const text of [
+    "sk-hynix-ddr5-memory-kit-black-edition-2024",
+    "task-A1b2C3d4E5f6G7h8J9k0A1b2",
+    "ghp_settings_page",
+    "AKIA12345",
+    "MY_AKIAQ7X2M9K4R1T8W3Z6Q7",
+    "xoxb-",
+    "-----BEGIN PUBLIC KEY-----",
+  ])
+    assert.deepEqual(errors(headed(text)), [], text);
+  const google = `AIza${"SyA1b2C3d4E5f6G7h8J9k0A1b2C3d4E5f6G"}`;
+  assert.deepEqual(errors(headed(google)), []);
+  assert.match(vetShared(headed(google)).warnings.join("\n"), /x-k holds a Google API key/);
+  assert.match(vetShared(spec(), `key: ${google}`).warnings.join("\n"), /notes hold a Google API key/);
+  // the export scan's shape heuristics read the notes too
+  const jwt = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "c2lnbmF0dXJl"].join(".");
+  assert.match(vetShared(spec(), `token ${jwt}`).warnings.join("\n"), /notes look like a JWT/);
+});
+
 /* --------------------------------------------------------------- pull */
 
 let server: Server;

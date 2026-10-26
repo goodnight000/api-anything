@@ -55,9 +55,14 @@ focused regressions, and the final candidate passed the full suite before landin
 ```sh
 npm ci
 npm run check
-npm test
+REQUIRE_BROWSER=1 npm test   # fails, not skips, when Chrome is missing
+npm run smoke:pack           # pack, install the tarball outside the checkout, run `sites`, `ops` and the library
 npm run demo -- 'agent memory'
 ```
+
+CI runs all but the demo on every pull request and push to main, plus a gitleaks scan (pinned
+release, checked by SHA-256) of the working tree and the full history. Before a release, check the
+latest `main` run is green on both Node versions, including the `secrets` job.
 
 Follow [Setup and demos](QUICKSTART.md) for a clean global install, MCP setup, teaching a new
 operation, and LinkedIn session import/enrichment. Browser tests require Google Chrome; a run

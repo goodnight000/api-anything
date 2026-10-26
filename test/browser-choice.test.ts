@@ -5,6 +5,14 @@ import { join } from "node:path";
 import { after, beforeEach, describe, test } from "node:test";
 import { browserAvailable, browserChoice } from "../src/browser.js";
 
+// Every browser test skips itself when no browser is found; this one turns that into a failure where
+// a skip would hide them all (CI sets REQUIRE_BROWSER=1). Run before the env is changed below.
+test("REQUIRE_BROWSER=1: a missing browser fails the run instead of skipping the browser tests", {
+  skip: process.env.REQUIRE_BROWSER !== "1" && "REQUIRE_BROWSER is not 1",
+}, () => {
+  assert.ok(browserAvailable(), "no Chromium browser found: install Google Chrome or set API_ANYTHING_BROWSER");
+});
+
 describe("browserChoice", () => {
   const saved = process.env.API_ANYTHING_BROWSER;
   const dir = mkdtempSync(join(tmpdir(), "api-anything-browser-choice-"));

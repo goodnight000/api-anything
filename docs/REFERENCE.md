@@ -246,6 +246,11 @@ Known limits:
 - `--html` returns text as it is in the page. `@href` and `@src` are links, so a relative value
   is resolved against the page's `<base href>` or else the final URL the answer came from, and
   returned absolute; the other attributes (`@title`, `@id`, ...) and plain text stay as they are.
+- `--html` and `--outline` read only what the page shows: `<script>`, `<style>`, `<noscript>` and
+  `<template>` are dropped, and so is every element with the `hidden` attribute (not
+  `hidden="until-found"`) or an inline `display:none`/`visibility:hidden`, with all it holds.
+  `aria-hidden="true"` stays: it hides from screen readers, not from the eye. Hiding done by a
+  stylesheet (an `sr-only` class, off-screen positioning) is not seen, so such text still comes back.
 - "Not found" is detected by replaying the op's example args, so a spec without examples reports
   missing data as `drift`. An empty result is `ok` with `[]` when the page shows it structurally:
   an empty JSON list at the extract path, or, for `--html`, an items selector written as

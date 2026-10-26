@@ -256,6 +256,20 @@ describe("inspect", () => {
     // the same page, a selector with no container to find: nothing tells no results from a wrong selector
     assert.equal((await inspect(4, "--html", '{"items":"li.user","fields":{"name":"a.name"}}')).code, 1);
   });
+
+  test("--html and --outline read what the page shows: no hidden row, no display:none text, no script", async () => {
+    seed("chidden", { url: `${fx.url}/list-hidden`, exchanges: [await answered(1, "document", "/list-hidden")] });
+    const recipe = '{"items":"li.user","fields":{"name":"a.name","followers":"all:span.followers"}}';
+    const html = await cli("inspect", "chidden", "1", "--html", recipe);
+    assert.deepEqual(JSON.parse(html.stdout).data, [
+      { name: "alice", followers: ["500"] },
+      { name: "bob", followers: ["300"] },
+      { name: "carol", followers: ["500"] },
+    ]);
+    const outline = await cli("inspect", "chidden", "1", "--outline", "--example", "q=alice");
+    assert.match(outline.stdout, /"count":3/, outline.stdout);
+    assert.doesNotMatch(outline.stdout, /instructions|delete op|evil/, outline.stdout);
+  });
 });
 
 describe("add from a saved capture", () => {

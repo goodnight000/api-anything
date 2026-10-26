@@ -4,7 +4,7 @@
  * go, the pages a browser holding the user's sessions opens, and whether an op writes.
  */
 import { parse } from "tldts";
-import { literalCredentials, scanSecrets } from "./secrets.js";
+import { literalCredentials, providerKeys, scanSecrets } from "./secrets.js";
 import { siteOf } from "./session.js";
 import type { Operation, Request, Site } from "./spec.js";
 
@@ -267,6 +267,28 @@ export function vetShared(site: Site, notes?: string): Vetted {
     }
   }
   // `shared` is pull's own record (a hash), not the spec's content
-  warnings.push(...scanSecrets({ ...site, shared: undefined }, { cookies: [], values: {} }, allowed).warnings);
+  const content = { ...site, shared: undefined };
+  warnings.push(...scanSecrets(content, { cookies: [], values: {} }, allowed).warnings);
+  if (notes !== undefined)
+    warnings.push(
+      ...scanSecrets(notes, { cookies: [], values: {} }).warnings.map((w) => w.replace(/^\$ looks/, "notes look")),
+    );
+  // `public` waives no provider key: none is one a site gives every visitor
+  for (const [where, text] of [...strings(content, "$"), ...(notes !== undefined ? [["notes", notes]] : [])])
+    for (const k of providerKeys(text)) {
+      const holds = `${where} ${where === "notes" ? "hold" : "holds"} ${k.what} (${k.sample})`;
+      if (k.public) warnings.push(`${holds}; check it is the site's own public key`);
+      else errors.push(`${holds}; a shared spec never carries one`);
+    }
   return { errors, warnings };
 }
+
+/** Every string in `v`, with its JSON path. */
+const strings = (v: unknown, path: string): [string, string][] =>
+  typeof v === "string"
+    ? [[path, v]]
+    : Array.isArray(v)
+      ? v.flatMap((x, i) => strings(x, `${path}[${i}]`))
+      : v && typeof v === "object"
+        ? Object.entries(v).flatMap(([k, x]) => strings(x, `${path}.${k}`))
+        : [];

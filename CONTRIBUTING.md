@@ -76,9 +76,15 @@ npm run format  # Biome: format and apply safe lint fixes
 npm run lint    # what CI runs: formatting and lint, no changes
 npm run check   # typecheck src and test
 npm test        # unit + offline e2e (the browser parts skip when no Chromium browser is installed)
+npm run smoke:pack  # pack, install the tarball in a temp dir, run its CLI and library (needs the npm registry)
 ```
 
-CI runs `lint`, `check` and `test` on every pull request.
+CI runs `lint`, `check`, `test` with `REQUIRE_BROWSER=1` (a missing Chrome fails the run instead
+of skipping the browser tests) and `smoke:pack` on Node 22 and 24, and a gitleaks secret scan of the
+working tree and the full history on every pull request, a fork's included. The scan uses
+`.gitleaks.toml`: gitleaks' default rules, with a few fake test values allowed by exact value. A
+test that needs a provider-key shape should build it at run time rather than add an exception.
+The `CI` job passes only when every other job did, so it is the one to require.
 
 Tests never touch real websites. `test/fixture/server.ts` imitates the patterns that matter:
 rotating GraphQL ids, layered form encoding, login walls, rate limits, signatures, and HTML

@@ -4,8 +4,8 @@
  * site-specific rules: JSON outlines, JSON embedded in a page (JSON-LD, __NEXT_DATA__, state
  * assignments), and repeated HTML items that carry an example value.
  */
-import { type HTMLElement, parse as parseHtml } from "node-html-parser";
-import { extractEmbedded, getPath, innerJson, parseBody } from "./extract.js";
+import type { HTMLElement } from "node-html-parser";
+import { extractEmbedded, getPath, innerJson, parseBody, parseShown } from "./extract.js";
 import { suggestExtract } from "./learn.js";
 
 export type JsonOutline = {
@@ -297,7 +297,7 @@ export function outline(contentType: string, body: string, examples: string[]): 
     // JSON-LD is small and schema.org-stable, so it is always worth showing; other blocks only when they carry an example
     return o.at || regex.startsWith("application/ld") ? [{ regex, ...o }] : [];
   });
-  const root = parseHtml(body);
+  const root = parseShown(body);
   const list = values.length ? outlineHtmlList(root, values) : undefined;
   const labels = list ? undefined : outlineLabels(root);
   return {
