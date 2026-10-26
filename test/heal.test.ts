@@ -431,6 +431,7 @@ fetch("/api/"+"${QID.slice(0, 11)}"+"${QID.slice(11)}"+"/User?name="+location.pa
     assert.equal(r.class, "blocked", JSON.stringify(r));
     assert.match(r.reason ?? "", /bot challenge \(Cloudflare challenge page \(HTTP 403\)\)/);
     assert.match(r.next ?? "", /clear the challenge/);
+    assert.deepEqual([r.nextCall?.action, r.nextCall?.mode, r.retry], ["login", "window", "after_fix"]);
   };
 
   test("a recapture that meets a challenge that never solves is blocked: the heal stops, and nothing is stale", async () => {
