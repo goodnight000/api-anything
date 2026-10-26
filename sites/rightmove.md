@@ -26,8 +26,6 @@ Healing opens the homepage, waits five seconds for hydration, fills the public f
 search input, and waits two seconds. An initial capture filled too early and produced no
 typeahead request. No user browser cookies were imported and no site writes were selected.
 
-Capture and replay evidence is recorded in
-[the discovery report](../docs/research/discovery/property-jobs.md). Raw exchanges remain local
-and are not included in this shared spec. Coverage is location suggestions only, with the
+Raw exchanges remain local and are not included in this shared spec. Coverage is location suggestions only, with the
 captured limit and exclusions fixed. No nationwide property listings or current property
 prices are supplied by this operation.
