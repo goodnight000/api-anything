@@ -1012,8 +1012,18 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
           );
       // a POST: Chrome's cache makes a second GET of one URL wait for the first
       if (req.url?.startsWith("/twin")) {
-        // held until the page's own request and the call's are both in; then each is sent somewhere else
-        if (waiting.push(res) === 2) waiting.forEach((w, i) => void w.writeHead(302, { location: `/to-${i}` }).end());
+        // held until a second copy comes in (the page's own, then the call's); then each is sent
+        // somewhere else. One alone goes on after 3 s: a page replaced for a stall sends its own again.
+        const mate = waiting.shift();
+        if (mate) {
+          mate.writeHead(302, { location: "/to-0" }).end();
+          return void res.writeHead(302, { location: "/to-1" }).end();
+        }
+        waiting.push(res);
+        setTimeout(() => {
+          if (waiting.includes(res))
+            waiting.splice(waiting.indexOf(res), 1)[0]!.writeHead(302, { location: "/to-alone" }).end();
+        }, 3000).unref();
         return;
       }
       landed.push(req.url!);
@@ -1401,6 +1411,33 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
       slow.closeAllConnections();
       slow.close();
     }
+  });
+
+  test("a cached page that never sends the fetch is replaced, the write goes once, and what the page sends when it wakes never leaves", async () => {
+    site("t2stall", rd("up", "/plain", { minTier: 2 }), {
+      ...rd("save", "/api/stalled", { minTier: 2 }),
+      readOnly: false,
+      request: { method: "POST", url: `${fx.base}/api/stalled`, headers: {}, body: "x=1" },
+    });
+    assert.equal((await call("t2stall", "up", {}, { maxTier: 2, minIntervalMs: 0 })).ok, true, "the page is cached");
+    const cached = (await openBrowser({ profileDir: profileDir() })).pages().find((p) => p.url() === `${fx.base}/`);
+    assert.ok(cached, "the cached origin page");
+    // a renderer that runs nothing for longer than the call may take, as a stalled one did
+    const busy = Date.now() + 6000;
+    await cached.evaluate(
+      (until) =>
+        void setTimeout(() => {
+          while (Date.now() < until);
+        }),
+      busy,
+    );
+    const r = await call("t2stall", "save", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 4000, allowWrites: true });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 2);
+    assert.equal(r.write, "accepted");
+    // the stalled page wakes up and runs the fetch it was handed
+    await new Promise((res) => setTimeout(res, Math.max(0, busy + 1500 - Date.now())));
+    assert.equal(fx.hits.filter((h) => h.url === "/api/stalled").length, 1, "sent once");
   });
 
   test("a second process (CLI next to a running MCP server) can still use tier 2", async () => {

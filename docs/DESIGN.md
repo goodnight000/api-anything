@@ -478,7 +478,7 @@ server flag, library option).
 
 What a write did is a field, not prose: `write` is read from every attempt the call made, the most
 any of them may have done. `not_sent`: nothing left (refused, bad args, a request that cannot be
-built, the browser profile busy, a tier-2 origin page that did not load, a tier-3 run that fired
+built, the browser profile busy, a tier-2 origin page that did not load or never sent the request, a tier-3 run that fired
 nothing after its confirm was told no, or the ledger below held it back). `not_applied`: the site answered that it did not run it (a definite non-execution as above,
 or an attempt flagged `rejected`: a clear refusal in a 2xx body, which the classifier sets).
 `accepted`: a 2xx judged ok, which proves the site took it and not that it took effect.
@@ -670,9 +670,19 @@ At tier 2 `timeoutMs` is one deadline for the whole call, counted from the momen
 (starting it, seconds on a busy machine, is not counted): the first load of the origin page, every
 hop of the fetch, and the wait and second fetch after the page navigated all draw on it. When the
 origin's root redirects to another origin, it fetches from a
-blank stand-in page on the request's origin. When the origin page navigates mid-fetch (its own
+blank stand-in page on the request's origin. When the origin page navigates mid-fetch, after the request left (its own
 challenge or redirect destroys the context), a read waits for the new document and fetches once
-more; a write is never resent. The tier-3 answer is the matching request whose declared parameter positions equal the
+more; a write is never resent.
+Origin pages are kept per origin across a process's calls, and every request one sends waits in
+the browser until api-anything lets it go. A fetch none of whose requests was let go within 2 s
+(any with its method to its origin counts, the page's own included) never left: seen on a loaded
+machine, a cached page whose renderer ran nothing until the next DevTools command reached it, so
+the call waited out its whole deadline. A page that closed or navigated before letting one go is
+treated the same. That page is retired, whatever it sends later is failed in
+the browser, and the request goes once more from a fresh page inside the same deadline, a write
+too, since nothing was sent. If that one never leaves either, the call fails with
+`write: "not_sent"` (when it was the first hop). A page a call failed on is not handed to the next
+call. The tier-3 answer is the matching request whose declared parameter positions equal the
 materialized call, including short and structured values, and whose response judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
 A param's default is filled into the args once, before the first tier, so every tier runs with the
 same values: the tier-3 trigger opens `?count=20`, never a literal `{count}`.

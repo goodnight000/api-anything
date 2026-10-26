@@ -14,7 +14,7 @@ import type { CaptureResult, Exchange, SeenDialog, StoredCookie, TriggerStep } f
 
 let current: { profileDir: string; headless: boolean; ctx: Promise<BrowserContext> } | undefined;
 let headlessUA: string | undefined;
-const originPages = new Map<string, Page>();
+const originPages = new Map<string, OriginPage>();
 
 // A browser locks a profile to one process. A long-lived process (the MCP server) releases it
 // after this much idle time (an agent's calls are seconds apart, so the browser would mostly
@@ -1171,15 +1171,44 @@ async function redirectOf(seen: Response[], hop: Hop, url: string) {
   return { ...answers[0]!, body: "", url, location: answers[0]!.headers.location };
 }
 
+/** One tier-2 fetch's hold on the requests of the page it runs in. */
+interface Watch {
+  /** may this request be the fetch's own? Same method and origin: the page's own can look alike, which only errs toward "sent" */
+  mine(method: string, url: string): boolean;
+  /** one of them reached the browser and was let go */
+  started: boolean;
+  /** given up on before any was let go: each later one is failed in the browser, so none leaves */
+  sealed: boolean;
+}
+
+/** A cached tier-2 page and the fetches watching its requests. */
+interface OriginPage {
+  origin: string;
+  page: Page;
+  watches: Set<Watch>;
+  retired?: boolean;
+}
+
+/** A tier-2 fetch none of whose requests left the page, and none of which ever will. */
+class NotStarted extends Error {}
+
+/** Hand out a page no more, and close it once no fetch that may still be answered is using it. */
+function retire(e: OriginPage): void {
+  e.retired = true;
+  if (originPages.get(e.origin) === e) originPages.delete(e.origin);
+  if ([...e.watches].every((w) => w.sealed)) void within(e.page.close(), undefined);
+}
+
 /** A page on `origin` to fetch from: its root, or a blank stand-in when the root redirects elsewhere (api.* to www). */
-async function originPage(ctx: BrowserContext, origin: string, left: () => number): Promise<Page> {
-  let page = originPages.get(origin);
-  if (page && !page.isClosed()) {
-    if (new URL(page.url()).origin === origin) return page;
-    await within(page.close(), undefined, Math.min(SEAL_MS, left()));
+async function originPage(ctx: BrowserContext, origin: string, left: () => number): Promise<OriginPage> {
+  const kept = originPages.get(origin);
+  if (kept && !kept.page.isClosed()) {
+    if (new URL(kept.page.url()).origin === origin) return kept;
+    originPages.delete(origin);
+    await within(kept.page.close(), undefined, Math.min(SEAL_MS, left()));
     if (left() <= 1) throw new Error("the origin page could not be replaced before the call's deadline");
   }
-  page = await ctx.newPage();
+  const page = await ctx.newPage();
   // the same answers as a trigger run's, with no confirm accepted: this page only fetches
   page.on("dialog", (d) => answer(d, d.type() === "beforeunload"));
   await page.goto(origin, { waitUntil: "domcontentloaded", timeout: left() }).catch(() => {});
@@ -1197,9 +1226,33 @@ async function originPage(ctx: BrowserContext, origin: string, left: () => numbe
     );
     await page.goto(blank, { waitUntil: "domcontentloaded", timeout: left() });
   }
-  originPages.set(origin, page);
-  return page;
+  // Every request the page sends waits in the browser until it is let go here. So a fetch none of
+  // whose requests was let go provably sent nothing, and one given up on can be kept from leaving
+  // later, when a stalled page wakes up.
+  const entry: OriginPage = { origin, page, watches: new Set() };
+  const cdp = await ctx.newCDPSession(page);
+  cdp.on("Fetch.requestPaused", ({ requestId, request }) => {
+    let drop = false;
+    for (const w of entry.watches)
+      if (w.mine(request.method, request.url)) {
+        if (w.sealed) drop = true;
+        else w.started = true;
+      }
+    void (
+      drop
+        ? cdp.send("Fetch.failRequest", { requestId, errorReason: "Aborted" })
+        : cdp.send("Fetch.continueRequest", { requestId })
+    ).catch(() => {}); // the page is gone
+  });
+  await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
+  originPages.set(origin, entry);
+  return entry;
 }
+
+// How long a page has to hand its fetch to the browser. It takes milliseconds; a page that has not
+// by then is stalled (seen: a cached page whose renderer ran nothing until the next DevTools
+// command reached it, so its fetch waited out the whole deadline) and is replaced.
+const START_MS = 2000;
 
 /** Tier 2: fetch() from inside a page on the site origin, so TLS, cookies and sec-fetch are the browser's own. */
 export async function pageFetch(o: {
@@ -1228,7 +1281,15 @@ export async function pageFetch(o: {
   const release = hold();
   try {
     const ctx = await openBrowser(o);
-    const once = async (page: Page, hop: Hop, left: number) => {
+    const once = async (entry: OriginPage, hop: Hop, left: number) => {
+      const { page } = entry;
+      const origin = new URL(hop.url).origin;
+      const w: Watch = {
+        mine: (method, url) => method === hop.method && URL.parse(url)?.origin === origin,
+        started: false,
+        sealed: false,
+      };
+      entry.watches.add(w);
       const redirects: Response[] = [];
       const onResponse = (res: Response) => void (res.status() >= 300 && res.status() < 400 && redirects.push(res));
       page.on("response", onResponse);
@@ -1253,48 +1314,86 @@ export async function pageFetch(o: {
       );
       // the page itself can hang (a stuck renderer): the budget holds either way
       let timer: NodeJS.Timeout | undefined;
+      let quietTimer: NodeJS.Timeout | undefined;
       const late = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`no response within ${timeoutMs} ms`)), left + 1000);
       });
+      const quiet = new Promise<never>((_, reject) => {
+        quietTimer = setTimeout(
+          () => void (!w.started && reject(new NotStarted(`the page did not send the request within ${START_MS} ms`))),
+          Math.min(START_MS, left),
+        );
+      });
       try {
-        const r = await Promise.race([run, late]);
+        const r = await Promise.race([run, late, quiet]);
         return r.opaque ? await redirectOf(redirects, hop, r.url) : { ...r, location: undefined };
       } catch (e) {
-        if (/TimeoutError|timed out|signal timed out/i.test((e as Error).message))
-          throw new Error(`no response within ${timeoutMs} ms`);
+        const message = (e as Error).message;
+        const timedOut = /TimeoutError|timed out|signal timed out|no response within/i.test(message);
+        if (!w.started) {
+          // decided before anything was let go, so whatever the page sends from now on is failed
+          w.sealed = true;
+          if (e instanceof NotStarted) throw e;
+          if (timedOut) throw new NotStarted(`no response within ${timeoutMs} ms: the page never sent the request`);
+          if (page.isClosed() || /Execution context was destroyed|navigat/i.test(message))
+            throw new NotStarted(`the page went away before it sent the request: ${message.split("\n")[0]}`);
+        }
+        if (timedOut) throw new Error(`no response within ${timeoutMs} ms`);
         throw e;
       } finally {
         clearTimeout(timer);
+        clearTimeout(quietTimer);
         page.off("response", onResponse);
+        if (!w.sealed) entry.watches.delete(w);
+        if (entry.retired) retire(entry);
       }
     };
     // One deadline for the whole call from here, with Chrome up: the origin page's load, every hop
     // of the fetch and a recovery after the page navigated all draw on it.
     const deadline = Date.now() + timeoutMs;
     const left = () => Math.max(1, deadline - Date.now());
-    let page = await originPage(ctx, o.origin, left);
-    const fetchHop = async (hop: Hop) => {
-      try {
-        return await once(page, hop, left());
-      } catch (e) {
-        if (!o.retryOnNavigation || !/Execution context was destroyed|navigat/i.test((e as Error).message)) throw e;
-        // waitForFunction outlives a context swap (a bare load-state wait can resolve on the old document)
-        await page
-          .waitForFunction(() => document.readyState !== "loading", undefined, { timeout: left() })
-          .catch(() => {});
-        // it may have landed on another origin (a challenge's redirect): start from a fresh page on ours
-        let here = "";
+    let entry = await originPage(ctx, o.origin, left);
+    let replaced = false;
+    let navigated = false;
+    /** `first`: no hop before this one was sent, so a hop that never left means the call sent nothing */
+    const fetchHop = async (hop: Hop, first: boolean) => {
+      for (;;) {
         try {
-          here = new URL(page.url()).origin;
-        } catch {
-          /* about:blank */
+          return await once(entry, hop, left());
+        } catch (e) {
+          if (e instanceof NotStarted) {
+            // nothing left, so even a write may go again: once, from a fresh page, inside the same deadline
+            retire(entry);
+            if (replaced || left() <= 1) throw first ? new PageUnreachable(e.message) : new Error(e.message);
+            replaced = true;
+            entry = await originPage(ctx, o.origin, left);
+            continue;
+          }
+          if (
+            navigated ||
+            !o.retryOnNavigation ||
+            !/Execution context was destroyed|navigat/i.test((e as Error).message)
+          )
+            throw e;
+          navigated = true;
+          const { page } = entry;
+          // waitForFunction outlives a context swap (a bare load-state wait can resolve on the old document)
+          await page
+            .waitForFunction(() => document.readyState !== "loading", undefined, { timeout: left() })
+            .catch(() => {});
+          // it may have landed on another origin (a challenge's redirect): start from a fresh page on ours
+          let here = "";
+          try {
+            here = new URL(page.url()).origin;
+          } catch {
+            /* about:blank */
+          }
+          if (here !== o.origin) {
+            retire(entry);
+            await within(page.close(), undefined, Math.min(SEAL_MS, left()));
+            entry = await originPage(ctx, o.origin, left);
+          }
         }
-        if (here !== o.origin) {
-          originPages.delete(o.origin);
-          await page.close().catch(() => {});
-          page = await originPage(ctx, o.origin, left);
-        }
-        return await once(page, hop, left());
       }
     };
     // Pseudo-headers are invalid names for fetch(); forbidden ones (cookie, host, ...) the browser drops itself.
@@ -1304,12 +1403,18 @@ export async function pageFetch(o: {
     const t0 = performance.now();
     let redirected = false;
     // Redirects are taken by hand, as at tier 1; how many is the policy's to say.
-    for (let hops = 0; ; hops++) {
-      const { location, ...r } = await fetchHop(hop);
-      redirected ||= !!location;
-      if (!location || !o.redirect)
-        return { ...r, ms: Math.round(performance.now() - t0), ...(redirected ? { redirected } : {}) };
-      hop = o.redirect(hop, r.status, location, hops);
+    try {
+      for (let hops = 0; ; hops++) {
+        const { location, ...r } = await fetchHop(hop, hops === 0);
+        redirected ||= !!location;
+        if (!location || !o.redirect)
+          return { ...r, ms: Math.round(performance.now() - t0), ...(redirected ? { redirected } : {}) };
+        hop = o.redirect(hop, r.status, location, hops);
+      }
+    } catch (e) {
+      // a page a call failed on (a dead server, a stale document, a stall) is not handed to the next one
+      retire(entry);
+      throw e;
     }
   } finally {
     release();
