@@ -928,7 +928,10 @@ and no 2FA/captcha to redo — the human solved those in their own browser alrea
   with why (no login cookie appeared, or the ones held at opening did not change) and keeps the stored
   session. The window does not close itself when a login cookie appears: a site can set its session
   cookie before a second factor, a consent page or the redirect back from an identity provider is done,
-  and closing then would keep a half-finished sign-in. The human closes it, or presses Enter. A site
+  and closing then would keep a half-finished sign-in. The human closes it, or presses Enter. Its
+  dialogs (popups included) are answered for it, since Playwright takes them from the human: a
+  `beforeunload` and an alert are accepted, so leaving or closing a page is never refused, and a
+  confirm or prompt is declined, as Playwright's default would. A site
   whose only login cookie is one every visitor gets cannot be told apart by name: list that name in the
   spec's `loginCookies`, and a change in it counts.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON array (Cookie-Editor / Playwright)

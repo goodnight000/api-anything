@@ -495,7 +495,7 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
       await page.waitForLoadState("load");
       await new Promise((r) => setTimeout(r, 300)); // the window's own navigation has finished
       await act(page);
-      await page.close();
+      await page.close({ runBeforeUnload: true }); // as a human closing it: the page may ask first
       return pending;
     };
 
@@ -519,7 +519,16 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     assert.ok(loadSession(site).cookies.some((c) => c.name === "auth_token"));
 
     // the profile already holds the login: opening and closing the window proves nothing about it
-    const again = await inWindow();
+    // and a page that asks before it is left still closes: the window's dialog answer lets it go
+    const again = await inWindow(async (page) => {
+      await page.click("body");
+      await page.evaluate(() =>
+        addEventListener("beforeunload", (e) => {
+          e.preventDefault();
+          e.returnValue = "";
+        }),
+      );
+    });
     assert.equal(again.ok, false);
     assert.match(!again.ok ? again.reason : "", /no new sign-in: the window already held auth_token when it opened/);
   });

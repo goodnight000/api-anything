@@ -1349,6 +1349,12 @@ async function loginWindow(
   const ctx = await openBrowser({ profileDir, headless: false });
   const opened = siteCookies(await ctx.cookies(), url);
   const page = ctx.pages()[0] ?? (await ctx.newPage());
+  // Playwright answers the window's dialogs, not the human: leaving or closing a page is never refused
+  // (a dismissed beforeunload would keep it open), an alert is only read, a confirm or prompt declined.
+  const onDialog = (d: Dialog) => answer(d, d.type() === "beforeunload" || d.type() === "alert");
+  const onPage = (p: Page) => p.on("dialog", onDialog);
+  onPage(page);
+  ctx.on("page", onPage); // a sign-in popup (an identity provider) too
   await page.goto(url);
   // Closing the last window closes the context, after which cookies can't be read, so keep a snapshot.
   let snapshot = await ctx.cookies();
@@ -1375,6 +1381,7 @@ async function loginWindow(
     snapshot = await ctx.cookies().catch(() => snapshot);
   } finally {
     clearInterval(poll);
+    ctx.off("page", onPage);
     if (waitForEnter) {
       process.stdin.off("data", onEnter);
       process.stdin.pause();
