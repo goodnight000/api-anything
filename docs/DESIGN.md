@@ -392,12 +392,43 @@ request. A read's tier-3 trigger also aborts unsafe requests other than the op's
 run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the
 steps are not running yet: its own verify POSTs (AWS WAF's `mp_verify`, Cloudflare's
 `/cdn-cgi/challenge-platform`) go through, or it would never reload; the guard applies from the real
-document on. Any 2xx to a write is `ok`, whatever the body (204,
-"OK", an HTML page with a password field), because the server took it, with one exception: a
-sign-in form (a password field next to a username field, or a form posting to a login path) where
-the op's answer is not a page is `auth`: the session was gone and nothing ran. An explicit JSON `ok: false` or `success: false` rejects a write even with HTTP 200.
-A write executes exactly
-once per call. Retry only on a definite non-execution (400/401/403/404 answered to the request
+document on. A 2xx to a write is `ok` (204, "OK", an HTML page with a password field, `{"status":
+"queued"}`), because the server took it, unless the answer says it was not done:
+- A sign-in form (a password field next to a username field, or a form posting to a login path)
+  where the op's answer is not a page is `auth`: the session was gone and nothing ran.
+- A JSON answer that says the service refused the write is not `ok`, and is marked `rejected`.
+  That covers an error field that holds an error, up to four levels down (`error`, `errors` and
+  `userErrors` at any of those levels, and the family `validationErrors`, `errorMessage`, `hasError`
+  up to two). It covers `ok` or `success` false up to two levels, and a root `status`, `state`,
+  `result` or `outcome` that is an error word (`"error"`, `"fail"`, `"invalid"`). An error field
+  that is empty, zero, false or a word for none (`error: null`, `userErrors: []`) is no refusal. A
+  `message` is not read for error words, since a success can name what the write was about ("Error
+  report sent").
+- A numeric `status` of 400 or more, up to one level down, is judged as that HTTP status, like an
+  error status in place of the data (below). A 4xx there is a refusal; a 5xx is a server failure
+  and stays as ambiguous as one.
+- GraphQL errors with no `data` are a request error, so by the spec nothing ran. Errors with null
+  `data`, or with null under every root field, are an execution that failed. Both are refusals.
+  Errors next to a payload that is there mean the write may have partly run: not `ok`, and not
+  `rejected` either.
+- The class follows the wording: a refusal that says the session is gone is `auth`, one that names a
+  limit is `rate`, and anything else is `error`.
+- A form page that shows its errors (Django's `errorlist`, Rails' `field_with_errors` or
+  `#error_explanation`, or an alert whose text is an error's) is a refusal when it is the answer
+  itself, with no redirect. An element the markup hides (`hidden`, `aria-hidden`, an inline
+  `display: none`, a `<template>`) is not shown; a stylesheet's hiding is not seen.
+- After a redirect, neither of these proves anything: the post may have run before the redirect.
+  A redirect whose address names an error (`?error=title_blank`, `#status=failed`), or one back to
+  the op's own form page (its trigger's address) showing an error, is `error` with "may or may not
+  have run". It is not `rejected`.
+- A 201 with a `Location` header is a created resource, whatever its body names.
+
+None of this resends anything: a 2xx is never proof that a write did not run, so the rule below
+holds. Reads get none of it. A read's data can carry an error field of its own (a job's or a
+payment's failure), and a read without its data already goes through the example-args check
+below, which can tell a template that went stale (heal it) from bad args.
+
+A write executes exactly once per call. Retry only on a definite non-execution (400/401/403/404 answered to the request
 itself: after a redirect, as in Post/Redirect/Get, it ran; at tier 3 the page sent it, and the
 answer judged may be a redirect's follow-up, so a tier-3 write is never retried); timeouts, 5xx and network errors are
 ambiguous and are never retried. A redirect does not send it a second time either: at tiers 1 and 2
@@ -475,13 +506,13 @@ Every response is classified, never by status code alone:
 
 | class | signals | action |
 |---|---|---|
-| `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`; for an html recipe whose items selector is `<container> <item>`, the container present with no element of the item's tag), no GraphQL `errors` with null `data` or next to a null extract target, no error status in place of the data; any 2xx to a write that carries no error status | return |
-| `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once |
+| `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`; for an html recipe whose items selector is `<container> <item>`, the container present with no element of the item's tag), no GraphQL `errors` with null `data` or next to a null extract target, no error status in place of the data; any 2xx to a write whose answer does not say it was refused (see Writes) | return |
+| `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, a non-empty list there that the `pick` empties (no item has a picked field: a shared spec has no learned shape, and `data: []` would read as no results), an html recipe whose items all match with none of their fields found, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once (missing data first checks the example args) |
 | `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or a refused API key ("Invalid Application-ID or API key") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, a sign-in form that embeds a CAPTCHA widget or a vendor script that also rides on ordinary pages (reCAPTCHA on a login page guards the login; an interstitial's own markers still make the page `blocked`), an html/embedded op's page without its data that says "sign in" or shows a sign-in form (a mere Sign-in link, like Google's ServiceLogin button, is not one), a redirect to a login path, `require_login: true`, a trigger that lands on a sign-in page | each step at most once per call, at any tier, a retry that still answers `auth` going on to the next step (a changed analytics cookie changes the request without renewing a token); a write only when it certainly did not run, so never at tier 3: re-import a browser-imported session; then refresh the jar's cookies from the profile, retrying if that changes the request (a tier-2 page sends the profile's cookies itself, so there only a `cookie:` ref counts: an `x-csrf-token` header); for a read with `session:` refs, one trigger run refreshes them and answers; for a write with them, one trigger run with the write intercepted (as when learning it) refreshes them and the write is sent again; for a read whose only credential is one marked public, with no login on record, a heal re-learns it, as for drift (the site rotated its shared bearer); then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429 (with the server's Retry-After), "please wait", "rate limit" | back off, report; no heal |
-| `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers. A page showing a sign-in form is `auth`, not a wall, when its only challenge marker is one that also rides on ordinary pages (a CAPTCHA widget, a vendor script or header on a challenge status); an interstitial's own structure or title on that page is still a wall | escalate transport tier; then diagnostic `gated`. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal |
+| `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers. A page showing a sign-in form is `auth`, not a wall, when its only challenge marker is one that also rides on ordinary pages (a CAPTCHA widget, a vendor script or header on a challenge status); an interstitial's own structure or title on that page is still a wall; a tier-3 run or a heal's recapture whose trigger fired no matching request and ended on a challenge that did not solve (judged before a sign-in page or a page that is down) | escalate transport tier; then diagnostic `gated`. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
-| `error` | anything else (a network error names its cause) | return with details |
+| `error` | a write refused in its 2xx answer (see Writes); a signed-in JSON read (it holds a credential ref, or was learned signed in) redirected off its path to an HTML page of the same site with no sign-in form or challenge: a consent, terms or "verify it's you" step, reported with its address and a `next` to finish it in the browser and run `api-anything login <site>` (a real redirect only: an SPA's shell at the request's own address is drift); anything else (a network error names its cause) | return with details; no heal, nothing stale |
 
 An error status a 2xx answer carries in place of its data is judged as the HTTP status it stands
 for: a batchexecute RPC whose payload's place holds `[13]` (`[["wrb.fr",null,null,null,null,[13]]]`),
@@ -516,9 +547,10 @@ drifted (a renamed field): `drift`, with a hint to re-add with a new `--extract`
 Two guards against heal loops. A heal that produces a byte-identical template (compared with the
 same args filled in) is not drift. An op healed less than 10 minutes ago that fails again, or
 whose heal failed, is marked stale for 30 minutes with a reason, not re-healed. While stale, a read
-still tries its trigger (tier 3), unless the trigger did not answer either. A heal that learned
-nothing about the op (its check was rate limited, challenged or logged out, or another process held
-the browser profile, or no browser is installed for the recapture) stops at once and marks nothing
+still tries its trigger (tier 3), unless the trigger did not answer either (a run met by a challenge,
+a limit or a sign-in page is no such answer). A heal that learned nothing about the op (its check
+was rate limited, challenged or logged out, its recapture ended on a challenge that did not solve,
+another process held the browser profile, or no browser is installed for the recapture) stops at once and marks nothing
 stale. A forced `api-anything heal` that re-learns the same template replays it once and reports its
 answer: the same template is no proof the op works.
 

@@ -1,6 +1,8 @@
 /** Classify every response, never by status code alone. See DESIGN.md "Failure classifier". */
-import { parse as parseHtml } from "node-html-parser";
+import { type HTMLElement, parse as parseHtml } from "node-html-parser";
+import { templateRefs } from "./codec.js";
 import { extract, extractHtml, getPath, inferShape, parseBody, pick } from "./extract.js";
+import { siteOf } from "./session.js";
 import type { Operation } from "./spec.js";
 
 export type Class = "ok" | "drift" | "auth" | "rate" | "blocked" | "input" | "error";
@@ -21,6 +23,13 @@ export interface Classified {
   server?: boolean;
   /** rate: how long the server's Retry-After asks the caller to wait */
   retryAfterMs?: number;
+  /** a write's 2xx whose answer says plainly that the service refused it: it did not run */
+  rejected?: boolean;
+  /**
+   * the address of a same-site page the request was redirected to instead of its data (a consent,
+   * terms or "verify it's you" step), for a human to finish in the browser
+   */
+  unfinished?: string;
 }
 export interface Observed {
   status: number;
@@ -28,6 +37,8 @@ export interface Observed {
   body: string;
   /** final URL after redirects, when known */
   url?: string;
+  /** the first answer was a redirect, followed to `url` */
+  redirected?: boolean;
 }
 
 // [vendor, interstitial, integration]. The interstitial pattern is the challenge page's own
@@ -139,10 +150,18 @@ export function botWall(r: Observed, wantsJson = false, hasData?: () => boolean)
   return undefined;
 }
 
+type HtmlRecipe = NonNullable<Operation["response"]["html"]>;
+/** Items with a field found: a selector renamed under every field leaves items holding nothing. */
+function htmlFinds(recipe: HtmlRecipe, items: ReturnType<typeof extractHtml>): boolean {
+  if (!Object.keys(recipe.fields).length) return items.length > 0;
+  return items.some((item) => Object.values(item).some((v) => (Array.isArray(v) ? v.length > 0 : !!v)));
+}
+
 /** The html/embedded recipe finds data here (a non-empty list, or a value). Never throws. */
 function recipeFinds(op: Operation, body: string): boolean {
   try {
-    if (op.response.format === "html") return !!op.response.html && extractHtml(body, op.response.html).length > 0;
+    if (op.response.format === "html")
+      return !!op.response.html && htmlFinds(op.response.html, extractHtml(body, op.response.html));
     if (op.response.format === "embedded") {
       const d = extract(op.response, body);
       return d !== undefined && !(Array.isArray(d) && !d.length);
@@ -303,6 +322,152 @@ function inBandError(data: unknown, extract?: string): { status: number; said: s
   return code >= 400 && code < 600 ? { status: code, said: `error ${code}` } : undefined;
 }
 
+// What a write's answer says when the service refused it (after Pomerado's commit check). An error
+// field holds an error unless it is empty, zero, false or a word for none (`error: null`, `userErrors: []`).
+const NONE = /^\s*(0+|none|null|false|ok|success|n\/a|no errors?( found)?)?\s*\.?\s*$/i;
+function filled(v: unknown, depth = 0): boolean {
+  if (v === null || v === undefined || v === false || v === 0) return false;
+  if (typeof v === "string") return !NONE.test(v);
+  if (typeof v !== "object" || depth > 3) return true;
+  return (Array.isArray(v) ? v : Object.values(v)).some((x) => filled(x, depth + 1));
+}
+// Names compared lower-cased without _ and -. Up to two levels down, the error fields' family
+// (`{data: {save: {validationErrors}}}`); deeper, to four, only error, errors and userErrors.
+const ERROR_NEAR =
+  /^((user|validation|field|form|mutation)?errors?|error(message|msg|text|code|description|details?)s?|haserrors?|err|errmsg)$/;
+const ERROR_DEEP = /^(error|errors|usererrors)$/;
+const SUCCEEDED = /^(is)?(success|successful|succeeded|ok)$/;
+// A status enum, not prose: a message can name what the write was about ("Error report sent").
+const STATUS_WORD = /\b(errors?|fail(s|ed|ure)?|invalid|forbidden|unauthori[sz]ed)\b/i;
+
+/**
+ * A write's JSON answer that says it was refused: an error field that holds one (4 levels down),
+ * `ok`/`success` false (2 levels), a numeric `status` of 400 or more (1 level, as `status`), or an
+ * error word as the whole root `status`/`state`/`result`. "queued" or "pending" is accepted work.
+ */
+function refusal(data: unknown): { said: string; status?: number } | undefined {
+  let budget = 2000;
+  const visit = (v: unknown, depth: number): { said: string; status?: number } | undefined => {
+    if (depth > 4 || v === null || typeof v !== "object" || --budget < 0) return undefined;
+    if (Array.isArray(v)) {
+      for (const x of v.slice(0, 50)) {
+        const found = visit(x, depth + 1);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    for (const [key, field] of Object.entries(v)) {
+      const name = key.toLowerCase().replace(/[_-]/g, "");
+      const text = typeof field === "string" ? field : (JSON.stringify(field) ?? "");
+      const said = `${key} is ${snippet(text)}`;
+      if (depth <= 2 && SUCCEEDED.test(name) && field === false) return { said };
+      // named fields only: a setting for what to do on an error (notifyOnError) is none
+      if ((depth <= 2 ? ERROR_NEAR : ERROR_DEEP).test(name)) {
+        if (field === true ? /^(has)?errors?$/.test(name) : filled(field)) return { said };
+        continue;
+      }
+      if (depth <= 1 && /^status(code)?$/.test(name) && typeof field === "number" && field >= 400 && field < 600)
+        return { said, status: field };
+      if (
+        depth === 0 &&
+        /^(status|state|result|outcome)$/.test(name) &&
+        typeof field === "string" &&
+        field.trim().split(/[\s_-]+/).length <= 3 &&
+        STATUS_WORD.test(field.replace(/[_-]+/g, " "))
+      )
+        return { said };
+      const found = visit(field, depth + 1);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return visit(data, 0);
+}
+
+/** A refusal's class by the answer's wording: a lost session or a limit says so; anything else is an error. */
+const refusedAs = (text: string, reason: string): Classified =>
+  is(LOGIN_SAID.test(text) ? "auth" : RATE.test(text) ? "rate" : "error", reason);
+
+/** `error=title_blank`, `status=failed`: a redirect's query or fragment that names an error. */
+function errorInQuery(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const u = new URL(url);
+    for (const [k, v] of [...u.searchParams, ...new URLSearchParams(u.hash.slice(1))]) {
+      if (/error|fail/i.test(k) && !/^(0|false|none)$/i.test(v)) return v ? `${k}=${v}` : k;
+      if (/^(error|errors|fail|failed|failure|invalid)$/i.test(v)) return `${k}=${v}`;
+    }
+  } catch {
+    /* not a URL */
+  }
+  return undefined;
+}
+
+/** The final URL is the write's own form page: its trigger's address, a `{param}` there matching any one segment. */
+function onForm(op: Operation, url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    const t = new URL(op.trigger.url.replace(/\{[^{}]+\}/g, "0p0"));
+    const u = new URL(url);
+    const path = t.pathname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replaceAll("0p0", "[^/]+");
+    return u.origin === t.origin && new RegExp(`^${path}/?$`).test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+// What a server-rendered form shows when it refused the post: Django's errorlist, Rails'
+// field_with_errors and error_explanation; an alert counts only when its words are an error's.
+const FORM_ERRORS = ".errorlist, .field_with_errors, #error_explanation";
+const ALERTS = '[role="alert"], .alert-danger, .alert-error, .flash-error, .error-message, .form-error, .errors';
+const ERROR_WORDS =
+  /\b(errors?|fail(s|ed|ure)?|invalid|forbidden|unauthori[sz]ed|required|must|cannot|can't|could ?n[o']t|unable|not valid|already (taken|exists|in use)|too (long|short)|please (enter|select|choose|provide|fill|correct))\b/i;
+/** Hidden by the markup itself (a client-side check's template); a stylesheet's hiding is not seen. */
+function hidden(el: HTMLElement | null): boolean {
+  for (let e = el; e; e = e.parentNode as HTMLElement | null) {
+    if (!e.getAttribute) continue;
+    if (/^(template|script|noscript)$/i.test(e.tagName ?? "")) return true;
+    if (e.hasAttribute("hidden") || e.getAttribute("aria-hidden") === "true") return true;
+    if (/(display\s*:\s*none|visibility\s*:\s*hidden)/i.test(e.getAttribute("style") ?? "")) return true;
+  }
+  return false;
+}
+/** The error a form page shows, if any. Never throws. */
+function formError(body: string): string | undefined {
+  try {
+    const doc = parseHtml(body);
+    const shown = (sel: string, words: boolean) =>
+      doc.querySelectorAll(sel).find((el) => {
+        const t = el.text.replace(/\s+/g, " ").trim();
+        return !hidden(el) && (words ? ERROR_WORDS.test(t) : !!t || el.classList.contains("field_with_errors"));
+      });
+    const el = shown(FORM_ERRORS, false) ?? shown(ALERTS, true);
+    return el ? snippet(el.text) || "a field marked as an error" : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A read's request redirected off its path to an HTML page of the same site, with no sign-in or
+ * challenge there (both are judged before): a consent, terms or "verify it's you" step. Only for an
+ * op that holds a credential or was learned signed in, and only after a real redirect: an SPA serving
+ * its shell at the request's own address is drift.
+ */
+function unfinishedPage(op: Operation, r: Observed): string | undefined {
+  if (!r.redirected || !r.url) return undefined;
+  const holds = op.slots.some((s) => !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0));
+  if (!holds && !op.learnedLoggedIn) return undefined;
+  try {
+    const to = new URL(r.url);
+    const from = new URL(op.request.url);
+    if (to.pathname === from.pathname || siteOf(to.hostname) !== siteOf(from.hostname)) return undefined;
+  } catch {
+    return undefined;
+  }
+  return r.url;
+}
+
 /** Learned shape and value, scoped to the extract path when it resolves: other subtrees may come and go. */
 function shapeScope(
   op: Operation,
@@ -336,6 +501,18 @@ function shapeKept(expected: Record<string, string>, data: unknown): number {
     (p) => now[p] !== undefined && (now[p] === expected[p] || now[p] === "null" || expected[p] === "null"),
   );
   return kept.length / paths.length;
+}
+
+/**
+ * Why the pick leaves nothing of a non-empty list: no item has a picked field. pick drops items with
+ * none (an ad, a shelf), so a list of only those empties too: missing data, which the example args
+ * tell from drift.
+ */
+function pickEmptied(op: Operation, list: unknown): string | undefined {
+  const fields = op.response.pick;
+  if (!fields?.length || !Array.isArray(list) || !list.length) return undefined;
+  if ((pick(list, fields) as unknown[]).length) return undefined;
+  return `none of the ${list.length} items has a picked field (${fields.join(", ")})`;
 }
 
 function mentionsParam(op: Operation, body: string): boolean {
@@ -418,6 +595,13 @@ function classifyResponse(
   if (r.status === 400 && mentionsParam(op, body)) return is("input", `HTTP 400: ${snippet(body)}`);
   if (r.status >= 500) return { ...is("error", `HTTP ${r.status}: ${snippet(body)}`), server: true };
   if (r.status < 200 || r.status >= 300) return is("error", `HTTP ${r.status}: ${snippet(body)}`);
+  // A redirect gives no body of its own: one whose address names an error may carry a refusal, or
+  // may follow a post that ran (Post/Redirect/Get), so it is neither done nor refused.
+  const named = !op.readOnly && r.redirected ? errorInQuery(r.url) : undefined;
+  if (named)
+    return is("error", `redirected to ${r.url}, which names an error (${named}): the write may or may not have run`);
+  // 201 with a Location: the resource was created, whatever its body names
+  if (!op.readOnly && r.status === 201 && r.headers.location) return ok(`HTTP 201, created at ${r.headers.location}`);
 
   let data: unknown;
   try {
@@ -426,45 +610,91 @@ function classifyResponse(
     if (!op.readOnly) {
       if (isHtml && !/html/i.test(op.response.contentType ?? "") && signInForm(body))
         return is("auth", "a sign-in form where the write's answer was expected");
+      // the form answered with its errors (nothing ran), or the post redirected back to it, showing one
+      const shown = isHtml && (!r.redirected || onForm(op, r.url)) ? formError(body) : undefined;
+      if (shown && r.redirected)
+        return is("error", `redirected back to the form, which shows "${shown}": the write may or may not have run`);
+      if (shown)
+        return { ...is("error", `the service refused the write: the form answered "${shown}"`), rejected: true };
       return ok(`HTTP ${r.status}, ${body.trim() ? "non-JSON body" : "empty body"}`);
     }
     if (wantsJson) {
       if (isHtml && LOGIN.test(body)) return is("auth", "HTML login page where JSON was expected");
+      const away = isHtml ? unfinishedPage(op, r) : undefined;
+      if (away)
+        return {
+          ...is(
+            "error",
+            `redirected to ${away}, a page of the site with no sign-in form or challenge where JSON was expected: a step (consent, terms, verify it's you) to finish in the browser`,
+          ),
+          unfinished: away,
+        };
       if (!body.trim()) return missing(`HTTP ${r.status} with an empty body`);
       return is("drift", isHtml ? "HTML where JSON was expected" : `response is not JSON: ${snippet(body)}`);
     }
   }
-  const d = data as { errors?: unknown; data?: unknown; ok?: unknown; success?: unknown } | null;
-  if (!op.readOnly && d && (d.ok === false || d.success === false))
-    return is("error", "the service rejected the write (ok/success is false)");
+  const d = data as { errors?: unknown; data?: unknown } | null;
   const errors = d && typeof d === "object" && Array.isArray(d.errors) && d.errors.length ? d.errors : undefined;
-  if (errors && d!.data == null) return graphqlErrors(errors, " with null data");
-  // Partial data: errors next to a null target (a rate limit, a not-found user) are the answer, not a successful null.
-  if (errors && op.response.extract && readTarget(data) == null)
-    return graphqlErrors(errors, ` and a null "${op.response.extract}"`);
   // An error status in the body is judged as that status: a server's own failure is not moved data.
-  const inBand = () => {
-    const e = inBandError(data, op.response.extract);
-    if (!e) return undefined;
+  const judgedAs = (e: { status: number; said: string }): Classified => {
     const as = `HTTP ${r.status} carrying ${e.said}, judged as HTTP ${e.status}`;
     // A read's bad request names no param here: like missing data, the example args tell bad args from drift.
     if (op.readOnly && e.status === 400) return missing(as);
     const c = classify(op, { ...r, status: e.status });
     const own = `HTTP ${e.status}`;
-    return { ...c, reason: c.reason.startsWith(own) ? as + c.reason.slice(own.length) : `${as}: ${c.reason}` };
+    const reason = c.reason.startsWith(own) ? as + c.reason.slice(own.length) : `${as}: ${c.reason}`;
+    // a write refused with a 4xx did not run; a server's failure (5xx) is as ambiguous as that status
+    return { ...c, reason, ...(!op.readOnly && e.status < 500 ? { rejected: true } : {}) };
   };
-  if (!op.readOnly) return inBand() ?? ok();
+  const inBand = () => {
+    const e = inBandError(data, op.response.extract);
+    return e && judgedAs(e);
+  };
+  if (!op.readOnly) {
+    if (errors && Object.keys(d!).every((k) => k === "data" || k === "errors" || k === "extensions")) {
+      const c = graphqlErrors(errors);
+      const payload = d!.data;
+      // By the GraphQL spec no data at all is a request error (nothing ran), and null data an execution
+      // that failed, as is null under every root field. A payload that is there may have partly run.
+      if (payload && typeof payload === "object" && Object.values(payload).some((v) => v != null))
+        return { ...c, reason: `the write may have partly run: ${c.reason}` };
+      const why =
+        payload === undefined
+          ? "GraphQL errors and no data: a request error, so nothing ran"
+          : "GraphQL errors with null data";
+      return { ...c, reason: `the service refused the write (${why}): ${c.reason}`, rejected: true };
+    }
+    const e = inBand();
+    if (e) return e;
+    const no = refusal(data);
+    if (no?.status) return judgedAs({ status: no.status, said: no.said });
+    if (no) return { ...refusedAs(body, `the service refused the write (${no.said})`), rejected: true };
+    return ok();
+  }
+  if (errors && d!.data == null) return graphqlErrors(errors, " with null data");
+  // Partial data: errors next to a null target (a rate limit, a not-found user) are the answer, not a successful null.
+  if (errors && op.response.extract && readTarget(data) == null)
+    return graphqlErrors(errors, ` and a null "${op.response.extract}"`);
 
   if (op.response.format === "html") {
     if (!op.response.html) return ok();
-    if (extractHtml(body, op.response.html).length) return ok();
+    const items = extractHtml(body, op.response.html);
+    if (htmlFinds(op.response.html, items)) return ok();
     if (loginPage(body)) return is("auth", "login page instead of content");
     if (emptyResults(body, op.response.html.items)) return ok("no results");
-    return missing(`selector "${op.response.html.items}" matched nothing`);
+    const fields = Object.keys(op.response.html.fields).join(", ");
+    return missing(
+      items.length
+        ? `selector "${op.response.html.items}" matched ${items.length} items but none of their fields (${fields})`
+        : `selector "${op.response.html.items}" matched nothing`,
+    );
   }
   if (op.response.format === "embedded") {
-    if (extract(op.response, body) !== undefined) return ok();
-    return loginPage(body) ? is("auth", "login page instead of content") : missing("embedded data not found");
+    const found = extract({ ...op.response, pick: undefined }, body);
+    const emptied = pickEmptied(op, found);
+    if (found !== undefined && !emptied) return ok();
+    if (loginPage(body)) return is("auth", "login page instead of content");
+    return missing(emptied ?? "embedded data not found");
   }
 
   // An empty list where the results go is a search with no results, not missing data.
@@ -472,7 +702,10 @@ function classifyResponse(
   if (Array.isArray(target) && !target.length) return ok("no results");
   let gone: string | undefined;
   const scope = op.response.shape ? shapeScope(op, data, target) : undefined;
+  // A site that renamed the picked fields: a shared spec has no learned shape to tell, and "no results" would lie.
+  const emptied = pickEmptied(op, target);
   if (op.response.extract && target === undefined) gone = `extract path "${op.response.extract}" missing`;
+  else if (emptied) gone = emptied;
   else if (scope && Object.keys(scope.expected).length >= 4 && shapeKept(scope.expected, scope.value) < 0.5) {
     gone = "response shape changed (under half of the learned key paths remain)";
   }

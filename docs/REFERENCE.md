@@ -254,7 +254,19 @@ Known limits:
 - "Not found" is detected by replaying the op's example args, so a spec without examples reports
   missing data as `drift`. An empty result is `ok` with `[]` when the page shows it structurally:
   an empty JSON list at the extract path, or, for `--html`, an items selector written as
-  `"<container> <item>"` whose container is on the page with no item-tag element in it.
+  `"<container> <item>"` whose container is on the page with no item-tag element in it. A list
+  that `--pick` empties (no item has a picked field), or `--html` items with none of their fields
+  found, is missing data, not `[]`: the site may have renamed them. A picked field missing from
+  some or all items is not detected, because it may be optional.
+- A write's 2xx is `ok` unless its answer says it was refused: an error field that holds an error
+  (`userErrors`, `error: "..."`), `ok`/`success` false, an error word as the root `status`, a body
+  status of 400 or more, GraphQL errors with null or no data, or the form page answering with its
+  errors. A redirect back to the form that shows an error, or to an address naming one, is
+  `error`, because the write may or may not have run. A site that answers a failure with an
+  unmarked 200 still reads as `ok`. None of these verdicts sends the write again.
+- A signed-in read redirected to a consent, terms or "verify it's you" page of the same site is
+  `error`. Its `next` names the page, which the user finishes in the browser before running
+  `api-anything login <site>`. It is not healed and not marked stale.
 - A param may declare a `pattern` (a regex the whole value must match) and a `hint`, an `enum` of
   the values it takes, and a `min`/`max`; a call whose arg fails one is `input`, and nothing is sent.
 - Two examples that the site answers with the same data mark the op `unproven`, which may be a
@@ -270,7 +282,8 @@ Known limits:
 - Rescan only reads scripts that the page references directly. An id inside a lazily loaded
   chunk heals through recapture instead, which is slower.
 - A site behind a bot wall that challenges a real Chrome as well needs you to clear it by hand
-  (`api-anything login`). There is no CAPTCHA solving and no TLS impersonation.
+  (`api-anything login`). There is no CAPTCHA solving and no TLS impersonation. A trigger run or
+  repair that ends on a challenge that did not solve is `blocked` and marks nothing stale.
 - Pagination is not modeled.
 
 

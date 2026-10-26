@@ -16,6 +16,7 @@ import { asText } from "./codec.js";
 import { capOutput } from "./extract.js";
 import {
   type Attempt,
+  challengePage,
   firedNothing,
   type HealResult,
   healOperation,
@@ -346,6 +347,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       const a: Attempt =
         judged ||
         resent ||
+        challengePage(run.capture) ||
         (run.loginWall
           ? { tier, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` }
           : (pageDown(run.capture) ?? {
@@ -395,7 +397,11 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         redirect: (from, status, location, taken) => nextHop(op, session, from, status, location, taken),
       });
     }
-    return { tier, status: r.status, ...(r.redirected ? { redirected: true } : {}), ...judge(op, r) };
+    const j = judge(op, r);
+    const hint = j.unfinished
+      ? `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${j.unfinished} in their browser and finish it, then run api-anything login ${ctx.site}; then retry once`
+      : undefined;
+    return { tier, status: r.status, ...(r.redirected ? { redirected: true } : {}), ...j, ...(hint ? { hint } : {}) };
   } catch (e) {
     // nothing was sent when the browser could not start
     if (e instanceof ProfileInUse) return { tier, class: "error", reason: e.message, hint: PROFILE_HINT, unsent: true };
@@ -537,8 +543,9 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     if (op.readOnly && a.tier < 3 && ctx.maxTier >= 3 && stale?.tier3 !== false && browserAvailable()) {
       const b = await attempt(ctx, op, 3);
       if (b.class === "ok") return success(b, { reason: guard });
-      // the site's own request doesn't answer either: stop paying a browser run per call
-      if (!b.hint && b.class !== "auth" && !b.server)
+      // the site's own request doesn't answer either: stop paying a browser run per call (a challenge,
+      // a limit or a sign-in page says nothing about that)
+      if (!b.hint && !learnedNothing(b))
         markStale(ctx.site, op.name, stale?.reason ?? guard, undefined, undefined, { tier3: false });
     }
     // `heal` refuses writes: a stale write is re-learned

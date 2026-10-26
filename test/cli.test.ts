@@ -1128,3 +1128,60 @@ describe("capture on a page with a reCAPTCHA frame from another site", {
     );
   });
 });
+
+describe("call: answers that are not what their status says", () => {
+  before(() => {
+    mkdirSync(join(HOME, "sites"), { recursive: true });
+    writeFileSync(
+      join(HOME, "sites", "verdicts.json"),
+      JSON.stringify({
+        name: "verdicts",
+        baseUrl: fx.url,
+        operations: [
+          {
+            name: "post",
+            readOnly: false,
+            trigger: { url: `${fx.url}/compose` },
+            request: {
+              method: "POST",
+              url: `${fx.url}/api/refused`,
+              headers: { "content-type": "application/json" },
+              body: '{"title":"x"}',
+            },
+            slots: [{ param: "title", at: ["body", "json:/title"] }],
+            params: [{ name: "title" }],
+          },
+          {
+            name: "me",
+            readOnly: true,
+            learnedLoggedIn: true,
+            trigger: { url: `${fx.url}/feed?v={v}` },
+            request: { method: "GET", url: `${fx.url}/api/consented?v=alice`, headers: {} },
+            slots: [{ param: "v", at: ["query:v"] }],
+            params: [{ name: "v", example: "alice" }],
+            response: { extract: "data" },
+          },
+        ],
+      }),
+    );
+  });
+
+  test("a write refused in its 200 answer fails, sent once", async () => {
+    const before = fx.calls.filter((c) => c.path === "/api/refused").length;
+    const r = await cli("call", "verdicts", "post", "title=", "--allow-writes", "--max-tier", "1");
+    assert.equal(r.code, 1, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.class, "error", r.stdout);
+    assert.match(out.reason, /refused the write \(userErrors is .*Title can't be blank/);
+    assert.equal(fx.calls.filter((c) => c.path === "/api/refused").length, before + 1);
+  });
+
+  test("a signed-in read sent to a consent page names the page to finish, with no heal", async () => {
+    const r = await cli("call", "verdicts", "me", "v=bob", "--max-tier", "1");
+    assert.equal(r.code, 1, r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.class, "error", r.stdout);
+    assert.match(out.next, /open http:\/\/127\.0\.0\.1:\d+\/privacy\/consent\?\S+ in their browser.*login verdicts/);
+    assert.equal(fx.calls.filter((c) => c.path.startsWith("/api/consented")).length, 1, "no second try, no heal");
+  });
+});

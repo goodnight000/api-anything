@@ -352,13 +352,17 @@ export async function runOpTrigger(
   };
 }
 
+/** The page's last load: a redirect's end carries no #fragment, and a reload answers again. */
+function lastLoad(capture: CaptureResult): Exchange["response"] {
+  const page = capture.finalUrl.split("#")[0];
+  return capture.exchanges
+    .filter((e) => e.resourceType === "document" && e.response && e.request.url.split("#")[0] === page)
+    .at(-1)?.response;
+}
+
 /** The trigger page's own failure (a 5xx): its requests never fired, which says nothing about the op. */
 export function pageDown(capture: CaptureResult): Attempt | undefined {
-  // the page's last load: a redirect's end carries no #fragment, and a reload answers again
-  const page = capture.finalUrl.split("#")[0];
-  const status = capture.exchanges
-    .filter((e) => e.resourceType === "document" && e.response && e.request.url.split("#")[0] === page)
-    .at(-1)?.response?.status;
+  const status = lastLoad(capture)?.status;
   return status !== undefined && status >= 500
     ? { tier: 3, class: "error", status, server: true, reason: `the trigger page answered HTTP ${status}` }
     : undefined;
@@ -378,6 +382,13 @@ export function firedNothing(op: Operation, capture: CaptureResult): string {
       ? "it is not one this write's learning recorded"
       : "this write's learning recorded none";
   return `${no}: the page asked to confirm ${atStep(asked.step)} and was told no, since ${why}; nothing is confirmed on the user's behalf`;
+}
+
+/** The run ended on a bot challenge that did not solve: its requests never fired, which says nothing about the op. */
+export function challengePage(capture: CaptureResult): Attempt | undefined {
+  const doc = lastLoad(capture);
+  const wall = doc && botWall({ status: doc.status, headers: doc.headers, body: doc.body ?? "" });
+  return wall ? { tier: 3, class: "blocked", reason: `the trigger page stayed a bot challenge (${wall})` } : undefined;
 }
 
 /** A tier-3 result: the site's own request, answered. */
@@ -1232,6 +1243,8 @@ export async function healOperation(
       return { outcome: "failed", attempt: { tier: 3, class: "error", reason, server: true }, transient: true, reason };
     return { outcome: "failed", attempt: last, reason };
   }
+  const wall = run.matched ? undefined : challengePage(run.capture);
+  if (wall) return { outcome: "failed", attempt: wall, transient: true, reason: wall.reason };
   if (!run.matched && run.loginWall) {
     return {
       outcome: "failed",

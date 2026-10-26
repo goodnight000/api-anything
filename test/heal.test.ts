@@ -13,7 +13,7 @@ import { browserAvailable, closeBrowser } from "../src/browser.js";
 import { call } from "../src/execute.js";
 import { addOperation, type CaptureFile } from "../src/heal.js";
 import { parseSite } from "../src/spec.js";
-import { loadSite, saveSite, staleMark } from "../src/store.js";
+import { loadSite, markStale, saveSite, staleMark } from "../src/store.js";
 import type { Exchange } from "../src/types.js";
 import { type Fixture, startFixture } from "./fixture/server.js";
 
@@ -150,8 +150,10 @@ describe("add: what it refuses to save, and what it doubts", () => {
 
 describe("heal", { skip: !browserAvailable() && "no Chromium browser installed" }, () => {
   const servers: Server[] = [];
+  const fixtures: Fixture[] = [];
   after(async () => {
     await closeBrowser();
+    for (const f of fixtures) await f.close();
     for (const s of servers) {
       s.closeAllConnections();
       s.close();
@@ -399,5 +401,55 @@ fetch("/api/"+"${QID.slice(0, 11)}"+"${QID.slice(11)}"+"/User?name="+location.pa
     assert.equal(r.class, "error");
     assert.match(r.reason ?? "", /heal stopped: the browser run failed/);
     assert.equal(staleMark("d", "get"), undefined);
+  });
+
+  // The trigger page is a bot challenge that never solves (about 15 s per run while it waits).
+  const challenged = async (name: string, over: Record<string, unknown> = {}) => {
+    const fx = await startFixture();
+    fixtures.push(fx);
+    saveSite(
+      parseSite({
+        name,
+        baseUrl: fx.url,
+        operations: [
+          {
+            name: "get",
+            readOnly: true,
+            request: { method: "GET", url: `${fx.url}/api/scoped?q=abc`, headers: {} },
+            slots: [{ param: "q", at: ["query:q"] }],
+            trigger: { url: `${fx.url}/challenged?q={q}` },
+            match: { method: "GET", path: "/api/scoped" },
+            params: [{ name: "q", example: "abc" }],
+            response: { extract: "data.items" }, // gone from the answer: drift
+            ...over,
+          },
+        ],
+      }),
+    );
+  };
+  const walled = (r: Awaited<ReturnType<typeof call>>) => {
+    assert.equal(r.class, "blocked", JSON.stringify(r));
+    assert.match(r.reason ?? "", /bot challenge \(Cloudflare challenge page \(HTTP 403\)\)/);
+    assert.match(r.next ?? "", /clear the challenge/);
+  };
+
+  test("a recapture that meets a challenge that never solves is blocked: the heal stops, and nothing is stale", async () => {
+    await challenged("cha");
+    const r = await call("cha", "get", { q: "xyz" }, fast);
+    walled(r);
+    assert.match(r.reason ?? "", /heal stopped/);
+    assert.equal(staleMark("cha", "get"), undefined);
+  });
+
+  test("a tier-3 run that meets a challenge that never solves is blocked, and a stale op keeps its tier-3 try", async () => {
+    await challenged("chb", { minTier: 3, response: { extract: "data.results" } });
+    walled(await call("chb", "get", { q: "xyz" }, fast));
+    assert.equal(staleMark("chb", "get"), undefined);
+
+    await challenged("chc");
+    markStale("chc", "get", "heal failed earlier");
+    const r = await call("chc", "get", { q: "xyz" }, fast);
+    assert.equal(r.ok, false);
+    assert.notEqual(staleMark("chc", "get")?.tier3, false, "a challenge is no proof the trigger does not answer");
   });
 });

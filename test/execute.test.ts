@@ -383,6 +383,56 @@ describe("a session learned signed in", () => {
   });
 });
 
+test("a write whose 200 body refuses it is not ok and is never sent again, a lost session included", async () => {
+  for (const [body, cls] of [
+    [{ data: { createPost: { post: null, userErrors: [{ message: "Title can't be blank" }] } } }, "error"],
+    [{ status: "error" }, "error"],
+    [{ error: "Message too long" }, "error"],
+    [{ error: "You are not logged in" }, "auth"],
+  ] as const) {
+    seen = [];
+    const r = await call("t", "post", { text: "hi" }, { ...opts(() => json(body)), allowWrites: true });
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.class, cls, JSON.stringify(r));
+    assert.match(r.reason ?? "", /refused the write/);
+    assert.equal(seen.length, 1, "a 200 is no proof it did not run: sent once");
+  }
+});
+
+test("a signed-in read redirected to a consent page is not drift: no heal, nothing stale, a hint to finish the page", async () => {
+  saveSite(
+    parseSite({
+      name: "consent",
+      baseUrl: "https://t.test",
+      operations: [
+        {
+          name: "me",
+          readOnly: true,
+          learnedLoggedIn: true,
+          request: { method: "GET", url: "https://t.test/api/me?v=alice", headers: {} },
+          slots: [{ param: "v", at: ["query:v"] }],
+          trigger: { url: "https://t.test/home?v={v}" },
+          params: [{ name: "v", example: "alice" }],
+          response: { extract: "data" },
+        },
+      ],
+    }),
+  );
+  const h: Handler = (url) =>
+    new URL(url).pathname === "/api/me"
+      ? new Response("", { status: 302, headers: { location: "https://t.test/privacy/consent?continue=%2Fapi%2Fme" } })
+      : new Response("<html><h1>We value your privacy</h1><button>Accept all</button></html>", {
+          headers: { "content-type": "text/html" },
+        });
+  const r = await call("consent", "me", { v: "bob" }, opts(h));
+  assert.equal(r.class, "error", JSON.stringify(r));
+  assert.match(r.reason ?? "", /t\.test\/privacy\/consent/);
+  assert.match(r.next ?? "", /https:\/\/t\.test\/privacy\/consent.*api-anything login consent/);
+  assert.equal(heals().length, 0);
+  assert.equal(staleMark("consent", "me"), undefined);
+  assert.equal(seen.filter((s) => s.url.includes("/api/")).length, 1, "no second try and no example args replay");
+});
+
 test("add --from a capture judges the op on the captured response: a wrong --extract is a warning, a right one a preview", async () => {
   const { addOperation } = await import("../src/heal.js");
   const capture = {

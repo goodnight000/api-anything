@@ -196,6 +196,14 @@ export async function startFixture(): Promise<Fixture> {
       return html(200, page(state.build, '<textarea id="text"></textarea><button id="post">Post</button>'));
     if (p === "/feed" || p === "/scoped" || p === "/stores" || p === "/walled" || p.startsWith("/spa/"))
       return html(200, page(state.build));
+    // A bot challenge that never solves, in a real browser too: the interstitial on every load.
+    if (p === "/challenged")
+      return send(
+        res,
+        403,
+        "text/html; charset=utf-8",
+        '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
+      );
     if (/^\/follow\/[^/]+$/.test(p)) return html(200, page(state.build, '<button id="follow">Follow</button>'));
     // Native dialogs. A delete behind the browser's own confirm(), which sends only once it is
     // accepted; ?wording=new is the same page after the site reworded its question.
@@ -457,6 +465,19 @@ export async function startFixture(): Promise<Fixture> {
     if (p === "/api/follow" || p === "/api/sw-write" || p === "/api/autosave") return json(res, 200, { ok: true });
     if (p === "/api/delete" && req.method === "POST")
       return json(res, 200, { data: { deleted: u.searchParams.get("id") } });
+    // A write refused in a 200 answer, as Shopify's GraphQL answers a validation failure.
+    if (p === "/api/refused")
+      return json(res, 200, {
+        data: { createPost: { post: null, userErrors: [{ message: "Title can't be blank" }] } },
+      });
+    // A signed-in API sent off to a consent page until the visitor accepts.
+    if (p === "/api/consented")
+      return send(res, 302, "text/plain", "", { location: "/privacy/consent?continue=%2Fapi%2Fconsented" });
+    if (p === "/privacy/consent")
+      return html(
+        200,
+        "<!doctype html><html><body><h1>Before you continue</h1><button>Accept all</button></body></html>",
+      );
     if (p === "/api/spa/user") return json(res, 200, { name: u.searchParams.get("name") });
 
     if (p === "/api/limited") {

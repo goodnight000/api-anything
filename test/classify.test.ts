@@ -426,3 +426,182 @@ test("an extract ending in [*] returns the items: the learned shape is compared 
   });
   assert.equal(cls(nested, json(200, { results: [{ a: "x", b: 1, c: true }] })), "ok");
 });
+
+test("a write's 2xx whose body says it was refused is not ok, and says so; an empty error field is no refusal", () => {
+  const write = op({ readOnly: false, response: { format: "json" } });
+  for (const body of [
+    { data: { createPost: { post: null, userErrors: [{ field: ["title"], message: "Title can't be blank" }] } } },
+    { data: { records: { save: { result: { userErrors: [{ message: "taken" }] } } } } },
+    { status: "error" },
+    { status: "fail", data: { title: "A title is required" } },
+    { error: "Message too long" },
+    { errors: { title: ["can't be blank"] } },
+    { success: true, errors: [{ message: "Message too long" }] },
+    { data: { createPost: null }, errors: [{ message: "Message too long" }] },
+    { result: { ok: false } },
+    { data: { save: { success: false } } },
+    { status: 422, message: "Unprocessable" },
+    { meta: { statusCode: 400 } },
+    { hasError: true },
+    { validationErrors: ["title"] },
+  ]) {
+    const c = classify(write, json(200, body));
+    assert.notEqual(c.class, "ok", JSON.stringify(body));
+    assert.equal(c.rejected, true, JSON.stringify(body));
+  }
+  // its wording still names the class: a write refused for a lost session or a limit
+  assert.equal(cls(write, json(200, { error: "You are not logged in" })), "auth");
+  assert.equal(cls(write, json(200, { status: "error", error: "Rate limit exceeded" })), "rate");
+  // GraphQL with no data at all is a request error: by the spec nothing ran
+  assert.match(classify(write, json(200, { errors: [{ message: "Message too long" }] })).reason, /nothing ran/);
+  // errors next to a payload that is there: the write may have partly run, which is no clear refusal
+  const partly = classify(write, json(200, { data: { createPost: { id: 1 } }, errors: [{ message: "x" }] }));
+  assert.equal(partly.class, "error");
+  assert.equal(partly.rejected, undefined);
+  // a server failure in the body is as ambiguous as a 5xx
+  assert.equal(classify(write, json(200, { status: 503 })).rejected, undefined);
+  for (const body of [
+    { ok: true },
+    { error: null, data: { id: 1 } },
+    { errors: [] },
+    { error: "" },
+    { errorCode: 0, errorMessage: "none" },
+    { data: { createPost: { post: { id: 1 }, userErrors: [] } } },
+    { status: "queued", id: "job-1" },
+    { status: "pending" },
+    { status: "success" },
+    { status: 200 },
+    { message: "Error report sent. Thanks!" },
+    { notifyOnError: true, id: 1 },
+    { data: { job: { id: 1, state: "failed" } } },
+    { data: { a: { b: { c: { d: { error: "a stored value five levels down" } } } } } },
+  ]) {
+    assert.equal(cls(write, json(200, body)), "ok", JSON.stringify(body));
+  }
+  // 201 with a Location is a created resource, whatever its body names
+  assert.equal(cls(write, json(201, { errors: ["imported with warnings"] }, { location: "/posts/9" })), "ok");
+  // a read's data may carry an error field of its own (a job's, a payment's): reads are judged as before
+  assert.equal(cls(op({ response: { format: "json" } }), json(200, { status: "error", error: "timeout" })), "ok");
+});
+
+test("a write redirected back to its form with an error, or answered by its form showing errors, is not ok", () => {
+  const write = op({
+    readOnly: false,
+    request: { method: "POST", url: "https://s.test/posts", headers: {} },
+    slots: [],
+    params: [],
+    trigger: { url: "https://s.test/posts/new" },
+    response: { format: "json" },
+  });
+  const page = (body: string, url: string, redirected = true): Observed => ({
+    ...html(200, `<html><body><form action="/posts">${body}<input name="title"></form></body></html>`),
+    url,
+    redirected,
+  });
+  const errorlist = '<ul class="errorlist"><li>Title can\'t be blank</li></ul>';
+  // Post/Redirect/Get back to the form: it may or may not have run, so no clear refusal
+  for (const r of [
+    page("", "https://s.test/posts/new?error=title_blank"),
+    page("", "https://s.test/posts/new#status=failed"),
+    page(errorlist, "https://s.test/posts/new"),
+    page('<div class="alert alert-danger">Could not save: title is required</div>', "https://s.test/posts/new"),
+  ]) {
+    const c = classify(write, r);
+    assert.equal(c.class, "error", r.url ?? "");
+    assert.equal(c.rejected, undefined, r.url ?? "");
+  }
+  // the form itself answered with its errors: nothing ran
+  const rendered = classify(write, page(errorlist, "https://s.test/posts", false));
+  assert.equal(rendered.class, "error");
+  assert.equal(rendered.rejected, true);
+  // back on the form with nothing wrong, on another page, or an error word in the request's own URL: done
+  assert.equal(cls(write, page("", "https://s.test/posts/new")), "ok");
+  assert.equal(
+    cls(write, page('<div class="alert alert-danger">Maintenance tonight</div>', "https://s.test/posts/new")),
+    "ok",
+  );
+  assert.equal(cls(write, page('<ul class="errorlist"><li>Required</li></ul>', "https://s.test/posts/9")), "ok");
+  assert.equal(cls(write, page("", "https://s.test/posts?kind=error", false)), "ok");
+  // a hidden template for client-side checks is not a shown error
+  assert.equal(
+    cls(write, page('<ul class="errorlist" hidden><li>Required</li></ul>', "https://s.test/posts/new")),
+    "ok",
+  );
+  // a templated form page matches by its path's shape
+  const templated = op({ ...write, trigger: { url: "https://s.test/t/{board}/new" } });
+  assert.equal(cls(templated, page(errorlist, "https://s.test/t/cats/new")), "error");
+});
+
+test("a list the pick empties is missing data, not 'no results'; html items with none of their fields too", () => {
+  const picked = op({ response: { format: "json", extract: "data.items", pick: ["id", "title"] } });
+  const renamed = judge(
+    picked,
+    json(200, {
+      data: {
+        items: [
+          { uid: 1, name: "a" },
+          { uid: 2, name: "b" },
+        ],
+      },
+    }),
+  );
+  assert.equal(renamed.class, "drift");
+  assert.equal(renamed.missing, true);
+  assert.match(renamed.reason, /pick/);
+  assert.deepEqual(judge(picked, json(200, { data: { items: [] } })), { class: "ok", reason: "no results", data: [] });
+  // an item with none of the fields next to one with them is dropped, as before
+  assert.deepEqual(judge(picked, json(200, { data: { items: [{ id: 1 }, { ad: true }] } })).data, [{ id: 1 }]);
+  // a write ran whatever its answer's pick finds
+  const write = op({ readOnly: false, response: { format: "json", extract: "items", pick: ["id"] } });
+  assert.equal(cls(write, json(200, { items: [{ uid: 1 }] })), "ok");
+
+  const listed = op({ response: { format: "html", html: { items: "ul.r li", fields: { t: ".title", u: "a@href" } } } });
+  const items = (inner: string) =>
+    html(200, `<html><body><ul class="r"><li>${inner}</li><li>${inner}</li></ul></body></html>`);
+  assert.equal(cls(listed, items('<span class="title">Dune</span><a href="/d">x</a>')), "ok");
+  assert.equal(cls(listed, items('<span class="title">Dune</span>')), "ok");
+  const gone = classify(listed, items('<span class="name">Dune</span><b>no link</b>'));
+  assert.deepEqual([gone.class, gone.missing], ["drift", true]);
+  assert.match(gone.reason, /none of their fields/);
+  // an empty "all:" list or empty text is no field found either
+  const tags = op({
+    response: { format: "html", html: { items: "ul.r li", fields: { tags: "all:.tag", t: ".title" } } },
+  });
+  assert.equal(cls(tags, items('<span class="title"> </span>')), "drift");
+
+  const embedded = op({ response: { format: "embedded", embedded: { regex: "data:(\\[)" }, pick: ["id"] } });
+  assert.equal(cls(embedded, html(200, '<script>x({data:[{"id":1}]})</script>')), "ok");
+  assert.equal(cls(embedded, html(200, '<script>x({data:[{"uid":1}]})</script>')), "drift");
+  assert.equal(cls(embedded, html(200, "<script>x({data:[]})</script>")), "ok");
+});
+
+test("a signed-in JSON read redirected to a same-site page with no login or challenge is unfinished, not drift", () => {
+  const me = op({
+    request: { method: "GET", url: "https://www.s.test/api/me", headers: {} },
+    slots: [],
+    params: [],
+    learnedLoggedIn: true,
+    response: { format: "json", extract: "data" },
+  });
+  const consent =
+    "<html><body><h1>Before you continue</h1><form action='/save'><button>Accept all</button></form></body></html>";
+  const at = (url: string, redirected = true): Observed => ({ ...html(200, consent), url, redirected });
+  const c = classify(me, at("https://consent.s.test/terms?continue=%2Fapi%2Fme"));
+  assert.equal(c.class, "error");
+  assert.equal(c.unfinished, "https://consent.s.test/terms?continue=%2Fapi%2Fme");
+  assert.match(c.reason, /consent\.s\.test\/terms/);
+  // an SPA's shell at the old path, with no redirect, is real drift
+  assert.equal(cls(me, at("https://www.s.test/api/me", false)), "drift");
+  // another site, or an op that holds no credential and was learned signed out: drift as before
+  assert.equal(cls(me, at("https://consent.other.test/terms")), "drift");
+  assert.equal(cls(op({ ...me, learnedLoggedIn: false }), at("https://www.s.test/terms")), "drift");
+  const ref = op({ ...me, learnedLoggedIn: false, slots: [{ at: ["header:authorization"], ref: "session:token" }] });
+  assert.equal(cls(ref, at("https://www.s.test/terms")), "error");
+  // a sign-in page or a challenge keeps its own class
+  const signIn = '<html><form action="/session"><input name="email"><input type="password" name="pw"></form></html>';
+  assert.equal(cls(me, { ...html(200, signIn), url: "https://www.s.test/verify", redirected: true }), "auth");
+  assert.equal(
+    cls(me, { ...html(200, "<title>Just a moment...</title>"), url: "https://www.s.test/x", redirected: true }),
+    "blocked",
+  );
+});
