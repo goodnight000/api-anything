@@ -399,6 +399,7 @@ test("a write whose 200 body refuses it is not ok and is never sent again, a los
     assert.equal(seen.length, 1, "a 200 is no proof it did not run: sent once");
     // it did not run: fix what it says first, then it may be sent
     assert.equal(r.write, "not_applied", JSON.stringify(r));
+    assert.equal(r.server, undefined, "the site answered: no server failure");
     assert.equal(r.nextCall?.action, step, JSON.stringify(r));
     assert.equal(r.retry, "after_fix", JSON.stringify(r));
     if (cls === "error") assert.match(r.next ?? "", /refused the write, so it did not run/);
@@ -422,6 +423,8 @@ test("a write whose 200 may have partly run, or whose redirect lands back on its
     assert.equal(r.retry, "no", what);
     assert.equal(r.nextCall?.action, "check_site", what);
     assert.equal(seen.filter((s) => s.method === "POST").length, 1, what);
+    // a 5xx standing in the body is the server's own failure, as at the status line
+    assert.equal(r.server, what === "a server failure in the body" ? true : undefined, what);
   }
 });
 
