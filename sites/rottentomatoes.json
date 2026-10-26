@@ -1,0 +1,158 @@
+{
+  "name": "rottentomatoes",
+  "displayName": "Rotten Tomatoes",
+  "baseUrl": "https://www.rottentomatoes.com",
+  "description": "Public movie search and critic scores from Rotten Tomatoes HTML and JSON-LD.",
+  "operations": [
+    {
+      "name": "searchMovies",
+      "description": "Search public Rotten Tomatoes movie titles, first-page results only.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.rottentomatoes.com/search?search=%7Bq%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:search"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.rottentomatoes.com/search?search={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.rottentomatoes.com",
+        "path": "/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "search-page-result[type=movie] search-page-media-row",
+          "fields": {
+            "title": "a[data-qa=info-name]",
+            "url": "a[data-qa=info-name]@href",
+            "year": "@release-year",
+            "tomatometer": "@tomatometer-score",
+            "cast": "@cast"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Movie title words.",
+          "example": "Inception"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "Interstellar"
+          },
+          "expect": "result",
+          "purpose": "The first result is Interstellar (2014), excluding the Inception example and matching the signed-out search page."
+        }
+      ]
+    },
+    {
+      "name": "getMovie",
+      "description": "Read public Rotten Tomatoes movie metadata and aggregate critic score from its JSON-LD.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.rottentomatoes.com/m/%7Bslug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.rottentomatoes.com/m/{slug}"
+      },
+      "match": {
+        "host": "www.rottentomatoes.com",
+        "path": "/m/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title=name",
+          "url",
+          "tomatometer=aggregateRating.ratingValue",
+          "criticReviews=aggregateRating.ratingCount",
+          "dateCreated",
+          "contentRating",
+          "genres=genre",
+          "directors=director[*].name"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*type=\"application/ld\\+json\"[^>]*>([\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Movie page slug from a searchMovies URL after /m/.",
+          "example": "inception"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "matrix"
+          },
+          "expect": "result",
+          "purpose": "The Matrix (1999) and Wachowski directors replace Inception and Nolan, verifying unseen movie identity."
+        }
+      ]
+    }
+  ]
+}
