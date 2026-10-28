@@ -92,7 +92,7 @@ export function embedReadback(spec: Site, op: Operation): Operation {
   if (!rb || !("op" in rb)) return op;
   const read = spec.operations.find((o) => o.name === rb.op);
   if (!read?.readOnly) return op;
-  const { name, request, slots, volatile, trigger, match, response, params, minTier, learnedLoggedIn } = read;
+  const { name, request, slots, volatile, trigger, match, response, params, minTier, learnedLoggedIn, paging } = read;
   return {
     ...op,
     readback: {
@@ -108,6 +108,8 @@ export function embedReadback(spec: Site, op: Operation): Operation {
         ...(read.public ? { public: read.public } : {}),
         minTier,
         learnedLoggedIn,
+        // an omitted cursor is cleared for page one only when the read knows it pages
+        ...(paging ? { paging } : {}),
       },
       args: rb.args,
       ...(rb.find ? { find: rb.find } : {}),

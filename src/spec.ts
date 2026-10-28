@@ -184,6 +184,7 @@ export const ReadbackSchema = z.union([
       public: z.array(z.string()).optional(),
       minTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
       learnedLoggedIn: z.boolean().default(false),
+      paging: PagingSchema.optional(),
     }),
     args: ReadbackArgs,
     find: ReadbackFind,

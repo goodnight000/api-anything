@@ -302,6 +302,58 @@ test("publish refuses a readback that does not fit the read it names on this mac
   assert.match(plan("demo", { ops: ["post"] }).errors.join("\n"), /post: readback op gone is no operation of demo/);
 });
 
+test("a carried read keeps its paging: an omitted cursor asks for page one, as the named read does", async () => {
+  // learned from page 2's request, so its template holds that page's cursor
+  const s = withReadback({ op: "lookup", args: {} });
+  const lookup = s.operations[0]!;
+  const paged = parseSite({
+    ...s,
+    operations: [
+      {
+        ...lookup,
+        request: { ...lookup.request, url: "https://www.example.com/posts?cursor=second-page" },
+        slots: [{ param: "cursor", at: ["query:cursor"] }],
+        params: [{ name: "cursor", required: false }],
+        response: { extract: "items" },
+        paging: { param: "cursor", next: "next" },
+      },
+      s.operations[1]!,
+    ],
+  });
+  saveSite(paged);
+  let urls: string[] = [];
+  const fetchImpl = async (u: string | URL | Request, i?: RequestInit) => {
+    urls.push(String(u));
+    if (i?.method === "POST") return json({ ok: true });
+    return new URL(String(u)).searchParams.get("cursor")
+      ? json({ error: "invalid cursor" }, 400)
+      : json({ items: [{ title: "milk" }], next: null });
+  };
+  const o = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl, allowWrites: true, again: true };
+  const named = await call("demo", "post", { title: "milk" }, o);
+  assert.equal(named.write, "applied", JSON.stringify(named));
+
+  const p = plan("demo", { ops: ["post"], consent: true });
+  assert.deepEqual(p.errors, []);
+  const sent = p.ops[0]!.upload.operation;
+  assert.ok(sent.readback && "read" in sent.readback);
+  assert.deepEqual(sent.readback.read.paging, { param: "cursor", next: "next" });
+  saveSite({ ...paged, operations: [sent] });
+  urls = [];
+  const carried = await call("demo", "post", { title: "milk" }, o);
+  assert.equal(carried.write, "applied", JSON.stringify(carried));
+  assert.ok(!urls.some((u) => decodeURIComponent(u).includes("{cursor}")), urls.join("\n"));
+
+  // the carried read is vetted as a read: a required paging param is refused there too
+  const bad = structuredClone(sent);
+  if (bad.readback && "read" in bad.readback)
+    bad.readback.read.params = [{ name: "cursor", type: "string", required: true }];
+  assert.match(
+    vetShared(parseSite({ name: "demo", baseUrl: "https://www.example.com", operations: [bad] })).errors.join("\n"),
+    /readback lookup: paging param cursor is required/,
+  );
+});
+
 test("a carried read drops a field it does not know; the outer shapes stay apart", () => {
   const s = withReadback();
   const sent = embedReadback(s, s.operations[1]!);
