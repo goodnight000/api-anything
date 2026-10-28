@@ -662,19 +662,18 @@ test("learn_site calls an op someone shared for the same page: the data, no brow
       reg.matches = [{ name: "example-com", domain: "example.com", operations: [] }];
       reg.sites.set("example-com", served(shop, undefined, "candidate"));
       // the agent's own placeholder name, and no browser at all
-      const r = await learnSite(
-        {
-          trigger: "https://example.com/shop?q={query}",
-          args: { query: "alice" },
-          args2: { query: "bobby" },
-          args3: { query: "carol" },
-        },
-        { minIntervalMs: 0 },
-      );
+      const input = {
+        trigger: "https://example.com/shop?q={query}",
+        args: { query: "alice" },
+        args2: { query: "bobby" },
+        args3: { query: "carol" },
+      };
+      const r = await learnSite(input, { minIntervalMs: 0 });
       assert.equal(r.ok, true, JSON.stringify(r));
       assert.deepEqual(r.reused, { site: "example-com", op: "searchShop", status: "candidate" });
       assert.deepEqual(r.data, [{ name: "alice one" }, { name: "alice two" }]);
       assert.equal(r.signature, "searchShop(q)");
+      assert.match(r.next ?? "", /^this is example-com\.searchShop, shared by others: call_operation it .*fresh: true/);
       assert.deepEqual([r.captures, r.shared, r.proof], [undefined, undefined, undefined]);
       assert.deepEqual(hits, ["GET /api/search?q=alice"], "one call: no holdout, no clean replay");
       assert.equal(reg.uploads().length, 0);
@@ -684,6 +683,12 @@ test("learn_site calls an op someone shared for the same page: the data, no brow
         reg.reports().map((x) => [x.hash, x.outcome]),
         [[hashOf("example-com", shop.operations[0]!), "ok"]],
       );
+
+      // fresh: the shared op was not what the user wanted, so the page is learned, which needs a browser here
+      const own = await learnSite({ ...input, fresh: true }, { minIntervalMs: 0 });
+      assert.equal(own.reused, undefined);
+      assert.match(own.error ?? "", /needs a Chromium browser/);
+      assert.equal(hits.length, 1, "the shared op was not called again");
     }),
   ));
 

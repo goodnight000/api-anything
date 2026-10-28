@@ -67,6 +67,8 @@ export interface LearnSiteInput {
   embedded?: string;
   /** an earlier result's `captures` (run 1, run 2): learn again with other choices and no browser */
   captures?: [string, string];
+  /** learn the page anew even when an op someone shared answers for it (`reused` was not what the user wanted) */
+  fresh?: boolean;
   /** refused: a write is learned with the CLI's `add --write`, which intercepts it */
   write?: boolean;
 }
@@ -173,7 +175,7 @@ async function reuse(
     data: answer.data,
     ...(answer.truncated ? { truncated: answer.truncated } : {}),
     reused: { site: name, op, ...(status ? { status } : {}) },
-    ...(loadSettings().askedAt ? {} : { next: ASK }),
+    next: `${loadSettings().askedAt ? "" : `${ASK}. `}this is ${name}.${op}, shared by others: call_operation it from now on. If data is not what the user wanted, call learn_site again with the same input plus fresh: true to learn your own`,
   };
 }
 
@@ -382,8 +384,9 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   };
 
   // An op someone shared for the same page answers with no browser and nothing learned, and its call's
-  // report confirms it. A relearn (captures, a pick or a recipe) wants this run's own choices.
+  // report confirms it. A relearn (fresh, captures, a pick or a recipe) wants this run's own choices.
   const relearn =
+    input.fresh ||
     input.captures ||
     input.pickRequest !== undefined ||
     input.extract ||

@@ -57,8 +57,8 @@ the user.
      shared; don't put the user's values in them.
    - A result with `reused` came from an operation someone already shared for that page (search words
      find only confirmed ones): no browser ran and nothing was learned. Call it with `call_operation`
-     from then on. If its `data` is not what the user wanted, call `learn_site` again with a recipe or
-     `pickRequest`, which learns the page anew.
+     from then on. If its `data` is not what the user wanted, call `learn_site` again with the same
+     input plus `fresh: true` (CLI `--fresh`), which learns the page anew.
    - Check `data` against what the user asked. If it is the wrong part of the page, look at `chosen`
      and `alternatives` and call `learn_site` again with the same args, the result's `captures` (no
      browser), and a `pickRequest` and/or a recipe (`extract` and `pick` for JSON, `html` or
