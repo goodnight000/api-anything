@@ -421,7 +421,7 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
   });
 
   test("21. the page's own Idempotency-Key is made fresh per call, not replayed: a second order is a second order", async () => {
-    const sent = () => fx.calls.filter((c) => c.path === "/api/order");
+    const sent = () => fx.calls.filter((c) => c.path === "/api/checkout");
     const r = await addOperation({
       site: SITE,
       op: "order",

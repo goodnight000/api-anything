@@ -213,7 +213,7 @@ export async function startFixture(): Promise<Fixture> {
     if (p.startsWith("/checkout/"))
       return html(
         200,
-        `<!doctype html><html><body><button id="buy">Buy</button><script>document.getElementById("buy").onclick=()=>fetch("/api/order",{method:"POST",headers:{"content-type":"application/json","idempotency-key":crypto.randomUUID()},body:JSON.stringify({item:${JSON.stringify(decodeURIComponent(p.slice(10)))}})}).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)})</script></body></html>`,
+        `<!doctype html><html><body><button id="buy">Buy</button><script>document.getElementById("buy").onclick=()=>fetch("/api/checkout",{method:"POST",headers:{"content-type":"application/json","idempotency-key":crypto.randomUUID()},body:JSON.stringify({item:${JSON.stringify(decodeURIComponent(p.slice(10)))}})}).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)})</script></body></html>`,
       );
     // Native dialogs. A delete behind the browser's own confirm(), which sends only once it is
     // accepted; ?wording=new is the same page after the site reworded its question.
@@ -520,7 +520,7 @@ export async function startFixture(): Promise<Fixture> {
       return json(res, 200, { ok: true });
     }
     if (p === "/api/todos") return json(res, 200, { todos });
-    if (p === "/api/order" && req.method === "POST") {
+    if (p === "/api/checkout" && req.method === "POST") {
       const key = String(req.headers["idempotency-key"] ?? "");
       const item = String((JSON.parse(body || "{}") as { item?: unknown }).item ?? "");
       if (!key || orders.has(key)) return json(res, 200, { orderId: orders.get(key) ?? null, replayed: true });
