@@ -337,7 +337,7 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
         args: { q: "alice" },
         args2: { q: "bobby" },
         args3: { q: "dave" },
-        captures: scoped.captures,
+        captures: scoped.captures as [string, string],
       },
       fast,
     );

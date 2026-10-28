@@ -117,7 +117,12 @@ test("judge: in a list, gone from every item is drift, gone from some is the dat
 });
 
 test("a picked field some items of the learned list lacked is optional: absent from every item later is no drift", () => {
-  const item = (name: string, extra: Record<string, unknown> = {}) => ({ name, price: 10, url: `/p/${name}`, ...extra });
+  const item = (name: string, extra: Record<string, unknown> = {}) => ({
+    name,
+    price: 10,
+    url: `/p/${name}`,
+    ...extra,
+  });
   const learned = learnOperation({
     exchanges: [
       {

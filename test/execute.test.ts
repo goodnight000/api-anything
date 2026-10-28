@@ -1326,7 +1326,7 @@ describe("a site that said stop, and the pace between sends (localhost)", () => 
     const forced = await call("local", "get", { q: "x" }, { ...fast, ignoreCoolDown: true });
     assert.deepEqual([forced.ok, hits.length], [true, 3]);
     const plain = await call("local", "get", { q: "z" }, fast);
-    assert.deepEqual([plain.ok, hits.length], [true, 4], plain.reason);
+    assert.deepEqual([plain.ok, hits.length], [true, 4], plain.reason ?? "");
   });
 
   test("a bare 429 cools down for a few minutes; a long Retry-After is capped", async () => {

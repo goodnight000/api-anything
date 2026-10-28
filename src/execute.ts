@@ -64,8 +64,8 @@ import type { Operation, Site } from "./spec.js";
 import {
   BLOCKED_COOL_MS,
   beginWrite,
-  clearCoolDown,
   type CoolDown,
+  clearCoolDown,
   coolDown,
   cooling,
   lastHealAt,
