@@ -581,12 +581,22 @@ export function stoppedIn(run: CaptureResult, url: string): { site: string[]; el
   return out;
 }
 
+/**
+ * What to do about a request a read's learning stopped: --write first, which never sends it. A --match
+ * pin sends it for real on each run, so it is offered only for a request that changes nothing: an
+ * agent that took the pin for an order placed two real orders.
+ */
+const pinHint = (method: string, path: string, again = "add it") =>
+  `If it is an action (an order, a post, a change), ${again} with --write, which never sends it. ` +
+  `Only if it changes nothing (a search the site sends as ${method}), add it with --match method=${method} --match path=${path}: ` +
+  `a pinned request is sent for real on each learning run and saved as a read`;
+
 /** Said when a read's learning stopped requests the steps sent on the page's own site: what to do instead. */
 export function stoppedHint(labels: string[], again: string): string {
   const [method, path] = labels[0]!.split(" ");
   return (
     `${labels.join(", ")}, sent once the steps ran, ${labels.length > 1 ? "were" : "was"} stopped in the browser: nothing was sent. ` +
-    `If it is an action, ${again} with --write; if it is a read the site sends as ${method}, add it with --match method=${method} --match path=${path}`
+    pinHint(method!, path!, again)
   );
 }
 
@@ -1027,8 +1037,8 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     const e = learned.exchange.aborted ? learned.exchange : learned.exchange2!;
     const method = e.request.method.toUpperCase();
     throw new Error(
-      `request ${e.id} (${requestLabel(e, siteOfUrl(trigger.url))}) was stopped in the browser as a possible write, so it has no answer to learn: ` +
-        `if it is an action, add it with --write; if it is a read the site sends as ${method}, add it with --match method=${method} --match path=${new URL(e.request.url).pathname}${i.from ? " and --trigger instead of --from" : ""}`,
+      `request ${e.id} (${requestLabel(e, siteOfUrl(trigger.url))}) was stopped in the browser as a possible write, so it has no answer to learn. ` +
+        pinHint(method, `${new URL(e.request.url).pathname}${i.from ? " and --trigger instead of --from" : ""}`),
     );
   }
   const notRead = i.readsOnly && !i.write ? notARead(learned.operation) : undefined;

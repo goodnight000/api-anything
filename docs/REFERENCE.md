@@ -274,7 +274,9 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
   in the browser, so learning never performs them. Without `--write`, `add` and `capture` stop a
   POST, PUT, PATCH or DELETE the steps send (a GraphQL query, or the request `--match` pins, passes):
   one on the page's own site fails the add before its second run, so a forgotten `--write` places no
-  order. A tier-3 write call lets out only the op's own request, once, and the other unsafe requests
+  order. The failure says to add an action again with `--write`, which never sends it, and offers a
+  `--match` pin only for a request that changes nothing (a search sent as POST): a pinned request is
+  sent for real on each learning run and saved as a read, so never pin an order. A tier-3 write call lets out only the op's own request, once, and the other unsafe requests
   its learning saw the trigger send (`trigger.companions`); any other is stopped, and the reason
   names it (a redesign whose button now deletes the account deletes nothing). Card payment is left to
   you: api-anything does not learn card fields, which sit in the payment provider's iframe. Calling a write needs `--allow-writes` on the

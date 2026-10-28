@@ -416,8 +416,12 @@ same test `notARead` applies; a persisted query, which names its document by a h
 mutation and is aborted). What the page sends while it loads, before the steps run, and a trigger
 with no steps are left alone: a visit sends that too. One aborted on the trigger page's own site,
 with no `--match`, fails the add before run 2 and before anything is saved, naming each request by
-method and path and saying what to do: `--write` if it is the action, `--match` if it is a read the
-site sends as POST. One on another site (an analytics beacon, most often), or beside a pinned
+method and path and saying what to do: `--write` if it is the action, which never sends it, said
+first; a `--match` pin only if it changes nothing (a search the site sends as POST), said with what it
+costs: a pinned request is sent for real on each learning run and saved as a read (seen: an agent took
+the pin for an order endpoint, sent two real orders while learning and saved the order as a read). The
+guard cannot tell a POST search from an order (both fail `notARead`), so the safe answer leads. One on
+another site (an analytics beacon, most often), or beside a pinned
 `--match`, is still aborted, and the add goes on and warns about it. `capture` lists what it stopped
 (`stopped`), and its `next` says the same; `add --from` such a capture refuses to learn a request
 that was stopped, which never left and has no answer. WebSocket messages are not judged here, as
