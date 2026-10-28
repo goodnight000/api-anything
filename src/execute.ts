@@ -26,6 +26,7 @@ import {
   pageDown,
   profileDir,
   runOpTrigger,
+  type TriggerRun,
 } from "./heal.js";
 import {
   AddressRefused,
@@ -377,6 +378,24 @@ const sameArgs = (a: Record<string, unknown>, b: Record<string, unknown>, op: Op
 const safeHeal = (p: Promise<HealResult>): Promise<HealResult> =>
   p.catch((e: Error) => ({ outcome: "failed" as const, reason: `heal crashed: ${e.message.split("\n")[0]}` }));
 
+/** The other unsafe requests a write's tier-3 run sent or stopped, named whatever the outcome. */
+function othersNote(op: Operation, o: TriggerRun["others"]): string | undefined {
+  if (!o) return undefined;
+  const them = (l: string[]) => l.join(", ");
+  const out: string[] = [];
+  if (o.stopped.length)
+    out.push(
+      `the page also tried to send ${them(o.stopped)}, which this write's learning did not see the trigger send: stopped in the browser, nothing of it was sent. If the page changed, look at it before you learn it again with add --write`,
+    );
+  if (o.left.length)
+    out.push(
+      op.trigger.companions
+        ? `the page also sent ${them(o.left)}, as it did when this write was learned`
+        : `the page also sent ${them(o.left)}: ${op.name} was learned before api-anything recorded what else a write's trigger sends, so nothing else was stopped; learn it again with add --write to stop any request it did not send then`,
+    );
+  return out.join("; ");
+}
+
 /** What to do about a write whose redirect was not followed, since that would have sent it again. */
 const sentOnce = (site: string, op: Operation) =>
   `the write was sent once and may have run: check the site first. Do not retry: the site answered it with a redirect that would send it a second time, which was not followed; if the operation moved, learn it at its new address: api-anything add ${site} ${op.name} ... --write`;
@@ -436,9 +455,12 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
                 ? { unsent: true }
                 : {}),
             }));
-      if (!run.repeats) return a;
-      const stopped = run.repeats === 1 ? "the repeat was" : `${run.repeats} repeats were`;
-      return { ...a, note: `the page sent this write ${run.repeats + 1} times: ${stopped} stopped in the browser` };
+      const notes = [
+        run.repeats &&
+          `the page sent this write ${run.repeats + 1} times: ${run.repeats === 1 ? "the repeat was" : `${run.repeats} repeats were`} stopped in the browser`,
+        othersNote(op, run.others),
+      ].filter(Boolean);
+      return notes.length ? { ...a, note: notes.join("; ") } : a;
     }
     const none = bare(ctx, op);
     const session = none ? NO_SESSION : loadSession(ctx.site);

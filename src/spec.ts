@@ -59,6 +59,15 @@ export const ConfirmSchema = z.object({
   digest: z.string().regex(/^[0-9a-f]{64}$/, "digest must be 64 lowercase hex characters"),
 });
 
+/** Stable request identity only. Never a queryId/doc_id/hash. */
+export const MatchSchema = z.object({
+  method: z.string().optional(),
+  host: z.string().optional(),
+  /** pathname with `*` for any one segment */
+  path: z.string().optional(),
+  operationName: z.string().optional(),
+});
+
 export const TriggerSchema = z.object({
   /** URL template, `{param}` filled from args */
   url: z.string(),
@@ -67,15 +76,11 @@ export const TriggerSchema = z.object({
   softFrom: z.string().optional(),
   /** a write's confirm() dialogs that a tier-3 run accepts when the page asks them again; any other is dismissed */
   confirms: z.array(ConfirmSchema).optional(),
-});
-
-/** Stable request identity only. Never a queryId/doc_id/hash. */
-export const MatchSchema = z.object({
-  method: z.string().optional(),
-  host: z.string().optional(),
-  /** pathname with `*` for any one segment */
-  path: z.string().optional(),
-  operationName: z.string().optional(),
+  /**
+   * a write's other unsafe requests its learning saw the trigger send (the cart saved before the
+   * order), each by its stable identity: a tier-3 run stops any other. Absent: learned before this.
+   */
+  companions: z.array(MatchSchema).optional(),
 });
 
 function validRegex(p: string): boolean {
