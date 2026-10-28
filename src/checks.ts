@@ -168,8 +168,11 @@ export interface Verified {
   proven: string[];
 }
 
-/** One run of an op's cases. `from`: per call, the hash of the op its answer came from, as the call last reported it. */
-type Run = { results: CaseResult[]; from: (string | undefined)[]; proven: boolean } | { skipped: string };
+/**
+ * One run of an op's cases. `plan`: the hash of the op the cases were chosen from. `from`: per call,
+ * the hash of the op its answer came from, as the call last reported it.
+ */
+type Run = { results: CaseResult[]; plan: string; from: (string | undefined)[]; proven: boolean } | { skipped: string };
 
 async function runCases(name: string, op: Operation, opts: CallOptions): Promise<Run> {
   const example = exampleArgs(op);
@@ -218,12 +221,12 @@ async function runCases(name: string, op: Operation, opts: CallOptions): Promise
     });
     if (op.paging && label === "example") results.push(await nextPageCase(op, args, r, send));
   }
-  return { results, from, proven: !!op.unproven && answersDiffer(op, op.unproven.params, answers) };
+  return { results, plan: opHash(op), from, proven: !!op.unproven && answersDiffer(op, op.unproven.params, answers) };
 }
 
-/** Whether every case of `run` answered from `op` as it is saved now. */
+/** Whether `run`'s cases were chosen from `op` as it is saved now, and every one answered from it. */
 const allFrom = (op: Operation | undefined, run: Run | undefined) =>
-  !!op && !!run && "from" in run && run.from.every((h) => h === opHash(op));
+  !!op && !!run && "from" in run && run.plan === opHash(op) && run.from.every((h) => h === opHash(op));
 
 /**
  * Run every read's example and checks, record the outcomes, and clear `unproven` where the answers
@@ -236,11 +239,12 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
   const runs = new Map<string, Run>();
   for (const op of site.operations) if (op.readOnly) runs.set(op.name, await runCases(name, op, opts));
   // Cases that answered from different versions (a heal part way through them, or a save between
-  // them) prove no one version: they all run once more, on the op as it is now.
+  // them), or that were chosen from another version than the one saved now (whose own checks may
+  // differ), prove no one version: they all run once more, on the op as it is now.
   const then = loadSite(name)?.site ?? site;
   for (const [n, run] of runs) {
     const op = then.operations.find((o) => o.name === n);
-    if (op?.readOnly && "from" in run && !allFrom(op, run) && new Set(run.from).size > 1)
+    if (op?.readOnly && "from" in run && !allFrom(op, run) && (new Set(run.from).size > 1 || run.plan !== opHash(op)))
       runs.set(n, await runCases(name, op, opts));
   }
   const proven: string[] = [];

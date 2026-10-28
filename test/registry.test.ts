@@ -939,13 +939,14 @@ test("publish runs on verify's record: every counted check passes, and inconclus
 test("verify records nothing for an op saved meanwhile by something else: its answers came from the old version", async () => {
   let n = 0;
   const fetchImpl = (async (u: string | URL | Request) => {
-    // while verify runs, another process saves the op with a request none of its cases sent
-    if (++n === 2) {
+    // while verify runs, another process saves the op with a request none of its cases sent, and
+    // again while they run once more from that version
+    if (++n % 2 === 0) {
       const s = loadSite("demo")!.site;
       saveSite({
         ...s,
         operations: [
-          { ...s.operations[0]!, request: { ...s.operations[0]!.request, url: "https://news.example.com/v2?q=x" } },
+          { ...s.operations[0]!, request: { ...s.operations[0]!.request, url: `https://news.example.com/v${n}?q=x` } },
         ],
       });
     }
@@ -963,6 +964,7 @@ test("verify records nothing for an op saved meanwhile by something else: its an
   );
   await verifySite("demo", { maxTier: 1, minIntervalMs: 0, fetchImpl });
   const now = loadSite("demo")!.site;
+  assert.equal(n, 4, "once more, from the version saved meanwhile");
   assert.match(plan("demo").errors.join("\n"), /its checks have not run on this version/);
   assert.ok(now.operations[0]!.unproven, "no case ran on the saved version: its mark stays");
 });
@@ -998,30 +1000,30 @@ test("a heal vouches only for the version it saved: one saved meanwhile by somet
       unproven: { params: ["q"], reason: "same examples" },
     }),
   );
+  let saves = 0;
   const fetchImpl = (async (raw: string | URL | Request) => {
     const u = new URL(String(raw));
     if (u.pathname === "/search") return reissued();
     if (u.searchParams.get("t") === OLD) return new Response("old route", { status: 404 });
     if (u.searchParams.get("q") === "zzzz") {
-      // the example healed the op; now another process saves a version no case sends
+      // the example healed the op; now another process saves a version no case sends, each time
       const s = loadSite("heal-race")!.site;
+      saves++;
       saveSite({
         ...s,
         operations: s.operations.map((o) => ({
           ...o,
-          request: { ...o.request, url: o.request.url.replace("/api?", "/never-tested?") },
+          request: { ...o.request, url: o.request.url.replace(/\/[\w-]+\?/, `/never-tested-${saves}?`) },
         })),
       });
       return json({ hits: [] });
     }
     return json({ hits: [{ id: 1 }] });
   }) as typeof fetch;
-  const v = await verifySite("heal-race", { maxTier: 1, minIntervalMs: 0, fetchImpl });
-  assert.ok(
-    v.results.some((r) => "healed" in r && r.healed),
-    JSON.stringify(v),
-  );
+  await verifySite("heal-race", { maxTier: 1, minIntervalMs: 0, fetchImpl });
   const now = loadSite("heal-race")!.site.operations[0]!;
+  assert.ok(now.request.url.includes(FRESH), "the example healed it");
+  assert.equal(saves, 2, "once more, from the version saved meanwhile");
   assert.notEqual(loadRecord("heal-race").search?.hash, opHash(now));
   assert.ok(now.unproven, "its unproven mark stays");
 });
@@ -1155,6 +1157,44 @@ test("verify records nothing when an op's cases answered from different versions
   assert.deepEqual(urls, ["/a?q=example", "/b?q=absent", "/a?q=example", "/a?q=absent"]);
   assert.equal(loadRecord("mixed").search?.hash, opHash(a.operations[0]!));
   assert.match(plan("mixed").errors.join("\n"), /search: check 1 \(q=absent\) expects empty, and answered result/);
+});
+
+test("verify runs the cases of the version it records: a check another process saved meanwhile is run", async () => {
+  const read = (name: string, path: string, more: Record<string, unknown> = {}) => ({
+    name,
+    readOnly: true,
+    request: { method: "GET", url: `https://news.example.com${path}`, headers: {} },
+    trigger: { url: "https://news.example.com/" },
+    match: { path },
+    ...more,
+  });
+  // search ignores q: A has only its example, B also a check that expects nothing for q=absent
+  const search = {
+    slots: [{ param: "q", at: ["query:q"] }],
+    params: [{ name: "q", required: true, example: "example" }],
+  };
+  const a = parseSite({
+    name: "plan",
+    baseUrl: "https://news.example.com",
+    operations: [read("first", "/first"), read("search", "/search?q=example", search)],
+  });
+  const b = parseSite({
+    ...a,
+    operations: [a.operations[0]!, { ...a.operations[1]!, checks: [{ args: { q: "absent" }, expect: "empty" }] }],
+  });
+  saveSite(a);
+  const urls: string[] = [];
+  const fetchImpl = (async (raw: string | URL | Request) => {
+    const u = new URL(String(raw));
+    urls.push(u.pathname + u.search);
+    if (u.pathname === "/first") saveSite(b);
+    return json([{ title: "example" }]);
+  }) as typeof fetch;
+  await verifySite("plan", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  // every answer came from B, but the cases were A's: once more, from B
+  assert.deepEqual(urls, ["/first", "/search?q=example", "/search?q=example", "/search?q=absent"]);
+  assert.equal(loadRecord("plan").search?.hash, opHash(b.operations[1]!));
+  assert.match(plan("plan").errors.join("\n"), /search: check 1 \(q=absent\) expects empty, and answered result/);
 });
 
 test("a check that passes as input, refused before anything is sent, is recorded", async () => {
