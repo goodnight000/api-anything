@@ -280,6 +280,18 @@ test("CLI setup: --dry-run, --yes, --no-share, and no answer without a TTY", asy
   const no = await cli("setup", "--no-share", "--agents", "cursor");
   assert.deepEqual([no.out.share, loadSettings().share], [false, false]);
 
+  // --share-only records the answer and touches no agent
+  write(paths.cursorJson(), "{}");
+  const only = await cli("setup", "--yes", "--share-only");
+  assert.deepEqual([only.code, only.out.share, loadSettings().share], [0, true, true]);
+  assert.equal(read(paths.cursorJson()), "{}");
+  assert.match(only.stderr, /Sharing: on\. Turn it off with api-anything setup --no-share --share-only/);
+  const off = await cli("setup", "--no-share", "--share-only");
+  assert.deepEqual([off.out.share, loadSettings().share], [false, false]);
+  const unanswered = await cli("setup", "--share-only");
+  assert.equal(unanswered.code, 1);
+  assert.match(String(unanswered.out.error), /pass --yes or --no-share/);
+
   const both = await cli("setup", "--yes", "--no-share");
   assert.equal(both.code, 1);
   const bad = await cli("setup", "--agents", "vim");

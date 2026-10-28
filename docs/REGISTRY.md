@@ -22,7 +22,11 @@ browser (needed only to learn sites), makes the install's key (`identity.ts`: an
 > your cookies or logins), report under this install's anonymous key whether calls work, and test a few
 > new operations a day from your network. Site searches go to the catalog either way.
 
-The answer is `settings.json` `share: true|false` (default yes). No account. What it does not change:
+The answer is `settings.json` `share: true|false` (default yes). No account. An install that never ran
+setup (the plugin, `claude mcp add`, `npm -g`) shares nothing until the question is answered: `learn_site`
+asks it once, the first time it has something to share (MCP elicitation, or the CLI's prompt), and when
+the client cannot ask, its `next` has the agent ask the user and run `api-anything setup --yes
+--share-only` or `--no-share --share-only`, which records the answer alone. What it does not change:
 `find_sites` sends its words, domain or URL to `GET /v1/search` whether sharing is on or off (the
 local specs are searched too, and answer alone when the registry cannot be reached), and so does a
 call of a site this machine lacks, which fetches it. The registry sees the request's IP address, as any
@@ -71,8 +75,9 @@ registrable domain and the hashed network that asked (demand, below), never the 
    carries no query document (a persisted query, named by a hash or an id), or a param that is the whole
    body or the document. Over MCP the trigger must be an https page on a public host.
 4. `shareOps` uploads it (`POST /v1/versions`, signed). A public read goes automatically when
-   `share` is on. A login op is claimed by its fingerprint ("Ops learned signed in"). A login op or a
-   write is uploaded with its body only with the user's yes (CLI prompt, or MCP
+   `share` is on (unanswered, the question is asked first: Setup). A login op is claimed by its
+   fingerprint ("Ops learned signed in"). A login op or a write is uploaded with its body only with
+   the user's yes (CLI prompt, or MCP
    elicitation where the client supports it); the prompt lists what in the upload may be the user's own
    (an email, an id, a literal typed into the page). The published examples are the agent's chosen second
    example and holdout, never the user's own request. An automatic upload carries no checks but

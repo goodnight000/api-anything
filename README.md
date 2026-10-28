@@ -140,7 +140,9 @@ happened (`class`), why (`reason`) and what to do next (`next`).
 - It checks for a Chromium browser (Chrome, Brave, Edge, Chromium, Vivaldi, Arc). One is needed only
   to learn sites; calling shared operations works without it. `API_ANYTHING_BROWSER` names any other.
 - It makes this install's key (`~/.api-anything/key.json`). There is no account.
-- `--yes` shares without asking, `--no-share` turns sharing off. See [what leaves your machine](#what-leaves-your-machine).
+- `--yes` shares without asking, `--no-share` turns sharing off; add `--share-only` to change only that.
+  Installed another way, your agent asks the question the first time it learns something to share.
+  See [what leaves your machine](#what-leaves-your-machine).
 
 Install the command globally, then connect any client:
 
@@ -396,7 +398,8 @@ no search words. With sharing on:
   published examples, over plain HTTP with no cookies, only to https addresses on public hosts.
 - **Repairs.** When a call heals a public operation that drifted, the repaired version is shared.
 
-With sharing off (`api-anything setup --no-share`), nothing is shared or reported, and the catalog
+With sharing off (`api-anything setup --no-share --share-only`), or before you answered, nothing is
+shared or reported, and the catalog
 still works for reads. [How the catalog works](docs/REGISTRY.md)
 
 <details>

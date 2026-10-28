@@ -65,12 +65,20 @@ the user.
    - `class: "refused"` with "is not a read": the data came from a request that may change something
      (a POST that is no GraphQL query, a mutation). Nothing was sent or saved. Try another request from
      `alternatives`; if none reads, tell the user it needs `api-anything add ... --write`, which they run.
-4. **Sharing is automatic.** A public read the user's agent learned or repaired is shared without
-   asking when the user turned sharing on at setup: don't ask them about it. Only an operation that
-   needed their login, or that may hold something of theirs (`shared.personal`), is shared on their
-   yes. The MCP client may ask them itself; when the result's `next` says to ask, ask in one line,
-   showing every `shared.personal` item, and run `api-anything publish <site> <op> --yes` only on their
-   yes. A `shared.reason` says why something was not shared; pass it on only if the user asks.
+4. **Sharing.** A public read the user's agent learned or repaired is shared without asking once the
+   user said yes to sharing. If they never answered (setup was skipped), `learn_site` asks them its one
+   question the first time something could be shared, and keeps the answer; when the client can't
+   show the question, `shared.reason` says sharing was never asked and `next` gives the question and
+   the commands: ask the user once, in its words, then run the one that records their answer
+   (`api-anything setup --yes --share-only` or `--no-share --share-only`) and, on yes, the `publish`
+   it names. Never ask again once they answered, and never share without their yes.
+   An operation that needed their login, or that may hold something of theirs (`shared.personal`),
+   is shared on its own yes: when `next` says to ask, ask in one line, showing every
+   `shared.personal` item, and run `api-anything publish <site> <op> --yes` only on their yes.
+   When `shared.shared` is true, tell the user in one line what went up and under which name
+   (`shared.as`, else `site`, and `op`), and that `api-anything setup --no-share --share-only` turns
+   sharing off. Any other `shared.reason` says why something was not shared; pass it on only if the
+   user asks.
 5. **Repairs are automatic.** A call that heals a drifted operation (`healed: true`) saves it and,
    for a public read, shares the repaired version. You don't need to do anything about it.
 
@@ -374,13 +382,15 @@ Every failure carries:
 
 ## Sharing
 
-What the user's install shares, when they turned sharing on at setup: public reads it learned or
+What the user's install shares, when they said yes to sharing (at setup, or when `learn_site` first
+asked): public reads it learned or
 repaired (with the agent's second example and the holdout check, never the user's values), reports
 of how calls went (no args, no data, signed by the install's anonymous key), and a few background
 checks a day of other people's new operations, called from the user's IP address. An operation that
 needed a login, or with a check or notes the user wrote, is shared only on the user's yes; writes are
-not shared automatically. Nothing is shared when sharing is off (`api-anything setup --no-share`);
-`find_sites` still sends its words, domain or URL to the catalog to search it.
+not shared automatically. Nothing is shared when sharing is off (`api-anything setup --no-share
+--share-only`) or was never answered; `find_sites` still sends its words, domain or URL to the
+catalog to search it.
 
 A site learned by hand with `add` is shared the same way: `api-anything publish <site> <op>` shows
 what would be sent, and `--yes` sends it. Run `--yes` for a login op or a write only on the user's

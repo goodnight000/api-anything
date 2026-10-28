@@ -15,6 +15,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { browserAvailable, closeBrowser } from "../src/browser.js";
 import { loadCapture } from "../src/heal.js";
+import { saveSettings } from "../src/identity.js";
 import { hooks, type LearnSiteResult, learnSite } from "../src/learnsite.js";
 import { createServer } from "../src/mcp.js";
 import { learnTool } from "../src/mcp-learn.js";
@@ -71,6 +72,8 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
   before(async () => {
     // the fixture is on localhost, which MCP learn_site refuses to load anywhere else
     learnTool.publicOnly = false;
+    // the user answered setup's question: only an op's own consent is asked here
+    saveSettings({ share: true, askedAt: "2026-10-25T00:00:00.000Z" });
     fx = await startFixture();
     shares = stubShare((c) => ({ site: c.site, op: c.ops[0]!, shared: true, status: "candidate", hash: "h1" }));
     scoped = await learnSite(

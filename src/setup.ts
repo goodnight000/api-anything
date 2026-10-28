@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { browserChoice } from "./browser.js";
-import { ensureKey, keyFile, loadSettings, saveSettings } from "./identity.js";
+import { answerShare, ensureKey, keyFile, loadSettings, QUESTION } from "./identity.js";
 
 export interface Entry {
   command: string;
@@ -29,9 +29,6 @@ const LABEL: Record<Agent, string> = {
   cursor: "Cursor",
   "claude-desktop": "Claude Desktop",
 };
-
-export const QUESTION =
-  "Help build the shared catalog? Your agent will share operations it learns from public pages (never your cookies or logins), report under this install's anonymous key whether calls work, and test a few new operations a day from your network. Site searches go to the catalog either way.";
 
 export const paths = {
   claudeJson: () => join(homedir(), ".claude.json"),
@@ -284,7 +281,7 @@ export async function setup(o: SetupOptions = {}): Promise<SetupResult> {
   const before = loadSettings();
   let share = o.share;
   if (share === undefined && !before.askedAt && o.ask && !dryRun) share = await o.ask(QUESTION);
-  if (share !== undefined && !dryRun) saveSettings({ share, askedAt: new Date().toISOString() });
+  if (share !== undefined && !dryRun) answerShare(share);
   const answer = share ?? (before.askedAt ? before.share : undefined);
 
   return {
@@ -338,7 +335,7 @@ export function summary(r: SetupResult): string {
     r.share === undefined
       ? r.dryRun
         ? "Sharing: would be asked on a terminal (default yes); --yes or --no-share answers it"
-        : "Sharing: not asked yet, so nothing is shared. Answer with: api-anything setup --yes (or --no-share)"
+        : "Sharing: not asked yet, so nothing is shared; your agent asks the first time it learns something to share. Answer now with: api-anything setup --yes (or --no-share)"
       : `Sharing: ${r.dryRun ? "would be " : ""}${r.share ? "on. Your agent shares operations it learns from public pages, reports whether calls work, and tests a few new operations a day; never your cookies or logins." : "off."}`;
   return [
     `api-anything setup${r.dryRun ? " (dry run: nothing was changed)" : ""}`,
