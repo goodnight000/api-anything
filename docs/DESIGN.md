@@ -391,7 +391,22 @@ it drops every run's sends. A page that is still open can still write, and time 
 that it cannot. Service workers are blocked in the profile, since their fetches bypass routing (a
 dedicated worker's are routed). Not covered: a shared worker's writes (see Browser below). The op is learned from the intercepted
 request. A read's tier-3 trigger also aborts unsafe requests other than the op's own once its steps
-run, so a spec that says "read" can't write. While the page is a bot challenge's interstitial the
+run, so a spec that says "read" can't write. Learning a read (`add` or `capture` without `--write`)
+is held to the same rule, since forgetting `--write` would otherwise perform the action on each run
+(seen: a click step that POSTed an order placed two real orders, and the op was saved as a read of
+the page's GET without a word about the POST). Once the steps run, an unsafe request (any method but
+GET, HEAD and OPTIONS) is aborted unless it is the op's own by `--match` (or a hop of that one's
+redirect chain) or a GraphQL query carrying its document, which reads by GraphQL's own rules (the
+same test `notARead` applies; a persisted query, which names its document by a hash, may be a
+mutation and is aborted). What the page sends while it loads, before the steps run, and a trigger
+with no steps are left alone: a visit sends that too. One aborted on the trigger page's own site,
+with no `--match`, fails the add before run 2 and before anything is saved, naming each request by
+method and path and saying what to do: `--write` if it is the action, `--match` if it is a read the
+site sends as POST. One on another site (an analytics beacon, most often), or beside a pinned
+`--match`, is still aborted, and the add goes on and warns about it. `capture` lists what it stopped
+(`stopped`), and its `next` says the same; `add --from` such a capture refuses to learn a request
+that was stopped, which never left and has no answer. WebSocket messages are not judged here, as
+for a read's tier-3 run. While the page is a bot challenge's interstitial the
 steps are not running yet: its own verify POSTs (AWS WAF's `mp_verify`, Cloudflare's
 `/cdn-cgi/challenge-platform`) go through, or it would never reload; the guard applies from the real
 document on. A 2xx to a write is `ok` (204, "OK", an HTML page with a password field, `{"status":
@@ -444,10 +459,36 @@ bound twice, a client that sends again), so the run has a budget: the op's own r
 `match`, leaves once, every further request matching it is aborted, and the result's `reason` says
 a repeat was stopped. The server's redirect of the one that left is held to the same rule as at
 tiers 1 and 2: a hop that would send the write on (an unsafe method kept, or the op's own request
-again) is aborted in the browser, and the result says so; a hop that became a GET passes. What else the
-trigger sends passes (a real write often needs companion requests, and what a trigger does besides
-is its author's choice) until the run ends, when, as in every guarded run, its pages send nothing
-more. An op with no `match` has no request to count.
+again) is aborted in the browser, and the result says so; a hop that became a GET passes. A real
+write often needs companion requests (the cart saved before the order), but a page can change under
+a spec: after a redesign, the button the steps click can send `DELETE /api/account`, and when the
+companions were let through unexamined that DELETE reached the server while the result said only
+that the trigger fired no request of the op's (seen). So learning a write records them: each unsafe
+request the guard aborted in either run besides the op's own, on the op's site, goes in
+`trigger.companions` by the same stable identity as `match` (method, host, path with a segment that
+holds a hash, a long number or an example value as `*`, operationName; never a query id), at most 8
+(`add` warns about the rest). A write always has the key, an empty list included. Once the steps of
+a tier-3 write run, an unsafe request that is neither the op's own (sent once, as above) nor a
+recorded companion is aborted, so is another site's, and what the page sends while it loads is left
+alone as for a read. A write learned before this has no `companions` key: its companions still pass,
+since nothing says which ones it needs. Either way the result's `reason` names every other unsafe
+request that left or was stopped, by method and path (with the host when it is off the op's site,
+never the query, redacted like any reason), and for an op with no record it says to learn it again
+with `add --write` so the rest are stopped. A heal never changes the list: like the confirms it is the
+caller's contract, and a recapture runs the trigger intercepted anyway. WebSocket messages pass at
+tier 3, as before. When the run ends, as in every guarded run, its pages send nothing more. An op
+with no `match` has no request to count. `vetShared` refuses `companions` on a read, more than 8, and
+one that names no unsafe method, no host or no path, or a host off the op's own site: a shared spec
+cannot use the list to let a write to someone else's server out of the user's browser. Not covered:
+a companion whose path holds an id that is none of those (a cart id the page makes on each visit).
+It is another path on the next call, so it is stopped, and the reason names it; the write may then
+fail, and nothing else was sent.
+
+Payment-card entry is handed back to the human. api-anything does not learn card fields or the
+request that submits a card: a card form sits in the payment provider's iframe, on another site,
+which the guards cannot cover (above), and a card number is a credential no spec may hold. A checkout
+can be learned up to the payment step like any write; at the payment step, the agent tells the user
+to finish in their browser.
 
 A write behind the browser's own `confirm()` ("Delete this post?") is sent only once the dialog is
 accepted. Told no, as Playwright tells every dialog with no listener, the page sends nothing, and

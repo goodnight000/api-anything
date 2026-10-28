@@ -18,6 +18,8 @@ import {
   fillTrigger,
   loadCapture,
   PROFILE_HINT,
+  stoppedHint,
+  stoppedIn,
   unplaced,
 } from "./heal.js";
 import { buildRequest } from "./http.js";
@@ -99,12 +101,15 @@ const HELP: Record<string, string> = {
   and for: inspect <id> <n>. Captures hold cookie values; the newest 20 are kept, none past 24 h.
   --steps      JSON array of {action: click|fill|press|wait|goto, selector?, value?, ms?}
   --soft-from  load this page first, then navigate in-app to <url> (SPAs only fire their data XHRs that way)
-  --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser
+  --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser.
+               Without it, a POST, PUT, PATCH or DELETE sent once the steps run is stopped too (a GraphQL query
+               passes): the page loads as usual, and a click that would place an order places none
   --outline    for the top 3 candidates, summarize the response instead of making you inspect it: where the
                example values are, a suggested --extract and --pick fields with samples, JSON the page
                embeds (a ready --embedded regex), and a repeated HTML list as a ready --html recipe
   Output: capture (the id), candidates, next (what to do). blocked: the bot challenge the site served.
-  pageStatus: the page's own HTTP error, when a request it loaded is recommended all the same.`,
+  pageStatus: the page's own HTTP error, when a request it loaded is recommended all the same.
+  stopped: the requests the steps sent that were stopped without --write (method and path); nothing was sent.`,
   inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline --example k=v]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
   response through add's recipe flags, so a recipe is tried here first: --extract (also spelled --path),
@@ -119,7 +124,9 @@ const HELP: Record<string, string> = {
   --steps <json>  UI steps after load, [{action: click|fill|press|wait|goto, selector?, value?, ms?}];
                   {param} is filled in selector/value
   --soft-from     neutral page to load first, then navigate in-page to the trigger
-  --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON)
+  --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON).
+                  Without --write, a POST, PUT, PATCH or DELETE the steps send is stopped unless it is this
+                  one (or a GraphQL query), and one on the page's own site fails the add before run 2
   --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser).
                   Every add saves its own runs as captures, so a wrong recipe is fixed this way: add the op
                   again --from the capture it was learned from, with the recipe flags (--extract, --pick,
@@ -557,6 +564,8 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
   const limit = positive(v.limit, "limit") ?? 15;
   const examples = kv(v.example);
   const c = await capturePage({ url, steps, softFrom: v["soft-from"], write: v.write, args: examples });
+  const halted = v.write ? undefined : stoppedIn(c, c.url);
+  const stopped = halted ? [...halted.site, ...halted.elsewhere] : [];
   const ranked = rankCandidates(c.exchanges, examples, { pages: pageUrls(c.exchanges, capturePages(c)) });
   const values = Object.values(examples).map(String);
   const candidates = ranked.slice(0, limit).map((x, i) => ({
@@ -598,9 +607,12 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     candidates,
     ...(wall ? { blocked: wall } : {}),
     ...(page.status ? { pageStatus: page.status } : {}),
+    ...(stopped.length ? { stopped } : {}),
     next: wall
       ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> (clear the challenge in the window), then capture again`
-      : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),
+      : halted?.site.length
+        ? stoppedHint(halted.site, "capture again")
+        : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),
   });
   return 0;
 }

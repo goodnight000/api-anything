@@ -217,6 +217,29 @@ export async function startFixture(): Promise<Fixture> {
         `<!doctype html><html><body><button id="delete">Delete</button><script>document.getElementById("delete").onclick=()=>{if(confirm(${JSON.stringify(ask)}))fetch("/api/delete?id="+encodeURIComponent(${JSON.stringify(id)}),{method:"POST"}).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)})}</script></body></html>`,
       );
     }
+    // A shop: the item loads on its own, and Buy saves the cart and places the order side by side.
+    // ?redesign=1 is the same page after a redesign put "Delete account" where Buy was.
+    if (/^\/shop\/[^/]+$/.test(p)) {
+      const item = decodeURIComponent(p.slice("/shop/".length));
+      const click = u.searchParams.get("redesign")
+        ? `fetch("/api/account",{method:"DELETE"})`
+        : `fetch("/api/cart/"+encodeURIComponent(item),{method:"PUT"}).catch(()=>{});fetch("/api/order",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({item})}).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)},()=>{})`;
+      return html(
+        200,
+        `<!doctype html><html><body><button id="buy">${u.searchParams.get("redesign") ? "Delete account" : "Buy"}</button><script>const item=${JSON.stringify(item)};fetch("/api/item?id="+encodeURIComponent(item));document.getElementById("buy").onclick=()=>{${click}}</script></body></html>`,
+      );
+    }
+    // A finder whose reads go out as POSTs on a click: a search, a GraphQL query, and a click beacon beside each.
+    if (p === "/finder")
+      return html(
+        200,
+        `<!doctype html><html><body><input id="q"><button id="go">Find</button><button id="gql">Find (GraphQL)</button><script>
+const q=()=>document.getElementById("q").value;
+const track=()=>fetch("/api/track",{method:"POST",body:"click"}).catch(()=>{});
+document.getElementById("go").onclick=()=>{track();fetch("/api/find",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({q:q()})})};
+document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({query:"query Find($q: String!) { find(q: $q) { name } }",variables:{q:q()}})});
+</script></body></html>`,
+      );
     // An editor that, once touched, asks before the page is left ("unsaved changes") and saves a
     // draft as it goes, the way autosave does.
     if (p === "/unsaved")
@@ -488,6 +511,22 @@ export async function startFixture(): Promise<Fixture> {
     // is: a recipe suggested from a signed-in visitor's answer would carry the cookie's value.
     if (p === "/api/mine") return json(res, 200, { [jar.session ?? "guest"]: [{ name: u.searchParams.get("name") }] });
     if (p === "/api/follow" || p === "/api/sw-write" || p === "/api/autosave") return json(res, 200, { ok: true });
+    if (p === "/api/item") return json(res, 200, { item: { id: u.searchParams.get("id"), price: 10 } });
+    if (p.startsWith("/api/cart/") && req.method === "PUT") return json(res, 200, { ok: true });
+    if (p === "/api/order" && req.method === "POST")
+      return json(res, 200, {
+        order: { id: `o${calls.length}`, item: (JSON.parse(body || "{}") as { item?: string }).item },
+      });
+    if (p === "/api/account" && req.method === "DELETE") return json(res, 200, { deleted: true });
+    if (p === "/api/track") return json(res, 200, { ok: true });
+    if (p === "/api/find" && req.method === "POST") {
+      const q = String((JSON.parse(body || "{}") as { q?: unknown }).q ?? "");
+      return json(res, 200, { results: [`${q} one`, `${q} two`] });
+    }
+    if (p === "/api/gql" && req.method === "POST") {
+      const q = String((JSON.parse(body || "{}") as { variables?: { q?: unknown } }).variables?.q ?? "");
+      return json(res, 200, { data: { find: [{ name: `${q} one` }, { name: `${q} two` }] } });
+    }
     if (p === "/api/delete" && req.method === "POST")
       return json(res, 200, { data: { deleted: u.searchParams.get("id") } });
     // A write refused in a 200 answer, as Shopify's GraphQL answers a validation failure.

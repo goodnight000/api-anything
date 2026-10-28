@@ -434,7 +434,11 @@ Every call answers in fields, so an agent or a script can act without parsing pr
 **Writes are guarded at every step.**
 
 - Nothing is sent without `--allow-writes` (MCP: `call_write_operation`, library: `allowWrites`).
-- Learning a write intercepts and aborts the request, so learning never performs it.
+- Learning a write intercepts and aborts the request, so learning never performs it. Learning a read
+  stops any POST, PUT, PATCH or DELETE its clicks send, so a forgotten `--write` places no order.
+- When the browser sends a write, only the requests its learning saw go out: a redesigned button
+  that now deletes the account is stopped, and the result names it.
+- Card payment stays with you: api-anything doesn't learn card fields.
 - A write is sent once. It is retried only when the server certainly didn't run it (400, 401, 403, 404).
 - The same write within 10 minutes is refused as `duplicate`, unless you pass `--again`.
   `--idempotency-key` makes a repeat return the first call's record.

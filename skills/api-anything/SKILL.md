@@ -349,7 +349,18 @@ Every failure carries:
 - Writes (posting, liking, sending, buying) are ops added with `--write`. While api-anything learns
   one, it aborts the request in the browser, so learning never performs the action. Learning an
   existing write again, or a request a `--write` capture aborted, needs `--write`: `add` refuses to
-  save either as a read.
+  save either as a read. Without `--write`, a POST, PUT, PATCH or DELETE the steps send is stopped
+  (a GraphQL query passes), and `add` fails naming it: if it is the action, add it with `--write`;
+  if it is a read the site sends as POST (a search form), pin it with `--match method=POST
+  --match path=...`. `capture` lists what it stopped under `stopped`.
+- A tier-3 write call lets out the op's own request once, plus the other requests its learning saw
+  the page send. Anything else the page tries (a redesigned button that now deletes) is stopped, and
+  the call's `reason` names it: show the user, look at the page, and re-learn with `--write` only if
+  the action is still the one they want. A reason saying the op "was learned before" means nothing
+  else was stopped: re-learn it with `--write`.
+- Checkout and payment: learn and call steps up to the payment, never card entry. A card form is
+  the payment provider's iframe, which api-anything does not learn; hand the payment step to the
+  user in their browser, and never ask for or pass a card number.
 - Calling a write needs `--allow-writes` (over MCP, a server started with `--allow-writes`, and the
   `call_write_operation` tool or the write's own tool; `call_operation` never sends one). Add
   it only when the user asked for **that specific action with that content**. Confirm the exact

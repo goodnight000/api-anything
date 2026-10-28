@@ -488,17 +488,31 @@ export function matches(m: Match, req: Request): boolean {
  * Stable identity, with filled and hash-like path segments wildcarded. A segment a ref fills is
  * blank in the template and another value on every run, like a param's.
  */
-function buildMatch(req: Request, slots: Slot[]): Match {
+function buildMatch(req: Request, slots: Slot[], value: (seg: string) => boolean = () => false): Match {
   const filled = new Set(
     slots.filter((s) => s.at.length === 1 && s.at[0]!.startsWith("path:")).map((s) => Number(s.at[0]!.slice(5))),
   );
   const u = new URL(req.url);
   const path = u.pathname
     .split("/")
-    .map((seg, i) => (i > 0 && (filled.has(i - 1) || hashLike(seg) || /^\d{6,}$/.test(seg)) ? "*" : seg))
+    .map((seg, i) => (i > 0 && (filled.has(i - 1) || hashLike(seg) || /^\d{6,}$/.test(seg) || value(seg)) ? "*" : seg))
     .join("/");
   const operationName = operationNameOf(req);
   return { method: req.method.toUpperCase(), host: u.hostname, path, ...(operationName ? { operationName } : {}) };
+}
+
+/** A request that is not the op's, by the same identity: a path segment holding an example value is a wildcard too. */
+export function requestMatch(req: Request, args: Args): Match {
+  const values = new Set(Object.values(args).map((v) => asText(v).toLowerCase()));
+  return buildMatch(req, [], (seg) => values.has(decodeLoose(seg).toLowerCase()));
+}
+
+function decodeLoose(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
 }
 
 /* --------------------------------------------------------------- learning */
