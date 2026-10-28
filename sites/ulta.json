@@ -100,6 +100,192 @@
           "purpose": "Different product family or SKU must return its own identity, selected size and main offer."
         }
       ]
+    },
+    {
+      "name": "listBrandProducts",
+      "description": "List the product cards in a public US brand document, in document order, with names and SKU-bearing detail links. Initial document only; no full-catalog or stock guarantee.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.ulta.com/brand/%7BbrandSlug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "brandSlug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.ulta.com/brand/{brandSlug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.ulta.com",
+        "path": "/brand/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "html": {
+          "items": ".ProductListingResults__productList .ProductListingResults__productCard",
+          "fields": {
+            "name": ".pal-c-ProductCardBody--title",
+            "brand": ".pal-c-ProductCardBody--brandName",
+            "url": "a[href*=\"/p/\"]@href",
+            "sku": "@data-sku-id"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "brandSlug",
+          "type": "string",
+          "required": true,
+          "description": "Brand slug copied from an actual public Ulta /brand/ link.",
+          "example": "olaplex",
+          "pattern": "[a-z0-9-]+",
+          "hint": "The public brand path segment, without slash or query."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "brandSlug": "redken"
+          },
+          "expect": "result",
+          "purpose": "Different brand must return different product identities and labels."
+        },
+        {
+          "args": {
+            "brandSlug": "morphe"
+          },
+          "expect": "result",
+          "purpose": "Third public brand link must return its own product cards."
+        }
+      ]
+    },
+    {
+      "name": "listCategoryProducts",
+      "description": "Discover products across brands in a public three-level US category document. Returns initial product cards in document order with SKU-bearing detail links; no full-catalog or stock guarantee.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.ulta.com/shop/%7Bdepartment%7D/%7Bcategory%7D/%7Bsubcategory%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "department",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "category",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "subcategory",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.ulta.com/shop/{department}/{category}/{subcategory}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.ulta.com",
+        "path": "/shop/*/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "html": {
+          "items": ".ProductListingResults__productList .ProductListingResults__productCard",
+          "fields": {
+            "name": ".pal-c-ProductCardBody--title",
+            "brand": ".pal-c-ProductCardBody--brandName",
+            "url": "a[href*=\"/p/\"]@href",
+            "sku": "@data-sku-id"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "department",
+          "type": "string",
+          "required": true,
+          "description": "The department segment copied in order from a public three-level Ulta /shop/ category link.",
+          "example": "makeup",
+          "pattern": "[a-z0-9-]+",
+          "hint": "Copy this segment from the same /shop/department/category/subcategory link, without slash or query."
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "The category segment copied in order from a public three-level Ulta /shop/ category link.",
+          "example": "face",
+          "pattern": "[a-z0-9-]+",
+          "hint": "Copy this segment from the same /shop/department/category/subcategory link, without slash or query."
+        },
+        {
+          "name": "subcategory",
+          "type": "string",
+          "required": true,
+          "description": "The subcategory segment copied in order from a public three-level Ulta /shop/ category link.",
+          "example": "foundation",
+          "pattern": "[a-z0-9-]+",
+          "hint": "Copy this segment from the same /shop/department/category/subcategory link, without slash or query."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "department": "skin-care",
+            "category": "moisturizers",
+            "subcategory": "night-cream"
+          },
+          "expect": "result",
+          "purpose": "A different category returns its own products across brands."
+        },
+        {
+          "args": {
+            "department": "hair",
+            "category": "shampoo-conditioner",
+            "subcategory": "shampoo"
+          },
+          "expect": "result",
+          "purpose": "An unseen category from public navigation returns its own products across brands."
+        }
+      ]
     }
   ]
 }

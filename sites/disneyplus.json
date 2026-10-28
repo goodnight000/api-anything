@@ -90,6 +90,166 @@
           "purpose": "Held-out footer-linked film has a different identity and synopsis."
         }
       ]
+    },
+    {
+      "name": "listFeaturedTitles",
+      "description": "List labelled title links from the Featured section of a public Disney+ brand or collection document, in response document order.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.disneyplus.com/browse/page-%7BpageId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "pageId",
+          "at": [
+            "path:1"
+          ],
+          "template": "page-{pageId}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.disneyplus.com/browse/page-{pageId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.disneyplus.com",
+        "path": "/browse/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "sourceUrl",
+          "entityId=sourceUrl~^https://www\\.disneyplus\\.com/browse/entity-([0-9a-f-]{36})$"
+        ],
+        "html": {
+          "items": "main section > div:has(> h2:contains(\"Featured\")) + div [role=\"region\"] a[href^=\"/browse/entity-\"][aria-label]",
+          "fields": {
+            "title": "@aria-label",
+            "sourceUrl": "@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "pageId",
+          "type": "string",
+          "required": true,
+          "description": "Page ID from an existing public Disney+ browse/page- link whose document has a labelled Featured section.",
+          "example": "9143212f-5696-4ee3-a37a-f2fbcd14749a",
+          "pattern": "[0-9a-f-]{36}",
+          "hint": "the page ID from an observed public Disney+ brand or collection link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "pageId": "4c4b78ed-4a17-43eb-8221-14a3959e4517"
+          },
+          "expect": "result",
+          "purpose": "Disney has different featured titles from Pixar."
+        },
+        {
+          "args": {
+            "pageId": "a577ee5e-2f37-443f-bc13-594a20520492"
+          },
+          "expect": "result",
+          "purpose": "Independently reserved National Geographic brand page has distinct title navigation."
+        }
+      ]
+    },
+    {
+      "name": "listRelatedTitles",
+      "description": "List labelled title links in the title-context You May Also Like section of a signed-out title document, in response document order.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.disneyplus.com/browse/entity-%7BentityId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "entityId",
+          "at": [
+            "path:1"
+          ],
+          "template": "entity-{entityId}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.disneyplus.com/browse/entity-{entityId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.disneyplus.com",
+        "path": "/browse/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "sourceUrl",
+          "entityId=sourceUrl~^https://www\\.disneyplus\\.com/browse/entity-([0-9a-f-]{36})$"
+        ],
+        "html": {
+          "items": "main section#you-may-also-like [role=\"region\"][data-testid=\"you-may-also-like\"] a[href^=\"/browse/entity-\"][aria-label]",
+          "fields": {
+            "title": "@aria-label",
+            "sourceUrl": "@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "entityId",
+          "type": "string",
+          "required": true,
+          "description": "Entity ID from a literal public Disney+ title link whose signed-out document has a You May Also Like section.",
+          "example": "ce1ccdca-f468-4960-b67c-026b01ba42ab",
+          "pattern": "[0-9a-f-]{36}",
+          "hint": "the entity ID from an observed public Disney+ title link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "entityId": "46bee9e1-869a-4a04-a145-de2c28552866"
+          },
+          "expect": "result",
+          "purpose": "Moana has a different title-context recommendation collection from Coco."
+        },
+        {
+          "args": {
+            "entityId": "9c1b0ec2-2e4e-4717-89fb-bdf3a45523df"
+          },
+          "expect": "result",
+          "purpose": "Independently reserved Cars title was withheld until full A/B comparison and offline preflight."
+        }
+      ]
     }
   ]
 }

@@ -1,46 +1,21 @@
-US English catalog, signed out, USD. No store, ZIP, delivery or membership context is selected. Prices can change; tax, shipping, discounts and local inventory are outside scope.
+US English, signed out, USD. No store, ZIP, destination or membership context. Prices can change; tax, shipping, discounts, stock, size availability, pickup and deliverability are outside scope.
 
-`listProducts(category)` takes the complete segment after `/w/` from a real Nike navigation link. It reads the initial shelf, with no pagination, scrolling or filters. Returned category is the card subtitle, not the input path.
+`listProducts(category)` takes the complete segment after `/w/` from a real US Nike link. It returns the initial SSR shelf, 24 cards in checked categories. Card category is its subtitle. No pagination, scrolling or filters.
 
-`getProduct(slug, style)` takes both segments after `/t/` from one returned product URL; keep them together. Its canonical product-group URL may omit style. The offer is the first listed variant, not proof of stock, size availability, pickup or delivery. Other locales and page layouts are unverified.
+`searchProducts(query)` fills q and vst together. Their independent meanings are unknown. It returns only the initial shelf; completeness, relevance and requiring every query word are unproved. Empty input is rejected locally. Empty results and other layouts are unqualified. Product URLs are opaque.
 
-`searchProducts(query)` copies one phrase into both q and vst; their separate meanings are unknown. It reads the initial shelf only. URLs are opaque identities; displayed prices are not final bag prices or stock promises. Relevance, all-word matching and empty-result behavior are unqualified. Empty input is rejected locally; other layouts can fail extraction.
+`getProduct(slug, style)` needs both segments from one `/t/` URL, kept together. Its URL is the canonical product group and may omit style. Schema.org identity and ONLY the first listed variant's offer are returned. The requested style need not be that first variant. Availability was absent in the unseen checked offer. Other countries, currencies and layouts are unverified.
 
-`getSizeGuide(guide)` takes the segment after `/size-fit/` from official US navigation. Only the first embedded size-chart card and its tables are returned; guides without one are unsupported. It does not recommend fit. Output is capped near 20,000 characters.
+`listColorways(slug, style)` returns the SSR color-selector links in source order, including repeats. Color is chip alt text. Follow the literal URL; never combine a slug with another row's style. A `/u/` custom-design link lacks slug/style and cannot feed getProduct. No computed visibility, hydration, stock or selected-state promise.
 
-Chart rows retain original arrays: cell zero labels the row and later indices align across rows. A missing `value` means a blank cell; preserve its position. Cell keys, row `system` and `measurements` identify units. Imperial and metric rows may coexist without using a toggle. CM/JP box-label size differs from measured Foot Length. No conversion or availability is inferred; titles/descriptions can be empty. Truncated output is partial and cannot be used as a complete aligned chart. Unknown-guide and empty-result behavior are unqualified; empty input is rejected locally.
+`getSizeGuide(guide)` reads the first embedded chart card, all its tables. Use an official `/size-fit/` link. Rows stay aligned: cell zero is the label; missing value is a blank position. Keys, system and measurements name units; CM/JP box labels differ from Foot Length. No conversion, fit recommendation or toggle interaction is proved. Titles/descriptions can be empty. Other cards, unknown guides and empty results are unqualified. Empty input is local input. Output capped near 20,000 characters is partial and cannot serve as a complete chart.
 
 ## Maintainer notes
 
-Verified 2026-10-26 UTC with a fresh isolated API_ANYTHING_HOME, signed out, without importing browser cookies. Real browser document captures used the repository's `bench/discovery/capture-document.mjs`: only the requested GET document was allowed, other requests were aborted. This proves the frontend document and its data, not a fully hydrated page. Both operations were learned through the CLI from two real captures, with zero add warnings and minTier 1.
+2026-10-28 UTC. Public US document reads, signed out, no private cookies or login. Exact GET captures use unchanged bench/discovery/capture-document.mjs, 15-second navigation timeout, all other requests aborted. This proves document markup, not hydrated or computed-visible UI. Color links come only from the actual colorway-picker-container, not recommendations, media URLs or JSON-LD offers. Every occurrence and original order remain intact. Some picker links target custom design; their literal URLs remain, without fabricated getProduct arguments.
 
-Source/request URLs and captures:
+Colorway A/B are the original catalog-sourced Spizike FQ1759-200 and Air Max Metro IW4935-102 pairs. Reserved D is the catalog-sourced Dunk IM4414-700 pair. Full URLs, native captures, explicit request IDs, complete comparisons, exact hashes, cold-home input/install state, header receipts, case records and limits are in [colorway qualification](../docs/research/discovery/nike-colorways-qualified-r1.md). A returned /t/ link is separately exercised through unchanged getProduct; the canonical group and schema first variant remain distinct from selected navigation style.
 
-- `https://www.nike.com/` supplied the category navigation links.
-- `https://www.nike.com/w/mens-shoes-nik1zy7ok`, capture `cmvp2qnwl3206ec`.
-- `https://www.nike.com/w/womens-shoes-5e1x6zy7ok`, capture `cmvp2qvw8ff1539`.
-- Unseen `https://www.nike.com/w/kids-shoes-v4dhzy7ok`, capture `cmvp2rko50acb27`.
-- The men's catalog supplied all three product URLs below.
-- `https://www.nike.com/t/jordan-spizike-low-mens-shoes-E3tPjSZP/FQ1759-200`, capture `cmvp2s99ube452b`.
-- `https://www.nike.com/t/air-max-metro-mens-shoes-bWvVBEWx/IW4935-102`, capture `cmvp2zbbz2ac966`.
-- Unseen `https://www.nike.com/t/dunk-low-retro-mens-shoes-5FQWGR/IM4414-700`, capture `cmvp2zpzh26a775`.
+Baseline evidence remains [apparel](../docs/research/discovery/apparel-r1.md), [search](../docs/research/discovery/nike-depth-qualified-r2.md), [size guides](../docs/research/discovery/nike-size-guides-qualified-r4.md) and [guide integration](../docs/research/discovery/nike-size-guides-parent-r5.md). These retain exact source URLs, capture identities, historical checks and limits. All four original operation objects and 13 cases are preserved. Later verification can send only guest cookies issued to the isolated cold home; first-call cookie absence is separate evidence. No writes, imported sessions, fallback, healing, pagination, directory, size stock or universal layout claim.
 
-`listProducts` was learned with category values `mens-shoes-nik1zy7ok` and `womens-shoes-5e1x6zy7ok`. Unseen `kids-shoes-v4dhzy7ok` returned tier 1 with 24/24 frontend identities, subtitles, displayed prices and URLs matching the captured document. Category cards identify `data-country="us"`.
-
-`getProduct` was learned with slug/style pairs `jordan-spizike-low-mens-shoes-E3tPjSZP` / `FQ1759-200` and `air-max-metro-mens-shoes-bWvVBEWx` / `IW4935-102`. Unseen `dunk-low-retro-mens-shoes-5FQWGR` / `IM4414-700` returned tier 1. All extracted fields matched its frontend JSON-LD. JSON-LD adds SE to the Dunk name, while the visible heading and catalog omit SE. The product group ID and selected style match the frontend, and USD 130 matches the catalog card.
-
-The real `verifySite` runner with maxTier 1 passed all six cases: each operation's example and its two public result checks. No empty-result or invalid-product semantics were established. Export retained the public examples. Both exported operations were then replayed at tier 1 from a separate initially empty home for each operation, without browser capture or imported cookies. Direct `vetShared` on the exported spec and these notes returned zero errors and warnings.
-
-Raw captures, command receipts, field comparisons, verification results, fresh-home results and resource samples are local ignored evidence under `bench/explore/state/discovery/apparel-r1/`. The research report is `docs/research/discovery/apparel-r1.md`. No writes or authenticated/account operations were explored.
-
-
-Search capture and learning 2026-10-27 UTC used a new isolated home and the unchanged exact-GET document helper, with all other requests aborted. These are frontend document captures, not hydrated GUI proof. Public search links supplied both q and vst; searchProducts fills them together and does not promise their independent meanings. CLI add used two real saved captures and an explicit document pick. Its two-place warning is retained in research, since both public query keys intentionally receive the phrase.
-
-- A https://www.nike.com/w?q=basketball%20shoes&vst=basketball%20shoes , capture cmvq3z79qe67616.
-- B https://www.nike.com/w?q=socks&vst=socks , capture cmvq41ozod2a065.
-- Reserved novel C https://www.nike.com/w?q=reflective%20trail%20running%20vest&vst=reflective%20trail%20running%20vest , capture cmvq42lyn01d46e.
-
-Each search document had a matching query heading and 24 cards. Recipes return displayed card text and product URLs; URL segments are opaque, and card subtitles are not a search taxonomy. No empty response or invalid-site-input response was observed. The exact export, operation hashes, field comparisons, first-request header-presence receipts and all-read verification outcomes are recorded in docs/research/discovery/nike-depth-qualified-r2.md, with raw files under bench/explore/state/discovery/nike-depth-qualified-r2/. Existing operation objects are preserved. No authenticated or write operation was attempted.
-
-
-Size-guide learning on 2026-10-27 UTC reused genuine frontend GET document captures from https://www.nike.com/size-fit/mens-footwear and https://www.nike.com/size-fit/womens-footwear. The unchanged helper aborted other requests; this is document proof, not hydrated GUI or unit-toggle proof. Source GETs and capture A had no Cookie/Authorization. B sent isolated guest cookies, no Authorization. No private session was imported. Paired CLI learning preserved embedded arrays because HTML list extraction drops blank cells. Exact-version scans, held-out comparisons, cold-home headers, all-read verification, hashes and preservation proofs are in docs/research/discovery/nike-size-guides-qualified-r4.md. Raw evidence stays ignored. Later cold-home requests may carry site-issued guest cookies. No writes or login were attempted.
+Apparel coverage on 2026-10-28 uses two fresh exact document captures for womens-tops-alpha and mens-bottoms-numeric. Only the unchanged first embedded chart is covered; units and body-measurement labels remain source values, without fit or conversion. Complete A/B comparisons, reserved cold input, hashes and limitations are in [apparel guide coverage](../docs/research/discovery/nike-apparel-guide-coverage-r1.md). Five original reads and sixteen cases remain, with only two appended guide checks.

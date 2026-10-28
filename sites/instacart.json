@@ -2,7 +2,7 @@
   "name": "instacart",
   "displayName": "Instacart",
   "baseUrl": "https://www.instacart.com",
-  "description": "Public city retailer directories from Instacart grocery-delivery pages.",
+  "description": "Public city retailer directories, pantry category product discovery and product-detail metadata from Instacart.",
   "operations": [
     {
       "name": "listStores",
@@ -94,6 +94,193 @@
           },
           "expect": "result",
           "purpose": "Unseen Long Island City cards match public frontend retailer identities."
+        }
+      ]
+    },
+    {
+      "name": "getProduct",
+      "description": "Read public product-detail metadata from a linked Instacart product page.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.instacart.com/store/products/%7Bproduct%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "product",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.instacart.com/store/products/{product}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.instacart.com",
+        "path": "/store/products/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "name",
+          "size",
+          "description",
+          "brand=brand.name",
+          "category",
+          "url=offers.url"
+        ],
+        "embedded": {
+          "regex": "(\\{\\s*\"@type\"\\s*:\\s*\"Product\"\\s*,)"
+        }
+      },
+      "params": [
+        {
+          "name": "product",
+          "type": "string",
+          "required": true,
+          "description": "Full product segment copied from a public /store/products/ link, including its ID and slug.",
+          "example": "19875642-s-s-soup-base-bonito-12-packs-12-ea",
+          "pattern": "[0-9]{1,12}-[a-z0-9-]{1,220}",
+          "hint": "Copy the complete final path segment from a public Instacart product link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "product": "53947-rustichella-d-abrzzo-extra-virgin-olive-oil-16-9-oz"
+          },
+          "expect": "result",
+          "purpose": "Different olive-oil identity and metadata from the soup-base example."
+        },
+        {
+          "args": {
+            "product": "279311-kitchen-basics-original-seafood-stock-32-fl-oz"
+          },
+          "expect": "result",
+          "purpose": "Unlearned product linked from the public Other Broths category."
+        }
+      ]
+    },
+    {
+      "name": "listPantryCategoryProducts",
+      "description": "List the initial public product cards of a five-level food/pantry category, using its three final linked path segments.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.instacart.com/categories/316-food/844-pantry/%7Baisle%7D/%7Bgroup%7D/%7Bcategory%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "aisle",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "group",
+          "at": [
+            "path:4"
+          ]
+        },
+        {
+          "param": "category",
+          "at": [
+            "path:5"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.instacart.com/categories/316-food/844-pantry/{aisle}/{group}/{category}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.instacart.com",
+        "path": "/categories/316-food/844-pantry/*/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "[data-experiment-id=seo-taxonomy-products] a[data-experiment-id]",
+          "fields": {
+            "name": "[title]:first-child@title",
+            "size": "[title]:last-child@title",
+            "url": "@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "aisle",
+          "type": "string",
+          "required": true,
+          "description": "Complete aisle ID-and-slug path segment copied from a public five-level food/pantry category URL.",
+          "example": "1239-soups",
+          "pattern": "[0-9]{1,12}-[a-z0-9-]{1,180}",
+          "hint": "Copy the matching path segment from a public /categories/316-food/844-pantry/ link"
+        },
+        {
+          "name": "group",
+          "type": "string",
+          "required": true,
+          "description": "Complete group ID-and-slug path segment copied from a public five-level food/pantry category URL.",
+          "example": "1242-broths-stocks",
+          "pattern": "[0-9]{1,12}-[a-z0-9-]{1,180}",
+          "hint": "Copy the matching path segment from a public /categories/316-food/844-pantry/ link"
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "Complete category ID-and-slug path segment copied from a public five-level food/pantry category URL.",
+          "example": "3378-other-broths",
+          "pattern": "[0-9]{1,12}-[a-z0-9-]{1,180}",
+          "hint": "Copy the matching path segment from a public /categories/316-food/844-pantry/ link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "aisle": "845-baking-and-cooking",
+            "group": "900-cooking-oils",
+            "category": "910-olive-oils"
+          },
+          "expect": "result",
+          "purpose": "Olive-oil identities differ from Other Broths; all three linked path arguments change."
+        },
+        {
+          "args": {
+            "aisle": "1239-soups",
+            "group": "1242-broths-stocks",
+            "category": "3374-beef-broth"
+          },
+          "expect": "result",
+          "purpose": "Independent unseen Beef Broth category linked from the public Broths and Stocks navigation."
         }
       ]
     }

@@ -2,7 +2,7 @@
   "name": "meetup",
   "displayName": "Meetup",
   "baseUrl": "https://www.meetup.com",
-  "description": "Public event title and scheduled time from event pages, without signing in.",
+  "description": "Public event discovery and advertised schedules from signed-out Meetup pages.",
   "operations": [
     {
       "name": "eventSchedule",
@@ -85,6 +85,81 @@
           },
           "expect": "result",
           "purpose": "A different event has a different title and scheduled time."
+        }
+      ]
+    },
+    {
+      "name": "listGroupEvents",
+      "description": "List the public event cards advertised on a Meetup group home page, in page order.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.meetup.com/%7Bnamespace%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "namespace",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.meetup.com/{namespace}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.meetup.com",
+        "path": "/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "url",
+          "schedule",
+          "namespace=url~https://www[.]meetup[.]com/([^/]+)/events/",
+          "eventId=url~/events/([0-9]+)/"
+        ],
+        "html": {
+          "items": "a[data-event-label=\"Event Card\"]",
+          "fields": {
+            "title": "h3",
+            "url": "@href",
+            "schedule": "time"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": true,
+          "description": "Public group route namespace from a literal Meetup group link.",
+          "example": "ananda-yoga-and-guided-meditation",
+          "pattern": "[A-Za-z0-9-]{1,150}",
+          "hint": "Public group namespace without slashes"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "namespace": "vibe-code-la"
+          },
+          "expect": "result",
+          "purpose": "A different group advertises a different populated event collection."
         }
       ]
     }

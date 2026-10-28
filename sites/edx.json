@@ -2,7 +2,7 @@
   "name": "edx",
   "displayName": "edX",
   "baseUrl": "https://www.edx.org",
-  "description": "Initial public course cards from signed-out edX provider pages.",
+  "description": "Public provider course cards, course details and professional-certificate course membership from signed-out edX documents.",
   "operations": [
     {
       "name": "listCourses",
@@ -74,6 +74,176 @@
           },
           "expect": "result",
           "purpose": "Third provider has independently grounded initial course titles, provider labels and URLs."
+        }
+      ]
+    },
+    {
+      "name": "getCourse",
+      "description": "Read public course description, learning outcomes, prerequisites, level and language from a linked edX course document.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.edx.org/learn/%7Bsubject%7D/%7BcourseSlug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "subject",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "courseSlug",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.edx.org/learn/{subject}/{courseSlug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.edx.org",
+        "path": "/learn/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "@graph[1]",
+        "pick": [
+          "title=name",
+          "url",
+          "provider=provider[*].name",
+          "description",
+          "level=educationalLevel",
+          "language=inLanguage",
+          "learningOutcomes=teaches",
+          "prerequisites=coursePrerequisites"
+        ],
+        "embedded": {
+          "regex": "<script\\b[^>]*type=\"application/ld\\+json\"[^>]*>([\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "subject",
+          "type": "string",
+          "required": true,
+          "description": "Subject segment from the same literal /learn/ course link as courseSlug. Do not combine independently.",
+          "example": "computer-science",
+          "pattern": "[a-z0-9-]+"
+        },
+        {
+          "name": "courseSlug",
+          "type": "string",
+          "required": true,
+          "description": "Course slug from the same literal /learn/ course link as subject.",
+          "example": "harvard-university-cs50-s-introduction-to-computer-science",
+          "pattern": "[a-z0-9-]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "subject": "how-to-learn",
+            "courseSlug": "edx-how-to-learn-online"
+          },
+          "expect": "result",
+          "purpose": "The edX learning course differs in identity, description and learning outcomes from Harvard CS50."
+        },
+        {
+          "args": {
+            "subject": "python",
+            "courseSlug": "harvard-university-cs50-s-introduction-to-programming-with-python"
+          },
+          "expect": "result",
+          "purpose": "Held-out Harvard Python course from a literal provider course link."
+        }
+      ]
+    },
+    {
+      "name": "getProgramCourses",
+      "description": "List public professional-certificate program course members in source frontend order, with course identities for getCourse.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.edx.org/certificates/professional-certificate/%7BprogramSlug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "programSlug",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.edx.org/certificates/professional-certificate/{programSlug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.edx.org",
+        "path": "/certificates/professional-certificate/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "@graph[1][0][2].hasPart",
+        "pick": [
+          "title=name",
+          "url"
+        ],
+        "embedded": {
+          "regex": "<script type=\"application/ld\\+json\">([\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "programSlug",
+          "type": "string",
+          "required": true,
+          "description": "Program slug from an actual /certificates/professional-certificate/ link.",
+          "example": "harvardx-computer-science-for-python-programming",
+          "pattern": "[a-z0-9-]+"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "programSlug": "harvardx-computer-science-for-cybersecurity"
+          },
+          "expect": "result",
+          "purpose": "Cybersecurity membership differs from Python membership."
+        },
+        {
+          "args": {
+            "programSlug": "harvardx-computer-science-for-web-programming"
+          },
+          "expect": "result",
+          "purpose": "Held-out web programming program membership."
         }
       ]
     }

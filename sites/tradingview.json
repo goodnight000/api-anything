@@ -2,7 +2,7 @@
   "name": "tradingview",
   "displayName": "TradingView",
   "baseUrl": "https://www.tradingview.com",
-  "description": "Public exchange-qualified stock instrument metadata from overview documents.",
+  "description": "Public instrument metadata and U.S. sector stock discovery from TradingView documents.",
   "operations": [
     {
       "name": "getInstrument",
@@ -81,6 +81,86 @@
           },
           "expect": "result",
           "purpose": "Public NVDA instrument has a different identity from the Apple example."
+        }
+      ]
+    },
+    {
+      "name": "listSectorInstruments",
+      "description": "Discover the first stock rows in a public U.S. sector document, in document order, with overview path identifiers, tickers and company names.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.tradingview.com/markets/stocks-usa/sectorandindustry-sector/%7Bsector%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "sector",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.tradingview.com/markets/stocks-usa/sectorandindustry-sector/{sector}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.tradingview.com",
+        "path": "/markets/stocks-usa/sectorandindustry-sector/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "instrument=instrumentPath~\\/symbols\\/([^/]+)\\/",
+          "symbol=symbol",
+          "name=name"
+        ],
+        "html": {
+          "items": "tbody[data-testid=\"selectable-rows-table-body\"] tr",
+          "fields": {
+            "instrumentPath": "a@href",
+            "symbol": "a",
+            "name": "a[data-overflow-tooltip-text]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "sector",
+          "type": "string",
+          "required": true,
+          "description": "Exact U.S. sector slug from TradingView sector navigation, such as electronic-technology.",
+          "example": "electronic-technology",
+          "pattern": "[a-z-]+",
+          "hint": "A sector slug shown in the U.S. sectors navigation"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "sector": "technology-services"
+          },
+          "expect": "result",
+          "purpose": "Software-sector identities differ from electronic technology."
+        },
+        {
+          "args": {
+            "sector": "health-technology"
+          },
+          "expect": "result",
+          "purpose": "Held-out health-sector collection differs from both learning examples."
         }
       ]
     }

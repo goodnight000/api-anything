@@ -2,7 +2,7 @@
   "name": "coursera",
   "displayName": "Coursera",
   "baseUrl": "https://www.coursera.org",
-  "description": "Public course catalog search and course metadata from signed-out Coursera pages.",
+  "description": "Public course catalog search, course metadata and ordered specialization curricula from signed-out Coursera pages.",
   "operations": [
     {
       "name": "search",
@@ -157,6 +157,81 @@
           },
           "expect": "result",
           "purpose": "Unseen course matches public Course JSON-LD exactly across all 10 returned fields."
+        }
+      ]
+    },
+    {
+      "name": "getSpecializationCourses",
+      "description": "List a public specialization's constituent courses in displayed curriculum order, with membership links and course workload summaries.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.coursera.org/specializations/%7Bslug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.coursera.org/specializations/{slug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.coursera.org",
+        "path": "/specializations/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "html": {
+          "items": "[data-track-component=syllabus] [data-testid=accordion-item]",
+          "fields": {
+            "title": "a[data-e2e=sdp-course-list-link]",
+            "url": "a[data-e2e=sdp-course-list-link]@href",
+            "courseSummary": "[data-testid=visually-hidden]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Specialization slug from an observed public /specializations/ link.",
+          "example": "machine-learning-introduction",
+          "pattern": "[a-z0-9][a-z0-9-]{0,199}",
+          "hint": "A slug from a Coursera /specializations/ URL."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "deep-learning"
+          },
+          "expect": "result",
+          "purpose": "Second public document capture has five distinct courses instead of the three-course Machine Learning example."
+        },
+        {
+          "args": {
+            "slug": "excel"
+          },
+          "expect": "result",
+          "purpose": "Public specialization linked by the Machine Learning page; independently compare every returned course field and order on unseen replay."
         }
       ]
     }
