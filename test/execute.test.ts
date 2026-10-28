@@ -1276,7 +1276,8 @@ describe("a site that said stop, and the pace between sends (localhost)", () => 
     const at = hits.sort((a, b) => a - b);
     const gaps = at.slice(1).map((t, i) => t - at[i]!);
     assert.equal(gaps.length, 2);
-    for (const g of gaps) assert.ok(g >= interval * 0.7 - 5, `arrivals ${gaps.join(", ")} ms apart`);
+    // slots are reserved at least 0.7 × the interval apart; arrival adds each process's own send latency
+    for (const g of gaps) assert.ok(g >= interval * 0.7 - 50, `arrivals ${gaps.join(", ")} ms apart`);
   });
 
   test("a 429's Retry-After is kept: the next calls send nothing until it is over, a write too", async () => {
