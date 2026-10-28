@@ -715,20 +715,17 @@ describe("browser", { skip: noChrome }, () => {
     }, "localhost");
     const a = await listen((req, res) => {
       const u = new URL(req.url ?? "/", "http://x");
+      // a persisted query sent as GET (Apollo's): a POST one would be stopped as a possible write
       if (u.pathname === "/api/graphql") {
-        let s = "";
-        req.on("data", (d) => (s += d));
-        req.on("end", () => {
-          const q = Buffer.from(JSON.parse(s).v, "base64").toString();
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ data: { results: [{ name: `${q} one` }, { name: `${q} two` }] } }));
-        });
+        const q = Buffer.from(u.searchParams.get("v") ?? "", "base64").toString();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ data: { results: [{ name: `${q} one` }, { name: `${q} two` }] } }));
         return;
       }
       html(
         res,
         `<input id=q><div id=out></div><script>document.getElementById('q').addEventListener('keydown', async (e) => { if (e.key !== 'Enter') return; const q = e.target.value;
-          const r = await fetch('/api/graphql', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({ id: 'a1b2c3', v: btoa(q) }) });
+          const r = await fetch('/api/graphql?id=a1b2c3&v=' + encodeURIComponent(btoa(q)));
           document.getElementById('out').textContent = JSON.stringify(await r.json());
           history.pushState({}, '', '/search?q=' + encodeURIComponent(q));
           fetch('${b.base}/v1/p', { method: 'POST', headers: {'content-type':'text/plain'}, body: JSON.stringify({ event: 'search', properties: { search: location.search }, context: { page: { url: location.href } } }) });
@@ -759,6 +756,8 @@ describe("browser", { skip: noChrome }, () => {
         /no captured request carries|answers without data/,
       );
       assert.equal(loadSite("spa"), undefined, "nothing was saved");
+      // the beacon is a POST its steps send: stopped while a read is learned, it never left
+      assert.equal(beacons.length, 1, "only the plain run's beacon left");
     } finally {
       for (const s of [a.server, b.server]) {
         s.closeAllConnections();
