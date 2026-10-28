@@ -112,13 +112,15 @@ const HELP: Record<string, string> = {
   Output: capture (the id), candidates, next (what to do). blocked: the bot challenge the site served.
   pageStatus: the page's own HTTP error, when a request it loaded is recommended all the same.
   stopped: the requests the steps sent that were stopped without --write (method and path); nothing was sent.`,
-  inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline --example k=v]
+  inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline] [--example k=v]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
   response through add's recipe flags, so a recipe is tried here first: --extract (also spelled --path),
   --pick, --html, --embedded. A path, selector or regex that finds nothing fails (exit 1). An empty
   list at a path is a result, and so is an --html items selector "<container> <item>" whose container
   is on the page with no item in it (data: [], with a note).
-  --outline summarizes the response (as capture --outline does) instead of printing it.`,
+  --outline summarizes the response (as capture --outline does) instead of printing it.
+  A request's URL and body show the run's cookie and storage values as refs ([cookie:x]), except
+  one equal to an --example value.`,
   add: `api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
   Runs the trigger twice in the browser (with --example, then --example2 or --example again), picks the request
   carrying the example values, and saves the learned operation to ~/.api-anything/sites/<site>.json.
@@ -658,6 +660,9 @@ function cmdInspect({ v, pos }: Parsed): number {
   const [id, reqId] = pos;
   if (!id) throw new Fail("missing <captureId>", "api-anything inspect --help");
   const c = loadCapture(id);
+  // the requests shown carry the run's live values as refs, as capture's candidates do
+  const live = captureLive(c, Object.values(kv(v.example)).map(String));
+  const shown = (s: string) => redact(s, live, { named: true });
   if (reqId === undefined) {
     out({
       capture: c.id,
@@ -666,7 +671,7 @@ function cmdInspect({ v, pos }: Parsed): number {
         id: e.id,
         kind: e.resourceType,
         method: e.request.method,
-        url: e.request.url.slice(0, 160),
+        url: shown(e.request.url).slice(0, 160),
         ...(e.response
           ? {
               status: e.response.status,
@@ -684,7 +689,7 @@ function cmdInspect({ v, pos }: Parsed): number {
   if (v.outline) {
     out({
       id: e.id,
-      request: { method: e.request.method, url: e.request.url },
+      request: { method: e.request.method, url: shown(e.request.url) },
       ...outlineOf(e, Object.values(kv(v.example)).map(String)),
     });
     return 0;
@@ -723,7 +728,7 @@ function cmdInspect({ v, pos }: Parsed): number {
     if (data === undefined) throw nothing(`nothing at "${path}"`);
   }
   if (v.pick) data = pick(data, splitPick(v.pick));
-  const sent = e.request.body;
+  const sent = e.request.body === undefined ? undefined : shown(e.request.body);
   const form =
     sent !== undefined &&
     /x-www-form-urlencoded/i.test(e.request.headers["content-type"] ?? "") &&
@@ -734,7 +739,7 @@ function cmdInspect({ v, pos }: Parsed): number {
     id: e.id,
     request: {
       method: e.request.method,
-      url: e.request.url,
+      url: shown(e.request.url),
       ...(shownBody !== undefined ? { body: capOutput(shownBody, 4000).data } : {}),
     },
     ...(e.response ? { status: e.response.status, type: e.response.contentType } : { aborted: !!e.aborted }),

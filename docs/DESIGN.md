@@ -1356,7 +1356,8 @@ independent alternative.
     carry a live token (`?access_token=...`): each of the run's cookie and web-storage values in it
     (not one equal to an `--example` value) is shown as the ref a spec would hold there,
     `[cookie:auth]` or `[session:x]` (`redact` with `named`, `captureLive`). `learn_site`'s `chosen`
-    and `alternatives` URLs are shown the same way. Neither is `data`, which stays the site's answer
+    and `alternatives` URLs are shown the same way, and so are the request URLs and bodies `inspect`
+    shows (keeping its `--example` values). None is `data`, which stays the site's answer
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--paging ...] [--write]`
   - `call <site> <op> [k=v ...] [--allow-writes] [--again] [--idempotency-key <k>] [--force]` (`--force`: send while the site cools down)
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe

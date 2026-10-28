@@ -25,7 +25,9 @@ $ api-anything capture "https://hn.algolia.com/?q=sqlite" --example q=sqlite
 A candidate URL that carries one of the run's cookie or web-storage values (an
 `?access_token=` some APIs take) shows it as the ref a spec would hold there, such as
 `access_token=[cookie:auth]`, never the value; `learn_site`'s `chosen` and `alternatives` do the same.
-`api-anything inspect <capture> <id>` shows a candidate's response, without a browser. Then describe
+`api-anything inspect <capture> <id>` shows a candidate's response, without a browser, and its
+request's URL and body with the same refs (a value equal to one of its `--example` values stays as
+it is). Then describe
 how to make the page fire that request. Give two example values, so the learner can tell params
 from nonces:
 

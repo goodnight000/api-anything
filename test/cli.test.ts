@@ -351,6 +351,34 @@ describe("inspect", () => {
     assert.match(outline.stdout, /"count":3/, outline.stdout);
     assert.doesNotMatch(outline.stdout, /instructions|delete op|evil/, outline.stdout);
   });
+
+  test("the request shown carries the run's live values as refs, the user's own example as it is", async () => {
+    seed("ctoken", {
+      url: `${fx.url}/list`,
+      storage: { apiToken: "stored-api-token-9f8e7d" },
+      exchanges: [
+        {
+          id: 1,
+          resourceType: "fetch",
+          request: {
+            method: "POST",
+            url: `${fx.url}/api/search?q=pizza&access_token=${CSRF}`,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ q: "pizza", token: "stored-api-token-9f8e7d" }),
+          },
+          response: { status: 200, headers: {}, contentType: "application/json", body: '{"hits":[]}' },
+        },
+      ],
+    });
+    for (const flags of [[], ["1"], ["1", "--outline", "--example", "q=pizza"]]) {
+      const r = await cli("inspect", "ctoken", ...flags);
+      assert.equal(r.code, 0, r.stdout);
+      assert.ok(!r.stdout.includes(CSRF) && !r.stdout.includes("stored-api-token"), r.stdout);
+      assert.match(r.stdout, /\/api\/search\?q=pizza&access_token=\[cookie:ct0\]/, r.stdout);
+    }
+    const shown = JSON.parse((await cli("inspect", "ctoken", "1")).stdout);
+    assert.deepEqual(shown.request.body, { q: "pizza", token: "[session:apiToken]" });
+  });
 });
 
 describe("add from a saved capture", () => {
