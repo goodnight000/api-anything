@@ -22,7 +22,12 @@ $ api-anything capture "https://hn.algolia.com/?q=sqlite" --example q=sqlite
   {"id":1,"kind":"document","method":"GET","url":"https://hn.algolia.com/?q=sqlite","status":200,"type":"text/html","size":2841}, ...]}
 ```
 
-`api-anything inspect <capture> <id>` shows a candidate's response, without a browser. Then describe
+A candidate URL that carries one of the run's cookie or web-storage values (an
+`?access_token=` some APIs take) shows it as the ref a spec would hold there, such as
+`access_token=[cookie:auth]`, never the value; `learn_site`'s `chosen` and `alternatives` do the same.
+`api-anything inspect <capture> <id>` shows a candidate's response, without a browser, and its
+request's URL and body with the same refs (a value equal to one of its `--example` values stays as
+it is). Then describe
 how to make the page fire that request. Give two example values, so the learner can tell params
 from nonces:
 
@@ -117,7 +122,9 @@ Besides its request template, each operation stores two things:
 - **trigger**: how to make the site's own frontend fire the request. This is a URL template,
   plus optional UI steps. A write's trigger may also hold `confirms`: the `confirm()` dialogs its
   learning accepted, each as a step index and a SHA-256 digest (no page text), which a tier-3 call
-  accepts again when the page asks the same question.
+  accepts again when the page asks the same question, and `companions`: the other unsafe requests
+  its learning saw the trigger send on the op's site, by stable identity, the only ones besides its
+  own that a tier-3 call lets out.
 - **match**: how to recognize that request in captured traffic by stable identity only
   (method, host, path with hash-like segments wildcarded, GraphQL operation name). It never
   uses a queryId or hash.
@@ -134,8 +141,20 @@ One routine, run the trigger, match the request, learn the template, does three 
      its anchor;
    - **recapture**: run the trigger again with your current args and re-learn from it.
 
-   A healed template is saved only after a replay succeeds. Each heal is logged to
-   `~/.api-anything/heals.jsonl`. Two guards stop heal loops: a heal that produces an identical
+   A healed template is saved only after a replay succeeds. The call that healed says how and
+   what changed in `heal`, one line per change to the request, with `{param}` and refs in place of
+   values (the CLI prints it on stderr too):
+
+   ```
+   "healed":true,"heal":{"strategy":"rescan","changes":["path: /api/graphql/Aa1.../UserByName -> /api/graphql/Zz9.../UserByName"]}
+   ```
+
+   Each heal is logged to `~/.api-anything/heals.jsonl` with the op as it was. `api-anything heals
+   [site]` lists the last 20 with their changes, and `api-anything revert <site> <op>` puts the op
+   back as it was before its last heal. It refuses if the op changed after that heal (learned again
+   or edited). Run it again to take back the heal before. A reverted op whose site really changed
+   drifts and heals again on a later call, so learn it again with `add` if the heal was wrong.
+   Two guards stop heal loops: a heal that produces an identical
    template is not drift, and an op that drifts again within 10 minutes of a heal is marked
    stale for 30 minutes.
 3. **Fallback.** For reads, the triggered browser run has already received the answer. When a
@@ -195,8 +214,10 @@ A write learned while signed in is checked before it is sent: if the session has
 cookie (expired or missing), api-anything re-imports first, and if there is still none the call
 returns `class: "auth"` and sends nothing.
 
-On macOS the first import shows one Keychain prompt ("security wants to use the … Safe Storage" key);
-allow it. The imported session is the *same* one as your browser, so if the site logs it out, both
+On macOS the first import shows one Keychain prompt ("security wants to use the … Safe Storage" key).
+Choose **Allow**, not **Always Allow**: that key decrypts every cookie the browser holds, and Always
+Allow lets any process that runs `security` read it from then on without asking you again. With Allow,
+each import asks. The imported session is the *same* one as your browser, so if the site logs it out, both
 go — avoid heavy automated traffic on it. Other ways in:
 
 - `--window` opens a visible Chrome window to sign in by hand (an independent session). Use it when
@@ -207,6 +228,11 @@ go — avoid heavy automated traffic on it. Other ways in:
   otherwise `login` answers `ok: false`, says why, and keeps the session you had.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
 - `api-anything logout <site>` clears the stored session.
+
+A trigger step never signs in: a `--steps` fill into a password or one-time-code field (the page's
+`type=password`, or `autocomplete` `current-password`, `new-password`, `one-time-code`) fails the run
+and saves nothing, since a step's value is stored in the spec. A hand-written step like that is
+refused by `export`, `publish` and `pull`.
 
 Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 
@@ -239,9 +265,25 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 ## Safety and terms of service
 
 - api-anything automates your own browser session on your own accounts. It is meant for things you
-  could do by hand, at human pace. HTTP replays to one site are paced at 1 s within one process; browser navigation may fire multiple requests.
+  could do by hand, at human pace. Requests to one site are spaced about 1 s apart (0.7 to 1.3 s, at
+  random), at every tier and across processes: separate CLI runs and agents in parallel queue up for
+  the same slot. A trigger run is a page load, which may fire many requests of the page's own.
+- When a site answers a rate limit, api-anything leaves it alone for its Retry-After (at most 30
+  minutes), or 3 minutes without one; after a block at every tier, or a 451, for 10 minutes. Calls
+  meanwhile answer `rate` or `blocked` at once with nothing sent, and `retryAfterMs` counts down.
+  `api-anything login <site>` ends the wait. `api-anything call ... --force` sends that one call
+  anyway: when it succeeds the wait ends; when the site limits or blocks it again, the wait starts
+  over from that answer.
 - **Writes** (posting, sending, buying) are learned by intercepting the request and aborting it
-  in the browser, so learning never performs them. Calling a write needs `--allow-writes` on the
+  in the browser, so learning never performs them. Without `--write`, `add` and `capture` stop a
+  POST, PUT, PATCH or DELETE the steps send (a GraphQL query, or the request `--match` pins, passes):
+  one on the page's own site fails the add before its second run, so a forgotten `--write` places no
+  order. The failure says to add an action again with `--write`, which never sends it, and offers a
+  `--match` pin only for a request that changes nothing (a search sent as POST): a pinned request is
+  sent for real on each learning run and saved as a read, so never pin an order. A tier-3 write call lets out only the op's own request, once, and the other unsafe requests
+  its learning saw the trigger send (`trigger.companions`); any other is stopped, and the reason
+  names it (a redesign whose button now deletes the account deletes nothing). Card payment is left to
+  you: api-anything does not learn card fields, which sit in the payment provider's iframe. Calling a write needs `--allow-writes` on the
   CLI, the MCP server (whose `call_write_operation` sends it; `call_operation` never does), or the library. A write is sent once and is retried only when the
   server certainly did not run it (a 400, 401, 403 or 404 answered to the write itself, not after
   a redirect). Timeouts and 5xx errors are reported,
@@ -249,8 +291,11 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
   `may_have_applied`), and `retry` says whether to send it again (`no` for one accepted or that may
   have gone through). The same write with the same args within 10 minutes of one that was accepted
   or may have gone through is refused (`class: "duplicate"`), unless the caller passes `--again`
-  (MCP `again`, library `again`). `--idempotency-key <k>` makes a repeat return the first call's
-  record instead of sending. The record (`~/.api-anything/writes.json`, kept 24 hours) holds the
+  (MCP `again`, library `again`). `--idempotency-key <k>`, passed on the first call, makes a repeat
+  return that call's record instead of sending; a key added only to a retry of a keyless call is
+  still that call's `duplicate`. A UUID the site's page makes for each request (an idempotency key)
+  is learned as a `gen` slot: each call sends a new one, the same on its own retries, and the same
+  for every call with one `--idempotency-key`. A result that says to check the site names the page. The record (`~/.api-anything/writes.json`, kept 24 hours) holds the
   site, the op, the time, the outcome and an HMAC of the args under a random local key, never the args.
 - A failure's `reason` quotes the site's answer, and `next` can name values too: both have every
   live cookie and session value replaced by `[redacted]` (as stored, URL-encoded, JSON- or
@@ -311,8 +356,13 @@ Known limits:
   an empty JSON list at the extract path, or, for `--html`, an items selector written as
   `"<container> <item>"` whose container is on the page with no item-tag element in it. A list
   that `--pick` empties (no item has a picked field), or `--html` items with none of their fields
-  found, is missing data, not `[]`: the site may have renamed them. A picked field missing from
-  some or all items is not detected, because it may be optional.
+  found, is missing data, not `[]`: the site may have renamed them. So is a picked field the op
+  learned with a type (not `null`) that no item carries now, or none with that type: when the
+  example args' answer still has it, the call is `ok` and its `reason` names the field; otherwise a
+  heal is tried, and if it cannot bring the field back the call is `drift` naming it, with a `next`
+  to re-add with a new `--pick`. A field learned `null` or absent, missing from some items of the
+  learned list, or present in some items of a list now, is optional. A field that keeps its type and changes its meaning (cents instead of units)
+  is not detected.
 - A write's 2xx is `ok` unless its answer says it was refused: an error field that holds an error
   (`userErrors`, `error: "..."`), `ok`/`success` false, an error word as the root `status`, a body
   status of 400 or more, GraphQL errors with null or no data, or the form page answering with its
@@ -329,15 +379,13 @@ Known limits:
   example 2, or until `verify` sees two passing cases that differ only in those params answer
   differently. A param the server ignores is not caught when the two answers differ for another
   reason (a timestamp, a shuffled order).
-- Request pacing (1 s per site) holds within one process: separate CLI runs are not paced
-  against each other.
 - Chrome locks its profile to one process. An MCP server releases it after 3 s idle; another
   process waits up to 15 s for it, then fails with a hint.
 - Optional request structure (a reply block that only some calls have) needs a separate op.
 - Rescan only reads scripts that the page references directly. An id inside a lazily loaded
   chunk heals through recapture instead, which is slower.
 - A site behind a bot wall that challenges a real Chrome as well needs you to clear it by hand
-  (`api-anything login`). There is no CAPTCHA solving and no TLS impersonation. A trigger run or
+  (`api-anything login <site> --window`). There is no CAPTCHA solving and no TLS impersonation. A trigger run or
   repair that ends on a challenge that did not solve is `blocked` and marks nothing stale.
 - Paging returns the site's own next cursor, and only when the answer holds one. Numbered pages
   get no `nextPage`. When the output cap cuts a page, the cut items are on neither that page nor

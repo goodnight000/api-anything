@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -9,13 +10,17 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { hooks, learnSite } from "../src/learnsite.js";
+import { resolver } from "../src/http.js";
+import { loadSettings, QUESTION, saveSettings } from "../src/identity.js";
+import { hooks, type LearnSiteOptions, learnSite, sameTrigger } from "../src/learnsite.js";
 import { createServer } from "../src/mcp.js";
 import { learnTool } from "../src/mcp-learn.js";
-import { HOLDOUT_PURPOSE } from "../src/share.js";
+import { settle } from "../src/report.js";
+import { HOLDOUT_PURPOSE, shareOps } from "../src/share.js";
+import { type Operation, parseSite } from "../src/spec.js";
 import { loadSite } from "../src/store.js";
 import { notARead } from "../src/vet.js";
-import { startRegistry } from "./fixture/registry.js";
+import { hashOf, served, startRegistry } from "./fixture/registry.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -226,6 +231,8 @@ test("learn_site refuses a GraphQL mutation, a POST or a PUT as a read, picked o
 test("learn_site's automatic pick passes over a write for the read; the consent prompt and next list what may be the user's", async () => {
   const home = mkdtempSync(join(tmpdir(), "aa-learn-read-"));
   process.env.API_ANYTHING_HOME = home;
+  // the user answered setup's question: only the op's own consent is asked
+  saveSettings({ share: true, askedAt: "2026-10-25T00:00:00.000Z" });
   const s = await site();
   const personal = ["$.operation.request.url holds an email address (me@mail.example.com)"];
   hooks.share = async (site, ops, o) =>
@@ -485,6 +492,8 @@ test("a learn_site still running at the deadline answers with a job, and its res
 test("learn_site asks its consent question after it answered with a job, and the job's result says the op was shared", async () => {
   const home = mkdtempSync(join(tmpdir(), "aa-learn-job-consent-"));
   process.env.API_ANYTHING_HOME = home;
+  // setup's question answered already: the op's own consent is the one asked
+  saveSettings({ share: true, askedAt: "2026-10-25T00:00:00.000Z" });
   // the holdout call (args3) takes longer than the server's deadline
   const s = await site({ q: ["carol"], ms: 600 });
   const shares: (boolean | undefined)[] = [];
@@ -538,4 +547,311 @@ test("learn_site asks its consent question after it answered with a job, and the
     await s.close();
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+/* ------------------------------- setup's question, asked by learn_site, and publish after it */
+
+const EX = "https://www.example.com";
+
+/** Sends what goes to www.example.com to the local site at `base`: a public site's spec, its requests kept here. */
+function routeExample(base: string): () => void {
+  const real = globalThis.fetch;
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    return real(url.startsWith(`${EX}/`) ? `${base}${url.slice(EX.length)}` : input, init);
+  }) as typeof fetch;
+  return () => {
+    globalThis.fetch = real;
+  };
+}
+
+/** A temp home, the local site behind www.example.com, the fake registry and the real shareOps, for `body`. */
+async function sharing(
+  body: (o: {
+    home: string;
+    reg: Awaited<ReturnType<typeof startRegistry>>;
+    /** what reached the site */
+    hits: string[];
+    learn: (op: string, o?: LearnSiteOptions) => ReturnType<typeof learnSite>;
+    input: (op: string) => Parameters<typeof learnSite>[0];
+  }) => Promise<void>,
+) {
+  const home = mkdtempSync(join(tmpdir(), "aa-learn-ask-"));
+  process.env.API_ANYTHING_HOME = home;
+  const s = await site();
+  const unroute = routeExample(s.base);
+  const reg = await startRegistry();
+  const was = process.env.API_ANYTHING_REGISTRY;
+  process.env.API_ANYTHING_REGISTRY = reg.url;
+  hooks.share = shareOps;
+  const read = { method: "GET", path: "/api/search?q={q}", answer: items };
+  let runs = 0;
+  const input = (op: string) => ({
+    op,
+    trigger: `${EX}/shop?q={q}`,
+    args: { q: "alice" },
+    args2: { q: "bobby" },
+    args3: { q: "carol" },
+    captures: [capture(home, `s${++runs}a`, EX, "alice", [read]), capture(home, `s${runs}b`, EX, "bobby", [read])] as [
+      string,
+      string,
+    ],
+  });
+  try {
+    await body({
+      home,
+      reg,
+      hits: s.hits,
+      input,
+      learn: (op, o = {}) => learnSite(input(op), { minIntervalMs: 0, ...o }),
+    });
+  } finally {
+    if (was === undefined) delete process.env.API_ANYTHING_REGISTRY;
+    else process.env.API_ANYTHING_REGISTRY = was;
+    unroute();
+    await reg.close();
+    await s.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+test("learn_site asks setup's question the first time something could be shared, keeps the answer, and never asks again", () =>
+  sharing(async ({ reg, learn }) => {
+    const asked: string[] = [];
+    const answering = (a: boolean | undefined) => async (m: string) => {
+      asked.push(m);
+      return a;
+    };
+    // dismissed: no answer is kept, nothing goes up, and the agent is told to ask
+    const r0 = await learn("search", { consent: answering(undefined) });
+    assert.equal(r0.ok, true, JSON.stringify(r0));
+    assert.equal(r0.site, "example-com");
+    assert.deepEqual(asked, [QUESTION]);
+    assert.equal(r0.shared?.shared, false);
+    assert.match(r0.shared?.reason ?? "", /never asked/);
+    assert.ok(r0.next?.includes(QUESTION), String(r0.next));
+    assert.equal(loadSettings().askedAt, undefined);
+    assert.equal(reg.uploads().length, 0);
+
+    // yes: kept, and the public read goes up at once
+    const r1 = await learn("search2", { consent: answering(true) });
+    assert.deepEqual(asked, [QUESTION, QUESTION]);
+    assert.equal(loadSettings().share, true);
+    assert.ok(loadSettings().askedAt);
+    assert.deepEqual([r1.shared?.shared, r1.shared?.status], [true, "candidate"], JSON.stringify(r1.shared));
+    assert.equal(r1.next, undefined);
+    assert.deepEqual(
+      reg.uploads().map((u) => u.operation.name),
+      ["search2"],
+    );
+
+    // answered: not asked again
+    const r2 = await learn("search3", { consent: answering(false) });
+    assert.equal(asked.length, 2);
+    assert.equal(r2.shared?.shared, true);
+  }));
+
+test("over MCP, a no to the question is kept: nothing is shared, the reason says the user said no, and it is not asked again", () =>
+  sharing(async ({ reg, input }) => {
+    const asked: string[] = [];
+    const client = new Client({ name: "probe", version: "0" }, { capabilities: { elicitation: {} } });
+    client.setRequestHandler(ElicitRequestSchema, async (req) => {
+      asked.push(req.params.message);
+      return { action: "decline" };
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await createServer().connect(a);
+    await client.connect(b);
+    try {
+      for (const op of ["search", "search2"]) {
+        const r = await client.callTool({ name: "learn_site", arguments: { ...input(op) } });
+        const out = JSON.parse((r.content as { text: string }[])[0]!.text);
+        assert.equal(out.ok, true, JSON.stringify(out));
+        assert.equal(out.shared.shared, false);
+        assert.match(out.shared.reason, /sharing is off: the user said no/);
+        assert.equal(out.next, undefined, "the user answered: nothing to ask");
+      }
+      assert.deepEqual(asked, [QUESTION]);
+      assert.deepEqual([loadSettings().share, !!loadSettings().askedAt], [false, true]);
+      assert.equal(reg.uploads().length, 0);
+    } finally {
+      await client.close();
+    }
+  }));
+
+test("with no way to ask, learn_site's next asks the user; the setup and publish it names then share the op", () =>
+  sharing(async ({ home, reg, input }) => {
+    const client = new Client({ name: "probe", version: "0" });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await createServer().connect(a);
+    await client.connect(b);
+    let out: { ok: boolean; site: string; next: string; shared: { shared: boolean; reason: string } };
+    try {
+      const r = await client.callTool({ name: "learn_site", arguments: { ...input("search") } });
+      out = JSON.parse((r.content as { text: string }[])[0]!.text);
+    } finally {
+      await client.close();
+    }
+    assert.equal(out.ok, true, JSON.stringify(out));
+    assert.equal(out.shared.shared, false);
+    assert.match(out.shared.reason, /never asked/);
+    assert.ok(out.next.includes(QUESTION), out.next);
+    assert.match(
+      out.next,
+      /On yes, run api-anything setup --yes --share-only; on no, api-anything setup --no-share --share-only/,
+    );
+    assert.match(out.next, /api-anything publish example-com search --yes/);
+    assert.equal(reg.uploads().length, 0);
+
+    // the user said yes: the agent runs what next names
+    const cli = (...args: string[]) =>
+      new Promise<{ code: number; out: Record<string, unknown>; stderr: string }>((resolve) =>
+        execFile(
+          process.execPath,
+          ["--import", "tsx", join(ROOT, "src", "cli.ts"), ...args],
+          // HOME too: setup --share-only must touch no agent's config
+          { cwd: ROOT, env: { ...process.env, HOME: home } },
+          (err, stdout, stderr) =>
+            resolve({ code: err ? Number(err.code ?? 1) : 0, out: JSON.parse(stdout || "{}"), stderr }),
+        ),
+      );
+    const yes = await cli("setup", "--yes", "--share-only");
+    assert.equal(yes.code, 0, yes.stderr);
+    assert.deepEqual([yes.out.share, loadSettings().share], [true, true]);
+    assert.equal(yes.out.agents, undefined, "no agent was connected");
+    const pub = await cli("publish", "example-com", "search", "--yes");
+    assert.equal(pub.code, 0, JSON.stringify(pub.out));
+    assert.deepEqual(
+      (pub.out.shared as { op: string; shared: boolean; status: string }[]).map((s) => [s.op, s.shared, s.status]),
+      [["search", true, "candidate"]],
+    );
+    assert.deepEqual(
+      reg.uploads().map((u) => [u.operation.name, u.operation.checks]),
+      [["search", [{ args: { q: "carol" }, expect: "result", purpose: HOLDOUT_PURPOSE }]]],
+    );
+    assert.equal(reg.received.find((r) => r.path === "/v1/versions")!.verified, true);
+  }));
+
+/* -------------------------------------------- an op someone shared, before any browser */
+
+/** example-com as the registry serves it: a candidate read behind the page `trigger`. */
+function shopSite(trigger: string, extract = "items") {
+  return parseSite({
+    name: "example-com",
+    baseUrl: EX,
+    operations: [
+      {
+        name: "searchShop",
+        request: { method: "GET", url: `${EX}/api/search?q=bobby`, headers: {} },
+        slots: [{ param: "q", at: ["query:q"] }],
+        params: [{ name: "q", example: "bobby" }],
+        trigger: { url: trigger },
+        match: { host: "www.example.com", path: "/api/search" },
+        response: { extract },
+        readOnly: true,
+      },
+    ],
+  });
+}
+
+/** A pulled candidate goes only to public addresses: www.example.com resolves to one here, with no DNS query. */
+async function publicDns(body: () => Promise<void>) {
+  const real = resolver.lookup;
+  resolver.lookup = async () => [{ address: "93.184.215.14" }];
+  try {
+    await body();
+  } finally {
+    resolver.lookup = real;
+  }
+}
+
+test("learn_site calls an op someone shared for the same page: the data, no browser, nothing learned or uploaded, and the call reported", () =>
+  publicDns(() =>
+    sharing(async ({ reg, hits }) => {
+      saveSettings({ share: true, askedAt: "2026-10-25T00:00:00.000Z" });
+      const shop = shopSite(`${EX}/shop?q={q}`);
+      reg.matches = [{ name: "example-com", domain: "example.com", operations: [] }];
+      reg.sites.set("example-com", served(shop, undefined, "candidate"));
+      // the agent's own placeholder name, and no browser at all
+      const input = {
+        trigger: "https://example.com/shop?q={query}",
+        args: { query: "alice" },
+        args2: { query: "bobby" },
+        args3: { query: "carol" },
+      };
+      const r = await learnSite(input, { minIntervalMs: 0 });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.deepEqual(r.reused, { site: "example-com", op: "searchShop", status: "candidate" });
+      assert.deepEqual(r.data, [{ name: "alice one" }, { name: "alice two" }]);
+      assert.equal(r.signature, "searchShop(q)");
+      assert.match(r.next ?? "", /^this is example-com\.searchShop, shared by others: call_operation it .*fresh: true/);
+      assert.deepEqual([r.captures, r.shared, r.proof], [undefined, undefined, undefined]);
+      assert.deepEqual(hits, ["GET /api/search?q=alice"], "one call: no holdout, no clean replay");
+      assert.equal(reg.uploads().length, 0);
+      assert.equal(loadSite("example-com")!.site.shared?.by, "agent", "pulled as an agent pulls: reads only");
+      await settle(5000);
+      assert.deepEqual(
+        reg.reports().map((x) => [x.hash, x.outcome]),
+        [[hashOf("example-com", shop.operations[0]!), "ok"]],
+      );
+
+      // fresh: the shared op was not what the user wanted, so the page is learned, which needs a browser here
+      const own = await learnSite({ ...input, fresh: true }, { minIntervalMs: 0 });
+      assert.equal(own.reused, undefined);
+      assert.match(own.error ?? "", /needs a Chromium browser/);
+      assert.equal(hits.length, 1, "the shared op was not called again");
+    }),
+  ));
+
+test("learn_site learns when the shared op is for another page or its call answers nothing", () =>
+  publicDns(() =>
+    sharing(async ({ reg, hits }) => {
+      reg.matches = [{ name: "example-com", domain: "example.com", operations: [] }];
+      const args = { args: { q: "alice" }, args2: { q: "bobby" }, args3: { q: "carol" } };
+      for (const [what, shop] of [
+        ["another page", shopSite(`${EX}/books?q={q}`)],
+        ["an empty answer", shopSite(`${EX}/shop?q={q}`, "nothing.here")],
+      ] as const) {
+        reg.sites.set("example-com", served(shop, undefined, "candidate"));
+        const r = await learnSite({ trigger: `${EX}/shop?q={q}`, ...args }, { minIntervalMs: 0 });
+        assert.equal(r.reused, undefined, what);
+        // learning comes next, and needs the browser this machine lacks
+        assert.match(r.error ?? "", /needs a Chromium browser/, what);
+      }
+      assert.ok(
+        hits.every((h) => h.startsWith("GET /api/search")),
+        hits.join("; "),
+      );
+    }),
+  ));
+
+test("sameTrigger: the same page with placeholders at the same places, whatever their names", () => {
+  const op = (url: string, params = [{ name: "q", type: "string" as const, required: true }]) =>
+    ({ trigger: { url }, params }) as unknown as Operation;
+  assert.deepEqual(
+    sameTrigger(op("https://www.example.com/s?q={q}"), "https://example.com/s?q={term}", { term: "x" }),
+    {
+      q: "x",
+    },
+  );
+  assert.deepEqual(
+    sameTrigger(
+      op("https://a.example.com/book/{id}?lang=en", [{ name: "id", type: "string" as const, required: true }]),
+      "https://a.example.com/book/{book}?lang=en",
+      { book: 7 },
+    ),
+    { id: 7 },
+  );
+  assert.equal(sameTrigger(op("https://example.com/s?q={q}"), "https://example.com/t?q={q}", { q: "x" }), undefined);
+  assert.equal(sameTrigger(op("https://example.com/s?q={q}"), "https://example.com/s?q=fixed", { q: "x" }), undefined);
+  assert.equal(
+    sameTrigger(op("https://example.com/s?q={q}"), "https://example.com/s?q={q}&p=2", { q: "x" }),
+    undefined,
+  );
+  assert.equal(sameTrigger(op("https://example.com/s?q={q}"), "https://example.org/s?q={q}", { q: "x" }), undefined);
+  assert.equal(
+    sameTrigger(op("https://example.com/s?q={q}"), "https://example.com/s?q={q}", { q: "x", page: 2 }),
+    undefined,
+    "an arg the op lacks",
+  );
 });

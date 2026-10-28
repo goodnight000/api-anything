@@ -1,0 +1,7 @@
+`getProduct(slug, catalogId)` reads public US product metadata. Copy the slug and catalog ID from the same canonical Costco product link. The returned item number is Costco's published item identifier and can differ from the catalog ID in the URL. Neither establishes a selected size or variant.
+
+The brand can be an empty string, as observed for the Costco Shop Card. The description is the site's structured product summary and can include displayed feature or promotion prose. Prices, member eligibility, inventory, delivery, gift-card redemption and purchase terms are outside this operation. No warehouse or shipping address is selected.
+
+## Maintainer notes
+
+Qualification completed signed out on 2026-10-26 UTC. Initial source reads and the separate fresh-home first call sent no Cookie or Authorization; later calls used only site-issued guest cookies. Qualification evidence is recorded in `docs/research/discovery/costco-coordinator-r7.md`, with capture preparation in `docs/research/discovery/costco-coordinator-r6.md`. The exact-document helper records real requested GET documents and aborts other requests. It does not establish a fully hydrated GUI. Current captured examples and independently checked fields are described in the report. Tier-1 checks used `lg-s80ty-313-ch-soundbar-with-wireless-subwoofer / 4000400860`, `uber-two-50-egift-cards / 4000282374` and held-out `costco-shop-card / 10024438`. Sources are the public canonical routes `https://www.costco.com/p/-/{slug}/{catalogId}`. No arbitrary catalog enumeration or search is qualified.

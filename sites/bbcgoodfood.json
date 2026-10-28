@@ -1,0 +1,172 @@
+{
+  "name": "bbcgoodfood",
+  "displayName": "BBC Good Food",
+  "baseUrl": "https://www.bbcgoodfood.com",
+  "description": "Signed-out recipe search and recipe details from Good Food public pages.",
+  "operations": [
+    {
+      "name": "search",
+      "description": "Search signed-out Good Food recipes on the first results page.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.bbcgoodfood.com/search?q=%7Bq%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.bbcgoodfood.com/search?q={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.bbcgoodfood.com",
+        "path": "/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": ".search-results article[data-item-type=recipe]",
+          "fields": {
+            "title": "h2",
+            "url": "[data-testid=title-wrapper]@href",
+            "rating": ".rating__values > span",
+            "ratings": ".rating__count-text"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Free-text recipe search query.",
+          "example": "chicken"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "salmon"
+          },
+          "expect": "result"
+        },
+        {
+          "args": {
+            "q": "beef"
+          },
+          "expect": "result"
+        }
+      ]
+    },
+    {
+      "name": "getRecipe",
+      "description": "Read a public recipe by its Good Food recipe URL slug.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.bbcgoodfood.com/recipes/%7Bslug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.bbcgoodfood.com/recipes/{slug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.bbcgoodfood.com",
+        "path": "/recipes/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title=name",
+          "url",
+          "description",
+          "ingredients=recipeIngredient",
+          "instructions=recipeInstructions[*].text",
+          "prepTime",
+          "cookTime",
+          "totalTime",
+          "servings=recipeYield",
+          "nutrition",
+          "category=recipeCategory",
+          "cuisine=recipeCuisine"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*data-testid=\"page-schema\"[^>]*>([\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Recipe URL slug returned by search, such as chicken-chorizo-jambalaya.",
+          "example": "chicken-chorizo-jambalaya"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "crunchy-garlic-chicken"
+          },
+          "expect": "result"
+        },
+        {
+          "args": {
+            "slug": "beef-bourguignon"
+          },
+          "expect": "result"
+        }
+      ]
+    }
+  ]
+}

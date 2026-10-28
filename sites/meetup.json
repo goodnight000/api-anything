@@ -1,0 +1,92 @@
+{
+  "name": "meetup",
+  "displayName": "Meetup",
+  "baseUrl": "https://www.meetup.com",
+  "description": "Public event title and scheduled time from event pages, without signing in.",
+  "operations": [
+    {
+      "name": "eventSchedule",
+      "description": "Read the public title and scheduled time of one Meetup event.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.meetup.com/%7Bnamespace%7D/events/%7BeventId%7D/?eventOrigin=home_logged_out_near_location",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "namespace",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "eventId",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.meetup.com/{namespace}/events/{eventId}/?eventOrigin=home_logged_out_near_location"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.meetup.com",
+        "path": "/*/events/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "title": "h1",
+            "start": "time@datetime",
+            "schedule": "time"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "namespace",
+          "type": "string",
+          "required": true,
+          "description": "Event route namespace from the public event URL.",
+          "example": "ananda-yoga-and-guided-meditation",
+          "pattern": "[A-Za-z0-9-]{1,150}",
+          "hint": "Public URL namespace, without slashes"
+        },
+        {
+          "name": "eventId",
+          "type": "string",
+          "required": true,
+          "description": "Event identifier from the public event URL.",
+          "example": "317020116",
+          "pattern": "[0-9]{1,20}",
+          "hint": "Digits from the event URL"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "namespace": "vibe-code-la",
+            "eventId": "316840610"
+          },
+          "expect": "result",
+          "purpose": "A different event has a different title and scheduled time."
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { liveIn, OMITTED, REDACTED, redact, scanSecrets } from "../src/secrets.js";
+import { captureLive, liveIn, OMITTED, REDACTED, redact, scanSecrets, signInFills } from "../src/secrets.js";
 import type { Session } from "../src/session.js";
 
 const TOKEN = "Tk4Rf9Lp2Wq7Zx3Nm8Vb";
@@ -112,4 +112,70 @@ test("liveIn: reads HTML character references, the origin and short values are n
   assert.ok(liveIn(`<p>${ODD.replace("+", "&#x2B;")}</p>`, odd));
   assert.ok(!liveIn("see https://www.x.test/ and abc", session));
   assert.ok(scanSecrets(ODD.replace("+", "&#43;"), odd).secrets.length);
+});
+
+test("redact named: each live value becomes the ref that would stand there", () => {
+  const url = `https://x.test/api?q=pizza&access_token=${TOKEN}&c=${encodeURIComponent(SPACED)}`;
+  assert.equal(
+    redact(url, session, { named: true }),
+    "https://x.test/api?q=pizza&access_token=[cookie:sid]&c=[session:csrf]",
+  );
+});
+
+test("captureLive: a capture's cookies and storage, without the user's own example values", () => {
+  const cookie = (name: string, value: string) => ({ ...session.cookies[0]!, name, value });
+  const live = captureLive(
+    {
+      cookies: [cookie("sid", TOKEN), cookie("last", "Pizza-Place")],
+      storage: { tok: "st0r3dT0kenValue9", q: "pizza-place" },
+    },
+    ["pizza-place"],
+  );
+  assert.deepEqual(
+    live.cookies.map((c) => c.name),
+    ["sid"],
+  );
+  assert.deepEqual(live.values, { tok: "st0r3dT0kenValue9" });
+  assert.equal(
+    redact("/api?q=pizza-place&t=st0r3dT0kenValue9", live, { named: true }),
+    "/api?q=pizza-place&t=[session:tok]",
+  );
+});
+
+test("signInFills: a step typing into a password or code field, or a password-like literal, is a sign-in's", () => {
+  const fill = (selector: string, value = "{q}") => ({ action: "fill" as const, selector, value });
+  for (const selector of [
+    "#pw",
+    "input[type=password]",
+    'input[type="password"]',
+    "#login_pwd",
+    "input[name=passwd]",
+    "#user-password",
+    "[autocomplete=current-password]",
+    "[autocomplete=one-time-code]",
+    "#otp",
+    "input[name=totp_code]",
+    "#mfa-code",
+    "input[name=pass]",
+    "#user_pass",
+    "input[name='pass']",
+  ])
+    assert.equal(signInFills([fill(selector, "x")]).length, 1, selector);
+  const [why] = signInFills([{ action: "click", selector: "#go" }, fill("#q", "Hunter2-RealPassw0rd!")]);
+  assert.match(
+    why!,
+    /^steps\[1\] types a literal that looks like a password: a sign-in is the user's: ask them to run api-anything login/,
+  );
+  // a search box, a footprint filter, a passport number field, params the call fills, words
+  for (const s of [
+    fill("#q"),
+    fill("#footprint"),
+    fill("input[name=passport]"),
+    fill("input[name=passenger]"),
+    fill("#compass"),
+    fill("#bypass-cache"),
+    fill("#search", "{user}-{q}"),
+    fill("#q", "new york pizza"),
+  ])
+    assert.deepEqual(signInFills([s]), [], s.selector);
 });

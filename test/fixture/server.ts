@@ -90,6 +90,8 @@ if((m=p.match(/^\\/u\\/([^/]+)$/))){
   document.getElementById("follow").addEventListener("click",()=>fetch("/api/follow?user="+m[1]).then(r=>r.json()).then(out,()=>{}));
 }else if(p==="/walled"){
   fetch("/api/walled").then(r=>r.json()).then(out);
+}else if(p==="/shut-out"){
+  fetch("/api/shut-out?q="+encodeURIComponent(new URLSearchParams(location.search).get("q")||"")).then(r=>r.json()).then(out,()=>{});
 }else if(p.startsWith("/spa/")){
   // a client-routed SPA: its own links and history changes are routed without a page load
   const route=()=>{
@@ -156,6 +158,8 @@ export async function startFixture(): Promise<Fixture> {
   let limitedHits = 0;
   const calendarFails: number[] = [];
   const todos: { id: string; title: string }[] = [];
+  /** order id by Idempotency-Key */
+  const orders = new Map<string, string>();
 
   const send = (
     res: ServerResponse,
@@ -195,7 +199,10 @@ export async function startFixture(): Promise<Fixture> {
     if (p === "/search" || p === "/cal") return html(200, page(state.build));
     if (p === "/compose")
       return html(200, page(state.build, '<textarea id="text"></textarea><button id="post">Post</button>'));
-    if (["/feed", "/scoped", "/stores", "/walled", "/reviews", "/todos"].includes(p) || p.startsWith("/spa/"))
+    if (
+      ["/feed", "/scoped", "/stores", "/walled", "/shut-out", "/reviews", "/todos"].includes(p) ||
+      p.startsWith("/spa/")
+    )
       return html(200, page(state.build));
     // A bot challenge that never solves, in a real browser too: the interstitial on every load.
     if (p === "/challenged")
@@ -206,6 +213,13 @@ export async function startFixture(): Promise<Fixture> {
         '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
       );
     if (/^\/follow\/[^/]+$/.test(p)) return html(200, page(state.build, '<button id="follow">Follow</button>'));
+    // A checkout whose page makes an Idempotency-Key per order (crypto.randomUUID()); the server answers
+    // a key it has seen with that earlier order, as Stripe-style APIs do.
+    if (p.startsWith("/checkout/"))
+      return html(
+        200,
+        `<!doctype html><html><body><button id="buy">Buy</button><script>document.getElementById("buy").onclick=()=>fetch("/api/checkout",{method:"POST",headers:{"content-type":"application/json","idempotency-key":crypto.randomUUID()},body:JSON.stringify({item:${JSON.stringify(decodeURIComponent(p.slice(10)))}})}).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)})</script></body></html>`,
+      );
     // Native dialogs. A delete behind the browser's own confirm(), which sends only once it is
     // accepted; ?wording=new is the same page after the site reworded its question.
     if (/^\/delete\/[^/]+$/.test(p)) {
@@ -217,12 +231,43 @@ export async function startFixture(): Promise<Fixture> {
         `<!doctype html><html><body><button id="delete">Delete</button><script>document.getElementById("delete").onclick=()=>{if(confirm(${JSON.stringify(ask)}))fetch("/api/delete?id="+encodeURIComponent(${JSON.stringify(id)}),{method:"POST"}).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)})}</script></body></html>`,
       );
     }
+    // A shop: the item loads on its own, and Buy saves the cart and places the order side by side.
+    // ?redesign=1 is the same page after a redesign put "Delete account" where Buy was.
+    if (/^\/shop\/[^/]+$/.test(p)) {
+      const item = decodeURIComponent(p.slice("/shop/".length));
+      const click = u.searchParams.get("redesign")
+        ? `fetch("/api/account",{method:"DELETE"})`
+        : `fetch("/api/cart/"+encodeURIComponent(item),{method:"PUT"}).catch(()=>{});fetch("/api/order",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({item})}).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)},()=>{})`;
+      return html(
+        200,
+        `<!doctype html><html><body><button id="buy">${u.searchParams.get("redesign") ? "Delete account" : "Buy"}</button><script>const item=${JSON.stringify(item)};fetch("/api/item?id="+encodeURIComponent(item));document.getElementById("buy").onclick=()=>{${click}}</script></body></html>`,
+      );
+    }
+    // A finder whose reads go out as POSTs on a click: a search, a GraphQL query, and a click beacon beside each.
+    if (p === "/finder")
+      return html(
+        200,
+        `<!doctype html><html><body><input id="q"><button id="go">Find</button><button id="gql">Find (GraphQL)</button><script>
+const q=()=>document.getElementById("q").value;
+const track=()=>fetch("/api/track",{method:"POST",body:"click"}).catch(()=>{});
+document.getElementById("go").onclick=()=>{track();fetch("/api/find",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({q:q()})})};
+document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({query:"query Find($q: String!) { find(q: $q) { name } }",variables:{q:q()}})});
+</script></body></html>`,
+      );
     // An editor that, once touched, asks before the page is left ("unsaved changes") and saves a
     // draft as it goes, the way autosave does.
     if (p === "/unsaved")
       return html(
         200,
         `<!doctype html><html><body><button id="edit">Edit</button><script>document.getElementById("edit").onclick=()=>{addEventListener("beforeunload",e=>{e.preventDefault();e.returnValue=""});addEventListener("pagehide",()=>navigator.sendBeacon("/api/autosave","draft"))};fetch("/api/scoped?q=unsaved")</script></body></html>`,
+      );
+    // A sign-in box beside a search, on one page. The password and code fields are named by their
+    // type and autocomplete only, as many sites' are. The search sends the page's CSRF cookie in its
+    // URL, the way some APIs take an access_token in the query.
+    if (p === "/signin-box")
+      return html(
+        200,
+        `<!doctype html><html><body><form><input id="user" name="username" autocomplete="username"><input name="secret" type="password"><input id="code" name="code" autocomplete="one-time-code"><button type="button">Sign in</button></form><input id="q"><button id="find">Find</button><script>const ct0=(document.cookie.match(/(?:^|; )ct0=([^;]*)/)||[])[1]||"";const find=q=>fetch("/api/scoped?q="+encodeURIComponent(q)+"&access_token="+ct0);document.getElementById("find").onclick=()=>find(document.getElementById("q").value);const q=new URLSearchParams(location.search).get("q");if(q)find(q)</script></body></html>`,
       );
     // A page that greets with an alert (or asks with a prompt) before it loads its data.
     if (p === "/greet") {
@@ -461,6 +506,8 @@ export async function startFixture(): Promise<Fixture> {
       }
       return json(res, 200, { data: { items: ["behind the wall"] } });
     }
+    // A site that refuses this machine outright, a real browser too: a bare 403, no challenge, no sign-in.
+    if (p === "/api/shut-out") return json(res, 403, { message: "Forbidden" });
     if (p === "/api/scoped")
       return json(res, 200, {
         data: { results: [`${u.searchParams.get("q")} one`, `${u.searchParams.get("q")} two`] },
@@ -488,6 +535,22 @@ export async function startFixture(): Promise<Fixture> {
     // is: a recipe suggested from a signed-in visitor's answer would carry the cookie's value.
     if (p === "/api/mine") return json(res, 200, { [jar.session ?? "guest"]: [{ name: u.searchParams.get("name") }] });
     if (p === "/api/follow" || p === "/api/sw-write" || p === "/api/autosave") return json(res, 200, { ok: true });
+    if (p === "/api/item") return json(res, 200, { item: { id: u.searchParams.get("id"), price: 10 } });
+    if (p.startsWith("/api/cart/") && req.method === "PUT") return json(res, 200, { ok: true });
+    if (p === "/api/order" && req.method === "POST")
+      return json(res, 200, {
+        order: { id: `o${calls.length}`, item: (JSON.parse(body || "{}") as { item?: string }).item },
+      });
+    if (p === "/api/account" && req.method === "DELETE") return json(res, 200, { deleted: true });
+    if (p === "/api/track") return json(res, 200, { ok: true });
+    if (p === "/api/find" && req.method === "POST") {
+      const q = String((JSON.parse(body || "{}") as { q?: unknown }).q ?? "");
+      return json(res, 200, { results: [`${q} one`, `${q} two`] });
+    }
+    if (p === "/api/gql" && req.method === "POST") {
+      const q = String((JSON.parse(body || "{}") as { variables?: { q?: unknown } }).variables?.q ?? "");
+      return json(res, 200, { data: { find: [{ name: `${q} one` }, { name: `${q} two` }] } });
+    }
     if (p === "/api/delete" && req.method === "POST")
       return json(res, 200, { data: { deleted: u.searchParams.get("id") } });
     // A write refused in a 200 answer, as Shopify's GraphQL answers a validation failure.
@@ -511,6 +574,13 @@ export async function startFixture(): Promise<Fixture> {
       return json(res, 200, { ok: true });
     }
     if (p === "/api/todos") return json(res, 200, { todos });
+    if (p === "/api/checkout" && req.method === "POST") {
+      const key = String(req.headers["idempotency-key"] ?? "");
+      const item = String((JSON.parse(body || "{}") as { item?: unknown }).item ?? "");
+      if (!key || orders.has(key)) return json(res, 200, { orderId: orders.get(key) ?? null, replayed: true });
+      orders.set(key, `o${orders.size + 1}`);
+      return json(res, 201, { orderId: orders.get(key), item });
+    }
     if (p === "/api/spa/user") return json(res, 200, { name: u.searchParams.get("name") });
 
     if (p === "/api/limited") {

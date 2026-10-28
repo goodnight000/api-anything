@@ -130,7 +130,7 @@ export function splitPick(s: string): string[] {
   return out;
 }
 
-function pickEntry(p: string): { name: string; path: string; re?: RegExp } {
+export function pickEntry(p: string): { name: string; path: string; re?: RegExp } {
   const [, name, rest] = /^([\w$-]+)=(.+)$/.exec(p) ?? [p, undefined, p];
   const cut = rest.indexOf("~");
   const path = cut < 0 ? rest : rest.slice(0, cut);
@@ -398,8 +398,12 @@ export function capOutput(value: unknown, maxChars = 20_000): { data: unknown; t
 // numeric ids, short upper-case codes (SFO, US), and ids with digits (item-85809106, u_123)
 const ID_KEY = /^(\d+|[A-Z0-9]{2,5}|[\w:.-]*\d[\w:.-]*)$/;
 
-/** Key paths -> types (first array item only; an id-keyed map as "*"), for drift detection. */
-export function inferShape(value: unknown, maxPaths = 200): Record<string, string> {
+/**
+ * Key paths -> types (first array item only; an id-keyed map as "*"), for drift detection.
+ * `optional` (a learned answer's): a path of a first item that another item of its list lacks is
+ * typed "null", as a value learned null is, so its absence later is no drift.
+ */
+export function inferShape(value: unknown, maxPaths = 200, optional = false): Record<string, string> {
   const out: Record<string, string> = {};
   let n = 0;
   const visit = (v: unknown, path: string, depth: number) => {
@@ -411,7 +415,20 @@ export function inferShape(value: unknown, maxPaths = 200): Record<string, strin
     }
     if (depth >= 6) return;
     if (Array.isArray(v)) {
-      if (v.length) visit(v[0], `${path}[]`, depth + 1);
+      if (!v.length) return;
+      const at = `${path}[]`;
+      const before = new Set(Object.keys(out));
+      visit(v[0], at, depth + 1);
+      if (!optional || v[0] === null || typeof v[0] !== "object") return;
+      const own = Object.keys(out).filter((k) => !before.has(k) && k !== at);
+      for (const item of v.slice(1)) {
+        if (item === null || typeof item !== "object") continue;
+        const has = inferShape(item, maxPaths);
+        for (const k of own) {
+          const rel = k.slice(at.length).replace(/^\./, "");
+          if (!(rel in has)) out[k] = "null";
+        }
+      }
     } else if (type === "object") {
       const entries = Object.entries(v as Record<string, unknown>);
       // An id-keyed map (airports: {SFO: {...}}) has different keys for other args: its keys are "*".

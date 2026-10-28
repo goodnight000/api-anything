@@ -1,0 +1,86 @@
+{
+  "name": "netflix",
+  "displayName": "Netflix",
+  "baseUrl": "https://www.netflix.com",
+  "description": "Public signed-out title metadata from Netflix title documents in the observed US English context.",
+  "operations": [
+    {
+      "name": "getTitle",
+      "description": "Read public title identity, synopsis, advertised genres and credited people from the signed-out title document.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.netflix.com/title/%7BtitleId%7D?pubDate=20250721",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "titleId",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.netflix.com/title/{titleId}?pubDate=20250721"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.netflix.com",
+        "path": "/title/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "title": "h1",
+            "synopsis": "[data-uia=\"title-info-synopsis-talent\"]",
+            "genres": "[data-uia=\"more-details\"] > div:nth-child(2) > div > div:nth-child(1) > div > div:nth-child(2) > span",
+            "cast": "[data-uia=\"more-details\"] > div:nth-child(2) > div > div:nth-child(3) span",
+            "starring": "[data-uia=\"info-starring\"] > span:nth-child(2)",
+            "creators": "[data-uia=\"info-creators\"] > span:nth-child(2)"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "titleId",
+          "type": "string",
+          "required": true,
+          "description": "Numeric title ID from an existing public Netflix title URL.",
+          "example": "81018682",
+          "pattern": "[0-9]+",
+          "hint": "a numeric ID from a public Netflix title URL"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "titleId": "80057281"
+          },
+          "expect": "result",
+          "purpose": "A series title differs from the film example and has optional creators."
+        },
+        {
+          "args": {
+            "titleId": "80178603"
+          },
+          "expect": "result",
+          "purpose": "Held-out linked film has a different identity and synopsis."
+        }
+      ]
+    }
+  ]
+}

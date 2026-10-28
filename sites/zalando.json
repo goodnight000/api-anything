@@ -1,0 +1,87 @@
+{
+  "name": "zalando",
+  "displayName": "Zalando UK",
+  "baseUrl": "https://www.zalando.co.uk",
+  "description": "Public UK article identity and colour metadata; excludes size selection, offers and inventory.",
+  "operations": [
+    {
+      "name": "getProduct",
+      "description": "Read public UK article identity, brand and schema colour metadata from the product document.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.zalando.co.uk/%7BproductPath%7D.html",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "productPath",
+          "at": [
+            "path:0"
+          ],
+          "template": "{productPath}.html"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.zalando.co.uk/{productPath}.html"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.zalando.co.uk",
+        "path": "/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "[0]",
+        "pick": [
+          "name",
+          "articleId=productGroupID",
+          "brand=brand.name",
+          "schemaColour=color",
+          "url"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*type=\"application/ld\\+json\"[^>]*>(\\[)"
+        }
+      },
+      "params": [
+        {
+          "name": "productPath",
+          "type": "string",
+          "required": true,
+          "description": "Exact product-link path segment before .html from a Zalando UK product page. Preserve the whole slug, including its article suffix.",
+          "example": "adidas-originals-samba-og-unisex-trainers-core-black-ad115o1o3-q11",
+          "pattern": "[a-z0-9-]+",
+          "hint": "Copy the product path without the leading slash or .html."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "productPath": "adidas-originals-samba-unisex-trainers-whitecardboard-ad115o1pp-a12"
+          },
+          "expect": "result",
+          "purpose": "Second captured Samba article differs in article identity, name and colour metadata."
+        },
+        {
+          "args": {
+            "productPath": "adidas-originals-handball-spezial-unisex-trainers-carboncarbongum-ad115p09y-q11"
+          },
+          "expect": "result",
+          "purpose": "Held-out Handball Spezial independently compared with article detail, heading, canonical URL and document title."
+        }
+      ]
+    }
+  ]
+}

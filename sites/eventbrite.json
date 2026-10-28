@@ -1,0 +1,168 @@
+{
+  "name": "eventbrite",
+  "displayName": "Eventbrite",
+  "baseUrl": "https://www.eventbrite.com",
+  "description": "Discover featured events by city and read public event details.",
+  "operations": [
+    {
+      "name": "getEvent",
+      "description": "Read public event details from its frontend-linked event slug.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.eventbrite.com/e/%7Bslug%7D?aff=ebdssbneighborhoodbrowse",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.eventbrite.com/e/{slug}?aff=ebdssbneighborhoodbrowse"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.eventbrite.com",
+        "path": "/e/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "name",
+          "description",
+          "url",
+          "startDate",
+          "endDate",
+          "eventStatus",
+          "venue=location.name",
+          "address=location.address",
+          "organizer=organizer.name",
+          "offers"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*type=\"application/ld\\+json\"[^>]*>\\s*(\\{\"@context\":\"https://schema.org\",\"@type\":\"[A-Za-z]*Event\"[\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Final path segment of an Eventbrite event link, including its title slug and ticket ID.",
+          "example": "san-frans-largest-tech-startup-business-entrepreneur-networking-soiree-tickets-1976644210042",
+          "pattern": "[a-z0-9-]+",
+          "hint": "The full /e/ path segment from an event link, without query parameters."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "rb-and-ribs-sf-halloween-tickets-2001891472283"
+          },
+          "expect": "result",
+          "purpose": "Different public event identity from the example."
+        },
+        {
+          "args": {
+            "slug": "fairmont-hotel-san-francisco-mega-halloween-party-tickets-1998382597143"
+          },
+          "expect": "result",
+          "purpose": "Independent third event matched all returned detail fields."
+        }
+      ]
+    },
+    {
+      "name": "listFeaturedEvents",
+      "description": "List the first featured event shelf on a public city browse page.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.eventbrite.com/d/%7Bcity%7D/events/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "city",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.eventbrite.com/d/{city}/events/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.eventbrite.com",
+        "path": "/d/*/events/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "html": {
+          "items": ".content-bucket:not(.eds-l-pad-vert-16) .eds-show-up-md .event-card-details",
+          "fields": {
+            "name": "h3",
+            "url": "a.event-card-link@href",
+            "eventId": "a.event-card-link@data-event-id",
+            "location": "a.event-card-link@data-event-location",
+            "when": "a.event-card-link + p",
+            "venue": "p.event-card__clamp-line--one"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "city",
+          "type": "string",
+          "required": true,
+          "description": "City route slug from an Eventbrite browse link, such as ca--san-francisco.",
+          "example": "ca--san-francisco",
+          "pattern": "[a-z0-9-]+",
+          "hint": "A city slug from a public /d/<city>/events/ link."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "city": "ny--new-york"
+          },
+          "expect": "result",
+          "purpose": "Different city excludes San Francisco featured events."
+        },
+        {
+          "args": {
+            "city": "ca--los-angeles"
+          },
+          "expect": "result",
+          "purpose": "Los Angeles shelf exactly matched the independent frontend capture."
+        }
+      ]
+    }
+  ]
+}

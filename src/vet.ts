@@ -5,7 +5,7 @@
  */
 import { parse } from "tldts";
 import { siteOf } from "./domain.js";
-import { literalCredentials, providerKeys, scanSecrets } from "./secrets.js";
+import { literalCredentials, providerKeys, scanSecrets, signInFills } from "./secrets.js";
 import type { Operation, Readback, ReadbackRead, Request, Site } from "./spec.js";
 
 export const LIMITS = {
@@ -15,11 +15,13 @@ export const LIMITS = {
   file: 256 * 1024,
   regex: 200,
   confirms: 8,
+  companions: 8,
   enum: 100,
   checks: 10,
 } as const;
 
 const READ_METHODS = new Set(["GET", "HEAD", "POST"]);
+const READ_ONLY = new Set(["GET", "HEAD", "OPTIONS"]);
 // Op and param names are spelled in the commands `next` hints give an agent to run.
 const NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 // A param that is the whole body (raw, base64, the JSON root or a batch's item) is the request the caller
@@ -397,10 +399,24 @@ export function vetShared(site: Site, notes?: string): Vetted {
     for (const c of confirms)
       if (c.step >= steps)
         errors.push(at(`a recorded confirm dialog at steps[${c.step}], a step the trigger does not have`));
+    // A companion is let out at tier 3 beside the write: only a write's, a few, each one unsafe request on the op's own site.
+    const companions = op.trigger.companions ?? [];
+    if (companions.length && op.readOnly)
+      errors.push(at("a read sends no companion requests, and this one lists some"));
+    if (companions.length > LIMITS.companions)
+      errors.push(at(`${companions.length} companion requests; at most ${LIMITS.companions}`));
+    const opSite = hostOf(op.request.url) && siteOf(hostOf(op.request.url)!);
+    for (const [j, c] of companions.entries()) {
+      const where = `companion ${j + 1} (${c.method ?? "any method"} ${c.host ?? "any host"}${c.path ?? ""})`;
+      if (!c.method || READ_ONLY.has(c.method.toUpperCase()) || !c.host || !c.path)
+        errors.push(at(`${where} names no unsafe method, host and path`));
+      else if (siteOf(c.host.toLowerCase()) !== opSite) errors.push(at(`${where} is off the op's own site ${opSite}`));
+    }
     if (op.learnedLoggedIn) warnings.push(at("learned while signed in: calls use the caller's own login"));
     const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
     for (const leaf of literalCredentials(op.request, pub))
       errors.push(at(`request ${leaf.at.join(" > ")} holds a literal credential`));
+    for (const fill of signInFills(op.trigger.steps)) errors.push(at(`trigger ${fill}`));
     for (const name of pub)
       if (op.request.headers[name] !== undefined) {
         warnings.push(at(`sends the literal ${name} it lists as public: every caller sends that same value`));

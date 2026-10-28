@@ -140,7 +140,9 @@ happened (`class`), why (`reason`) and what to do next (`next`).
 - It checks for a Chromium browser (Chrome, Brave, Edge, Chromium, Vivaldi, Arc). One is needed only
   to learn sites; calling shared operations works without it. `API_ANYTHING_BROWSER` names any other.
 - It makes this install's key (`~/.api-anything/key.json`). There is no account.
-- `--yes` shares without asking, `--no-share` turns sharing off. See [what leaves your machine](#what-leaves-your-machine).
+- `--yes` shares without asking, `--no-share` turns sharing off; add `--share-only` to change only that.
+  Installed another way, your agent asks the question the first time it learns something to share.
+  See [what leaves your machine](#what-leaves-your-machine).
 
 Install the command globally, then connect any client:
 
@@ -398,7 +400,8 @@ no search words. With sharing on:
   published examples, over plain HTTP with no cookies, only to https addresses on public hosts.
 - **Repairs.** When a call heals a public operation that drifted, the repaired version is shared.
 
-With sharing off (`api-anything setup --no-share`), nothing is shared or reported, and the catalog
+With sharing off (`api-anything setup --no-share --share-only`), or before you answered, nothing is
+shared or reported, and the catalog
 still works for reads. [How the catalog works](docs/REGISTRY.md)
 
 <details>
@@ -429,14 +432,20 @@ Every call answers in fields, so an agent or a script can act without parsing pr
 | `retry` | `safe` `after_wait` `after_fix` `no` | whether to send it again; `retryAfterMs` says when |
 | `nextCall` | `login` `relearn` `fix_args` `check_site` `allow_writes` ... | the one step to take next; over MCP, with the tool and its args |
 | `nextPage`, `hasMore` | the site's own cursor | how to get the next page of a list |
+| `heal` | `{strategy, changes}` | how a call that repaired the op did it, and what changed in its request; `api-anything revert` undoes it |
 
 **Writes are guarded at every step.**
 
 - Nothing is sent without `--allow-writes` (MCP: `call_write_operation`, library: `allowWrites`).
-- Learning a write intercepts and aborts the request, so learning never performs it.
+- Learning a write intercepts and aborts the request, so learning never performs it. Learning a read
+  stops any POST, PUT, PATCH or DELETE its clicks send, so a forgotten `--write` places no order.
+- When the browser sends a write, only the requests its learning saw go out: a redesigned button
+  that now deletes the account is stopped, and the result names it.
+- Card payment stays with you: api-anything doesn't learn card fields.
 - A write is sent once. It is retried only when the server certainly didn't run it (400, 401, 403, 404).
 - The same write within 10 minutes is refused as `duplicate`, unless you pass `--again`.
-  `--idempotency-key` makes a repeat return the first call's record.
+  `--idempotency-key` on the first call makes a repeat return that call's record.
+- A key the page makes per request (`Idempotency-Key: crypto.randomUUID()`) is made fresh for each call, not replayed.
 - `accepted` is a 2xx. Only a `readback` that finds the new item makes it `applied`.
 
 [![Demo: a write refused without --allow-writes, applied once, then refused as a duplicate](docs/demos/safety.gif)](docs/demos/README.md#5-a-write-refused-by-default-sent-once-never-twice)
@@ -452,7 +461,8 @@ api-anything login linkedin
 `login` imports that site's cookies from a browser profile you're already signed in to, so there's
 usually no password to type. If several profiles are signed in, it asks which one. If none can be
 imported, it opens a window to sign in by hand. A spec holds references to cookies and tokens, never
-their values, so a refreshed session works without re-learning anything.
+their values, so a refreshed session works without re-learning anything. No password goes in one
+either: a trigger step that would type into a password or one-time-code field fails instead.
 
 <details>
 <summary><b>What counts as signed in, and what happens on <code>auth</code></b></summary>

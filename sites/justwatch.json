@@ -1,0 +1,84 @@
+{
+  "name": "justwatch",
+  "displayName": "JustWatch",
+  "baseUrl": "https://www.justwatch.com",
+  "description": "Regular public streaming, rental, purchase and other provider offers on US movie pages.",
+  "operations": [
+    {
+      "name": "listOffers",
+      "description": "Read regular public US provider offers for one film; excludes promoted and similar-film cards. Displayed amounts are not guaranteed checkout prices.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.justwatch.com/us/movie/%7Bslug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.justwatch.com/us/movie/{slug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.justwatch.com",
+        "path": "/us/movie/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html;charset=utf-8",
+        "html": {
+          "items": ".buybox > .offer-container > a.offer",
+          "fields": {
+            "providers": "all:img.provider-icon@alt",
+            "monetization": ".offer__label__text, .offer__label__free-trial",
+            "priceText": ".offer__label__price:not(.transparent)",
+            "quality": ".offer__presentation__icons__quality"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Exact public US movie slug from a JustWatch link; country-specific slugs can differ.",
+          "example": "dune-part-two-2023",
+          "pattern": "[a-z0-9][a-z0-9-]{0,199}",
+          "hint": "A US movie slug such as memento, without slashes or query strings"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "memento"
+          },
+          "expect": "result",
+          "purpose": "Different title and monetization offers from the Dune example"
+        },
+        {
+          "args": {
+            "slug": "oppenheimer"
+          },
+          "expect": "result",
+          "purpose": "Held-out actual Dune frontend film link"
+        }
+      ]
+    }
+  ]
+}

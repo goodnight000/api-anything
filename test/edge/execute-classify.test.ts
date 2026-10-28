@@ -422,7 +422,8 @@ describe("timeouts and network errors", () => {
     const s = await call("rl", "s", {}, t1);
     assert.equal(s.class, "rate");
     assert.match(`${s.reason} ${s.next}`, /120/, JSON.stringify(s));
-    const d = await call("rl", "d", {}, t1);
+    // sent, though the first 429 cooled the site down
+    const d = await call("rl", "d", {}, { ...t1, ignoreCoolDown: true });
     assert.match(`${d.reason} ${d.next}`, /2026-10-21|Oct 2026/, JSON.stringify(d));
   });
 });
@@ -513,9 +514,11 @@ describe("classification", () => {
   });
 
   test("5xx is error (retry hint), 4xx without markers is not auth", () => {
+    assert.equal(classify(gqlOp(), obs(503, "Service Unavailable", "text/plain")).class, "error");
+    // one that names its wait is a limit
     assert.equal(
       classify(gqlOp(), obs(503, "Service Unavailable", "text/plain", { "retry-after": "30" })).class,
-      "error",
+      "rate",
     );
     assert.equal(classify(gqlOp(), obs(500, '{"error":"internal"}')).class, "error");
     assert.equal(classify(gqlOp(), obs(403, '{"message":"CSRF token missing or incorrect."}')).class, "auth");
@@ -638,7 +641,7 @@ describe("execution ladder", () => {
     const t0 = Date.now();
     const rs = await Promise.all([1, 2, 3].map(() => call("conc", "l", {}, { ...t1, minIntervalMs: 100 })));
     assert.ok(rs.every((r) => r.ok));
-    assert.ok(Date.now() - t0 >= 190, "3 requests at 100 ms spacing");
+    assert.ok(Date.now() - t0 >= 135, "3 requests at 100 ms ±30% spacing");
   });
 });
 

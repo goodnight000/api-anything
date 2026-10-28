@@ -1,0 +1,119 @@
+{
+  "name": "gumtree",
+  "displayName": "Gumtree",
+  "baseUrl": "https://www.gumtree.com",
+  "description": "Public UK listing product metadata from server-rendered detail documents.",
+  "operations": [
+    {
+      "name": "getListingMetadata",
+      "description": "Read public UK listing identity, title and asking price from product metadata. No availability or authenticated condition claim.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.gumtree.com/p/%7Bcategory%7D/%7Bslug%7D/%7BadId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "category",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "slug",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "adId",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.gumtree.com/p/{category}/{slug}/{adId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.gumtree.com",
+        "path": "/p/*/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html;charset=utf-8",
+        "pick": [
+          "adId=sku",
+          "title=name",
+          "askingPrice=offers.price",
+          "currency=offers.priceCurrency",
+          "url=offers.url"
+        ],
+        "embedded": {
+          "regex": "<script type=\"application/ld\\+json\">(\\{\"@context\":\"https://schema.org\",\"@type\":\"Product\",)"
+        }
+      },
+      "params": [
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "Exact category or slug path segment from the public listing URL",
+          "example": "kids-bikes",
+          "pattern": "[a-z0-9-]{3,180}",
+          "hint": "Exact category or slug path segment from the public listing URL"
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Exact category or slug path segment from the public listing URL",
+          "example": "frog-55-kids-bike-purple",
+          "pattern": "[a-z0-9-]{3,180}",
+          "hint": "Exact category or slug path segment from the public listing URL"
+        },
+        {
+          "name": "adId",
+          "type": "string",
+          "required": true,
+          "description": "Public numeric listing ID from its URL",
+          "example": "1804023430",
+          "pattern": "[0-9]{6,16}",
+          "hint": "Public numeric listing ID from its URL"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "category": "hybrid-bikes",
+            "slug": "ridgeback-velocity-ladies-hybrid-bicycle-with-kryptonite-lock-step-through-frame-",
+            "adId": "1803965714"
+          },
+          "expect": "result",
+          "purpose": "A different source-linked listing changes category, slug and listing identity."
+        },
+        {
+          "args": {
+            "category": "folding-bikes",
+            "slug": "blue-brompton-6-speed-2021-c-line",
+            "adId": "1803924977"
+          },
+          "expect": "result",
+          "purpose": "Reserved source-linked third listing differs from both learning examples."
+        }
+      ]
+    }
+  ]
+}

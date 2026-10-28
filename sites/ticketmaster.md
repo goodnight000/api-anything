@@ -1,0 +1,15 @@
+Signed-out reads from Ticketmaster's US public search frontend. `q` is the keyword entered into the Artist, Event or Venue box. Results are the first relevance-sorted page, currently up to 20 events. Pagination, distance, date filters, complete venue inventories, and separate event-detail pages are not covered.
+
+`startDate` is the event's UTC timestamp; use `timeZone` to show its local date. Country and state are short codes. `tba` marks an announced date/time limitation; the other status flags describe cancellation, postponement, or rescheduling. These fields are event metadata, not ticket availability or a price quote. Returned URLs can point to partner sites. No returned link is automatically followed. Presale access, queues, seat holds, purchases, and account actions are outside this operation.
+
+No developer API credential is needed for this frontend operation. Ticketmaster's separate developer API was not used.
+
+## Maintainer notes
+
+Verified 2026-10-26 UTC, signed out. Source homepage https://www.ticketmaster.com/ exposes a GET search form with action `/search` and input `q`. Actual frontend document captures came from https://www.ticketmaster.com/search?q=Metallica (`cmvp3ht588e9857`) and https://www.ticketmaster.com/search?q=Hamilton (`cmvp3ic7qf98d3e`). The requested document was the captured GET request in both cases. The experimental document helper aborted other requests; this is document evidence, not a fully hydrated GUI check.
+
+`searchEvents(q)` reads the fulfilled `searchEvents` data in the public document's embedded Next.js Redux state. Two different examples learned with no warnings after correcting the initial CLI match argument. An unseen `q=Eagles` replay succeeded at tier 1. A separate public HTTP document at https://www.ticketmaster.com/search?q=Eagles supplied independently parsed event data and 20 rendered event cards. All 20 IDs and all 13 selected fields matched by ID; visible event names, cities, venues and local dates also matched. Relevance order changed between requests, so this proves identity and meaning, not fixed ordering.
+
+The browser home started empty; no login or personal browser import occurred. The learner's guest-cookie heuristic initially set `learnedLoggedIn` true. That metadata was corrected to false, followed by a fresh verification and export. `verifySite` with `maxTier: 1` passed the Metallica example and Hamilton/Eagles checks, three passes and zero failed or inconclusive cases. Export retained public examples and reported zero warnings. An exported operation replay from its own initially empty home sent no Cookie header and matched all unseen event IDs and field values. Direct `vetShared` over the export and these notes returned zero errors and warnings. Shared integrated checks remain the parent's responsibility.
+
+Ignored receipts, raw responses, captures and isolated homes are under `bench/explore/state/discovery/tickets-r1/`. The default resource gate and owned global browser mutex guarded captures. No site writes were performed.

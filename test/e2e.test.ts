@@ -17,7 +17,7 @@ import { call, heal } from "../src/execute.js";
 import { addOperation, capturePage, profileDir } from "../src/heal.js";
 import { importSession, windowLogin } from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
-import { rememberedTier, staleMark } from "../src/store.js";
+import { clearCoolDown, rememberedTier, staleMark } from "../src/store.js";
 import { makeChromiumDb } from "./fixture/cookie-db.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
@@ -227,6 +227,13 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     assert.match(r.stderr, /^next: rate limited/m);
     assert.equal(hits(), before + 1);
     assert.equal(heals().length, healCount);
+    // the site said stop: the next call sends nothing, and --force does
+    const held = await cli("call", SITE, "limited");
+    assert.match(JSON.parse(held.stdout).reason, /^not sent: fixture answered rate/);
+    assert.equal(hits(), before + 1);
+    await cli("call", SITE, "limited", "--force");
+    assert.equal(hits(), before + 2);
+    clearCoolDown(SITE); // the rest of this file calls the same site
   });
 
   test("8. layered f.req form encoding with the XSSI prefix works for a new query", async () => {
@@ -418,6 +425,42 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     assert.equal(r.operation.trigger.url, `${fx.url}/follow/{user}`);
     assert.equal(r.operation.trigger.steps?.[1]?.selector, 'a[href="/u/{user}"], #follow');
     assert.deepEqual(r.captures, []);
+  });
+
+  test("21. the page's own Idempotency-Key is made fresh per call, not replayed: a second order is a second order", async () => {
+    const sent = () => fx.calls.filter((c) => c.path === "/api/checkout");
+    const r = await addOperation({
+      site: SITE,
+      op: "order",
+      trigger: {
+        url: `${fx.url}/checkout/{item}`,
+        steps: [
+          { action: "click", selector: "#buy" },
+          { action: "wait", ms: 300 },
+        ],
+      },
+      examples: [{ item: "fridge" }, { item: "toaster" }],
+      write: true,
+    });
+    assert.equal(sent().length, 0, "learning sent no order");
+    assert.deepEqual(
+      r.operation.slots.find((s) => s.at[0] === "header:idempotency-key"),
+      { gen: "uuid", at: ["header:idempotency-key"] },
+    );
+    assert.equal(r.operation.minTier, 1);
+    const w = { ...fast, allowWrites: true, maxTier: 1 as const };
+    const a = await call(SITE, "order", { item: "fridge" }, w);
+    const b = await call(SITE, "order", { item: "toaster" }, w);
+    assert.deepEqual([a.ok, b.ok], [true, true], JSON.stringify([a, b]));
+    assert.notDeepEqual((a.data as { orderId: string }).orderId, (b.data as { orderId: string }).orderId);
+    const keys = sent().map((c) => c.headers["idempotency-key"]);
+    assert.equal(new Set(keys).size, 2, JSON.stringify(keys));
+    // the caller's key reaches the site: sent again on purpose, the site itself answers with the same order
+    const k1 = await call(SITE, "order", { item: "kettle" }, { ...w, idempotencyKey: "kettle-1" });
+    const k2 = await call(SITE, "order", { item: "kettle" }, { ...w, idempotencyKey: "kettle-1", again: true });
+    assert.equal(sent().length, 4);
+    assert.equal(sent()[2]!.headers["idempotency-key"], sent()[3]!.headers["idempotency-key"]);
+    assert.deepEqual((k2.data as { orderId: string }).orderId, (k1.data as { orderId: string }).orderId);
   });
 
   test("16. a site that walls plain HTTP answers at tier 2, and the result says why", async () => {
@@ -625,5 +668,39 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     const out = JSON.parse(r.stdout);
     assert.equal(out.candidates[0].kind, "document");
     assert.match(out.next, /inspect .* --html/);
+  });
+
+  test("21. a step that types into a password or one-time-code field fails the run and saves nothing; capture shows a live token as its ref", async () => {
+    const before = readFileSync(specFile(), "utf8");
+    // the selectors say nothing of a password: the page's own type and autocomplete do
+    for (const selector of ["input[name=secret]", "#code"])
+      await assert.rejects(
+        addOperation({
+          site: SITE,
+          op: "signIn",
+          trigger: {
+            url: `${fx.url}/signin-box`,
+            steps: [
+              { action: "fill", selector: "#user", value: "{user}" },
+              { action: "fill", selector, value: "Hunter2-RealPassw0rd!" },
+              { action: "fill", selector: "#q", value: "{q}" },
+              { action: "click", selector: "#find" },
+            ],
+          },
+          examples: [
+            { user: "jane", q: "pizza" },
+            { user: "jdoe", q: "pasta" },
+          ],
+        }),
+        /fills a password or one-time-code field .*a sign-in is the user's: ask them to run api-anything login/,
+        selector,
+      );
+    assert.equal(readFileSync(specFile(), "utf8"), before, "nothing saved");
+    assert.ok(!readFileSync(join(HOME, "sessions", `${SITE}.json`), "utf8").includes("Hunter2"));
+
+    await closeBrowser(); // the CLI launches its own Chrome on the same profile
+    const r = await cli("capture", `${fx.url}/signin-box?q=pizza`, "--example", "q=pizza");
+    const found = JSON.parse(r.stdout).candidates.find((c: { url: string }) => c.url.includes("/api/scoped"));
+    assert.match(found.url, /\/api\/scoped\?q=pizza&access_token=\[cookie:ct0\]$/);
   });
 });

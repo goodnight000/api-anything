@@ -20,7 +20,7 @@ import { pull, search, summarize } from "../src/registry.js";
 import type { SearchMatch } from "../src/registry-api.js";
 import { loadSession, mergeCapture, saveSession, siteOf } from "../src/session.js";
 import { type Operation, OperationSchema, parseSite, type Site } from "../src/spec.js";
-import { loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
+import { clearCoolDown, loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
 import { LIMITS, readbackProblems, uploadProblems, vetShared } from "../src/vet.js";
 import { type FakeRegistry, hashOf, served, startRegistry } from "./fixture/registry.js";
 
@@ -60,6 +60,37 @@ test("every bundled spec passes the shared rules: CI runs this on every pull req
   }
 });
 
+test("a write whose idempotency key is a gen slot passes the shared rules: it is no credential", () => {
+  const order = spec(
+    {},
+    {
+      name: "order",
+      readOnly: false,
+      request: {
+        method: "POST",
+        url: "https://news.example.com/api/order",
+        headers: { "idempotency-key": "" },
+        body: '{"item":"x"}',
+      },
+      slots: [
+        { param: "item", at: ["body", "json:/item"] },
+        { gen: "uuid", at: ["header:idempotency-key"] },
+      ],
+      params: [{ name: "item" }],
+      match: { host: "news.example.com", path: "/api/order" },
+    },
+  );
+  assert.equal(order.operations[0]!.slots[1]!.gen, "uuid");
+  const v = vetShared(order);
+  assert.deepEqual(v.errors, []);
+  assert.ok(!v.warnings.some((w) => /idempotency|credential|secret/i.test(w)), v.warnings.join("\n"));
+  // one slot, one source
+  assert.throws(
+    () => spec({}, { slots: [{ gen: "uuid", param: "q", at: ["query:q"] }] }),
+    /exactly one of param, ref or gen/,
+  );
+});
+
 test("the shared rules refuse what a hostile or careless spec could do with someone's sessions", () => {
   assert.deepEqual(errors(spec()), []);
   const refused: [string, Site, RegExp][] = [
@@ -73,6 +104,22 @@ test("the shared rules refuse what a hostile or careless spec could do with some
         { trigger: { url: "https://news.example.com/", steps: [{ action: "goto", value: "https://localhost/x" }] } },
       ),
       /goto .* no public host/,
+    ],
+    [
+      "a password typed by a step",
+      spec(
+        {},
+        {
+          trigger: {
+            url: "https://news.example.com/login",
+            steps: [
+              { action: "fill", selector: "#user", value: "jane" },
+              { action: "fill", selector: "input[type=password]", value: "Hunter2-RealPassw0rd!" },
+            ],
+          },
+        },
+      ),
+      /trigger steps\[1\] fills a password or one-time-code field .*api-anything login/,
     ],
     [
       "a literal bearer",
@@ -877,8 +924,9 @@ test("publish runs on verify's record: every counted check passes, and inconclus
   saveSite({ ...s, operations: [{ ...s.operations[0]!, version: { hash: "a".repeat(64), status: "candidate" } }] });
   assert.deepEqual(plan("demo").errors, []);
 
-  // a check that fails holds the spec back
+  // a check that fails holds the spec back (once the 429's cool-down is over: until then nothing is sent)
   answers.cats = () => json({ hits: [] });
+  clearCoolDown("demo");
   await verifySite("demo", opts);
   assert.match(plan("demo").errors.join("\n"), /search: check 2 \(q=cats\) expects result, and answered empty/);
   // and a changed op has no record until verify runs on it again

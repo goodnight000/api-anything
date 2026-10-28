@@ -1,0 +1,256 @@
+{
+  "name": "ikea",
+  "displayName": "IKEA US",
+  "baseUrl": "https://www.ikea.com",
+  "description": "Public signed-out IKEA US English category products, individual product metadata and selected-store visit details.",
+  "operations": [
+    {
+      "name": "getProduct",
+      "description": "Read public product identity, description, dimensions and national online price from the US English product page. No store or ZIP code is selected.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.ikea.com/us/en/p/%7Bslug%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.ikea.com/us/en/p/{slug}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.ikea.com",
+        "path": "/us/en/p/*/"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=UTF-8",
+        "pick": [
+          "sku",
+          "name",
+          "url",
+          "description",
+          "category",
+          "price=offers.price",
+          "currency=offers.priceCurrency",
+          "country=offers.shippingDetails.shippingDestination.addressCountry",
+          "width",
+          "height",
+          "depth"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*id=\"pip-range-json-ld\"[^>]*>([\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Complete final product URL segment, including its article number, copied from an IKEA US English product link.",
+          "example": "konstrunda-stool-pine-80623716",
+          "pattern": "[a-z0-9-]+",
+          "hint": "The complete product slug from an IKEA /us/en/p/ link, without slashes."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "lindakra-sleeper-sofa-vissle-light-gray-green-60629272"
+          },
+          "expect": "result",
+          "purpose": "A sofa with another article number and price, excluding the stool example."
+        },
+        {
+          "args": {
+            "slug": "foerlig-led-floor-wall-lamp-white-adjustable-color-80601291"
+          },
+          "expect": "result",
+          "purpose": "A lamp whose third-input tier-1 response matched its captured frontend document, article 806.012.91."
+        },
+        {
+          "args": {
+            "slug": "invalid/path"
+          },
+          "expect": "input",
+          "purpose": "A slash is outside the single-segment argument format and must be refused before sending."
+        }
+      ]
+    },
+    {
+      "name": "listCategoryProducts",
+      "description": "Browse initial public product cards for an IKEA US English category, with literal product identifiers, names, descriptions and links.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.ikea.com/us/en/cat/%7Bcategory%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "category",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.ikea.com/us/en/cat/{category}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.ikea.com",
+        "path": "/us/en/cat/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": ".plp-product-list div[data-testid=\"plp-product-card\"]",
+          "fields": {
+            "productNumber": "@data-product-number",
+            "name": "@data-product-name",
+            "description": ".plp-price-module__description",
+            "url": ".plp-product__image-link@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "Complete final segment of an existing IKEA US English category link, including its numeric suffix.",
+          "example": "bookcases-10382",
+          "pattern": "[a-z0-9-]{3,120}",
+          "hint": "A source-linked category segment such as bookcases-10382; no slash or query string."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "category": "cube-storage-55012"
+          },
+          "expect": "result",
+          "purpose": "Cube storage returns KALLAX-led products, distinct from the BILLY-led bookcase example."
+        },
+        {
+          "args": {
+            "category": "invalid/path"
+          },
+          "expect": "input",
+          "purpose": "A slash is outside the single-category-segment format and must be refused locally."
+        }
+      ]
+    },
+    {
+      "name": "getStoreDetails",
+      "description": "Read public selected-store visit details, department hours, variable-hours notices and dated closures or special store hours from an IKEA US English Store page.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.ikea.com/us/en/stores/%7Bstore%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "store",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.ikea.com/us/en/stores/{store}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.ikea.com",
+        "path": "/us/en/stores/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "html",
+          "fields": {
+            "name": "h1",
+            "url": "link[rel=\"canonical\"]@href",
+            "address": ".hnf-store__container__block--address-4 p",
+            "storeHours": "all:.hnf-store__container--four-columns .hnf-store__container__columns > div:nth-child(1) li",
+            "clickCollectHours": "all:.hnf-store__container--four-columns .hnf-store__container__columns > div:nth-child(2) li",
+            "smallandHours": "all:.hnf-store__container--four-columns .hnf-store__container__columns > div:nth-child(3) li",
+            "restaurantHours": "all:.hnf-store__container--four-columns .hnf-store__container__columns > div:nth-child(4) li",
+            "bistroHours": "all:.hnf-store__container--four-columns .hnf-store__container__columns > div:nth-child(5) li",
+            "closed": "all:.hnf-store__container--four-columns .hnf-store__container__single-column > div:nth-child(1) li",
+            "specialStoreHours": "all:.hnf-store__container--four-columns .hnf-store__container__single-column > div:nth-child(2) li"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "store",
+          "type": "string",
+          "required": true,
+          "description": "Final segment of an actual IKEA US English Store detail link from the store directory.",
+          "example": "houston",
+          "pattern": "[a-z0-9-]{3,80}",
+          "hint": "A source-linked Store slug such as houston; no slash, query or pickup-facility ID."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "store": "orlando"
+          },
+          "expect": "result",
+          "purpose": "Orlando has another address, 11 AM Store opening and variable Småland hours, unlike Houston."
+        },
+        {
+          "args": {
+            "store": "invalid/path"
+          },
+          "expect": "input",
+          "purpose": "A slash is outside a single store segment and must be refused locally."
+        }
+      ]
+    }
+  ]
+}

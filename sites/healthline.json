@@ -1,0 +1,87 @@
+{
+  "name": "healthline",
+  "displayName": "Healthline news bibliography",
+  "baseUrl": "https://www.healthline.com",
+  "description": "Public news article titles, source URLs, credits and publisher date labels. No article bodies or clinical guidance.",
+  "operations": [
+    {
+      "name": "getNewsMetadata",
+      "description": "Read bibliographic metadata from a known public Healthline news article. Returns publisher labels only.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.healthline.com/health-news/%7Bslug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.healthline.com/health-news/{slug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.healthline.com",
+        "path": "/health-news/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title=headline",
+          "sourceUrl=url",
+          "author=author.name",
+          "creditedReviewer=reviewedBy",
+          "publishedAt=datePublished",
+          "modifiedAt=dateModified",
+          "lastReviewedAt=lastReviewed"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*type=\"application/ld\\+json\"[^>]*>([\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "News article slug copied from an actual /health-news/ link, without URL, slash or query.",
+          "example": "physical-activity-may-improve-mood-and-quality-of-life-during-menopause",
+          "pattern": "[a-z0-9][a-z0-9-]*",
+          "hint": "A Healthline health-news article slug from a public source link."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "ultra-processed-food-intake-linked-to-higher-dementia-stroke-risk"
+          },
+          "expect": "result",
+          "purpose": "Second captured article has a different title, URL and publisher date."
+        },
+        {
+          "args": {
+            "slug": "pistachios-may-support-sleep-review-finds"
+          },
+          "expect": "result",
+          "purpose": "Held-out article independently matched visible identity, public credits and calendar date."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,175 @@
+{
+  "name": "apple",
+  "displayName": "Apple US iPhone",
+  "baseUrl": "https://www.apple.com",
+  "description": "Public US iPhone technical specifications from Apple model-family pages. Includes public iPhone, iPad and Mac model-family catalog links.",
+  "operations": [
+    {
+      "name": "getTechSpecs",
+      "description": "Read public US iPhone technical specifications, including grouped model variants and advertised battery claims.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.apple.com/%7Bproduct%7D/specs/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "product",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.apple.com/{product}/specs/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.apple.com",
+        "path": "/*/specs/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "main",
+          "fields": {
+            "name": "h1",
+            "models": "all:.techspecs-columnheader",
+            "capacity": "all:.section-capacity .techspecs-column",
+            "chip": "all:.section-chip .techspecs-column",
+            "display": "all:.section-display .techspecs-column",
+            "dimensions": "all:.section-size-and-weight .techspecs-column",
+            "battery": "all:.section-power-and-battery .techspecs-column"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "product",
+          "type": "string",
+          "required": true,
+          "description": "iPhone model-family path segment copied from a public Apple /specs/ link.",
+          "example": "iphone-18-pro",
+          "pattern": "iphone-[a-z0-9-]+",
+          "hint": "A single iPhone path segment such as iphone-16, without slashes."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "product": "iphone-16"
+          },
+          "expect": "result",
+          "purpose": "Different model family excludes the iPhone 18 Pro example."
+        },
+        {
+          "args": {
+            "product": "iphone-duo"
+          },
+          "expect": "result",
+          "purpose": "Unseen folding model matched an independently read specs document."
+        },
+        {
+          "args": {
+            "product": "invalid/path"
+          },
+          "expect": "input",
+          "purpose": "Slash outside single-segment format is refused before sending."
+        }
+      ]
+    },
+    {
+      "name": "listProductFamilies",
+      "description": "List the model-family names and public product links in an Apple US iPhone, iPad or Mac catalog.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.apple.com/%7Bfamily%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "family",
+          "at": [
+            "path:0"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.apple.com/{family}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.apple.com",
+        "path": "/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "main .product-tile, main [class*=\"ProductTile_productTile__\"]",
+          "fields": {
+            "name": ".product-tile-headline, [class*=\"ProductTile_headingArea__\"] h3",
+            "url": ".product-tile-image-link, [class*=\"ProductTile_elevatedLink__\"]@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "family",
+          "type": "string",
+          "required": true,
+          "description": "Supported public Apple US catalog family: iphone, ipad or mac.",
+          "example": "iphone",
+          "pattern": "iphone|ipad|mac",
+          "hint": "Use iphone, ipad or mac, without slashes."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "family": "ipad"
+          },
+          "expect": "result",
+          "purpose": "The iPad catalog excludes every iPhone family in the example."
+        },
+        {
+          "args": {
+            "family": "mac"
+          },
+          "expect": "result",
+          "purpose": "Held-out Mac catalog identities and destination links are compared against separate frontend evidence."
+        },
+        {
+          "args": {
+            "family": "invalid/path"
+          },
+          "expect": "input",
+          "purpose": "Unsupported category/path is refused locally before sending."
+        }
+      ]
+    }
+  ]
+}

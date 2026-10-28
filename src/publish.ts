@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Gate, gate } from "./checks.js";
+import { type Gate, gate, proofOf } from "./checks.js";
 import { slugOf } from "./domain.js";
 import { sharedName } from "./registry.js";
 import type { Evidence, SiteContext, VersionUpload } from "./registry-api.js";
@@ -239,6 +239,8 @@ export function plan(
       clientVersion: CLIENT_VERSION,
       learnedLoggedIn: mine.learnedLoggedIn,
       cleanReplay: "skipped",
+      // what learn_site proved of this version, when the user shares it later
+      ...proofOf(name, mine),
       ...o.evidence,
     };
     const upload: VersionUpload = { site: context, operation, ...(o.parent ? { parent: o.parent } : {}), evidence };
@@ -277,7 +279,7 @@ export function plan(
     operations: ops.map((p) => summarize(p.upload.operation)),
     stripped: [
       "the example values in each request (the param examples stay)",
-      "response shapes",
+      "response shapes (the picked fields' types stay)",
       "when each op was learned",
       ...(r.site.shared ? ["where it was pulled from"] : []),
     ],

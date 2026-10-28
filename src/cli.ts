@@ -8,7 +8,7 @@ import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { verifySite } from "./checks.js";
 import { botWall, emptyResults, htmlFinds, loginPath, signInForm } from "./classify.js";
 import { launchOf, printConfig } from "./clients.js";
-import { call, heal, type Tier } from "./execute.js";
+import { type CallResult, call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
 import {
   addOperation,
@@ -18,9 +18,13 @@ import {
   fillTrigger,
   loadCapture,
   PROFILE_HINT,
+  revertHeal,
+  stoppedHint,
+  stoppedIn,
   unplaced,
 } from "./heal.js";
 import { buildRequest, unknownArgs } from "./http.js";
+import { answerShare } from "./identity.js";
 import { AmbiguousProfile } from "./import.js";
 import { type Candidate, capturePages, pageUrls, rankCandidates } from "./learn.js";
 import { learnSite } from "./learnsite.js";
@@ -38,6 +42,7 @@ import { type Outline, outline } from "./outline.js";
 import { plan, uploadName } from "./publish.js";
 import { pull, RegistryError, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
+import { captureLive, redact } from "./secrets.js";
 import { loadSession } from "./session.js";
 import { AGENTS, type Agent, askYesNo, setup, summary } from "./setup.js";
 import { shareOps } from "./share.js";
@@ -52,7 +57,7 @@ import {
   readbackName,
   TriggerStepSchema,
 } from "./spec.js";
-import { exportSite, listSites, loadSite, siteNotes, updateSite } from "./store.js";
+import { exportSite, listSites, loadHeals, loadSite, siteNotes, updateSite } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { readbackProblems, SHARED_NOTE } from "./vet.js";
 
@@ -99,19 +104,24 @@ const HELP: Record<string, string> = {
   and for: inspect <id> <n>. Captures hold cookie values; the newest 20 are kept, none past 24 h.
   --steps      JSON array of {action: click|fill|press|wait|goto, selector?, value?, ms?}
   --soft-from  load this page first, then navigate in-app to <url> (SPAs only fire their data XHRs that way)
-  --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser
+  --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser.
+               Without it, a POST, PUT, PATCH or DELETE sent once the steps run is stopped too (a GraphQL query
+               passes): the page loads as usual, and a click that would place an order places none
   --outline    for the top 3 candidates, summarize the response instead of making you inspect it: where the
                example values are, a suggested --extract and --pick fields with samples, JSON the page
                embeds (a ready --embedded regex), and a repeated HTML list as a ready --html recipe
   Output: capture (the id), candidates, next (what to do). blocked: the bot challenge the site served.
-  pageStatus: the page's own HTTP error, when a request it loaded is recommended all the same.`,
-  inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline --example k=v]
+  pageStatus: the page's own HTTP error, when a request it loaded is recommended all the same.
+  stopped: the requests the steps sent that were stopped without --write (method and path); nothing was sent.`,
+  inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline] [--example k=v]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
   response through add's recipe flags, so a recipe is tried here first: --extract (also spelled --path),
   --pick, --html, --embedded. A path, selector or regex that finds nothing fails (exit 1). An empty
   list at a path is a result, and so is an --html items selector "<container> <item>" whose container
   is on the page with no item in it (data: [], with a note).
-  --outline summarizes the response (as capture --outline does) instead of printing it.`,
+  --outline summarizes the response (as capture --outline does) instead of printing it.
+  A request's URL and body show the run's cookie and storage values as refs ([cookie:x]), except
+  one equal to an --example value.`,
   add: `api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
   Runs the trigger twice in the browser (with --example, then --example2 or --example again), picks the request
   carrying the example values, and saves the learned operation to ~/.api-anything/sites/<site>.json.
@@ -119,7 +129,9 @@ const HELP: Record<string, string> = {
   --steps <json>  UI steps after load, [{action: click|fill|press|wait|goto, selector?, value?, ms?}];
                   {param} is filled in selector/value
   --soft-from     neutral page to load first, then navigate in-page to the trigger
-  --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON)
+  --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON).
+                  Without --write, a POST, PUT, PATCH or DELETE the steps send is stopped unless it is this
+                  one (or a GraphQL query), and one on the page's own site fails the add before run 2
   --from <id> --pick-request <n>   learn from a saved capture instead of running the trigger (no browser).
                   Every add saves its own runs as captures, so a wrong recipe is fixed this way: add the op
                   again --from the capture it was learned from, with the recipe flags (--extract, --pick,
@@ -155,15 +167,21 @@ const HELP: Record<string, string> = {
   data, so nothing shows the server reads those params (publish refuses the op until it does).
   An op whose captured response is a bot challenge, a sign-in page, a rate limit or a server failure
   is not saved.`,
-  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--dry]
-  Calls an operation: {ok, class, data, tier, healed?, ms, next?}; a failure also says retry
+  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
+  Calls an operation: {ok, class, data, tier, healed?, heal?, ms, next?}; a failure also says retry
   (safe, after_wait, after_fix, no), retryAfterMs and nextCall, and a write says write (not_sent,
   not_applied, accepted, may_have_applied, applied: its readback found it). A paged read says
-  nextPage (pass it as the op's paging param) and hasMore. --dry prints the request with
-  credentials redacted.
-  --again           send a write refused as a duplicate (the same args within 10 minutes, and the
+  nextPage (pass it as the op's paging param) and hasMore. A call that healed the op says how and
+  what changed in its request in heal (undo: api-anything revert <site> <op>). --dry prints the
+  request with credentials redacted.
+  --again          send a write refused as a duplicate (the same args within 10 minutes, and the
                     first may have gone through): only when the user checked the site
-  --idempotency-key <k>  a repeat of a write with the same key returns the first call's record`,
+  --idempotency-key <k>  on the first call: a repeat of the write with the same key returns that
+                    call's record (added only to a retry, the retry is still a duplicate)
+  --force           send even while the site cools down: after a rate limit (its Retry-After, or
+                    3 minutes) or a block at every tier (10 minutes) calls answer without sending.
+                    A forced call that succeeds ends the wait; one limited or blocked again starts
+                    it over. A login for the site also ends the wait`,
   verify: `api-anything verify [site]
   Calls every read operation with its stored example args and its checks, healing as needed, and
   judges each case: pass, fail, or inconclusive (a challenge, a sign-in page, a rate limit, or a server
@@ -192,6 +210,16 @@ const HELP: Record<string, string> = {
   arg formats and login advice from <site>.md beside its spec.`,
   heal: `api-anything heal <site> <op> [k=v ...]
   Forces a heal (rescan, then recapture) even when the op is marked stale. Reads only.`,
+  heals: `api-anything heals [site]
+  Lists the last 20 heals and reverts (of one site, or all), newest first: when, which op, how (rescan,
+  recapture, revert) and what changed in its request template, one line each, with {param} and
+  cookie:/session: refs in place of values. A call that heals says the same in its heal field.`,
+  revert: `api-anything revert <site> <op>
+  Puts back the op as it was before its last heal (heals.jsonl keeps it), and logs the revert; run it
+  again to take back the heal before that. Refused when the op has no heal to take back, or changed
+  after it (learned again or edited). A pulled spec's copy keeps its shared record, and the op gets back
+  the registry version it was. The next call sends the old request: if the site really changed, it
+  drifts and may heal again, so learn the op again with add if the heal was wrong.`,
   export: `api-anything export <site> [--out <file>] [--keep-examples] [--force]
   Writes a shareable spec: examples and response shapes stripped, and refused if a live cookie or
   session value is inside. --keep-examples keeps param examples you confirmed are public (so verify works).`,
@@ -235,7 +263,7 @@ const HELP: Record<string, string> = {
                   Gemini CLI, VS Code, Cursor and Claude Desktop, with absolute paths and the other
                   flags given, instead of serving
   --no-learn      hide learn_site`,
-  setup: `api-anything setup [--yes | --no-share] [--agents claude-code,codex,cursor,claude-desktop] [--dry-run]
+  setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop] [--dry-run]
   Connects the MCP server (npx -y api-anything mcp) to each agent found on this machine: Claude Code,
   Codex, Cursor, Claude Desktop. Installs the skill for Claude Code (~/.claude/skills) and Codex
   (~/.agents/skills). Checks for a Chromium browser, makes this install's key, and asks whether to help
@@ -243,6 +271,9 @@ const HELP: Record<string, string> = {
   is backed up to <file>.bak-api-anything before its first edit. Running it again changes nothing.
   --yes        share: answer the question yes without asking
   --no-share   do not share; answer the question no
+  --share-only record --yes or --no-share and nothing else: no agent, skill or key is touched. learn_site
+               asks the question the first time something could be shared; this records the answer
+               given in chat, and changes it later
   --agents     connect these agents only, found or not
   --dry-run    print what would change, and change nothing`,
   learn: `api-anything learn <trigger> --args k=v --args2 k=v --args3 k=v [--site s] [--op o] [--intent text] [options]
@@ -250,13 +281,16 @@ const HELP: Record<string, string> = {
   --args and --args2, picks the request carrying them and the fields from the first run's outline, saves
   the op with --args2 as its example, calls it with --args3 (kept as the op's check) and once with no
   cookies, then shares it when sharing is on and it is public. A login op is shared only on your yes.
+  First, when the registry has a read for the same page on that domain, it calls that with --args and
+  answers with reused: no browser, nothing learned (--fresh, a recipe or --from learns anyway).
   <trigger>   page URL with {param} placeholders, e.g. https://site.com/search?q={q}
   --args      the values you want the answer for
   --args2     another real value of the same kind (the op's shared example)
   --args3     a third, different from both (the holdout check)
   --from <id> --from2 <id>   learn again from an earlier learn's captures, with no browser
+  --fresh     learn the page even when a shared op answers for it (its data was not what you wanted)
   --pick-request <n>, --extract, --pick, --html, --embedded   choose the request and the recipe (see add)
-  Output: data, signature, chosen and alternatives (request and recipe), proof, shared.`,
+  Output: data, signature, chosen and alternatives (request and recipe), proof, shared; or data and reused.`,
 };
 
 const USAGE = `api-anything ${VERSION}: turn a website into operations an agent can call.
@@ -274,6 +308,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything check <site> <op> [k=v ...] --expect result|empty|input
   api-anything readback <site> <write-op> <read-op> [k=v ...] [--find field=value]
   api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site>
+  api-anything heals [site] | revert <site> <op>
   api-anything mcp [--allow-writes] [--sites a,b] [--print-config]
 
 api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
@@ -362,6 +397,7 @@ const OPTIONS = {
   match: { type: "string", multiple: true },
   from: { type: "string" },
   "pick-request": { type: "string" },
+  fresh: { type: "boolean" },
   from2: { type: "string" },
   embedded: { type: "string" },
   public: { type: "string" },
@@ -400,6 +436,7 @@ const OPTIONS = {
   agents: { type: "string" },
   "dry-run": { type: "boolean" },
   "no-share": { type: "boolean" },
+  "share-only": { type: "boolean" },
   "no-learn": { type: "boolean" },
   paging: { type: "string" },
   find: { type: "string" },
@@ -549,25 +586,32 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
   const limit = positive(v.limit, "limit") ?? 15;
   const examples = kv(v.example);
   const c = await capturePage({ url, steps, softFrom: v["soft-from"], write: v.write, args: examples });
+  const halted = v.write ? undefined : stoppedIn(c, c.url);
+  const stopped = halted ? [...halted.site, ...halted.elsewhere] : [];
   const ranked = rankCandidates(c.exchanges, examples, { pages: pageUrls(c.exchanges, capturePages(c)) });
   const values = Object.values(examples).map(String);
-  const candidates = ranked.slice(0, limit).map((x, i) => ({
-    id: x.id,
-    kind: x.resourceType,
-    method: x.method,
-    url: x.url.length > 160 ? `${x.url.slice(0, 157)}...` : x.url,
-    ...(x.status !== undefined ? { status: x.status } : {}),
-    ...(x.contentType ? { type: x.contentType.split(";")[0] } : {}),
-    ...(x.operationName ? { operationName: x.operationName } : {}),
-    ...(x.hits.length ? { carries: x.hits } : {}),
-    size: x.size,
-    ...(v.outline && i < 3
-      ? outlineOf(
-          c.exchanges.find((e) => e.id === x.id),
-          values,
-        )
-      : {}),
-  }));
+  // the URLs shown carry the run's live values as the refs a spec would hold there
+  const live = captureLive(c, values);
+  const candidates = ranked.slice(0, limit).map((x, i) => {
+    const url = redact(x.url, live, { named: true });
+    return {
+      id: x.id,
+      kind: x.resourceType,
+      method: x.method,
+      url: url.length > 160 ? `${url.slice(0, 157)}...` : url,
+      ...(x.status !== undefined ? { status: x.status } : {}),
+      ...(x.contentType ? { type: x.contentType.split(";")[0] } : {}),
+      ...(x.operationName ? { operationName: x.operationName } : {}),
+      ...(x.hits.length ? { carries: x.hits } : {}),
+      size: x.size,
+      ...(v.outline && i < 3
+        ? outlineOf(
+            c.exchanges.find((e) => e.id === x.id),
+            values,
+          )
+        : {}),
+    };
+  });
   const top = ranked[0];
   const html = top && /html/i.test(top.contentType ?? "");
   // a bot wall is not fixed by picking another request or writing a recipe
@@ -590,9 +634,12 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     candidates,
     ...(wall ? { blocked: wall } : {}),
     ...(page.status ? { pageStatus: page.status } : {}),
+    ...(stopped.length ? { stopped } : {}),
     next: wall
-      ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> (clear the challenge in the window), then capture again`
-      : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),
+      ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> --window (clear the challenge in the window), then capture again`
+      : halted?.site.length
+        ? stoppedHint(halted.site, "capture again")
+        : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),
   });
   return 0;
 }
@@ -615,6 +662,9 @@ function cmdInspect({ v, pos }: Parsed): number {
   const [id, reqId] = pos;
   if (!id) throw new Fail("missing <captureId>", "api-anything inspect --help");
   const c = loadCapture(id);
+  // the requests shown carry the run's live values as refs, as capture's candidates do
+  const live = captureLive(c, Object.values(kv(v.example)).map(String));
+  const shown = (s: string) => redact(s, live, { named: true });
   if (reqId === undefined) {
     out({
       capture: c.id,
@@ -623,7 +673,7 @@ function cmdInspect({ v, pos }: Parsed): number {
         id: e.id,
         kind: e.resourceType,
         method: e.request.method,
-        url: e.request.url.slice(0, 160),
+        url: shown(e.request.url).slice(0, 160),
         ...(e.response
           ? {
               status: e.response.status,
@@ -641,7 +691,7 @@ function cmdInspect({ v, pos }: Parsed): number {
   if (v.outline) {
     out({
       id: e.id,
-      request: { method: e.request.method, url: e.request.url },
+      request: { method: e.request.method, url: shown(e.request.url) },
       ...outlineOf(e, Object.values(kv(v.example)).map(String)),
     });
     return 0;
@@ -692,7 +742,7 @@ function cmdInspect({ v, pos }: Parsed): number {
     if (Array.isArray(before) && before.length && !(data as unknown[]).length)
       throw nothing(`none of the ${before.length} items has a picked field (${fields.join(", ")})`);
   }
-  const sent = e.request.body;
+  const sent = e.request.body === undefined ? undefined : shown(e.request.body);
   const form =
     sent !== undefined &&
     /x-www-form-urlencoded/i.test(e.request.headers["content-type"] ?? "") &&
@@ -703,7 +753,7 @@ function cmdInspect({ v, pos }: Parsed): number {
     id: e.id,
     request: {
       method: e.request.method,
-      url: e.request.url,
+      url: shown(e.request.url),
       ...(shownBody !== undefined ? { body: capOutput(shownBody, 4000).data } : {}),
     },
     ...(e.response ? { status: e.response.status, type: e.response.contentType } : { aborted: !!e.aborted }),
@@ -887,10 +937,54 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     again: v.again,
     idempotencyKey: v["idempotency-key"],
     maxTier,
+    ignoreCoolDown: v.force,
   });
   out(pulled ? { ...r, pulled: site } : r);
+  if (r.heal) process.stderr.write(healNote(site, name, r.heal));
   if (!r.ok) process.stderr.write(`next: ${r.next}\n`);
   return r.ok ? 0 : 1;
+}
+
+/** A heal, for the human at the terminal: how, what changed, and how to take it back. */
+function healNote(site: string, op: string, h: NonNullable<CallResult["heal"]>): string {
+  const undo = h.strategy === "registry" ? "" : `undo: api-anything revert ${site} ${op}\n`;
+  return `healed ${op} by ${h.strategy}:\n${h.changes.map((c) => `  ${c}\n`).join("")}${undo}`;
+}
+
+/** The last 20 heals and reverts, newest first, with what each changed. */
+function cmdHeals({ pos }: Parsed): number {
+  const site = pos[0] ? requireSite(pos[0]).site.name : undefined;
+  const heals = loadHeals(site)
+    .slice(-20)
+    .reverse()
+    .map(({ previous, saved: _s, diff, changes, ...h }) => ({
+      ...h,
+      changes: changes ?? [diff],
+      ...(h.strategy !== "revert" && !previous ? { revertible: false } : {}),
+    }));
+  out({ ok: true, heals });
+  return 0;
+}
+
+function cmdRevert({ pos }: Parsed): number {
+  const [site, name] = pos;
+  if (!site || !name) throw new Fail("missing <site> <op>", "api-anything revert <site> <op>");
+  const { site: s } = requireSite(site);
+  if (!s.operations.some((o) => o.name === name))
+    throw new Fail(`no operation "${name}" on ${s.name}`, `api-anything ops ${s.name}`);
+  try {
+    const r = revertHeal(site, name);
+    out({
+      ok: true,
+      site: r.site,
+      op: name,
+      reverted: { at: r.reverted.at, strategy: r.reverted.strategy },
+      changes: r.changes,
+    });
+    return 0;
+  } catch (e) {
+    throw new Fail((e as Error).message, `api-anything heals ${site} lists ${name}'s heals`);
+  }
 }
 
 async function cmdVerify({ pos }: Parsed): Promise<number> {
@@ -1113,7 +1207,7 @@ async function cmdSearch({ pos }: Parsed): Promise<number> {
     ...(r.registryError ? { registryError: r.registryError } : {}),
     ...(r.matches.length ? { shared: SHARED_NOTE } : {}),
     next: !top
-      ? "nobody shared one yet: learn it with api-anything capture and add, then share it with api-anything publish"
+      ? "nothing matched. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, search with that, which also finds unconfirmed ones; else learn it with api-anything learn"
       : !top.operations.length && top.interfaces?.length
         ? `${top.domain} offers its own agent interface: ${top.interfaces.map((i) => `${i.kind} ${i.url}`).join(", ")}`
         : top.installed
@@ -1208,6 +1302,17 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
 
 async function cmdSetup({ v }: Parsed): Promise<number> {
   if (v.yes && v["no-share"]) throw new Fail("--yes and --no-share contradict each other", "pass one of them");
+  if (v["share-only"]) {
+    if (!v.yes && !v["no-share"])
+      throw new Fail("--share-only records an answer: pass --yes or --no-share with it", "api-anything setup --help");
+    const share = !!v.yes;
+    if (!v["dry-run"]) answerShare(share);
+    out({ ok: true, ...(v["dry-run"] ? { dryRun: true } : {}), share, shareAsked: true });
+    process.stderr.write(
+      `Sharing: ${v["dry-run"] ? "would be " : ""}${share ? "on. Turn it off with api-anything setup --no-share --share-only" : "off. Turn it on with api-anything setup --yes --share-only"}\n`,
+    );
+    return 0;
+  }
   const agents = v.agents?.split(",").map((a) => a.trim());
   const unknown = agents?.filter((a) => !(AGENTS as readonly string[]).includes(a));
   if (unknown?.length)
@@ -1246,6 +1351,7 @@ async function cmdLearn({ v, pos }: Parsed): Promise<number> {
       ...(v.html ? { html: json(v.html, HtmlRecipeSchema, "html") } : {}),
       ...(v.embedded ? { embedded: v.embedded } : {}),
       ...(v.from && v.from2 ? { captures: [v.from, v.from2] as [string, string] } : {}),
+      ...(v.fresh ? { fresh: true } : {}),
       ...(v.write ? { write: true } : {}),
     },
     { consent: process.stdin.isTTY && process.stderr.isTTY ? askYesNo : undefined },
@@ -1308,20 +1414,22 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "paging",
     ],
   },
-  call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "dry"] },
+  call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "force", "dry"] },
   verify: { run: cmdVerify, flags: [] },
   check: { run: cmdCheck, flags: ["expect", "purpose"] },
   readback: { run: cmdReadback, flags: ["find"] },
   sites: { run: cmdSites, flags: [] },
   ops: { run: cmdOps, flags: [] },
   heal: { run: cmdHeal, flags: [] },
+  heals: { run: cmdHeals, flags: [] },
+  revert: { run: cmdRevert, flags: [] },
   export: { run: cmdExport, flags: ["out", "keep-examples", "force"] },
   search: { run: cmdSearch, flags: [] },
   interface: { run: cmdInterface, flags: [] },
   pull: { run: cmdPull, flags: [] },
   publish: { run: cmdPublish, flags: ["yes"] },
   mcp: { run: cmdMcp, flags: ["allow-writes", "sites", "print-config", "no-learn"] },
-  setup: { run: cmdSetup, flags: ["yes", "no-share", "agents", "dry-run"] },
+  setup: { run: cmdSetup, flags: ["yes", "no-share", "share-only", "agents", "dry-run"] },
   learn: {
     run: cmdLearn,
     flags: [
@@ -1338,6 +1446,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "embedded",
       "from",
       "from2",
+      "fresh",
       "write",
     ],
   },

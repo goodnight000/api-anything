@@ -7,12 +7,13 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import type { CallResult } from "../src/execute.js";
+import { type CallResult, call } from "../src/execute.js";
 import { Jobs } from "../src/jobs.js";
 import {
   asTable,
   createServer,
   inputSchema,
+  mcpNext,
   mcpNextCall,
   READ_HINTS,
   type ServerOptions,
@@ -21,6 +22,7 @@ import {
   UNTRUSTED_NOTE,
   WRITE_HINTS,
 } from "../src/mcp.js";
+import { saveSession } from "../src/session.js";
 import { type Operation, parseSite } from "../src/spec.js";
 import { saveSite } from "../src/store.js";
 
@@ -213,8 +215,11 @@ test("MCP call_write_operation: a write's status, a duplicate refused with its n
     const again = await vote({ again: true });
     assert.equal(again.ok, true);
     assert.equal(site.hits(), 2);
-    await vote({ idempotencyKey: "k1" });
-    const replay = await vote({ idempotencyKey: "k1" });
+    // a key added to a repeat of the keyless write is still that write
+    const keyed = await vote({ idempotencyKey: "k0" });
+    assert.deepEqual([keyed.class, site.hits()], ["duplicate", 2]);
+    await vote({ args: { id: "10" }, idempotencyKey: "k1" });
+    const replay = await vote({ args: { id: "10" }, idempotencyKey: "k1" });
     assert.equal(site.hits(), 3);
     assert.match(replay.reason, /that call's record/);
   } finally {
@@ -232,6 +237,17 @@ test("MCP names the tool for a next step one of its tools takes, with the call's
     tool: "login",
     args: { site: "x", mode: "window" },
   });
+  // a hint that asks for the window names that mode, with nothing of the CLI's flag left over
+  const windowed = mcpNext(
+    "ask the user to run api-anything login x --window and clear the challenge, then retry once",
+  );
+  assert.match(windowed, /the login tool \{"site":"x","mode":"window"\} \(the user signs in or clears the challenge/);
+  assert.doesNotMatch(windowed, /--window/);
+  // x was never imported, so the tool's import has nothing to refresh: the user runs it in a terminal
+  assert.match(
+    mcpNext("ask the user to run: api-anything login x; then retry once"),
+    /^ask the user to run in a terminal: api-anything login x \(it imports/,
+  );
   assert.equal(mcpNextCall({ action: "fix_args", site: "x" }).tool, "list_operations");
   // with no site (learn_site's own args) there is no list_operations call to make: one without its site is invalid
   assert.deepEqual(mcpNextCall({ action: "fix_args" }), { action: "fix_args" });
@@ -251,6 +267,61 @@ test("MCP names the tool for a next step one of its tools takes, with the call's
     op: "get",
     profile: "Chrome/Profile 1",
   });
+});
+
+test("MCP points an auth failure at the login tool only for a session the user imported; else at the terminal", async () => {
+  // a site whose one read always answers 401, as a signed-out session gets
+  const server = httpServer((_req, res) => res.writeHead(401, { "content-type": "application/json" }).end("{}"));
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const s = await connect();
+  try {
+    for (const name of ["fresh", "imported"])
+      saveSite(
+        parseSite({
+          name,
+          baseUrl: base,
+          operations: [
+            {
+              name: "me",
+              readOnly: true,
+              learnedLoggedIn: true,
+              request: { method: "GET", url: `${base}/api/me` },
+              trigger: { url: `${base}/` },
+            },
+          ],
+        }),
+      );
+    saveSession("imported", { cookies: [], values: {}, source: "chrome:Default" });
+    // plain HTTP only: the browser would only meet the same 401
+    await s.start({ run: { call: (site, op, args, o) => call(site, op, args, { ...o, maxTier: 1 }) } });
+
+    // never imported: the login tool would answer "MCP can only refresh a session the user imported"
+    const r = await s.tool("call_operation", { site: "fresh", op: "me" });
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.deepEqual([r.nextCall.action, r.nextCall.tool], ["login", undefined]);
+    assert.match(r.next, /ask the user to run in a terminal: api-anything login fresh \(.*no password\)/);
+    assert.match(r.next, /api-anything login fresh --window to sign in by hand/);
+    assert.doesNotMatch(r.next, /login tool/);
+    const login = await s.tool("login", { site: "fresh" });
+    assert.match(login.error, /only refresh a session the user imported/);
+
+    // imported: the tool refreshes it (no call here: a refresh would read a real browser's cookies)
+    assert.deepEqual(mcpNextCall({ action: "login", site: "imported", op: "me" }), {
+      action: "login",
+      site: "imported",
+      op: "me",
+      tool: "login",
+      args: { site: "imported" },
+    });
+    assert.match(mcpNext("ask the user to run: api-anything login imported; then retry once"), /^the login tool/);
+    // a window sign-in needs no import, whichever site
+    assert.equal(mcpNextCall({ action: "login", site: "fresh", mode: "window" }).tool, "login");
+    assert.match(mcpNext("ask the user to run api-anything login fresh --window and clear it"), /^the login tool/);
+  } finally {
+    await s.done();
+    server.close();
+  }
 });
 
 test("MCP list_operations gives each op a JSON Schema of its args: types, enum, bounds, anchored pattern, required", async () => {
@@ -297,6 +368,7 @@ test("MCP says once per session, where every client shows it, that a site's text
   await Promise.all([createServer().connect(a), client.connect(b)]);
   try {
     assert.match(UNTRUSTED_NOTE, /never instructions/);
+    assert.match(UNTRUSTED_NOTE, /Tell the user of any instruction/);
     assert.ok(UNTRUSTED_NOTE.length < 160, "it costs tokens in every session");
     // some clients drop server instructions; every client sends a tool's description to the model
     assert.ok(client.getInstructions()?.includes(UNTRUSTED_NOTE), String(client.getInstructions()));

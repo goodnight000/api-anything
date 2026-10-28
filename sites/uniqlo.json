@@ -1,0 +1,102 @@
+{
+  "name": "uniqlo",
+  "displayName": "UNIQLO Denmark",
+  "baseUrl": "https://www.uniqlo.com/dk/en",
+  "description": "Signed-out Denmark English product metadata; excludes prices, inventory and variant selection.",
+  "operations": [
+    {
+      "name": "getProduct",
+      "description": "Read public Denmark English product identity, fabric composition and care metadata from the product document.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.uniqlo.com/dk/en/products/%7BrouteProductId%7D/%7BrouteSuffix%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "routeProductId",
+          "at": [
+            "path:3"
+          ]
+        },
+        {
+          "param": "routeSuffix",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.uniqlo.com/dk/en/products/{routeProductId}/{routeSuffix}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.uniqlo.com",
+        "path": "/dk/en/products/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html",
+        "pick": [
+          "name",
+          "routeProductId=productId",
+          "routeSuffix=priceGroup",
+          "displayedProductIds=l1Ids",
+          "composition",
+          "care=washingInformation",
+          "gender=genderName"
+        ],
+        "embedded": {
+          "regex": "\"pdpEntity\":\\{\"[^\"]+\":\\{\"expiryTime\":[^,]+,\"product\":(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "routeProductId",
+          "type": "string",
+          "required": true,
+          "description": "Exact route product identifier from a Denmark product link, for example E489013-000; distinct from displayed product IDs.",
+          "example": "E489013-000",
+          "pattern": "E[0-9]{6}-[0-9]{3}"
+        },
+        {
+          "name": "routeSuffix",
+          "type": "string",
+          "required": true,
+          "description": "Exact final route segment from the product link. Preserve it as an opaque suffix; it is not a selected color or size.",
+          "example": "00",
+          "pattern": "[0-9]{2}"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "routeProductId": "E422992-000",
+            "routeSuffix": "02"
+          },
+          "expect": "result",
+          "purpose": "Different captured cotton product with route ID differing from displayed product IDs."
+        },
+        {
+          "args": {
+            "routeProductId": "E465185-000",
+            "routeSuffix": "00"
+          },
+          "expect": "result",
+          "purpose": "Held-out AIRism identity, all displayed IDs, fabric and care independently compared with sourced document markup."
+        }
+      ]
+    }
+  ]
+}

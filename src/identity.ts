@@ -1,7 +1,8 @@
 /**
  * This install's identity and its sharing choice. The key is an Ed25519 pair made once (`ensureKey`)
  * and kept in `~/.api-anything/key.json` (0600); the registry knows an install only by its public key.
- * `settings.json` holds what setup asked: until it was asked, nothing is shared or reported.
+ * `settings.json` holds the answer to the one question (`QUESTION`), asked by setup or by learn_site the
+ * first time something could be shared: until it was answered, nothing is shared or reported.
  */
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -44,12 +45,15 @@ export function signedHeaders(method: string, path: string, body: string, now = 
 export interface Settings {
   /**
    * share public reads this install learns or heals, report how calls go, and check a few candidates a
-   * day in the background. Off until setup asked.
+   * day in the background. Off until the user answered.
    */
   share: boolean;
-  /** when setup asked, ISO time; absent: never asked */
+  /** when the user answered, ISO time; absent: never asked */
   askedAt?: string;
 }
+
+export const QUESTION =
+  "Help build the shared catalog? Your agent will share operations it learns from public pages (never your cookies or logins), report under this install's anonymous key whether calls work, and test a few new operations a day from your network. Site searches go to the catalog either way.";
 
 export function loadSettings(): Settings {
   try {
@@ -63,3 +67,6 @@ export function loadSettings(): Settings {
 export function saveSettings(s: Settings): void {
   writePrivate(settingsFile(), `${JSON.stringify(s, null, 2)}\n`);
 }
+
+/** Keeps the user's answer to `QUESTION`: it is not asked again. */
+export const answerShare = (share: boolean) => saveSettings({ share, askedAt: new Date().toISOString() });

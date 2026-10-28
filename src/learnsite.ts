@@ -6,6 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 import { browserAvailable, ProfileInUse } from "./browser.js";
+import { type Proof, recordCases } from "./checks.js";
 import { botWall, judge } from "./classify.js";
 import { cleanCall } from "./clean.js";
 import { asText } from "./codec.js";
@@ -24,18 +25,20 @@ import {
   PROFILE_HINT,
 } from "./heal.js";
 import { buildRequest } from "./http.js";
+import { answerShare, loadSettings, QUESTION } from "./identity.js";
 import { type Args, capturePages, pageUrls, rankCandidates } from "./learn.js";
 import { resolveLoginTarget } from "./login.js";
 import { outline } from "./outline.js";
-import { sharedName } from "./registry.js";
-import type { Evidence } from "./registry-api.js";
+import { pull, registryRequest, sharedName } from "./registry.js";
+import type { Evidence, ServedSite } from "./registry-api.js";
 import { summarize } from "./search.js";
+import { captureLive, redact } from "./secrets.js";
 import { safeName } from "./session.js";
 import { HOLDOUT_PURPOSE, type ShareOutcome, shareOps } from "./share.js";
 import { CheckSchema, type Operation } from "./spec.js";
 import { loadSite, updateSite } from "./store.js";
 import type { Exchange } from "./types.js";
-import { badAddress, notARead } from "./vet.js";
+import { badAddress, LIMITS, notARead } from "./vet.js";
 
 const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string })
   .version;
@@ -65,6 +68,8 @@ export interface LearnSiteInput {
   embedded?: string;
   /** an earlier result's `captures` (run 1, run 2): learn again with other choices and no browser */
   captures?: [string, string];
+  /** learn the page anew even when an op someone shared answers for it (`reused` was not what the user wanted) */
+  fresh?: boolean;
   /** refused: a write is learned with the CLI's `add --write`, which intercepts it */
   write?: boolean;
 }
@@ -104,12 +109,75 @@ export interface LearnSiteResult {
     cleanReason?: string;
   };
   shared?: ShareOutcome;
+  /** an op someone shared for the same page answered: nothing was learned or uploaded */
+  reused?: { site: string; op: string; status?: string };
   warnings?: string[];
   captures?: string[];
   saved?: string;
   error?: string;
   next?: string;
   nextCall?: NextCall;
+}
+
+/** What `next` says while setup's question was never answered. */
+const ASK = `sharing was never set up on this install: ask the user once, in these words: "${QUESTION}" On yes, run api-anything setup --yes --share-only; on no, api-anything setup --no-share --share-only. Either answer is kept, and never asked again`;
+
+/**
+ * The registry's site for the trigger's domain (`name`), when one of its reads is behind the same page:
+ * pulled as an agent pulls (reads only, the shared rules, a candidate called with no cookies) and called
+ * with the user's args. Undefined when there is none, or its call does not answer with data: then it is
+ * learned. A user's own copy under that name is called as it is, never pulled over.
+ */
+async function reuse(
+  input: LearnSiteInput,
+  name: string | undefined,
+  askOnce: () => Promise<void>,
+  o: LearnSiteOptions,
+): Promise<LearnSiteResult | undefined> {
+  if (!name) return undefined;
+  let local: ReturnType<typeof loadSite>;
+  try {
+    local = loadSite(name);
+  } catch {
+    return undefined;
+  }
+  const match = (ops: Operation[]) =>
+    ops.flatMap((op) => {
+      const args = op.readOnly ? sameTrigger(op, input.trigger, input.args) : undefined;
+      return args ? [{ op, args }] : [];
+    })[0];
+  if (!local || local.source === "registry")
+    try {
+      // only a site with an op for this page is pulled; what is called is the pulled copy, vetted
+      const served = await registryRequest<ServedSite>(`/v1/sites/${name}`, {
+        cap: LIMITS.file + LIMITS.notes + 64 * 1024,
+        timeoutMs: 5000,
+      });
+      if (!match(served.operations.map((x) => x.operation))) return undefined;
+      await pull(name, { by: "agent" });
+      local = loadSite(name);
+    } catch {
+      return undefined;
+    }
+  const found = local && match(local.site.operations);
+  if (!found) return undefined;
+  // its report is what promotes it: the question is asked before the call, if it never was
+  await askOnce();
+  const op = found.op.name;
+  const r = await call(name, op, found.args, { minIntervalMs: o.minIntervalMs });
+  if (!r.ok || empty(r.data)) return undefined;
+  const answer = capOutput(r.data);
+  const status = found.op.version?.status;
+  return {
+    ok: true,
+    site: name,
+    op,
+    signature: summarize(found.op).op,
+    data: answer.data,
+    ...(answer.truncated ? { truncated: answer.truncated } : {}),
+    reused: { site: name, op, ...(status ? { status } : {}) },
+    next: `${loadSettings().askedAt ? "" : `${ASK}. `}this is ${name}.${op}, shared by others: call_operation it from now on. If data is not what the user wanted, call learn_site again with the same input plus fresh: true to learn your own`,
+  };
 }
 
 /** Replaced by tests: the real shareOps belongs to the registry client. */
@@ -196,15 +264,68 @@ function revealed(op: Operation, args: Args): string[] {
  * there), else the name the registry already serves the domain under (a seed's: goodreads.com is
  * goodreads), else a new one named as the registry names it (`slugOf`: crates.io is crates-io).
  */
-async function defaultSiteName(trigger: string): Promise<string> {
+async function defaultSiteName(trigger: string, registryName: () => Promise<string | undefined>): Promise<string> {
   const found = resolveLoginTarget(trigger).site;
   if (loadSite(found)) return found;
   const host = new URL(trigger).hostname;
   const domain = siteOf(host);
-  // a page on this machine or the network is never shared: the registry is not asked about it
-  const shared = badAddress(trigger) ? undefined : await sharedName(domain);
+  const shared = await registryName();
   const taken = shared && loadSite(shared)?.site;
   return safeName(shared && !(taken && siteOf(new URL(taken.baseUrl).hostname) !== domain) ? shared : slugOf(host));
+}
+
+const HOLE = /^\{(\w+)\}$/;
+
+/** A page URL as its parts in order: host (no www.), each path segment, each query key; placeholders kept. */
+function parts(url: string): [string, string][] | undefined {
+  const dec = (v: string) => {
+    try {
+      return decodeURIComponent(v);
+    } catch {
+      return v;
+    }
+  };
+  try {
+    const u = new URL(url);
+    return [
+      ["host", u.hostname.toLowerCase().replace(/^www\./, "")],
+      ...u.pathname
+        .split("/")
+        .filter(Boolean)
+        .map((v, i): [string, string] => [`path ${i}`, dec(v)]),
+      ...[...u.searchParams]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]): [string, string] => [`query ${k}`, v]),
+    ];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `args` by `op`'s param names when its trigger is the same page as `trigger`: placeholders at the same
+ * places, whatever their names, and every other part the same. Undefined when it is another page, or
+ * the args leave a required param unset or name one the op lacks.
+ */
+export function sameTrigger(op: Operation, trigger: string, args: Args): Args | undefined {
+  const a = parts(op.trigger.url);
+  const b = parts(trigger);
+  if (!a || !b || a.length !== b.length) return undefined;
+  const names: Record<string, string> = {};
+  for (const [i, [k, v]] of a.entries()) {
+    const [k2, v2] = b[i]!;
+    const [p, q] = [HOLE.exec(v), HOLE.exec(v2)];
+    if (k !== k2 || !p !== !q) return undefined;
+    if (p && q) names[q[1]!] = p[1]!;
+    else if (v !== v2) return undefined;
+  }
+  const out: Args = {};
+  for (const [k, v] of Object.entries(args)) {
+    const to = names[k] ?? k;
+    if (!op.params.some((x) => x.name === to)) return undefined;
+    out[to] = v;
+  }
+  return op.params.some((x) => x.required && out[x.name] === undefined && x.default === undefined) ? undefined : out;
 }
 
 /** A captured request as an op with no slots yet, for `notARead`. */
@@ -248,9 +369,37 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   const bad = checkArgs(input);
   if (bad) return { ok: false, error: bad, next: "fix the args and call again", nextCall: { action: "fix_args" } };
 
+  // a page on this machine or the network is never shared: the registry is not asked about it
+  let named: Promise<string | undefined> | undefined;
+  const registryName = () =>
+    (named ??= badAddress(input.trigger)
+      ? Promise.resolve(undefined)
+      : sharedName(siteOf(new URL(input.trigger).hostname)));
+  // setup's question, asked at most once per call and once ever
+  let prompted = false;
+  const askOnce = async () => {
+    if (prompted || loadSettings().askedAt) return;
+    prompted = true;
+    const yes = await o.consent?.(QUESTION).catch(() => undefined);
+    if (yes !== undefined) answerShare(yes);
+  };
+
+  // An op someone shared for the same page answers with no browser and nothing learned, and its call's
+  // report confirms it. A relearn (fresh, captures, a pick or a recipe) wants this run's own choices.
+  const relearn =
+    input.fresh ||
+    input.captures ||
+    input.pickRequest !== undefined ||
+    input.extract ||
+    input.pick?.length ||
+    input.html ||
+    input.embedded;
+  const reused = relearn ? undefined : await reuse(input, await registryName(), askOnce, o);
+  if (reused) return reused;
+
   let site: string;
   try {
-    site = input.site ? safeName(input.site) : await defaultSiteName(input.trigger);
+    site = input.site ? safeName(input.site) : await defaultSiteName(input.trigger, registryName);
   } catch (e) {
     return { ok: false, error: (e as Error).message, next: "pass site: a short name (letters, digits, . _ -)" };
   }
@@ -301,13 +450,16 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
 
   // the request and the recipe: the agent's, else the outline's
   const values = Object.values(input.args).map(asText);
+  // the URLs shown carry the run's live values as the refs a spec would hold there
+  const live = captureLive(c1, values);
+  const shownUrl = (u: string) => clip(redact(u, live, { named: true }));
   const ranked = rankCandidates(c1.exchanges, input.args, { pages: pageUrls(c1.exchanges, capturePages(c1)) });
   const exchange = (id: number) => c1.exchanges.find((e) => e.id === id);
   const refusal = (id: number) => notARead(asRequest(exchange(id)!));
   const options: Choice[] = ranked.slice(0, 6).map((c) => ({
     request: c.id,
     method: c.method,
-    url: clip(c.url),
+    url: shownUrl(c.url),
     ...(c.contentType ? { type: c.contentType.split(";")[0] } : {}),
     ...(c.hits.length ? { carries: c.hits } : {}),
     ...suggest(exchange(c.id)!, c.hits, values),
@@ -331,7 +483,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     chosen = options.find((x) => x.request === e.id) ?? {
       request: e.id,
       method: e.request.method,
-      url: clip(e.request.url),
+      url: shownUrl(e.request.url),
       ...suggest(e, [], values),
     };
   } else {
@@ -455,8 +607,11 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       ...cur!,
       operations: cur!.operations.map((x) => {
         if (x.name !== op) return x;
+        // an earlier learn_site's holdout gives way to this one, which ran on this version of the op
         const key = JSON.stringify(Object.entries(check.data.args).sort());
-        const rest = (x.checks ?? []).filter((c) => JSON.stringify(Object.entries(c.args).sort()) !== key);
+        const rest = (x.checks ?? []).filter(
+          (c) => c.purpose !== HOLDOUT_PURPOSE && JSON.stringify(Object.entries(c.args).sort()) !== key,
+        );
         return { ...x, checks: [...rest, check.data] };
       }),
     }));
@@ -484,6 +639,34 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     cleanReplay,
     ...(clean && clean.class !== "ok" ? { cleanReason: clean.reason } : {}),
   };
+  const proven: Proof = {
+    learnedLoggedIn: now.learnedLoggedIn,
+    cleanReplay,
+    holdout: { args: input.args3, ok: true, ...(holdout.tier ? { tier: holdout.tier } : {}) },
+    ...(holdout.tier ? { tier: holdout.tier } : {}),
+  };
+  // The holdout was the check's case: with no other check, publish needs no verify first, and sends
+  // what this run proved when the user shares it later.
+  if (held && check.success && now.checks?.length === 1)
+    recordCases(
+      site,
+      now,
+      [
+        {
+          op,
+          case: "check 1",
+          expect: "result",
+          outcome: "pass",
+          got: "result",
+          args: check.data.args,
+          purpose: HOLDOUT_PURPOSE,
+          ...(holdout.tier ? { tier: holdout.tier } : {}),
+          ...(holdout.healed ? { healed: true } : {}),
+          ms: holdout.ms,
+        },
+      ],
+      proven,
+    );
 
   let shared: ShareOutcome;
   let next: string | undefined;
@@ -499,13 +682,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       reason: `the learned request keeps the user's ${reveals.join(", ")} literally, so sharing it would say what they asked`,
     };
   } else {
-    const evidence: Partial<Evidence> = {
-      clientVersion: VERSION,
-      learnedLoggedIn: now.learnedLoggedIn,
-      cleanReplay,
-      holdout: { args: input.args3, ok: true, ...(holdout.tier ? { tier: holdout.tier } : {}) },
-      ...(holdout.tier ? { tier: holdout.tier } : {}),
-    };
+    const evidence: Partial<Evidence> = { clientVersion: VERSION, ...proven };
     // the user has their answer whatever sharing does
     const share = async (consent?: true): Promise<ShareOutcome> => {
       try {
@@ -515,7 +692,10 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
         return { site, op, shared: false, reason: (e as Error).message.split("\n")[0] };
       }
     };
+    // the first time something could be shared, setup's question is asked if it never was
+    await askOnce();
     shared = await share();
+    const publish = `api-anything publish ${site} ${op} --yes`;
     if (shared.needsConsent) {
       const found = shared.personal?.length ? shared.personal : undefined;
       const yes = await o
@@ -525,7 +705,14 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
         .catch(() => undefined);
       if (yes) shared = await share(true);
       else if (yes === undefined)
-        next = `ask the user whether to share ${op} with the catalog (${shared.reason ?? "it needs their yes"})${found ? `, showing them what may be theirs: ${found.join("; ")}` : ""}; only on their yes, run: api-anything publish ${site} ${op} --yes`;
+        next = `ask the user whether to share ${op} with the catalog (${shared.reason ?? "it needs their yes"})${found ? `, showing them what may be theirs: ${found.join("; ")}` : ""}; only on their yes, run: ${publish}`;
+    }
+    if (!shared.shared && !loadSettings().askedAt) {
+      next = next
+        ? `${next}. ${ASK}`
+        : shared.reason?.startsWith("refused")
+          ? ASK
+          : `${ASK}. On yes, also share ${op}: ${publish}`;
     }
   }
 

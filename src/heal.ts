@@ -4,7 +4,7 @@
  */
 import { join } from "node:path";
 import { atStep, browserAvailable, PageUnreachable, ProfileInUse, runTrigger, waitReport } from "./browser.js";
-import { botWall, type Class, judge } from "./classify.js";
+import { botWall, type Class, judge, pickedShape } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { capOutput, extract } from "./extract.js";
@@ -13,18 +13,21 @@ import {
   type Args,
   ASSET_EXT,
   arrayAround,
+  asGenerated,
   capturePages,
   checkExamples,
   hashLike,
   learnOperation,
   matches,
+  requestMatch,
+  UUID,
   unplaced,
 } from "./learn.js";
 
 export { unplaced };
 
 import type { NextAction } from "./execute.js";
-import { besideOrigins, credentialsOf, opUrls, scanSecrets } from "./secrets.js";
+import { besideOrigins, credentialsOf, opUrls, scanSecrets, signInFills } from "./secrets.js";
 import {
   cookieHeaderFor,
   home,
@@ -39,10 +42,30 @@ import {
   siteOf,
   writePrivate,
 } from "./session.js";
-import type { Match, Operation, Paging, Param, ResponseSpec, Site, Slot, Trigger, Volatile } from "./spec.js";
-import { appendHeal, clearStale, loadSite, rememberTier, updateSite } from "./store.js";
+import {
+  type Match,
+  type Operation,
+  OperationSchema,
+  type Paging,
+  type Param,
+  type ResponseSpec,
+  type Site,
+  type Slot,
+  type Trigger,
+  type Volatile,
+} from "./spec.js";
+import {
+  appendHeal,
+  clearStale,
+  type HealRecord,
+  loadHeals,
+  loadSite,
+  rememberTier,
+  templateHash,
+  updateSite,
+} from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
-import { notARead, pagingProblems, readbackProblems } from "./vet.js";
+import { LIMITS, notARead, pagingProblems, readbackProblems, vetShared } from "./vet.js";
 
 export const profileDir = () => join(home(), "profile");
 
@@ -59,6 +82,8 @@ export interface Attempt {
   ambiguous?: boolean;
   /** the args may be the problem (data missing, or a bare 403); see Classified.missing */
   missing?: boolean;
+  /** picked fields gone from an answer that has the rest (in `data`); see Classified.lost */
+  lost?: string[];
   /** the server failed or could not be reached; see Classified.server */
   server?: boolean;
   /** the first answer was a redirect, so the server took the request (a write ran) */
@@ -163,19 +188,66 @@ const readGuard = (m: Match, shared = false) => {
     ((shared && !!via && own(via) && site(e) !== site(via)) || (acting && !own(e) && !(via && own(via))));
 };
 
+const unsafe = (e: Exchange) => e.resourceType !== "websocket" && !SAFE_METHODS.has(e.request.method.toUpperCase());
+
+/** A request as a result names it: method and path, with the host when it is off `site`. Never the query. */
+export function requestLabel(e: Exchange, site: string | undefined): string {
+  try {
+    const u = new URL(e.request.url);
+    return `${e.request.method.toUpperCase()} ${siteOf(u.hostname) === site ? "" : u.host}${u.pathname}`;
+  } catch {
+    return e.request.method.toUpperCase();
+  }
+}
+
+const siteOfUrl = (url: string) => {
+  try {
+    return siteOf(new URL(url).hostname);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * A read being learned (`add`, `capture` without --write): once the steps run, an unsafe request is
+ * stopped, since a click that places an order would otherwise place it on each run. It passes when
+ * it is the op's own by `--match` (or a hop of that one's redirect), or a GraphQL query that carries
+ * its document, which reads by GraphQL's own rules. While the page loads, nothing is stopped.
+ */
+export const learnGuard = (m?: Match) => {
+  const own = (e?: Exchange) => !!e && !!m && Object.keys(m).length > 0 && matches(m, e.request);
+  return (e: Exchange, acting: boolean, via?: Exchange): boolean =>
+    acting &&
+    unsafe(e) &&
+    !own(e) &&
+    !own(via) &&
+    !!notARead({
+      request: { method: e.request.method, url: e.request.url, headers: e.request.headers, body: e.request.body },
+      slots: [],
+      params: [],
+    });
+};
+
 /**
  * A write's tier-3 run is the page sending it for real, so its own request may leave once: a
  * handler bound twice, or a client that sends again, would perform the write again, and every
  * further request matching the op is aborted. So is the server's redirect of the one that left
  * (`via`: what a hop was redirected from) when it would send the write on: a hop that keeps an
  * unsafe method (307, 308), or leads back to the op's own request. A hop that became a GET of
- * another address (Post/Redirect/Get) passes. What else the trigger sends is the op author's choice
- * and passes. An op with no `match` has no request to count. `stopped`: what was aborted.
+ * another address (Post/Redirect/Get) passes. Once the steps run, any other unsafe request leaves
+ * only when it is one of the companions the op's learning recorded: a redesigned page whose button
+ * now deletes the account sends nothing. An op learned before companions were recorded (none listed,
+ * not even an empty list) lets them leave. An op with no `match` has no request to count.
+ * `stopped`: what was aborted; `left`: the other unsafe requests that left, by `requestLabel`.
  */
-const sendOnce = (m: Match) => {
+const sendOnce = (op: Operation) => {
+  const m = op.match;
+  const companions = op.trigger.companions;
+  const site = siteOfUrl(op.request.url);
   let sent = false;
-  const stopped = { repeats: 0, resends: 0 };
-  const guard = (e: Exchange, _acting: boolean, via?: Exchange): boolean => {
+  const stopped = { repeats: 0, resends: 0, others: new Set<string>() };
+  const left = new Set<string>();
+  const guard = (e: Exchange, acting: boolean, via?: Exchange): boolean => {
     if (e.resourceType === "websocket" || !Object.keys(m).length) return false;
     const own = matches(m, e.request);
     if (via && matches(m, via.request)) {
@@ -183,14 +255,37 @@ const sendOnce = (m: Match) => {
       stopped.resends++;
       return true;
     }
-    if (!own) return false;
+    if (!own) {
+      if (!acting || !unsafe(e)) return false;
+      const recorded = !companions || companions.some((c) => matches(c, e.request));
+      (recorded ? left : stopped.others).add(requestLabel(e, site));
+      return !recorded;
+    }
     if (sent) stopped.repeats++;
     const repeat = sent;
     sent = true;
     return repeat;
   };
-  return Object.assign(guard, { stopped });
+  return Object.assign(guard, { stopped, left });
 };
+
+/**
+ * A write's companions, from its learning runs: the unsafe requests the guard aborted besides the
+ * op's own, on the op's site (another site's is stopped at tier 3), each by `requestMatch`, at most
+ * LIMITS.companions. `dropped`: how many more there were.
+ */
+function companionsOf(op: Operation, runs: [CaptureResult, Args][]): { companions: Match[]; dropped: number } {
+  const site = siteOfUrl(op.request.url);
+  const seen = new Map<string, Match>();
+  for (const [run, args] of runs)
+    for (const e of run.exchanges) {
+      if (!e.aborted || !unsafe(e) || matches(op.match, e.request) || siteOfUrl(e.request.url) !== site) continue;
+      const c = requestMatch(e.request, args);
+      seen.set(JSON.stringify(c), c);
+    }
+  const all = [...seen.values()];
+  return { companions: all.slice(0, LIMITS.companions), dropped: Math.max(0, all.length - LIMITS.companions) };
+}
 
 /** Values of the op's session: refs as the browser just sent them. */
 function sessionValuesOf(op: Operation, e: Exchange): Record<string, string> {
@@ -258,6 +353,8 @@ export interface TriggerRun {
   repeats?: number;
   /** a write's own request was answered with a redirect that would have sent it again, and was stopped */
   resends?: number;
+  /** a write's other unsafe requests once the steps ran, by `requestLabel`: those stopped, and those that left */
+  others?: { stopped: string[]; left: string[] };
 }
 
 /**
@@ -330,7 +427,7 @@ export async function runOpTrigger(
   const t = fillTrigger(op.trigger, args);
   const isHit = (e: Exchange) => matches(op.match, e.request);
   // A write's tier-3 run is the UI sending it for real, once; learning or healing one intercepts it.
-  const once = !o.intercept && !op.readOnly ? sendOnce(op.match) : undefined;
+  const once = !o.intercept && !op.readOnly ? sendOnce(op) : undefined;
   const shared = !!loadSite(site)?.site.shared;
   const intercept = once ?? (o.intercept ? writeGuard(op.match, { url: t.url, args }) : readGuard(op.match, shared));
   // Intercepted, a write's confirm sends nothing, so learning accepts it. For real, only what its
@@ -346,13 +443,16 @@ export async function runOpTrigger(
   const source = matched ?? hits.find((e) => e.response && e.response.status < 400);
   mergeCapture(site, capture.cookies, source && { from: source.request.url, values: sessionValuesOf(op, source) });
   const wall = matched?.response ? undefined : loginWall(capture, t.url);
-  const { repeats, resends } = once?.stopped ?? {};
+  const { repeats, resends, others } = once?.stopped ?? {};
+  const stopped = [...(others ?? [])];
+  const left = [...(once?.left ?? [])];
   return {
     capture,
     matched,
     ...(wall ? { loginWall: wall } : {}),
     ...(repeats ? { repeats } : {}),
     ...(resends ? { resends } : {}),
+    ...(stopped.length || left.length ? { others: { stopped, left } } : {}),
   };
 }
 
@@ -455,10 +555,49 @@ export async function capturePage(o: {
     steps: o.steps,
     softFrom: o.softFrom,
     profileDir: profileDir(),
-    intercept: o.write ? writeGuard(undefined, { url: o.url, args: o.args }) : undefined,
+    intercept: o.write
+      ? writeGuard(undefined, { url: o.url, args: o.args })
+      : o.steps?.length
+        ? learnGuard()
+        : undefined,
     confirm: o.write ? () => true : undefined,
   });
   return saveCapture(o, r);
+}
+
+/**
+ * What a read's learning run stopped (`learnGuard`), by `requestLabel`: on the trigger page's site,
+ * which may be the action the steps perform, and on others (an analytics beacon, most often).
+ */
+export function stoppedIn(run: CaptureResult, url: string): { site: string[]; elsewhere: string[] } {
+  const site = siteOfUrl(url);
+  const out = { site: [] as string[], elsewhere: [] as string[] };
+  for (const e of run.exchanges)
+    if (e.aborted) {
+      const list = siteOfUrl(e.request.url) === site ? out.site : out.elsewhere;
+      const label = requestLabel(e, site);
+      if (!list.includes(label)) list.push(label);
+    }
+  return out;
+}
+
+/**
+ * What to do about a request a read's learning stopped: --write first, which never sends it. A --match
+ * pin sends it for real on each run, so it is offered only for a request that changes nothing: an
+ * agent that took the pin for an order placed two real orders.
+ */
+const pinHint = (method: string, path: string, again = "add it") =>
+  `If it is an action (an order, a post, a change), ${again} with --write, which never sends it. ` +
+  `Only if it changes nothing (a search the site sends as ${method}), add it with --match method=${method} --match path=${path}: ` +
+  `a pinned request is sent for real on each learning run and saved as a read`;
+
+/** Said when a read's learning stopped requests the steps sent on the page's own site: what to do instead. */
+export function stoppedHint(labels: string[], again: string): string {
+  const [method, path] = labels[0]!.split(" ");
+  return (
+    `${labels.join(", ")}, sent once the steps ran, ${labels.length > 1 ? "were" : "was"} stopped in the browser: nothing was sent. ` +
+    pinHint(method!, path!, again)
+  );
 }
 
 export function loadCapture(id: string): CaptureFile {
@@ -619,7 +758,7 @@ function learnOrExplain(
       botWall({ status: doc.response.status, headers: doc.response.headers, body: doc.response.body ?? "" });
     if (wall)
       throw new Error(
-        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} and clear it, then add again (learning said: ${(e as Error).message})`,
+        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} --window and clear it, then add again (learning said: ${(e as Error).message})`,
       );
     const asked = input.readOnly && run.dialogs?.find((d) => d.type === "confirm" && !d.accepted);
     if (asked)
@@ -702,7 +841,7 @@ function saveOperation(
         `refusing to save ${operation.name}: the captured response is ${j.class}: ${j.reason}, so it was learned from ${j.class === "rate" ? "a throttled answer" : j.class === "error" ? "a server failure" : "a challenge or sign-in page"}, not the op's own answer. ` +
           (j.class === "rate" || j.class === "error"
             ? "Wait a few minutes, then add again"
-            : `Ask the user to run api-anything login ${site} (and clear any challenge), then add again`),
+            : `Ask the user to run api-anything login ${site}${j.class === "blocked" ? " --window and clear the challenge" : ""}, then add again`),
       );
     } else
       warnings.push(
@@ -712,6 +851,7 @@ function saveOperation(
 
   const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
   const secrets = scanSecrets(operation, credentialsOf(besideOrigins(session, opUrls(operation))), allowed).secrets;
+  secrets.push(...signInFills(operation.trigger.steps).map((f) => `trigger ${f}`));
   if (secrets.length) throw new Error(`refusing to save a spec containing a credential: ${secrets.join("; ")}`);
   // Re-read under the lock: another add or a heal may have saved this site since we started.
   let replaced = false;
@@ -791,20 +931,37 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   let run1: CaptureResult;
   let run2: CaptureResult | undefined;
   const captures: string[] = [];
+  // what a read's runs stopped and the add goes on without: off the page's site, or beside a pinned --match
+  const stops: string[] = [];
   if (i.from) {
     run1 = i.from.capture;
     run2 = i.from2;
+    if (!i.write)
+      for (const c of [i.from.capture, i.from2])
+        if (c && !c.write)
+          for (const label of Object.values(stoppedIn(c, c.url)).flat()) if (!stops.includes(label)) stops.push(label);
   } else {
     const run = async (a: Args) => {
       const t = fillTrigger(trigger!, a);
       const r = await runTrigger({
         ...t,
         profileDir: profileDir(),
-        intercept: i.write ? writeGuard(i.match, { url: t.url, args: a }) : undefined,
+        intercept: i.write
+          ? writeGuard(i.match, { url: t.url, args: a })
+          : t.steps?.length
+            ? learnGuard(i.match)
+            : undefined,
         confirm: i.write ? () => true : undefined,
       });
       const saved = saveCapture({ url: t.url, steps: t.steps, softFrom: t.softFrom, write: i.write }, r);
       captures.push(saved.id);
+      if (!i.write) {
+        // Before the next run, which would only be stopped again, and before anything is saved.
+        const { site, elsewhere } = stoppedIn(r, t.url);
+        const pinned = !!i.match && Object.keys(i.match).length > 0;
+        if (site.length && !pinned) throw new Error(`${stoppedHint(site, "add it again")}. ${i.op} was not saved`);
+        for (const label of [...(pinned ? site : []), ...elsewhere]) if (!stops.includes(label)) stops.push(label);
+      }
       return saved;
     };
     run1 = await run(ex1);
@@ -875,12 +1032,25 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     throw new Error(
       `capture ${i.from2.id} was made with --write and intercepted request ${learned.exchange2.id} as a write: learning it needs --write`,
     );
+  // Without --write, an aborted request is one a read's guard stopped: it never left, so it has no answer to learn.
+  if (!i.write && (learned.exchange.aborted || learned.exchange2?.aborted)) {
+    const e = learned.exchange.aborted ? learned.exchange : learned.exchange2!;
+    const method = e.request.method.toUpperCase();
+    throw new Error(
+      `request ${e.id} (${requestLabel(e, siteOfUrl(trigger.url))}) was stopped in the browser as a possible write, so it has no answer to learn. ` +
+        pinHint(method, `${new URL(e.request.url).pathname}${i.from ? " and --trigger instead of --from" : ""}`),
+    );
+  }
   const notRead = i.readsOnly && !i.write ? notARead(learned.operation) : undefined;
   if (notRead)
     throw new NotARead(
       `request ${learned.exchange.id} (${learned.operation.request.method} ${learned.operation.request.url.split("?")[0]}) is not a read: ${notRead}`,
     );
   const warnings = recipeWarnings(learned.warnings, r);
+  if (stops.length)
+    warnings.push(
+      `the steps also sent ${stops.join(", ")}, stopped in the browser (nothing was sent): learned without ${stops.length > 1 ? "them" : "it"}`,
+    );
   if (missing.length)
     warnings.push(
       `the trigger has no {${missing.join("}, {")}}: tier-3 runs and heals would load the example's page; put the param in --trigger`,
@@ -890,18 +1060,27 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   const description = i.description ?? prior?.description;
   // The confirms a write's runs accepted (intercepted, so nothing was sent), for its tier-3 calls to
   // accept again; a read keeps none. Derived from the runs alone, never carried over.
-  const { confirms: _given, ...asTriggered } = learned.operation.trigger;
+  const { confirms: _given, companions: _was, ...asTriggered } = learned.operation.trigger;
   const confirms = i.write ? acceptedConfirms(run1, ex1) : [];
   if (i.write && run2 && JSON.stringify(acceptedConfirms(run2, ex2 ?? ex1)) !== JSON.stringify(confirms))
     warnings.push(
       "the page's confirm dialogs differ between the two runs by more than the example values (another question, step or count): a tier-3 call accepts only the ones run 1 saw, asked the same way, and dismisses any other",
+    );
+  // The other unsafe requests a write's runs sent, which its tier-3 calls let out beside it; any other is stopped.
+  // Derived from the runs alone, like the confirms, and kept as an empty list too: absent means learned before this.
+  const { companions, dropped } = i.write
+    ? companionsOf(learned.operation, [[run1, ex1], ...(run2 ? ([[run2, ex2 ?? ex1]] as [CaptureResult, Args][]) : [])])
+    : { companions: undefined, dropped: 0 };
+  if (dropped)
+    warnings.push(
+      `the trigger sent ${dropped} more unsafe requests than the ${LIMITS.companions} recorded as companions: a tier-3 call stops those`,
     );
   // Learned again, an op also keeps what its params allow, and the checks whose args are all still params.
   const params = learned.operation.params.map((p) => ({ ...p, ...allowedOf(p.name) }));
   const checks = old?.checks?.filter((c) => Object.keys(c.args).every((k) => params.some((p) => p.name === k)));
   let operation: Operation = {
     ...learned.operation,
-    trigger: confirms.length ? { ...asTriggered, confirms } : asTriggered,
+    trigger: { ...asTriggered, ...(confirms.length ? { confirms } : {}), ...(companions ? { companions } : {}) },
     ...(description ? { description } : {}),
     ...(prior && !run2 && prior.minTier > learned.operation.minTier ? { minTier: prior.minTier } : {}),
     response: withRecipe(learned.operation.response, r),
@@ -1130,27 +1309,71 @@ export async function rescan(
 function template(op: Operation, args: Args): string {
   let req = op.request;
   try {
-    req = buildRequest(op, args, { cookies: [], values: {} });
+    // one seed for both sides: generated values are no change
+    req = buildRequest(op, args, { cookies: [], values: {} }, "");
   } catch {
     /* compare raw */
   }
   return JSON.stringify([req, op.slots, op.volatile]);
 }
 
-function summarize(a: Operation, b: Operation): string {
-  const parts: string[] = [];
-  if (a.request.url !== b.request.url)
-    parts.push(`url ${new URL(a.request.url).pathname} -> ${new URL(b.request.url).pathname}`);
-  const names = new Set([...Object.keys(a.request.headers), ...Object.keys(b.request.headers)]);
-  const headers = [...names].filter((n) => a.request.headers[n] !== b.request.headers[n]);
-  if (headers.length) parts.push(`headers ${headers.join(",")}`);
-  if (a.request.body !== b.request.body) parts.push("body");
-  if (JSON.stringify(a.slots) !== JSON.stringify(b.slots)) parts.push(`slots ${a.slots.length} -> ${b.slots.length}`);
-  return parts.join("; ") || "template unchanged";
+/** The op's request with each slot's `{param}` or ref template in its place: a change shows those, not values. */
+function placeholders(op: Operation): Operation["request"] {
+  let req = op.request;
+  for (const s of op.slots) {
+    try {
+      req = setAt(req, s.at, s.template ?? `{${s.param ?? s.ref}}`);
+    } catch {
+      /* position gone; the leaf shows as it is */
+    }
+  }
+  return req;
+}
+
+const MAX_CHANGES = 12;
+const shown = (v: string) => JSON.stringify(v.length > 80 ? `${v.slice(0, 77)}...` : v);
+
+/**
+ * What changed in the wire template from `a` to `b`, one line each: the method, origin and path, then
+ * every query, header, form and body leaf added, removed or changed (`header:x-app-version: "1" -> "2"`).
+ */
+export function templateChanges(a: Operation, b: Operation): string[] {
+  const [ra, rb] = [placeholders(a), placeholders(b)];
+  const out: string[] = [];
+  if (ra.method !== rb.method) out.push(`method: ${ra.method} -> ${rb.method}`);
+  const parts = (url: string) => /^([^:/?#]+:\/\/[^/?#]*)([^?#]*)/.exec(url) ?? ["", url, ""];
+  const [, oa = "", pa = ""] = parts(ra.url);
+  const [, ob = "", pb = ""] = parts(rb.url);
+  if (oa !== ob) out.push(`origin: ${oa} -> ${ob}`);
+  if (pa !== pb) out.push(`path: ${pa} -> ${pb}`);
+  // a JSON body's own leaves say more than the whole text; path segments are said above
+  const leaves = (req: Operation["request"]) =>
+    new Map(
+      walk(req)
+        .filter((l) => !l.container && !l.at[0]!.startsWith("path:"))
+        .map((l) => [l.at.join(" > "), l.value]),
+    );
+  const [la, lb] = [leaves(ra), leaves(rb)];
+  for (const [at, v] of la) {
+    if (!lb.has(at)) out.push(`${at}: removed (was ${shown(v)})`);
+    else if (lb.get(at) !== v) out.push(`${at}: ${shown(v)} -> ${shown(lb.get(at)!)}`);
+  }
+  for (const [at, v] of lb) if (!la.has(at)) out.push(`${at}: added ${shown(v)}`);
+  if (!out.length) out.push("the request reads the same: only how a param is filled changed");
+  return out.length > MAX_CHANGES
+    ? [...out.slice(0, MAX_CHANGES - 1), `and ${out.length - MAX_CHANGES + 1} more`]
+    : out;
 }
 
 export type HealResult =
-  | { outcome: "healed"; strategy: "rescan" | "recapture"; operation: Operation; attempt: Attempt }
+  | {
+      outcome: "healed";
+      strategy: "rescan" | "recapture";
+      operation: Operation;
+      attempt: Attempt;
+      /** what changed in the template; see templateChanges */
+      changes: string[];
+    }
   | {
       outcome: "identical" | "failed";
       reason: string;
@@ -1172,9 +1395,9 @@ export const learnedNothing = (a: Pick<Attempt, "class" | "server">) => STOP.has
 
 function saveHealed(
   site: string,
+  before: Operation,
   op: Operation,
   strategy: "rescan" | "recapture",
-  diff: string,
   attempt: Attempt,
 ): HealResult {
   const allowed = new Set((op.public ?? []).map((h) => `$.request.headers.${h}`));
@@ -1191,9 +1414,60 @@ function saveHealed(
     return putOperation(current, healed);
   });
   recordOrigins(site, opUrls(op));
-  appendHeal({ site, op: op.name, strategy, diff });
+  const changes = templateChanges(before, op);
+  appendHeal({
+    site,
+    op: op.name,
+    strategy,
+    diff: changes.join("; "),
+    changes,
+    previous: before,
+    saved: templateHash(healed),
+  });
   clearStale(site, op.name);
-  return { outcome: "healed", strategy, operation: op, attempt };
+  return { outcome: "healed", strategy, operation: op, attempt, changes };
+}
+
+/**
+ * Put back the op as it was before its last heal that is not reverted yet, from heals.jsonl. Refused
+ * when no heal kept it, or when the op changed since (learned again, edited): that is newer work. A
+ * pulled spec's user copy keeps its `shared` record, and the op gets back the registry version it was.
+ */
+export function revertHeal(siteName: string, name: string): { site: string; reverted: HealRecord; changes: string[] } {
+  const r = loadSite(siteName);
+  if (!r) throw new Error(`no site "${siteName}"`);
+  const site = r.site.name;
+  const current = r.site.operations.find((o) => o.name === name);
+  if (!current) throw new Error(`no operation "${name}" on ${site}`);
+  // a revert takes back the newest heal it finds; a second one, the heal before that
+  const open: HealRecord[] = [];
+  for (const h of loadHeals(site)) if (h.op === name) h.strategy === "revert" ? open.pop() : open.push(h);
+  const last = open.at(-1);
+  if (!last) throw new Error(`${name} on ${site} has no heal to revert`);
+  if (!last.previous) throw new Error(`the last heal of ${name} (${last.at}) was logged without the op as it was`);
+  if (last.saved && last.saved !== templateHash(current))
+    throw new Error(
+      `${name} changed after its last heal (${last.at}): learned again or edited, so reverting would undo that; nothing changed`,
+    );
+  const previous = OperationSchema.parse(last.previous);
+  const swap = (s: Site): Site => ({ ...s, operations: s.operations.map((o) => (o.name === name ? previous : o)) });
+  if (r.site.shared) {
+    const { errors } = vetShared(swap(r.site));
+    if (errors.length) throw new Error(`the op as it was fails today's shared rules: ${errors.join("; ")}`);
+  }
+  updateSite(site, (cur) => swap(cur ?? r.site));
+  const changes = templateChanges(current, previous);
+  appendHeal({
+    site,
+    op: name,
+    strategy: "revert",
+    diff: changes.join("; "),
+    changes,
+    previous: current,
+    saved: templateHash(previous),
+  });
+  clearStale(site, name);
+  return { site, reverted: last, changes };
 }
 
 const withDefaults = (op: Operation, args: Args): Args => {
@@ -1246,7 +1520,7 @@ export async function healOperation(
   if (scanned) {
     budget--;
     last = await o.validate(scanned.operation);
-    if (last.class === "ok") return saveHealed(site, scanned.operation, "rescan", scanned.diff, last);
+    if (last.class === "ok") return saveHealed(site, op, scanned.operation, "rescan", last);
     if (learnedNothing(last))
       return { outcome: "failed", attempt: last, transient: true, reason: swapped.replace("%s", last.reason) };
     if (!budget) return { outcome: "failed", attempt: last, reason: swapped.replace("%s", last.reason) };
@@ -1365,6 +1639,20 @@ export async function healOperation(
   } catch (e) {
     return { outcome: "failed", attempt: last, fallback, reason: `re-learning failed: ${(e as Error).message}` };
   }
+  // One run cannot show the page makes a value: a gen place that still holds a UUID, or that a ref took, stays one.
+  const gens = op.slots.flatMap((s) => {
+    const there = fresh.slots.find((f) => JSON.stringify(f.at) === JSON.stringify(s.at));
+    if (!s.gen || there?.param !== undefined || there?.template !== undefined) return [];
+    try {
+      return there?.ref || UUID.test(asText(getAt(fresh.request, s.at))) ? [s.at] : [];
+    } catch {
+      return []; // the place is gone
+    }
+  });
+  if (gens.length) {
+    fresh = { ...fresh, ...asGenerated(fresh, gens, sessionValues) };
+    settings = settings.filter((n) => n in sessionValues);
+  }
   // A deploy that adds an auth/anti-bot header: its value is needed to validate (and later send) the candidate.
   mergeCapture(site, [], { from: fresh.request.url, values: sessionValues }, { settings, urls: opUrls(fresh) });
   // An arg equal to a constant the old template had there ("search" in /api/search) is not a param position.
@@ -1381,6 +1669,7 @@ export async function healOperation(
     }),
   };
   // The interface (params, trigger, match, what to extract) is the caller's contract; only the wire template heals.
+  const pinned = pickedShape(op.response);
   const candidate: Operation = {
     ...fresh,
     description: op.description,
@@ -1396,6 +1685,8 @@ export async function healOperation(
     minTier: Math.max(op.minTier, fresh.minTier) as Operation["minTier"],
     response: {
       ...fresh.response,
+      // the picked fields' learned types are the recipe's too: a candidate whose answer lacks one fails its replay
+      ...(pinned ? { shape: { ...fresh.response.shape, ...pinned } } : {}),
       format: op.response.format,
       extract: op.response.extract,
       pick: op.response.pick,
@@ -1434,7 +1725,7 @@ export async function healOperation(
     return { outcome: "identical", fallback, reason: "re-learning produced a byte-identical template" };
   }
   last = await o.validate(candidate);
-  if (last.class === "ok") return saveHealed(site, candidate, "recapture", summarize(op, candidate), last);
+  if (last.class === "ok") return saveHealed(site, op, candidate, "recapture", last);
   return {
     outcome: "failed",
     attempt: last,

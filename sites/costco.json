@@ -1,0 +1,102 @@
+{
+  "name": "costco",
+  "displayName": "Costco US",
+  "baseUrl": "https://www.costco.com",
+  "description": "Public US product identity and descriptive metadata, without membership prices or availability.",
+  "operations": [
+    {
+      "name": "getProduct",
+      "description": "Read public US product identity, published item number, brand and descriptive summary; excludes prices, inventory and fulfillment.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.costco.com/p/-/%7Bslug%7D/%7BcatalogId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "catalogId",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.costco.com/p/-/{slug}/{catalogId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.costco.com",
+        "path": "/p/-/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "name",
+          "itemNumber=sku",
+          "brand=brand.name",
+          "url",
+          "description"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*type=\"application/ld\\+json\"[^>]*>\\s*(\\{)\\s*\"@context\"\\s*:\\s*\"https://schema.org\"\\s*,\\s*\"@type\"\\s*:\\s*\"Product\""
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Product slug from the same canonical Costco link as catalogId.",
+          "example": "lg-s80ty-313-ch-soundbar-with-wireless-subwoofer",
+          "pattern": "[a-z0-9-]{1,200}",
+          "hint": "Canonical slug only, without slashes or ID"
+        },
+        {
+          "name": "catalogId",
+          "type": "string",
+          "required": true,
+          "description": "Catalog identifier from the final path segment of the same canonical product link; differs from the published item number.",
+          "example": "4000400860",
+          "pattern": "[0-9]{5,20}",
+          "hint": "Digits from the canonical catalog ID"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "uber-two-50-egift-cards",
+            "catalogId": "4000282374"
+          },
+          "expect": "result",
+          "purpose": "Different brand and digital product metadata"
+        },
+        {
+          "args": {
+            "slug": "costco-shop-card",
+            "catalogId": "10024438"
+          },
+          "expect": "result",
+          "purpose": "Source-linked third product identity"
+        }
+      ]
+    }
+  ]
+}

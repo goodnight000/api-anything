@@ -273,7 +273,10 @@ export async function startFixture(): Promise<Fixture> {
           Object.keys(req.headers).some((h) => /^sec-(ch-ua|fetch-(site|dest|user))/.test(h))
           ? void res.writeHead(Number(u.searchParams.get("wall")) || 419, { "content-type": "text/plain" }).end("Sorry")
           : u.searchParams.has("bare")
-            ? json(res, { error: "refused" }, Number(u.searchParams.get("bare")), { "retry-after": "120" })
+            ? // a Retry-After makes any 4xx a rate limit: only the 429 says it
+              json(res, { error: "refused" }, Number(u.searchParams.get("bare")), {
+                ...(u.searchParams.get("bare") === "429" ? { "retry-after": "120" } : {}),
+              })
             : json(res, { items: [{ sorry: "ok" }] });
       // double-submit CSRF: the header must repeat the ct cookie
       case "/api/csrf": {

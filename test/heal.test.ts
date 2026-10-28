@@ -229,6 +229,39 @@ fetch("/api/search?${key}="+encodeURIComponent(p.get("q"))+"&page="+encodeURICom
     assert.deepEqual((r.data as unknown[])[0], { q: "cats", page: "2" });
   });
 
+  test("a recapture whose answer lost a picked field is not saved: the call is drift naming it", async () => {
+    let v2 = false;
+    const { server, base } = await serve((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      const key = v2 ? "term" : "q";
+      if (u.pathname.startsWith("/api/")) {
+        if (!u.searchParams.has(key))
+          return void res.writeHead(400, { "content-type": "application/json" }).end('{"error":"unknown argument"}');
+        const q = u.searchParams.get(key);
+        res.writeHead(200, { "content-type": "application/json" });
+        return void res.end(JSON.stringify({ results: [v2 ? { q, cost: 3 } : { q, price: 3 }] }));
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(
+        `<html><body><script>fetch("/api/search?${key}="+encodeURIComponent(new URLSearchParams(location.search).get("q")))</script></body></html>`,
+      );
+    });
+    servers.push(server);
+    await addOperation({
+      site: "p1",
+      op: "search",
+      trigger: { url: `${base}/s?q={q}` },
+      examples: [{ q: "hello" }, { q: "world" }],
+      response: { extract: "results", pick: ["q", "price"] },
+    });
+    v2 = true;
+    const r = await call("p1", "search", { q: "cats" }, fast);
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.class, "drift");
+    assert.match(r.reason ?? "", /picked field price disappeared/);
+    assert.match(loadSite("p1")!.site.operations[0]!.request.url, /[?&]q=/, "the candidate was not saved");
+  });
+
   test("a failed heal marks the op stale, so the next call skips the browser", async () => {
     const { server, base } = await search();
     servers.push(server);
@@ -440,6 +473,45 @@ fetch("/api/"+"${QID.slice(0, 11)}"+"${QID.slice(11)}"+"/User?name="+location.pa
     walled(r);
     assert.match(r.reason ?? "", /heal stopped/);
     assert.equal(staleMark("cha", "get"), undefined);
+  });
+
+  test("a bare 403 at every tier says the site refuses this machine; the site is then left alone for a while", async () => {
+    const fx = await startFixture();
+    fixtures.push(fx);
+    saveSite(
+      parseSite({
+        name: "refusing",
+        baseUrl: fx.url,
+        operations: [
+          {
+            name: "get",
+            readOnly: true,
+            request: { method: "GET", url: `${fx.url}/api/shut-out?q=abc`, headers: {} },
+            slots: [{ param: "q", at: ["query:q"] }],
+            trigger: { url: `${fx.url}/shut-out?q={q}` },
+            match: { method: "GET", path: "/api/shut-out" },
+            params: [{ name: "q", example: "abc" }],
+            response: { extract: "items" },
+          },
+        ],
+      }),
+    );
+    const refused = () => fx.calls.filter((c) => c.path.startsWith("/api/shut-out")).length;
+    const r = await call("refusing", "get", { q: "xyz" }, fast);
+    assert.deepEqual([r.class, r.tier], ["blocked", 3], JSON.stringify(r));
+    assert.match(r.next ?? "", /refuses requests from this machine or network/);
+    assert.match(r.next ?? "", /api-anything login refusing --window/);
+    assert.doesNotMatch(r.next ?? "", /challenging/);
+    assert.deepEqual([r.nextCall?.action, r.nextCall?.mode], ["login", "window"]);
+    const sent = refused();
+    assert.ok(sent >= 3, `every tier was tried (${sent} requests)`);
+
+    const again = await call("refusing", "get", { q: "xyz" }, fast);
+    assert.equal(refused(), sent, "nothing sent, and no browser run, while the site cools down");
+    assert.equal(again.class, "blocked");
+    assert.ok(again.retryAfterMs! > 9 * 60_000, String(again.retryAfterMs));
+    assert.match(again.next ?? "", /login refusing --window \(a login ends the wait\)/);
+    assert.ok(again.ms < 1000, `answered at once (${again.ms} ms)`);
   });
 
   test("a tier-3 run that meets a challenge that never solves is blocked, and a stale op keeps its tier-3 try", async () => {

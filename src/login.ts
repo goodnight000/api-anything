@@ -28,7 +28,7 @@ import {
   siteOf,
   withLock,
 } from "./session.js";
-import { listSites, loadSite } from "./store.js";
+import { clearCoolDown, listSites, loadSite } from "./store.js";
 import type { StoredCookie } from "./types.js";
 
 /** The known site whose baseUrl is on this host (www. or not). */
@@ -168,6 +168,7 @@ export async function importSession(site: string, url: string, o: ImportOptions 
     saveSession(site, { ...s, cookies, source: imported.source, ...(guestCookies ? { guestCookies } : {}) });
     return s.cookies;
   });
+  clearCoolDown(site);
   const had = new Set(before.map((c) => `${c.name}=${c.value}`));
   const unnamed =
     !o.loginCookies?.length && !signInCookies(cookies, [], guest).length && !signInCookies(before, [], guest).length;
@@ -265,6 +266,8 @@ export async function windowLogin(
 ): Promise<WindowLogin> {
   const guest = await knownGuests(site, url, o.loginCookies);
   const { opened, closed } = await login({ url, profileDir: profileDir(), waitForEnter: o.waitForEnter });
+  // the user had the site open: a challenge cleared there counts even with no sign-in
+  clearCoolDown(site);
   const renewed = renewedSignIn(opened, closed, o.loginCookies, guest);
   if (renewed.length && loggedIn(closed, o.loginCookies, guest)) {
     withLock(sessionFile(site), () => {

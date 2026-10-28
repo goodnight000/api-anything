@@ -1,0 +1,78 @@
+{
+  "name": "aldi",
+  "displayName": "ALDI UK",
+  "baseUrl": "https://www.aldi.co.uk",
+  "description": "Retailer descriptions and advertised technical details for public ALDI UK appliance product pages.",
+  "operations": [
+    {
+      "name": "applianceDetails",
+      "description": "Read a public appliance product page for its title, brand, descriptive text, advertised detail bullets and the retailer-selected option label. No stock or availability is returned.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.aldi.co.uk/product/%7BproductSlug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "productSlug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.aldi.co.uk/product/{productSlug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.aldi.co.uk",
+        "path": "/product/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html;charset=utf-8",
+        "html": {
+          "items": "main",
+          "fields": {
+            "title": "h1.product-details__title",
+            "brand": ".product-details__brand-name",
+            "description": ".product-details__information .p360-richtext",
+            "details": "all:.product-details__information li",
+            "selectedOptionLabel": ".product-variant-dropdowns input@value"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "productSlug",
+          "type": "string",
+          "required": true,
+          "description": "Exact final path segment copied from a public ALDI UK product link, including its numeric suffix. The suffix has no assumed code or model semantics.",
+          "example": "ambiano-soup-maker-000000000734442001",
+          "pattern": "[a-z0-9-]{3,180}",
+          "hint": "An exact product slug copied from an ALDI UK /product/ link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "productSlug": "ambiano-immersion-blender-000000000737164001"
+          },
+          "expect": "result",
+          "purpose": "Different appliance and detail bullets from the Soup Maker example; source-confirmed ON/Turbo and release-button descriptions."
+        }
+      ]
+    }
+  ]
+}

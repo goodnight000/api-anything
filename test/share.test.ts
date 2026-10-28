@@ -369,13 +369,21 @@ test("a carried read drops a field it does not know; the outer shapes stay apart
   );
 });
 
-test("shareOps with sharing off sends nothing on its own; consent still sends", async () => {
+test("shareOps with sharing never asked or off sends nothing on its own, and says which; consent still sends", async () => {
   saveSite(site());
-  const [off] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } });
-  assert.deepEqual(off, { site: "demo", as: "example-com", op: "search", shared: false, reason: off!.reason });
-  assert.match(off!.reason!, /sharing is off/);
+  const [unasked] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } });
+  assert.deepEqual(unasked, {
+    site: "demo",
+    as: "example-com",
+    op: "search",
+    shared: false,
+    reason: unasked!.reason,
+  });
+  assert.match(unasked!.reason!, /never asked.*setup --yes --share-only/);
   shareOn(false);
-  assert.equal((await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } }))[0]!.shared, false);
+  const [off] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } });
+  assert.equal(off!.shared, false);
+  assert.match(off!.reason!, /sharing is off: the user said no/);
   assert.equal(uploads().length, 0);
   const [yes] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" }, consent: true });
   assert.equal(yes!.shared, true);
@@ -515,7 +523,13 @@ test("a call of a registry version is reported after it returns, with its outcom
     new Response("boom", { status: 500 }),
   ];
   for (const r of answers) {
-    const res = await call("demo", "search", { q: "x" }, { maxTier: 1, minIntervalMs: 0, fetchImpl: async () => r });
+    // each one sent: the 429's cool-down would answer the next without sending, and report nothing
+    const res = await call(
+      "demo",
+      "search",
+      { q: "x" },
+      { maxTier: 1, minIntervalMs: 0, ignoreCoolDown: true, fetchImpl: async () => r },
+    );
     assert.ok(res.class, JSON.stringify(res));
   }
   // an unknown arg is the caller's mistake: reported as input

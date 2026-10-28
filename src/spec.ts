@@ -27,6 +27,11 @@ export const SlotSchema = z
       .string()
       .regex(/^(cookie|session):.+/, "ref must be cookie:<name> or session:<name>")
       .optional(),
+    /**
+     * a value the page makes for each request (an idempotency key from crypto.randomUUID()): a new one
+     * per call, the same on that call's retries, derived from the caller's idempotency key when given
+     */
+    gen: z.literal("uuid").optional(),
     at: z.array(Step).min(1),
     /** the leaf's text with `{param}` where the value goes (value is a substring of the leaf) */
     template: z.string().optional(),
@@ -34,7 +39,11 @@ export const SlotSchema = z
     /** with a template: how the value is escaped inside the leaf (see codec.ts Escape) */
     escape: z.enum(["url", "json"]).optional(),
   })
-  .refine((s) => (s.param === undefined) !== (s.ref === undefined), "a slot needs exactly one of param or ref");
+  .refine(
+    (s) => [s.param, s.ref, s.gen].filter((x) => x !== undefined).length === 1,
+    "a slot needs exactly one of param, ref or gen",
+  )
+  .refine((s) => s.gen === undefined || s.template === undefined, "a gen slot fills its whole leaf: no template");
 
 export const VolatileSchema = z.object({
   at: z.array(Step).min(1),
@@ -59,6 +68,15 @@ export const ConfirmSchema = z.object({
   digest: z.string().regex(/^[0-9a-f]{64}$/, "digest must be 64 lowercase hex characters"),
 });
 
+/** Stable request identity only. Never a queryId/doc_id/hash. */
+export const MatchSchema = z.object({
+  method: z.string().optional(),
+  host: z.string().optional(),
+  /** pathname with `*` for any one segment */
+  path: z.string().optional(),
+  operationName: z.string().optional(),
+});
+
 export const TriggerSchema = z.object({
   /** URL template, `{param}` filled from args */
   url: z.string(),
@@ -67,15 +85,11 @@ export const TriggerSchema = z.object({
   softFrom: z.string().optional(),
   /** a write's confirm() dialogs that a tier-3 run accepts when the page asks them again; any other is dismissed */
   confirms: z.array(ConfirmSchema).optional(),
-});
-
-/** Stable request identity only. Never a queryId/doc_id/hash. */
-export const MatchSchema = z.object({
-  method: z.string().optional(),
-  host: z.string().optional(),
-  /** pathname with `*` for any one segment */
-  path: z.string().optional(),
-  operationName: z.string().optional(),
+  /**
+   * a write's other unsafe requests its learning saw the trigger send (the cart saved before the
+   * order), each by its stable identity: a tier-3 run stops any other. Absent: learned before this.
+   */
+  companions: z.array(MatchSchema).optional(),
 });
 
 function validRegex(p: string): boolean {

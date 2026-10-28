@@ -1,12 +1,16 @@
 /** The ladder's rules with an injected fetch and maxTier 1 (no browser): writes, heal guards, rate. */
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { type CallResult, call, finish, stepOf } from "../src/execute.js";
 import { type Attempt, PROFILE_HINT } from "../src/heal.js";
 import { buildRequest } from "../src/http.js";
+import { importSession } from "../src/login.js";
 import { OMITTED } from "../src/secrets.js";
 import { saveSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
@@ -831,6 +835,7 @@ test("contract through call(): a read's rate limit and a write's three outcomes"
   );
   assert.deepEqual([rate.class, rate.retry, rate.retryAfterMs, rate.write], ["rate", "after_wait", 120_000, undefined]);
   assert.equal(rate.nextCall?.action, "retry");
+  rmSync(join(HOME, "state.json"), { force: true }); // the site's cool-down, which would answer the writes below unsent
 
   const w = (h: Handler) => ({ ...opts(h), allowWrites: true, again: true });
   const cases: [Handler | undefined, Partial<CallResult>][] = [
@@ -1202,3 +1207,298 @@ test("a cookie a redirect set, sent on the next hop and rotated again, is redact
   assert.ok(!r.reason!.includes(middle), r.reason!);
   assert.match(r.reason!, /\[redacted\]/);
 });
+const shop = parseSite({
+  name: "g",
+  baseUrl: "https://g.test",
+  operations: [
+    {
+      name: "order",
+      readOnly: false,
+      request: {
+        method: "POST",
+        url: "https://g.test/api/order",
+        headers: { "content-type": "application/json", "idempotency-key": "" },
+        body: '{"item":"x"}',
+      },
+      slots: [
+        { param: "item", at: ["body", "json:/item"] },
+        { gen: "uuid", at: ["header:idempotency-key"] },
+      ],
+      trigger: { url: "https://g.test/p/{item}" },
+      params: [{ name: "item" }],
+    },
+  ],
+});
+
+test("a gen slot: each call sends its own UUID, and one idempotency key always sends the same one", async () => {
+  saveSite(shop);
+  const keys: string[] = [];
+  let status = 200;
+  const w = (idempotencyKey?: string) => ({
+    ...opts((_u, init) => {
+      keys.push((init!.headers as Record<string, string>)["idempotency-key"]!);
+      return json(status < 400 ? { ok: true } : { error: "bad" }, status);
+    }),
+    allowWrites: true,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+  });
+  assert.equal((await call("g", "order", { item: "fridge" }, w())).write, "accepted");
+  assert.equal((await call("g", "order", { item: "toaster" }, w())).write, "accepted");
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1], "a new order is not the last one replayed");
+  for (const k of keys) assert.match(k, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+
+  // the caller's key: a send the site refused may go again, and carries the same value, so the site dedupes it too
+  status = 400;
+  assert.equal((await call("g", "order", { item: "stove" }, w("order-7"))).write, "not_applied");
+  status = 200;
+  assert.equal((await call("g", "order", { item: "stove" }, w("order-7"))).write, "accepted");
+  assert.equal(keys.length, 4);
+  assert.equal(keys[2], keys[3]);
+  assert.ok(!keys.slice(0, 2).includes(keys[2]!));
+  // another key is another write, with its own value
+  await call("g", "order", { item: "stove" }, w("order-8"));
+  assert.equal(keys.length, 5);
+  assert.notEqual(keys[4], keys[3]);
+  // the ledger holds no generated value
+  const ledger = readFileSync(join(HOME, "writes.json"), "utf8");
+  for (const k of keys) assert.ok(!ledger.includes(k));
+});
+
+test("a retry that adds an idempotency key after an unclear answer is the same write: held back, and told where to look", async () => {
+  const w = (h: Handler, idempotencyKey?: string) => ({ ...opts(h), allowWrites: true, idempotencyKey });
+  const lost = await call(
+    "t",
+    "post",
+    { text: "fridge" },
+    w(() => new Response("bad gateway", { status: 502 })),
+  );
+  assert.deepEqual([lost.write, lost.retry], ["may_have_applied", "no"]);
+  assert.match(lost.next ?? "", /check the site.*Look on https:\/\/t\.test\/compose/);
+  const retry = await call(
+    "t",
+    "post",
+    { text: "fridge" },
+    w(() => json({ ok: true }), "fresh-key"),
+  );
+  assert.deepEqual([retry.class, retry.write, retry.retry], ["duplicate", "not_sent", "no"]);
+  assert.equal(seen.length, 1, "sent once");
+  assert.match(retry.next ?? "", /Look on https:\/\/t\.test\/compose/);
+  // other args with a key are another write
+  assert.equal(
+    (
+      await call(
+        "t",
+        "post",
+        { text: "stove" },
+        w(() => json({ ok: true }), "fresh-key"),
+      )
+    ).ok,
+    true,
+  );
+  assert.equal(seen.length, 2);
+
+  // with a readback, the result names it too
+  saveSite(pagedAndTodos({ param: "after" }, { op: "todos", find: { field: "title", equals: "{title}" } }));
+  const unclear = await call(
+    "t",
+    "add",
+    { title: "milk" },
+    w((_u, i) => (i?.method === "POST" ? new Response("", { status: 502 }) : json({ todos: [] }))),
+  );
+  assert.equal(unclear.write, "may_have_applied");
+  assert.match(unclear.next ?? "", /Look on https:\/\/t\.test\/todos, or with its readback: the read todos/);
+});
+
+/* ------------------------------------------------- pacing and cool-downs */
+
+describe("a site that said stop, and the pace between sends (localhost)", () => {
+  let server: Server;
+  let base = "";
+  let hits: number[] = [];
+  let answer: (res: ServerResponse) => void = (res) => res.end();
+  before(async () => {
+    server = createServer((_req, res) => {
+      hits.push(Date.now());
+      answer(res);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+  after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const local = () =>
+    parseSite({
+      name: "local",
+      baseUrl: base,
+      operations: [
+        {
+          name: "get",
+          readOnly: true,
+          request: { method: "GET", url: `${base}/api/get?q=a`, headers: {} },
+          slots: [{ param: "q", at: ["query:q"] }],
+          trigger: { url: `${base}/s?q={q}` },
+          params: [{ name: "q", example: "a" }],
+          response: { extract: "items" },
+        },
+        {
+          name: "post",
+          readOnly: false,
+          request: {
+            method: "POST",
+            url: `${base}/api/post`,
+            headers: { "content-type": "application/json" },
+            body: '{"text":"x"}',
+          },
+          slots: [{ param: "text", at: ["body", "json:/text"] }],
+          trigger: { url: `${base}/compose` },
+          params: [{ name: "text" }],
+        },
+      ],
+    });
+  const reply =
+    (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    (res: ServerResponse) => {
+      res.writeHead(status, { "content-type": "application/json", ...headers });
+      res.end(JSON.stringify(body));
+    };
+  const fast = { maxTier: 1 as const, minIntervalMs: 0 };
+  beforeEach(() => {
+    saveSite(local());
+    hits = [];
+  });
+
+  test("calls from separate processes are paced as one: about the interval apart, never all at once", async () => {
+    answer = reply(200, { items: [1] });
+    const interval = 1000;
+    // every child waits for the same moment, so unpaced they would arrive together
+    const start = Date.now() + 4000;
+    const child = () =>
+      new Promise<string>((resolve, reject) => {
+        const p = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", CHILD], {
+          env: {
+            ...process.env,
+            AA_EXECUTE: new URL("../src/execute.ts", import.meta.url).href,
+            AA_START: String(start),
+            AA_INTERVAL: String(interval),
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let out = "";
+        p.stdout.on("data", (d) => (out += d));
+        p.stderr.on("data", (d) => (out += d));
+        p.on("error", reject);
+        p.on("close", () => resolve(out));
+      });
+    const outs = await Promise.all([child(), child(), child()]);
+    assert.deepEqual(outs, ["true", "true", "true"], outs.join("\n"));
+    const at = hits.sort((a, b) => a - b);
+    const gaps = at.slice(1).map((t, i) => t - at[i]!);
+    assert.equal(gaps.length, 2);
+    // slots are reserved at least 0.7 × the interval apart; arrival adds each process's own send latency
+    for (const g of gaps) assert.ok(g >= interval * 0.7 - 50, `arrivals ${gaps.join(", ")} ms apart`);
+  });
+
+  test("a 429's Retry-After is kept: the next calls send nothing until it is over, a write too", async () => {
+    answer = reply(429, { message: "Too Many Requests" }, { "retry-after": "300" });
+    const first = await call("local", "get", { q: "x" }, fast);
+    assert.deepEqual([first.class, first.retryAfterMs, hits.length], ["rate", 300_000, 1]);
+
+    answer = reply(200, { items: [1] });
+    const second = await call("local", "get", { q: "y" }, fast);
+    assert.equal(hits.length, 1, "nothing sent while the site cools down");
+    assert.deepEqual(
+      [second.ok, second.class, second.retry, second.nextCall?.action],
+      [false, "rate", "after_wait", "retry"],
+    );
+    assert.ok(second.retryAfterMs! <= 300_000 && second.retryAfterMs! > 290_000, String(second.retryAfterMs));
+    assert.match(
+      second.reason ?? "",
+      /^not sent: local answered rate at .*HTTP 429 \(the server says retry after 300 s\)/,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    const third = await call("local", "get", { q: "z" }, fast);
+    assert.ok(third.retryAfterMs! < second.retryAfterMs!, "counts down");
+
+    // a write is not sent either, and its ledger holds nothing that would refuse it later as a duplicate
+    const w = await call("local", "post", { text: "hi" }, { ...fast, allowWrites: true });
+    assert.deepEqual([w.class, w.write, hits.length], ["rate", "not_sent", 1]);
+
+    // the user's override sends
+    const forced = await call("local", "get", { q: "x" }, { ...fast, ignoreCoolDown: true });
+    assert.deepEqual([forced.ok, hits.length], [true, 2]);
+    const sent = await call("local", "post", { text: "hi" }, { ...fast, allowWrites: true, ignoreCoolDown: true });
+    assert.deepEqual([sent.write, hits.length], ["accepted", 3]);
+  });
+
+  test("a forced call the site answers ends the cool-down; one it limits again starts it over", async () => {
+    answer = reply(429, {}, { "retry-after": "300" });
+    await call("local", "get", { q: "x" }, fast);
+    // limited again: a new cool-down, from this answer's Retry-After
+    answer = reply(429, {}, { "retry-after": "600" });
+    const again = await call("local", "get", { q: "x" }, { ...fast, ignoreCoolDown: true });
+    assert.deepEqual([again.class, again.retryAfterMs, hits.length], ["rate", 600_000, 2]);
+    const held = await call("local", "get", { q: "y" }, fast);
+    assert.ok(held.retryAfterMs! > 590_000, String(held.retryAfterMs));
+    assert.equal(hits.length, 2);
+
+    answer = reply(200, { items: [1] });
+    const forced = await call("local", "get", { q: "x" }, { ...fast, ignoreCoolDown: true });
+    assert.deepEqual([forced.ok, hits.length], [true, 3]);
+    const plain = await call("local", "get", { q: "z" }, fast);
+    assert.deepEqual([plain.ok, hits.length], [true, 4], plain.reason ?? "");
+  });
+
+  test("a bare 429 cools down for a few minutes; a long Retry-After is capped", async () => {
+    answer = reply(429, {});
+    await call("local", "get", { q: "x" }, fast);
+    const bare = await call("local", "get", { q: "x" }, fast);
+    assert.ok(bare.retryAfterMs! > 170_000 && bare.retryAfterMs! <= 180_000, String(bare.retryAfterMs));
+
+    rmSync(join(HOME, "state.json"));
+    answer = reply(429, {}, { "retry-after": String(24 * 3600) });
+    await call("local", "get", { q: "x" }, fast);
+    const capped = await call("local", "get", { q: "x" }, fast);
+    assert.ok(capped.retryAfterMs! <= 30 * 60_000, String(capped.retryAfterMs));
+    assert.equal(hits.length, 2);
+  });
+
+  test("a failure that names its wait is rate, and is kept the same way", async () => {
+    answer = reply(503, { message: "down for maintenance" }, { "retry-after": "120" });
+    const r = await call("local", "get", { q: "x" }, fast);
+    assert.deepEqual([r.class, r.retry, r.retryAfterMs], ["rate", "after_wait", 120_000]);
+    await call("local", "get", { q: "x" }, fast);
+    assert.equal(hits.length, 1);
+  });
+
+  test("a login ends the cool-down", async () => {
+    answer = reply(429, {}, { "retry-after": "300" });
+    await call("local", "get", { q: "x" }, fast);
+    const file = join(HOME, "cookies.json");
+    writeFileSync(file, JSON.stringify([{ name: "sid", value: "s1", domain: "127.0.0.1", path: "/" }]));
+    assert.ok(await importSession("local", `${base}/`, { file, pushProfile: false }));
+    answer = reply(200, { items: [1] });
+    const r = await call("local", "get", { q: "x" }, fast);
+    assert.deepEqual([r.ok, hits.length], [true, 2]);
+  });
+
+  test("451: refused to this network or region; no tier climbed, no retry, and none sent again for a while", async () => {
+    answer = reply(451, { message: "Unavailable For Legal Reasons" });
+    // tier 3 allowed: a browser on the same network would get the same answer, so none is started
+    const r = await call("local", "get", { q: "x" }, { minIntervalMs: 0 });
+    assert.deepEqual([r.class, r.tier, r.retry, r.nextCall?.action, hits.length], ["blocked", 1, "no", "report", 1]);
+    assert.match(r.next ?? "", /not available from this network or region/);
+    const again = await call("local", "get", { q: "x" }, { minIntervalMs: 0 });
+    assert.deepEqual([again.class, again.retry, hits.length], ["blocked", "no", 1]);
+    assert.ok(again.retryAfterMs! > 9 * 60_000 && again.retryAfterMs! <= 10 * 60_000, String(again.retryAfterMs));
+  });
+});
+
+const CHILD = `
+const { call } = await import(process.env.AA_EXECUTE);
+await new Promise((r) => setTimeout(r, Math.max(0, Number(process.env.AA_START) - Date.now())));
+const r = await call("local", "get", { q: "c" }, { maxTier: 1, minIntervalMs: Number(process.env.AA_INTERVAL) });
+process.stdout.write(String(r.ok));
+`;

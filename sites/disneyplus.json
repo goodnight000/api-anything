@@ -1,0 +1,95 @@
+{
+  "name": "disneyplus",
+  "displayName": "Disney+",
+  "baseUrl": "https://www.disneyplus.com",
+  "description": "Public signed-out title metadata from Disney+ entity documents in the observed US English context.",
+  "operations": [
+    {
+      "name": "getTitle",
+      "description": "Read public title identity, synopsis, advertised genres and credited people from the signed-out title document.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.disneyplus.com/browse/entity-%7BentityId%7D?v=var1",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "entityId",
+          "at": [
+            "path:1"
+          ],
+          "template": "entity-{entityId}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.disneyplus.com/browse/entity-{entityId}?v=var1"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.disneyplus.com",
+        "path": "/browse/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "synopsis",
+          "genres=genreLine~^Genre:\\s*(.*)$",
+          "creditRole",
+          "creditedPeople",
+          "cast"
+        ],
+        "html": {
+          "items": "body",
+          "fields": {
+            "title": "[data-testid=\"content-title\"]",
+            "synopsis": "[data-section=\"Synopsis\"]",
+            "genreLine": "[data-testid=\"details-metadata\"] > dl > div:has(dt:contains(\"Genre:\"))",
+            "creditRole": "[data-testid=\"details-metadata\"] > dl:nth-child(2) > div:nth-child(1) > dt",
+            "creditedPeople": "all:[data-testid=\"details-metadata\"] > dl:nth-child(2) > div:nth-child(1) > dd",
+            "cast": "all:[data-testid=\"details-metadata\"] > dl:nth-child(2) > div:nth-child(2) > dd"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "entityId",
+          "type": "string",
+          "required": true,
+          "description": "Entity ID from an existing public Disney+ browse/entity- URL; not a partner-feed ID.",
+          "example": "422f6dcc-226f-44e7-98d4-22de69b31cf3",
+          "pattern": "[0-9a-f-]{36}",
+          "hint": "the entity ID from a public Disney+ title URL"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "entityId": "04c97b72-504b-47f2-9c6f-fe13d9aea82f"
+          },
+          "expect": "result",
+          "purpose": "A film differs from the series example and labels directors rather than a creator."
+        },
+        {
+          "args": {
+            "entityId": "a21ee2fc-421e-4839-bfcc-0bf2ba815875"
+          },
+          "expect": "result",
+          "purpose": "Held-out footer-linked film has a different identity and synopsis."
+        }
+      ]
+    }
+  ]
+}

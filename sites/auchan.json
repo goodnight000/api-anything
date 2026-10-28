@@ -1,0 +1,99 @@
+{
+  "name": "auchan",
+  "displayName": "Auchan France",
+  "baseUrl": "https://www.auchan.fr",
+  "description": "Public French product identities and general characteristics, without purchase-mode prices or availability.",
+  "operations": [
+    {
+      "name": "getProductDetails",
+      "description": "Read a French Auchan product title, brand and available general characteristics from its public product document.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.auchan.fr/%7Bslug%7D/pr-%7BproductId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "productId",
+          "at": [
+            "path:1"
+          ],
+          "template": "pr-{productId}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.auchan.fr/{slug}/pr-{productId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.auchan.fr",
+        "path": "/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "#wrapper.product",
+          "fields": {
+            "title": "h1",
+            "brand": ".offer-selector__name--large .offer-selector__brand",
+            "specifications": "all:#product-features .product-description__feature-wrapper:first-child .product-description__feature-group-wrapper"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Exact slug segment from the product URL, paired with productId.",
+          "example": "lego-city-60337-le-train-de-voyageurs-express-telecommande",
+          "pattern": "[a-z0-9-]{3,180}"
+        },
+        {
+          "name": "productId",
+          "type": "string",
+          "required": true,
+          "description": "Exact product identifier from the URL, including its C prefix.",
+          "example": "C1553147",
+          "pattern": "C[0-9]{4,10}"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "lego-friends-42687-la-maison-de-famille-de-liann",
+            "productId": "C1849115"
+          },
+          "expect": "result",
+          "purpose": "A different product, Friends 42687, has 946 pieces instead of the train."
+        },
+        {
+          "args": {
+            "slug": "lego-city-60316-le-commissariat-de-police",
+            "productId": "C1486035"
+          },
+          "expect": "result",
+          "purpose": "Independently source-grounded City 60316 police station has 668 pieces."
+        }
+      ]
+    }
+  ]
+}

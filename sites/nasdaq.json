@@ -1,0 +1,89 @@
+{
+  "name": "nasdaq",
+  "displayName": "Nasdaq",
+  "baseUrl": "https://www.nasdaq.com",
+  "description": "Public stock listing identity from observed Nasdaq frontend requests.",
+  "operations": [
+    {
+      "name": "getStockInfo",
+      "description": "Read public stock symbol, security name, stock type, listing exchange and asset class.",
+      "request": {
+        "method": "GET",
+        "url": "https://api.nasdaq.com/api/quote/%7Bsymbol%7D/info?assetclass=stocks",
+        "headers": {
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en-US,en;q=0.9",
+          "origin": "https://www.nasdaq.com",
+          "priority": "u=1, i",
+          "referer": "https://www.nasdaq.com/",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-site",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "symbol",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.nasdaq.com/market-activity/stocks/{symbol}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "api.nasdaq.com",
+        "path": "/api/quote/*/info"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "data",
+        "pick": [
+          "symbol",
+          "name=companyName",
+          "stockType",
+          "exchange",
+          "assetClass"
+        ]
+      },
+      "params": [
+        {
+          "name": "symbol",
+          "type": "string",
+          "required": true,
+          "description": "Uppercase stock symbol from the Nasdaq website, for example AAPL.",
+          "example": "AAPL",
+          "pattern": "[A-Z][A-Z0-9.-]{0,14}",
+          "hint": "A simple uppercase Nasdaq stock symbol such as AAPL"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "symbol": "MSFT"
+          },
+          "expect": "result",
+          "purpose": "Public MSFT instrument has a different identity from the Apple example."
+        },
+        {
+          "args": {
+            "symbol": "NVDA"
+          },
+          "expect": "result",
+          "purpose": "Public NVDA instrument has a different identity from the Apple example."
+        }
+      ]
+    }
+  ]
+}

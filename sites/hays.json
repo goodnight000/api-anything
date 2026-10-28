@@ -1,0 +1,80 @@
+{
+  "name": "hays",
+  "displayName": "Hays UK",
+  "baseUrl": "https://www.hays.co.uk",
+  "description": "Public structured job metadata from Hays UK posting pages.",
+  "operations": [
+    {
+      "name": "getJob",
+      "description": "Read selected public structured metadata for one source-linked Hays UK job posting.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.hays.co.uk/job-detail/%7Bjob%7D?jobSource=HaysGCJ",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "job",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.hays.co.uk/job-detail/{job}?jobSource=HaysGCJ"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.hays.co.uk",
+        "path": "/job-detail/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "jobReference=identifier.propertyID",
+          "reference=identifier.value",
+          "employmentType",
+          "industry",
+          "occupationalCategory",
+          "location=jobLocation.address.addressLocality"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*type=\"application/ld\\+json\"[^>]*>([\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "job",
+          "type": "string",
+          "required": true,
+          "description": "Exact route segment after /job-detail/ from a Hays UK posting URL, including its public reference.",
+          "example": "senior-quantity-surveyor--derbyshire_4840331",
+          "pattern": "[A-Za-z0-9_().-]{3,180}",
+          "hint": "Copy the exact job-detail route segment, without slash or query string."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "job": "software-engineer-(aws-python-c-c-cfd-fea)-oxford_4763934"
+          },
+          "expect": "result",
+          "purpose": "A different public posting has a distinct title, references and location."
+        }
+      ]
+    }
+  ]
+}

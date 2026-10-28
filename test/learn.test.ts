@@ -993,3 +993,65 @@ test("an example whose lower case is longer (İstanbul) still leaves a hole in i
   }).operation;
   assert.deepEqual(greek.slots[0]?.at, ["query:q"]);
 });
+
+test("a UUID the page makes for each request is a gen slot: no session ref, no nonce, nothing kept", () => {
+  const page = (item: string, id: number, body = `<h1>${item}</h1>`): Exchange => ({
+    id,
+    resourceType: "document",
+    request: { method: "GET", url: `https://shop.test/p/${item}`, headers: {} },
+    response: { status: 200, headers: {}, contentType: "text/html", body },
+  });
+  const order = (item: string, key: string, req: string, id: number): Exchange => ({
+    id,
+    resourceType: "fetch",
+    request: {
+      method: "POST",
+      url: "https://shop.test/api/order",
+      headers: { "content-type": "application/json", "idempotency-key": key, "x-request-id": req },
+      body: JSON.stringify({ item, qty: 1 }),
+    },
+  });
+  const K1 = "3b241101-e2bb-4255-8caf-4136c566a962";
+  const K2 = "9f8e7d6c-5b4a-4c3d-9e2f-1a0b9c8d7e6f";
+  const R1 = "0d6f2c1e-7a3b-4f5e-8d9c-2b1a0e9f8d7c";
+  const R2 = "6e5d4c3b-2a19-4807-a6f5-e4d3c2b1a098";
+  const input = (doc1?: string) => ({
+    exchanges: [page("fridge", 1, doc1), order("fridge", K1, R1, 2)],
+    exchanges2: [page("toaster", 3), order("toaster", K2, R2, 4)],
+    examples: [{ item: "fridge" }, { item: "toaster" }] as [Record<string, unknown>, Record<string, unknown>],
+    cookies: [],
+    match: { method: "POST", path: "/api/order" },
+    name: "order",
+    trigger: { url: "https://shop.test/p/{item}", steps: [{ action: "click" as const, selector: "#buy" }] },
+    readOnly: false,
+  });
+  const learned = learnOperation(input());
+  const op = learned.operation;
+  assert.deepEqual(
+    op.slots.filter((s) => s.gen).map((s) => [s.gen, s.at]),
+    [
+      ["uuid", ["header:idempotency-key"]],
+      ["uuid", ["header:x-request-id"]],
+    ],
+  );
+  assert.ok(!op.slots.some((s) => s.ref), JSON.stringify(op.slots));
+  assert.deepEqual(learned.sessionValues, {});
+  assert.equal(op.minTier, 1, "the page's own UUID is no signature");
+  const serialized = JSON.stringify(op);
+  for (const v of [K1, K2, R1, R2]) assert.ok(!serialized.includes(v), `${v} stayed in the spec`);
+
+  // filled per seed: the same seed (one call's retries, or one idempotency key) gives the same value
+  const none = { cookies: [], values: {} };
+  const a = buildRequest(op, { item: "kettle" }, none, "seed-a");
+  const again = buildRequest(op, { item: "kettle" }, none, "seed-a");
+  const b = buildRequest(op, { item: "kettle" }, none, "seed-b");
+  assert.match(a.headers["idempotency-key"]!, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(a.headers["idempotency-key"], again.headers["idempotency-key"]);
+  assert.notEqual(a.headers["idempotency-key"], b.headers["idempotency-key"]);
+  assert.notEqual(a.headers["idempotency-key"], a.headers["x-request-id"]);
+  assert.equal(JSON.parse(a.body!).item, "kettle");
+
+  // one the site handed the page (in the document before the request) is the site's: no gen slot
+  const issued = learnOperation(input(`<h1>fridge</h1><script>window.key="${K1}"</script>`)).operation;
+  assert.ok(!issued.slots.some((s) => s.gen && s.at[0] === "header:idempotency-key"), JSON.stringify(issued.slots));
+});

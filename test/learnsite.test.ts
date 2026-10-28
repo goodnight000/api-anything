@@ -14,7 +14,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { browserAvailable, closeBrowser } from "../src/browser.js";
+import { gate } from "../src/checks.js";
 import { loadCapture } from "../src/heal.js";
+import { saveSettings } from "../src/identity.js";
 import { hooks, type LearnSiteResult, learnSite } from "../src/learnsite.js";
 import { createServer } from "../src/mcp.js";
 import { learnTool } from "../src/mcp-learn.js";
@@ -71,6 +73,8 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
   before(async () => {
     // the fixture is on localhost, which MCP learn_site refuses to load anywhere else
     learnTool.publicOnly = false;
+    // the user answered setup's question: only an op's own consent is asked here
+    saveSettings({ share: true, askedAt: "2026-10-25T00:00:00.000Z" });
     fx = await startFixture();
     shares = stubShare((c) => ({ site: c.site, op: c.ops[0]!, shared: true, status: "candidate", hash: "h1" }));
     scoped = await learnSite(
@@ -152,6 +156,27 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
     assert.deepEqual(r.data, { name: "alice", followers: 500 });
     assert.equal(r.proof?.cleanReplay, "failed");
     assert.equal(calls[0]!.o.evidence.cleanReplay, "failed");
+  });
+
+  test("the request URLs shown carry the run's live cookie as its ref, never its value", async () => {
+    stubShare((c) => ({ site: c.site, op: c.ops[0]!, shared: false, reason: "not public" }));
+    const r = await learnSite(
+      {
+        site: "fx",
+        op: "findBoxed",
+        trigger: `${fx.url}/signin-box?q={q}`,
+        args: { q: "alice" },
+        args2: { q: "bobby" },
+        args3: { q: "carol" },
+      },
+      fast,
+    );
+    const urls = [r.chosen, ...(r.alternatives ?? [])].map((c) => c?.url ?? "");
+    assert.match(r.chosen?.url ?? "", /\/api\/scoped\?q=alice&access_token=\[cookie:ct0\]$/, JSON.stringify(r));
+    assert.ok(
+      urls.every((u) => !/access_token=[0-9a-f]{32}/.test(u)),
+      urls.join("\n"),
+    );
   });
 
   test("a server-rendered list is picked as an html recipe; with no site or op, the host's site and the path name them", async () => {
@@ -300,5 +325,29 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
     const out = JSON.parse(r.stdout);
     assert.deepEqual([out.ok, out.signature, out.data], [true, "searchCli(q)", ["alice one", "alice two"]]);
     assert.equal(out.proof.holdout.ok, true);
+  });
+
+  test("learned again with another holdout, the new one replaces the old, so publish needs no verify", async () => {
+    stubShare((c) => ({ site: c.site, op: c.ops[0]!, shared: false, needsConsent: true, reason: "asked" }));
+    const again = await learnSite(
+      {
+        site: "fx",
+        op: "searchScoped",
+        trigger: `${fx.url}/scoped?q={q}`,
+        args: { q: "alice" },
+        args2: { q: "bobby" },
+        args3: { q: "dave" },
+        captures: scoped.captures as [string, string],
+      },
+      fast,
+    );
+    assert.equal(again.ok, true, JSON.stringify(again));
+    assert.deepEqual(opOf("fx", "searchScoped").checks, [
+      { args: { q: "dave" }, expect: "result", purpose: HOLDOUT_PURPOSE },
+    ]);
+    assert.deepEqual(
+      gate(loadSite("fx")!.site).errors.filter((e) => e.startsWith("searchScoped:")),
+      [],
+    );
   });
 });

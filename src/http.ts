@@ -1,4 +1,5 @@
 /** Tier 1: fill the stored template and send it with Node fetch. */
+import { createHash, randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIPv4, isIPv6 } from "node:net";
 import * as zlib from "node:zlib";
@@ -6,6 +7,7 @@ import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js"
 import { matches } from "./learn.js";
 import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
 import type { Match, Operation, Param, Request } from "./spec.js";
+import { reserveSend } from "./store.js";
 import type { StoredCookie } from "./types.js";
 import { badAddress } from "./vet.js";
 
@@ -27,7 +29,7 @@ export interface SendOptions {
   site: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
-  /** minimum gap between requests to one site (default 1 s) */
+  /** gap between requests to one site, ±30% (default 1 s); 0 sends without pacing */
   minIntervalMs?: number;
   /**
    * someone else's spec, or a candidate verified in the background: the request and every redirect hop
@@ -36,6 +38,8 @@ export interface SendOptions {
    * not reach.
    */
   publicOnly?: boolean;
+  /** the call's seed for its gen slots (`buildRequest`) */
+  gen?: string;
 }
 
 /** How a public-only send resolves a host before connecting; tests replace it, since they stay off the network. */
@@ -189,6 +193,22 @@ function transform(v: string, t: "strip-quotes" | "url-decode" | undefined): str
 export const holdsRef = (s: Operation["slots"][number]) =>
   !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0);
 
+/**
+ * A gen slot's value: a UUID v4 drawn from `seed` and the slot's place, so every request one call
+ * builds carries the same one. With no seed, a fresh one.
+ */
+function generated(seed: string | undefined, at: string[]): string {
+  if (seed === undefined) return randomUUID();
+  const b = createHash("sha256")
+    .update(JSON.stringify([seed, at]))
+    .digest()
+    .subarray(0, 16);
+  b[6] = (b[6]! & 0x0f) | 0x40;
+  b[8] = (b[8]! & 0x3f) | 0x80;
+  const h = b.toString("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
 /** The args a call runs with at every tier: a param the caller left out takes its default. */
 export function withDefaults(op: Operation, args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -222,8 +242,11 @@ export function refusal(p: Pick<Param, "pattern" | "hint" | "enum" | "min" | "ma
   return undefined;
 }
 
-/** The fully materialized request: params, cookie/session refs, and the jar's Cookie header. */
-export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session): Request {
+/**
+ * The fully materialized request: params, cookie/session refs, gen slots from `gen` (the call's
+ * seed; without one each build makes new values), and the jar's Cookie header.
+ */
+export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session, gen?: string): Request {
   const given = withDefaults(op, args);
   const vals: Record<string, unknown> = {};
   for (const p of op.params) {
@@ -245,6 +268,10 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
   };
   delete req.headers.cookie;
   for (const slot of op.slots) {
+    if (slot.gen) {
+      req = setAt(req, slot.at, generated(gen, slot.at));
+      continue;
+    }
     const name = slot.param ?? slot.ref!;
     let v: unknown = slot.param !== undefined ? vals[slot.param] : resolveRef(slot.ref!, session, op.request.url);
     // No cursor is the first page. An op learned from the request that loads page 2 holds page 2's
@@ -294,14 +321,11 @@ export class BadHeader extends Error {
   }
 }
 
-const lastSend = new Map<string, number>();
-
-/** Reserve the next send slot for a site, then wait for it; concurrent callers queue up. */
-async function pace(site: string, minIntervalMs: number): Promise<void> {
-  const now = Date.now();
-  const at = Math.max(now, (lastSend.get(site) ?? 0) + minIntervalMs);
-  lastSend.set(site, at);
-  if (at > now) await new Promise((r) => setTimeout(r, at - now));
+/** Reserve the next send slot for a site, then wait for it; concurrent callers, in any process, queue up. */
+export async function pace(site: string, minIntervalMs = 1000): Promise<void> {
+  if (minIntervalMs <= 0) return;
+  const wait = reserveSend(site, minIntervalMs) - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
 
 export const REDIRECT = new Set([301, 302, 303, 307, 308]);
@@ -445,9 +469,9 @@ export async function send(
   session: Session,
   opts: SendOptions,
 ): Promise<Sent> {
-  const req = buildRequest(op, args, session);
+  const req = buildRequest(op, args, session, opts.gen);
   if (opts.publicOnly) await refusePrivate(op, req.url);
-  await pace(opts.site, opts.minIntervalMs ?? 1000);
+  await pace(opts.site, opts.minIntervalMs);
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const signal = AbortSignal.timeout(timeoutMs);
   let hop: Request = { ...req, body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body };

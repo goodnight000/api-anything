@@ -1,0 +1,104 @@
+{
+  "name": "workday",
+  "displayName": "Workday careers",
+  "baseUrl": "https://workday.wd5.myworkdayjobs.com",
+  "description": "Public job metadata on Workday’s own employer careers tenant, not other employers using Workday.",
+  "operations": [
+    {
+      "name": "getJob",
+      "description": "Read public job metadata for a job on Workday’s own employer careers tenant.",
+      "request": {
+        "method": "GET",
+        "url": "https://workday.wd5.myworkdayjobs.com/wday/cxs/workday/Workday/job/%7Bjob%7D",
+        "headers": {
+          "accept": "application/json",
+          "accept-language": "en-US",
+          "content-type": "application/x-www-form-urlencoded",
+          "priority": "u=1, i",
+          "referer": "https://workday.wd5.myworkdayjobs.com/en-US/Workday/details/{job}?source=Careers_Website",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "x-calypso-csrf-token": ""
+        }
+      },
+      "slots": [
+        {
+          "param": "job",
+          "at": [
+            "path:5"
+          ]
+        },
+        {
+          "param": "job",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://workday.wd5.myworkdayjobs.com/en-US/Workday/details/{job}?source=Careers_Website"
+        },
+        {
+          "ref": "cookie:CALYPSO_CSRF_TOKEN",
+          "at": [
+            "header:x-calypso-csrf-token"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://workday.wd5.myworkdayjobs.com/en-US/Workday/details/{job}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "workday.wd5.myworkdayjobs.com",
+        "path": "/wday/cxs/workday/Workday/job/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "jobPostingInfo",
+        "pick": [
+          "title",
+          "location",
+          "additionalLocations",
+          "timeType",
+          "remoteType",
+          "jobReqId",
+          "jobPostingId",
+          "externalUrl"
+        ]
+      },
+      "params": [
+        {
+          "name": "job",
+          "type": "string",
+          "required": true,
+          "description": "Complete final job-link segment, including its JR requisition suffix, copied from a public Workday employer job link.",
+          "example": "Technical-Consultant_JR-0110821"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "job": "Web-Designer_JR-0110973"
+          },
+          "expect": "result",
+          "purpose": "Separate public catalog entry for a USA CA remote web-design role."
+        },
+        {
+          "args": {
+            "job": "Digital-Project-Consultant_JR-0110941"
+          },
+          "expect": "result",
+          "purpose": "Separate Seattle digital-project role differs in title, location and requisition."
+        }
+      ]
+    }
+  ]
+}

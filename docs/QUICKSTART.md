@@ -33,7 +33,9 @@ so npx finds node. After a Node upgrade that moves npx, delete that entry and ru
   copy of the skill is backed up the same way, then replaced.
 - It checks for a Chromium browser, makes this install's key (`~/.api-anything/key.json`, mode 0600),
   and asks whether to help build the shared catalog. The answer is kept in
-  `~/.api-anything/settings.json`; until it is given, nothing is shared or reported.
+  `~/.api-anything/settings.json`; until it is given, nothing is shared or reported. Without setup
+  (the plugin, or `mcp add` by hand), the agent's `learn_site` asks the same question once, the first
+  time it learns something it could share.
 
 Flags:
 
@@ -42,6 +44,7 @@ Flags:
 | `--dry-run` | prints what would change, and changes nothing |
 | `--yes` | answers the question yes without asking |
 | `--no-share` | answers it no |
+| `--share-only` | with `--yes` or `--no-share`: records the answer and changes nothing else (the way to turn sharing on or off later) |
 | `--agents claude-code,codex,cursor,claude-desktop` | connects these agents only, found or not |
 
 Without a terminal (an agent running it) and without `--yes` or `--no-share`, the question is not
@@ -222,8 +225,8 @@ node examples/research.mjs anthropic --linkedin
 
 This searches companies, then uses each returned `universalName` to fetch company details, for
 at most three companies. It sends no messages. The JSON can feed an agent's brief, a local
-report, or your existing job runner. Use one persistent MCP process for shared pacing, because
-independent CLI processes are rate-limited separately. Treat `auth`, `rate`, `blocked` and
+report, or your existing job runner. Requests to one site are paced across processes, so CLI runs
+in parallel queue up rather than arrive together. Treat `auth`, `rate`, `blocked` and
 `drift` as incomplete work. Recordings and captured output for both demos are in
 [docs/demos](demos/README.md).
 

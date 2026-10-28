@@ -1,0 +1,92 @@
+{
+  "name": "ticketmaster",
+  "displayName": "Ticketmaster",
+  "baseUrl": "https://www.ticketmaster.com",
+  "description": "Search public event metadata from the Ticketmaster US frontend.",
+  "operations": [
+    {
+      "name": "searchEvents",
+      "description": "Search the first page of public Ticketmaster event metadata by keyword.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.ticketmaster.com/search?q=%7Bq%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.ticketmaster.com/search?q={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.ticketmaster.com",
+        "path": "/search"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "events",
+        "pick": [
+          "id",
+          "title",
+          "url",
+          "startDate=dates.startDate",
+          "timeZone",
+          "venueName=venue.name",
+          "city=venue.city",
+          "state=venue.state",
+          "country=venue.country",
+          "cancelled",
+          "postponed",
+          "rescheduled",
+          "tba"
+        ],
+        "embedded": {
+          "regex": "\"endpointName\":\"searchEvents\"[\\s\\S]*?\"data\":(\\{[\\s\\S]*?\\}),\"fulfilledTimeStamp\""
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Keyword for an artist, event, or venue, as entered in the public search box.",
+          "example": "Metallica"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "Hamilton"
+          },
+          "expect": "result",
+          "purpose": "Different public title excludes the Metallica example."
+        },
+        {
+          "args": {
+            "q": "Eagles"
+          },
+          "expect": "result",
+          "purpose": "Third keyword independently matched public event identities, venue, and local dates."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+Use `listStores` for the retailer cards on Instacart's public city directory. Take both arguments from a link under https://www.instacart.com/grocery-delivery. For example, `/grocery-delivery/ny/near-me-in-long-island-city-ny` means `region=ny city=long-island-city-ny`. The city slug includes its region suffix; the arguments must refer to the same place.
+
+The cards describe retailer chains advertised for the city, rather than individual branches. `fulfillment` is the card's delivery/pickup label and can contain a compact bullet such as `Delivery•Pickup`. It does not establish availability, inventory, pricing or delivery coverage for an address. The result includes the initially published cards only; Show all is not exercised. No account, ZIP code or personal address is required for this directory read.
+
+## Maintainer notes
+
+Verified signed out on 2026-10-26 UTC using the source checkout. Start at https://www.instacart.com/ and follow its Shop by location link to https://www.instacart.com/grocery-delivery. City links from that directory supplied all three inputs.
+
+Operation: `listStores(region, city)`. The GET document is also the response source. Trigger and request are `https://www.instacart.com/grocery-delivery/{region}/near-me-in-{city}`. The HTML recipe reads the public retailer grid's anchors, their visible name and fulfillment paragraphs, and their storefront links. No site-specific runtime code or credential refs are needed.
+
+The two real frontend captures were San Francisco (`region=ca city=san-francisco-ca`, `cmvp3ngcqd60eb2`) and West Cornwall (`region=ct city=west-cornwall-ct`, `cmvp3ody3d8ace6`). Long Island City (`region=ny city=long-island-city-ny`, `cmvp3p71b9b2017`) was not used for learning. All used document request 1. The document-only capture helper aborted every other request; inline scripts could run. These are actual browser document captures, not fully hydrated GUI verification.
+
+The unseen Long Island City call passed at tier 1. A separate Python HTMLParser compared the frontend card image alt labels, visible paragraphs and anchor hrefs with the returned data. All 12 names, URLs and fulfillment labels matched. `verifySite('instacart', {maxTier: 1})` then passed its San Francisco example and West Cornwall/Long Island City checks, all at tier 1. Export retained these harmless public examples. A later tier-1 call from an initially empty isolated API_ANYTHING_HOME resolved the exported bundled spec and returned all 12 matching records, with no preexisting session, cookie header or credential reference.
+
+The parent completed direct shared validation after resources recovered. The initial nested city-format quantifier was rejected; it was simplified to a bounded single-segment format, followed by current-version tier-1 verification, export and fresh-home reuse. Detailed receipts, resource measurements and the other assigned domains' blockers are in `docs/research/discovery/food-delivery-r1.md`; raw evidence remains ignored under `bench/explore/state/discovery/food-delivery-r1/`. The parent runs integrated registry checks.

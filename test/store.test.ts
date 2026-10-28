@@ -10,13 +10,17 @@ import type { Site } from "../src/spec.js";
 import {
   appendHeal,
   beginWrite,
+  clearCoolDown,
   clearStale,
+  coolDown,
+  cooling,
   lastHealAt,
   listSites,
   loadSite,
   markStale,
   rememberedTier,
   rememberTier,
+  reserveSend,
   saveSite,
   settleWrite,
   siteNotes,
@@ -303,4 +307,47 @@ test("export: shapes and typed example values stripped, examples kept on request
   assert.deepEqual(exportSite("demo").secrets, [
     "$.operations[0].request.headers.authorization holds the live session value authorization",
   ]);
+});
+
+test("export refuses a hand-written step that types a password, which no live session holds", async () => {
+  const { exportSite } = await import("../src/store.js");
+  fresh();
+  const op = site("x").operations[0]!;
+  const steps = [{ action: "fill" as const, selector: "#pw", value: "Hunter2-RealPassw0rd!" }];
+  saveSite({ ...site("x"), operations: [{ ...op, trigger: { ...op.trigger, steps } }] });
+  assert.deepEqual(exportSite("demo").secrets, [
+    "$.operations[0].trigger steps[0] fills a password or one-time-code field (#pw): a sign-in is the user's: ask them to run api-anything login <site> (it imports the cookies of the browser they are signed in with, no password)",
+  ]);
+});
+
+test("send slots: each moves the site's next send on by the interval ±30%, kept on disk, any one corrupt file aside", () => {
+  const { home } = fresh();
+  const now = 1_000_000;
+  const at = [reserveSend("a", 1000, now)];
+  for (let i = 0; i < 20; i++) at.push(reserveSend("a", 1000, now));
+  const gaps = at.slice(1).map((t, i) => t - at[i]!);
+  assert.equal(at[0], now, "an idle site sends at once");
+  assert.ok(
+    gaps.every((g) => g >= 700 && g <= 1300),
+    gaps.join(","),
+  );
+  assert.ok(new Set(gaps).size > 1, "not one fixed period");
+  assert.equal(reserveSend("b", 1000, now), now, "another site has its own slot");
+  // another process reads the same slot
+  assert.equal(JSON.parse(readFileSync(join(home, "pace.json"), "utf8")).a > at.at(-1)!, true);
+  writeFileSync(join(home, "pace.json"), "{not json");
+  assert.equal(reserveSend("a", 1000, now), now);
+});
+
+test("cool-downs: one per site, until it runs out or a login clears it; the wait is capped", () => {
+  fresh();
+  const now = Date.now();
+  coolDown("Demo", { class: "rate", reason: "HTTP 429" }, 60_000, now);
+  assert.deepEqual(cooling("demo", now + 1)?.class, "rate");
+  assert.equal(cooling("demo", now + 60_001), undefined);
+  coolDown("demo", { class: "blocked", reason: "x", status: 451 }, 365 * 24 * 3600_000, now);
+  assert.equal(cooling("demo", now)?.until, now + 30 * 60_000);
+  assert.equal(cooling("demo", now)?.status, 451);
+  clearCoolDown("demo");
+  assert.equal(cooling("demo", now), undefined);
 });

@@ -1,0 +1,88 @@
+{
+  "name": "megabus",
+  "displayName": "Megabus US",
+  "baseUrl": "https://us.megabus.com",
+  "description": "Provider-advertised US route-guide identity, stop counts and travel summaries.",
+  "operations": [
+    {
+      "name": "getRouteGuide",
+      "description": "Public US route-guide metadata advertised by Megabus, not a dated timetable.",
+      "request": {
+        "method": "GET",
+        "url": "https://us.megabus.com/route-guides/%7BrouteSlug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "routeSlug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://us.megabus.com/route-guides/{routeSlug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "us.megabus.com",
+        "path": "/route-guides/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "canonicalURL",
+          "originCity=title~^Bus from ([A-Za-z .-]+) to ",
+          "destinationCity=title~ to ([A-Za-z .-]+)$",
+          "routeCode=summary~Our route ([A-Z0-9]+) bus",
+          "stopCount=summary~bus stops at ([0-9]+) stops",
+          "advertisedFastestDuration=duration",
+          "advertisedMaximumServices=departures"
+        ],
+        "html": {
+          "items": "html",
+          "fields": {
+            "title": ".seo__header h1",
+            "duration": ".seo__journey .row > div:first-child h3 span",
+            "departures": ".seo__journey .row > div:nth-child(2) h3 span",
+            "summary": ".seo__itinerary p",
+            "canonicalURL": "link[rel=\"canonical\"]@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "routeSlug",
+          "type": "string",
+          "required": true,
+          "description": "Exact route-guide slug from the public route directory.",
+          "example": "philadelphia-to-new-york",
+          "pattern": "[a-z0-9-]{3,100}",
+          "hint": "A source-linked lowercase route-guide slug."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "routeSlug": "washington-to-new-york"
+          },
+          "expect": "result",
+          "purpose": "A distinct route advertises PP0E, four stops and a different fastest duration."
+        }
+      ]
+    }
+  ]
+}

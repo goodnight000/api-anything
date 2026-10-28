@@ -1,0 +1,23 @@
+Searches the public for-sale category in the SF Bay Area only. `query` is free-text search, such as `bicycle` or `piano`. Search can match listing descriptions, so every title need not contain the query.
+
+The returned listings are the server-rendered result set. Ranking, inventory and prices can change. Large responses are capped at 20,000 characters; inspect `truncated` and treat the result as partial. Pagination, other areas and contact information are not covered. Listing URLs are public references and can expire. No account or imported cookies are required.
+
+getListing takes the two final path components from a URL returned by search: slug, then reference. The reference is an opaque public URL identifier, not the numeric post id. Keep both components from the same listing. Listings can expire; a missing listing is not an empty search result.
+
+The details are the signed-out HTML fallback. Item prose and description metadata are omitted because they can include contact text. Attributes omit serial numbers. Images are public image links present in the document; none are fetched. The location label is optional seller-supplied area text, not a verified address. No coordinates, seller identity or contact controls are included.
+
+## Maintainer notes
+
+Verified signed out on 2026-10-26 UTC with an isolated api-anything home and no browser-session imports. Real frontend document captures `cmvp20czb` and `cmvp20dyk` learned `search(query)` from `bicycle` and `piano` with no warnings and minTier 1.
+
+Source and request URL: `https://www.craigslist.org/search/area/sfbay?cat=sss&query={query}`. The old `https://sfbay.craigslist.org/search/sss?query={query}` responds with a 301 and must not be matched as the data response. An initial local operation matched that redirect and was replaced before export.
+
+An unseen `query=violin` tier-1 call returned 102 of 207 listings under the output cap. A separate real frontend document capture had all 207 rows. All 102 returned listing URLs appeared in that capture and the first title, URL, price and location matched. Public listing references came from these results, never guessed IDs.
+
+Tier-1-only verify passed the stored bicycle example and the piano and violin result checks. Export retained only public example/check values. A second initially empty home, given only the exported spec, reproduced the violin result at tier 1 without a Cookie request header or stored credentials. The response created one anonymous cookie afterward. No browser was used by the fresh-home call.
+
+The recipe reads `ol.cl-static-search-results li.cl-static-search-result`, with title, link, price and location from each item. This covers the HTML fallback list rather than the dynamic interactive frontend. No completeness or strict title-substring guarantee is claimed. Worker evidence is in ignored `bench/explore/state/discovery/maps-jobs-r3/home/`.
+
+On 2026-10-27 UTC, getListing was learned with the existing CLI from two genuine exact-GET frontend document captures, using actual links from the retained bicycle search. The Specialized and Bianchi examples differ in title, price, attributes and image availability. The unchanged capture-document helper intercepted all other requests under an isolated profile and the owned global browser mutex. Captured request headers were preserved. The existing search operation, its three cases and all site metadata were retained.
+
+Qualification uses an operation-specific core-classification fetch guard with a localhost stop proof, stored-template tier 1 calls, a held-out BMX listing, and a separate initially empty home containing only the final public export. The first cold details call has no Cookie or Authorization at both fetch and transport boundaries. Later site-issued guest cookies, if present, are recorded by name in private evidence. All read cases are checked at final operation hashes. Exact results, limits and hashes are in docs/research/discovery/craigslist-depth-qualified-r1.md and its ignored receipt directory. Parent integration checks remain separate.

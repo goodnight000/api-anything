@@ -1,5 +1,8 @@
-/** Site specs (user dir, then pulled, then bundled), heal log, stale marks, remembered tiers, and the write ledger. */
-import { createHmac, randomBytes } from "node:crypto";
+/**
+ * Site specs (user dir, then pulled, then bundled), heal log, stale marks, remembered tiers, cool-downs,
+ * the per-site send slots, and the write ledger.
+ */
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -12,6 +15,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pickedShape } from "./classify.js";
 import { type Leaf, setAt, walk } from "./codec.js";
 import {
   besideOrigins,
@@ -22,9 +26,10 @@ import {
   opUrls,
   redact,
   scanSecrets,
+  signInFills,
 } from "./secrets.js";
 import { ensureDir, home, loadSession, readJson, safeName, withLock, writePrivate } from "./session.js";
-import { parseSite, type Site } from "./spec.js";
+import { type Operation, parseSite, type Site } from "./spec.js";
 import { vetShared } from "./vet.js";
 
 export const BUNDLED_DIR = fileURLToPath(new URL("../sites", import.meta.url));
@@ -124,10 +129,21 @@ export interface StaleMark {
   tier3?: boolean;
 }
 
+/** A site that said stop: calls to it are answered without sending until `until`. */
+export interface CoolDown {
+  class: "rate" | "blocked";
+  at: number;
+  until: number;
+  reason: string;
+  /** the answer's HTTP status (451: refused to this network or region) */
+  status?: number;
+}
+
 interface State {
   stale: Record<string, StaleMark>;
   tier: Record<string, 1 | 2 | 3>;
   healedAt: Record<string, number>;
+  cool: Record<string, CoolDown>;
 }
 
 const stateFile = () => join(home(), "state.json");
@@ -141,7 +157,7 @@ function loadState(): State {
     // tier memory and stale marks are hints: a corrupt file is started over, never a failed call
     s = {};
   }
-  return { stale: s.stale ?? {}, tier: s.tier ?? {}, healedAt: s.healedAt ?? {} };
+  return { stale: s.stale ?? {}, tier: s.tier ?? {}, healedAt: s.healedAt ?? {}, cool: s.cool ?? {} };
 }
 
 function updateState(fn: (s: State) => void): void {
@@ -159,10 +175,25 @@ function updateState(fn: (s: State) => void): void {
 export interface HealEntry {
   site: string;
   op: string;
-  strategy: "rescan" | "recapture";
+  /** `revert`: `api-anything revert` took back the last heal not taken back yet */
+  strategy: "rescan" | "recapture" | "revert";
   /** short human summary of what changed */
   diff: string;
+  /** what changed in the template, one line each, with `{param}` and refs in place of values */
+  changes?: string[];
+  /** the op as it was before: what a revert puts back. It holds refs, never a credential; redacted anyway */
+  previous?: Operation;
+  /** templateHash of the op saved, so a revert never undoes a later re-learn or edit */
+  saved?: string;
 }
+export type HealRecord = HealEntry & { at: string };
+
+/** The template's identity: its request, slots and volatile ids. */
+export const templateHash = (op: Operation) =>
+  createHash("sha256")
+    .update(JSON.stringify([op.request, op.slots, op.volatile]))
+    .digest("hex")
+    .slice(0, 16);
 
 /** `text` without the site's live session values: what is kept on disk is read by agents too. */
 function hidden(site: string, text: string): string {
@@ -173,16 +204,44 @@ function hidden(site: string, text: string): string {
   }
 }
 
-/** Append to heals.jsonl and remember when the op was last healed (for the heal-loop guard). */
+/** Every string in `v` without the site's live session values. */
+const hiddenAll = (site: string, v: unknown): unknown =>
+  typeof v === "string"
+    ? hidden(site, v)
+    : Array.isArray(v)
+      ? v.map((x) => hiddenAll(site, x))
+      : v && typeof v === "object"
+        ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hiddenAll(site, x)]))
+        : v;
+
+const healsFile = () => join(home(), "heals.jsonl");
+
+/** Append to heals.jsonl and remember when the op was last healed (for the heal-loop guard; a revert is no heal). */
 export function appendHeal(entry: HealEntry, now = Date.now()): void {
   ensureDir(home());
-  const file = join(home(), "heals.jsonl");
-  const line = { at: new Date(now).toISOString(), ...entry, diff: hidden(entry.site, entry.diff) };
+  const file = healsFile();
+  const line = { at: new Date(now).toISOString(), ...(hiddenAll(entry.site, entry) as HealEntry) };
   appendFileSync(file, `${JSON.stringify(line)}\n`, { mode: 0o600 });
   chmodSync(file, 0o600);
-  updateState((s) => {
-    s.healedAt[key(entry.site, entry.op)] = now;
-  });
+  if (entry.strategy !== "revert")
+    updateState((s) => {
+      s.healedAt[key(entry.site, entry.op)] = now;
+    });
+}
+
+/** heals.jsonl, oldest first, one site's or all; a line that does not parse is skipped. */
+export function loadHeals(site?: string): HealRecord[] {
+  if (!existsSync(healsFile())) return [];
+  return readFileSync(healsFile(), "utf8")
+    .split("\n")
+    .flatMap((l) => {
+      try {
+        const h = JSON.parse(l) as HealRecord;
+        return h && typeof h === "object" && (!site || h.site === site) ? [h] : [];
+      } catch {
+        return [];
+      }
+    });
 }
 
 export function lastHealAt(site: string, op: string): number | undefined {
@@ -232,6 +291,71 @@ export function rememberTier(site: string, op: string, tier: 1 | 2 | 3 | undefin
 
 export function rememberedTier(site: string, op: string): 1 | 2 | 3 | undefined {
   return loadState().tier[key(site, op)];
+}
+
+/** A rate limit's wait when the site names none, and the longest one kept whatever it names. */
+export const RATE_COOL_MS = 3 * 60_000;
+export const MAX_COOL_MS = 30 * 60_000;
+/** A block on every tier a call could use: each further call would only meet the wall again. */
+export const BLOCKED_COOL_MS = 10 * 60_000;
+
+export function coolDown(
+  site: string,
+  c: Pick<CoolDown, "class" | "reason" | "status">,
+  ms: number,
+  now = Date.now(),
+): void {
+  const reason = hidden(site, c.reason);
+  updateState((s) => {
+    s.cool[safeName(site)] = { ...c, reason, at: now, until: now + Math.min(ms, MAX_COOL_MS) };
+  });
+}
+
+/** The site's cool-down, if it has not run out. */
+export function cooling(site: string, now = Date.now()): CoolDown | undefined {
+  const c = loadState().cool[safeName(site)];
+  return c && c.until > now ? c : undefined;
+}
+
+/** A login ends a site's cool-down: the user has seen the site, and what it answers may have changed. */
+export function clearCoolDown(site: string): void {
+  if (loadState().cool[safeName(site)]) updateState((s) => void delete s.cool[safeName(site)]);
+}
+
+/* ----------------------------------------------------------------- pacing */
+
+const paceFile = () => join(home(), "pace.json");
+const ownSlots = new Map<string, number>();
+
+/**
+ * Reserve the next moment a request may go to `site`, and move the site's slot on by the interval
+ * ±30% (an exact period is a robot's). The slots are kept in pace.json under its lock, so separate
+ * processes (a CLI loop, agents in parallel) queue up too; a home that cannot be written paces this
+ * process only.
+ */
+export function reserveSend(site: string, intervalMs: number, now = Date.now()): number {
+  const gap = Math.round(intervalMs * (0.7 + Math.random() * 0.6));
+  try {
+    return withLock(paceFile(), () => {
+      let slots: Record<string, unknown>;
+      try {
+        slots = readJson<Record<string, unknown>>(paceFile(), {});
+      } catch {
+        slots = {};
+      }
+      if (!slots || typeof slots !== "object" || Array.isArray(slots)) slots = {};
+      // a slot in the past holds nothing back
+      for (const [k, t] of Object.entries(slots)) if (!(typeof t === "number" && t > now)) delete slots[k];
+      const at = Math.max(now, (slots[site] as number | undefined) ?? 0);
+      slots[site] = at + gap;
+      writePrivate(paceFile(), JSON.stringify(slots));
+      return at;
+    });
+  } catch {
+    const at = Math.max(now, ownSlots.get(site) ?? 0);
+    ownSlots.set(site, at + gap);
+    return at;
+  }
 }
 
 /* ------------------------------------------------------------ write ledger */
@@ -304,7 +428,8 @@ const hmac = (key: Buffer, value: unknown) =>
   createHmac("sha256", key).update(JSON.stringify(value)).digest("hex").slice(0, 32);
 
 export type WriteGate =
-  | { send: true; id: string }
+  /** `seed`: the call's gen slots are drawn from it: the key's HMAC, else the record's id */
+  | { send: true; id: string; seed: string }
   /** an unsettled write with the same args within the window */
   | { send: false; why: "duplicate"; earlier: WriteRecord }
   /** the idempotency key's write may have gone through: its record answers */
@@ -316,6 +441,8 @@ export type WriteGate =
  * Record a write before it is sent, under the ledger's lock so two processes cannot both pass, or
  * say why it must not be sent. `again` skips both checks (the user saw the site and wants it sent).
  * With an idempotency key the key decides, not the args' digest: the caller says which calls are one.
+ * A key with no live record of its own still meets a keyless call with the same args: an agent that
+ * adds a key only to its retry of an unclear answer is repeating that call.
  * Throws when the record cannot be written (a read-only home).
  */
 export function beginWrite(
@@ -343,15 +470,17 @@ export function beginWrite(
         const used = mine.findLast((r) => r.key === key);
         if (used && used.digest !== digest) return { send: false, why: "key_reused", earlier: used };
         if (used && unsettled(used)) return { send: false, why: "replay", earlier: used };
-      } else {
-        const earlier = mine.findLast((r) => r.digest === digest && now - r.at < DUPLICATE_WINDOW_MS && unsettled(r));
-        if (earlier) return { send: false, why: "duplicate", earlier };
       }
+      // with a key, only keyless calls: another key is another write, as the caller said
+      const earlier = mine.findLast(
+        (r) => (!key || !r.key) && r.digest === digest && now - r.at < DUPLICATE_WINDOW_MS && unsettled(r),
+      );
+      if (earlier) return { send: false, why: "duplicate", earlier };
     }
     const id = randomBytes(8).toString("hex");
     all.push({ id, site, op, digest, ...(key ? { key } : {}), at: now, status: "sending" });
     writePrivate(writesFile(), JSON.stringify(all, null, 1));
-    return { send: true, id };
+    return { send: true, id, seed: key ?? id };
   });
 }
 
@@ -406,7 +535,11 @@ export function exportSite(
       }
     }
     if (!o.keepExamples) for (const p of op.params) delete p.example;
-    delete op.response.shape;
+    // a shape's keys can be user data; the picked fields' are in the pick already, and their types let
+    // every caller of the copy tell a picked field that went
+    const picked = pickedShape(op.response);
+    if (picked) op.response.shape = picked;
+    else delete op.response.shape;
     const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
     for (const h of pub) allowed.add(`$.operations[${i}].request.headers.${h}`);
     const where = (leaf: Leaf) => `$.operations[${i}].request ${leaf.at.join(" > ")}`;
@@ -418,6 +551,8 @@ export function exportSite(
         `${where(leaf)} holds a literal credential (${n}); make it a session: ref, or list ${n} in the op's public names if the site ships it to everyone`,
       ]);
     }
+    for (const fill of signInFills(op.trigger.steps))
+      named.push([`$.operations[${i}].trigger.steps`, `$.operations[${i}].trigger ${fill}`]);
     for (const leaf of walk(op.request)) {
       const ip = leaf.type === "string" && !leaf.container ? ipIn(leaf.value) : undefined;
       if (ip)

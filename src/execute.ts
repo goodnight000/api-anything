@@ -3,6 +3,7 @@
  * the heal-loop guards, and the write rules. Always sends the stored template first; healing is
  * reactive only.
  */
+import { randomBytes } from "node:crypto";
 import {
   browserAvailable,
   type PageFetchResult,
@@ -17,6 +18,7 @@ import { capOutput, getPath } from "./extract.js";
 import {
   type Attempt,
   challengePage,
+  fillTrigger,
   firedNothing,
   type HealResult,
   healOperation,
@@ -26,6 +28,8 @@ import {
   pageDown,
   profileDir,
   runOpTrigger,
+  type TriggerRun,
+  templateChanges,
 } from "./heal.js";
 import {
   AddressRefused,
@@ -33,6 +37,7 @@ import {
   buildRequest,
   holdsRef,
   nextHop,
+  pace,
   RedirectRefused,
   refusePrivate,
   refusePrivateHop,
@@ -58,10 +63,16 @@ import {
 } from "./session.js";
 import { type Operation, readbackName, type Site } from "./spec.js";
 import {
+  BLOCKED_COOL_MS,
   beginWrite,
+  type CoolDown,
+  clearCoolDown,
+  coolDown,
+  cooling,
   lastHealAt,
   loadSite,
   markStale,
+  RATE_COOL_MS,
   type Resolved,
   rememberedTier,
   rememberTier,
@@ -92,7 +103,7 @@ export interface CallOptions {
   fetchImpl?: typeof fetch;
   /** highest transport tier to use (default 3); 1 also means no browser at all, so no recapture or cookie refresh */
   maxTier?: Tier;
-  /** per-site gap between tier-1 requests (default 1000) */
+  /** per-site gap between requests, ±30%, at every tier (default 1000) */
   minIntervalMs?: number;
   timeoutMs?: number;
   /**
@@ -101,6 +112,8 @@ export interface CallOptions {
    * in its place, so a record names only the version that answered
    */
   onAnswered?: (op: Operation) => void;
+  /** send even while the site cools down after a rate limit or a block (CLI --force); only when the user asks. Succeeding ends it */
+  ignoreCoolDown?: boolean;
 }
 
 export type { WriteStatus };
@@ -159,6 +172,12 @@ export interface CallResult {
   hasMore?: boolean;
   tier?: Tier;
   healed?: boolean;
+  /**
+   * with healed: how, and what changed in the request template, one line each, with `{param}` and
+   * cookie:/session: refs in place of values. `registry`: the registry's newer version of the op.
+   * A rescan or recapture is undone with `api-anything revert <site> <op>`
+   */
+  heal?: { strategy: "rescan" | "recapture" | "registry"; changes: string[] };
   ms: number;
   reason?: string;
   /** what to do about a failure; follow it at most once */
@@ -205,6 +224,8 @@ interface Ctx {
   unconfirmed?: boolean;
   /** every cookie a tier-1 redirect chain set: one sent on the next hop can be rotated out before the call ends */
   seen?: StoredCookie[];
+  /** the seed of the op's gen slots: one per call, so the call's own retries send the same values */
+  gen: string;
 }
 
 /**
@@ -281,6 +302,8 @@ function writeStatus(log: Attempt[]): WriteStatus {
 export function stepOf(a: Attempt): Partial<Result> {
   const wait = a.retryAfterMs !== undefined ? { retryAfterMs: a.retryAfterMs } : {};
   if (a.hint === PROFILE_HINT) return { ...wait, nextCall: { action: "retry" }, retry: "after_wait" };
+  // refused to this network or region: no tier, login or wait changes that
+  if (a.class === "blocked" && a.status === 451) return { nextCall: { action: "report" }, retry: "no" };
   if (a.step) return { ...wait, nextCall: { action: a.step } };
   // refused for its args; a refusal that says the session is gone or names a limit keeps its class's step
   if (a.rejected && a.class === "error") return { ...wait, nextCall: { action: "fix_args" } };
@@ -335,6 +358,9 @@ export function finish(r: Result, op: Operation | undefined, site: string | unde
   return out;
 }
 
+const REGION =
+  "the site says this is not available from this network or region (HTTP 451): do not retry; tell the user";
+
 /** `signIn`: how the user signs in again, when it is not `api-anything login` (`reimportIfBrowser`) */
 function nextFor(
   c: CallResult["class"],
@@ -360,7 +386,10 @@ function nextFor(
         ? "rate limited: do not retry before retryAfterMs (the time in reason)"
         : "rate limited: do not retry now; wait a few minutes";
     case "blocked":
-      return `the site is challenging automated requests: ask the user to run api-anything login ${site} and clear the challenge, then retry once`;
+      if (a?.status === 451) return REGION;
+      if (a?.missing)
+        return `the site refuses requests from this machine or network (a 403 with no challenge or sign-in to clear): do not retry as it is; a window may show why: ask the user to run api-anything login ${site} --window, then retry once`;
+      return `the site is challenging automated requests: ask the user to run api-anything login ${site} --window and clear the challenge in the window, then retry once`;
     case "drift":
       if (!op.readOnly)
         return `${ran ? "the write may have run: check the site first, then " : ""}re-learn it with api-anything add ${site} ${op.name} ... --write`;
@@ -406,6 +435,24 @@ const sameArgs = (a: Record<string, unknown>, b: Record<string, unknown>, op: Op
 const safeHeal = (p: Promise<HealResult>): Promise<HealResult> =>
   p.catch((e: Error) => ({ outcome: "failed" as const, reason: `heal crashed: ${e.message.split("\n")[0]}` }));
 
+/** The other unsafe requests a write's tier-3 run sent or stopped, named whatever the outcome. */
+function othersNote(op: Operation, o: TriggerRun["others"]): string | undefined {
+  if (!o) return undefined;
+  const them = (l: string[]) => l.join(", ");
+  const out: string[] = [];
+  if (o.stopped.length)
+    out.push(
+      `the page also tried to send ${them(o.stopped)}, which this write's learning did not see the trigger send: stopped in the browser, nothing of it was sent. If the page changed, look at it before you learn it again with add --write`,
+    );
+  if (o.left.length)
+    out.push(
+      op.trigger.companions
+        ? `the page also sent ${them(o.left)}, as it did when this write was learned`
+        : `the page also sent ${them(o.left)}: ${op.name} was learned before api-anything recorded what else a write's trigger sends, so nothing else was stopped; learn it again with add --write to stop any request it did not send then`,
+    );
+  return out.join("; ");
+}
+
 /** What to do about a write whose redirect was not followed, since that would have sent it again. */
 const sentOnce = (site: string, op: Operation) =>
   `the write was sent once and may have run: check the site first. Do not retry: the site answered it with a redirect that would send it a second time, which was not followed; if the operation moved, learn it at its new address: api-anything add ${site} ${op.name} ... --write`;
@@ -450,6 +497,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   try {
     if (tier === 3) {
       // For a write this is the UI sending it: the one attempt.
+      await pace(ctx.site, ctx.opts.minIntervalMs);
       const run = await runOpTrigger(ctx.site, op, ctx.args);
       const judged = run.matched && judgeExchange(op, run.matched);
       // The page is told nothing of a redirect that was stopped, its status included: this is the answer.
@@ -477,9 +525,12 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
                 ? { unsent: true }
                 : {}),
             }));
-      if (!run.repeats) return a;
-      const stopped = run.repeats === 1 ? "the repeat was" : `${run.repeats} repeats were`;
-      return { ...a, note: `the page sent this write ${run.repeats + 1} times: ${stopped} stopped in the browser` };
+      const notes = [
+        run.repeats &&
+          `the page sent this write ${run.repeats + 1} times: ${run.repeats === 1 ? "the repeat was" : `${run.repeats} repeats were`} stopped in the browser`,
+        othersNote(op, run.others),
+      ].filter(Boolean);
+      return notes.length ? { ...a, note: notes.join("; ") } : a;
     }
     const none = bare(ctx, op);
     const session = none ? NO_SESSION : loadSession(ctx.site);
@@ -492,6 +543,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         minIntervalMs: ctx.opts.minIntervalMs,
         // someone else's spec sends only to public addresses; tiers 2 and 3 are the browser's, out of this guard's reach
         publicOnly: !!ctx.shared,
+        gen: ctx.gen,
       });
       // A rotating cookie (a rolling session, __cf_bm) must ride on the next call.
       if (sent.setCookies) {
@@ -504,7 +556,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       }
       r = sent;
     } else {
-      const req = buildRequest(op, ctx.args, session);
+      const req = buildRequest(op, ctx.args, session, ctx.gen);
       // someone else's spec: the page's fetch goes only to public addresses, as tier 1 does (tier 3 is not covered)
       if (ctx.shared) await refusePrivate(op, req.url);
       const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
@@ -519,6 +571,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         retryOnNavigation: op.readOnly,
         // the page's own cookies, unless they may not go (`bare`)
         ...(none ? { credentials: "omit" as const } : {}),
+        pace: () => pace(ctx.site, ctx.opts.minIntervalMs),
         // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
         redirect: async (from, status, location, taken) => {
           const next = nextHop(op, session, from, status, location, taken);
@@ -604,7 +657,7 @@ async function refreshCookies(ctx: Ctx, op: Operation, tier: Tier): Promise<bool
     const s = loadSession(ctx.site);
     const sent = (cookies: StoredCookie[]) => {
       try {
-        const req = buildRequest(op, ctx.args, { ...s, cookies });
+        const req = buildRequest(op, ctx.args, { ...s, cookies }, ctx.gen);
         if (tier > 1) delete req.headers.cookie;
         return JSON.stringify(req);
       } catch {
@@ -665,10 +718,17 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   const examples = exampleArgs(op);
   /** the op's own example args got no data either: the args are not the problem */
   let examplesFail = false;
+  const lost = a.lost?.join(", ");
+  // no example args to tell a field the site dropped from one these args have no value for: fail loudly
+  if (lost && op.readOnly && !examples) examplesFail = true;
   if (a.missing && op.readOnly && examples) {
     if (sameArgs(examples, ctx.args, op)) examplesFail = true;
     else {
       const b = await attempt({ ...ctx, args: examples }, op, a.tier);
+      if (b.class === "ok" && lost)
+        return success(a, {
+          reason: `the answer for these args has no ${lost} (${a.reason}); the example args' answer does, so the operation works`,
+        });
       if (b.class === "ok") {
         return fail(
           { ...a, class: "input" },
@@ -683,6 +743,14 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       examplesFail = true;
     }
   }
+  // the site no longer sends a picked field, for any args: the call fails, naming it, rather than answer without it
+  const dropped = (b: Attempt): Partial<Result> =>
+    b.lost && examplesFail
+      ? {
+          next: `if the site still shows ${b.lost.join(", ")}, re-learn the response recipe with a new --pick (or --extract): api-anything add ${ctx.site} ${op.name} ... --pick <fields> (api-anything capture <trigger url> shows the response); if it is gone for good, drop it from the pick`,
+          nextCall: { action: "relearn" },
+        }
+      : {};
 
   // Another install may have repaired this version already, or it degraded and the registry serves the next
   // best: that version is one request, a heal is a browser run.
@@ -698,6 +766,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
         queueOk(next.version.hash, b);
         return success(b, {
           healed: true,
+          heal: { strategy: "registry", changes: templateChanges(op, next) },
           reason: `${a.reason}; the registry now serves another version of ${op.name}, and it answered`,
         });
       }
@@ -742,7 +811,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   );
   if (h.outcome === "healed") {
     ctx.opts.onAnswered?.(h.operation);
-    return success(h.attempt, { healed: true });
+    return success(h.attempt, { healed: true, heal: { strategy: h.strategy, changes: h.changes } });
   }
   // Throttled, challenged, logged out, or no browser: nothing was learned about the op, so it is not stale.
   if (h.outcome === "failed" && h.transient) {
@@ -769,6 +838,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
           reason: `the site takes the same request but its response lacks the data (${a.reason}), for the op's example args too`,
           next: `if the site works in a browser, re-learn the response recipe: api-anything add ${ctx.site} ${op.name} ... --extract <path> (api-anything capture <trigger url> shows the response); otherwise report it`,
           nextCall: { action: "relearn" },
+          ...dropped(a),
         },
       );
     }
@@ -781,7 +851,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     );
   }
   const b = h.attempt ?? h.fallback ?? a;
-  return fail(b, { reason: `${b.reason}; heal failed: ${h.reason}` });
+  return fail(b, { reason: `${b.reason}; heal failed: ${h.reason}`, ...dropped(b) });
 }
 
 function resolve(
@@ -879,6 +949,51 @@ async function readBack(
   return { ...kept, ok: true, class: "ok", write: "applied", reason: r.reason ? `${r.reason}; ${note}` : note };
 }
 
+/** Where to check a write that may have gone through: the page it is made on, with the call's args, and its readback. */
+function whereToLook(op: Operation, args: Record<string, unknown>): string {
+  const rb = op.readback;
+  const readArgs = rb && Object.fromEntries(Object.entries(rb.args).map(([k, v]) => [k, fillTemplate(v, args)]));
+  // a read the write carries is no op of the site to call: its page is where to look
+  const read = !rb
+    ? ""
+    : "op" in rb
+      ? `, or with its readback: the read ${rb.op} with args ${JSON.stringify(readArgs)}`
+      : `, or where its readback ${rb.read.name} reads: ${fillTrigger(rb.read.trigger, readArgs!).url}`;
+  return `. Look on ${fillTrigger(op.trigger, args).url}${read}`;
+}
+
+/** The answer while the site cools down (`coolAfter`): nothing is sent. */
+function cooled(c: CoolDown, site: string, now = Date.now()): Result {
+  const reason = `not sent: ${site} answered ${c.class} at ${new Date(c.at).toISOString()} (${c.reason}), so nothing goes to it until ${new Date(c.until).toISOString()}`;
+  const wait = { ok: false, class: c.class, reason, retryAfterMs: Math.max(0, c.until - now) };
+  if (c.class === "rate") return { ...wait, next: "rate limited: do not retry before retryAfterMs; nothing was sent" };
+  if (c.status === 451) return { ...wait, next: REGION, nextCall: { action: "report" }, retry: "no" };
+  return {
+    ...wait,
+    next: `the site blocked its last call at every tier: do not retry before retryAfterMs. To look sooner, ask the user to run api-anything login ${site} --window (a login ends the wait), then retry once`,
+  };
+}
+
+/**
+ * Leave a site alone once it said stop: a rate limit (for its Retry-After, capped, or a few minutes),
+ * a block at every tier the op climbs to, or a 451. Another call now would only meet it again.
+ * A `forced` call (sent through the cool-down) that succeeds ends it: the site answered.
+ */
+function coolAfter(site: string, op: Operation, r: Result, log: Attempt[], forced?: boolean): void {
+  const last = log.at(-1);
+  if (r.ok && forced && last) clearCoolDown(site);
+  if (r.ok || !last || last.class !== r.class) return;
+  if (r.class === "rate") {
+    const ms = r.retryAfterMs ?? RATE_COOL_MS;
+    if (ms > 0) coolDown(site, { class: "rate", reason: r.reason ?? last.reason }, ms);
+  } else if (r.class === "blocked" && (last.status === 451 || last.tier === (op.readOnly ? 3 : 2)))
+    coolDown(
+      site,
+      { class: "blocked", reason: r.reason ?? last.reason, ...(last.status ? { status: last.status } : {}) },
+      BLOCKED_COOL_MS,
+    );
+}
+
 /** The answer to a write the ledger held back: nothing is sent. */
 function heldBack(g: Exclude<WriteGate, { send: true }>, op: Operation): Result {
   const when = new Date(g.earlier.at).toISOString();
@@ -950,17 +1065,24 @@ async function run(
   let jar: Session | undefined;
   /** this write's ledger record, settled with what the call did */
   let ledger: string | undefined;
+  /** the site's cool-down this call was answered from, sending nothing: no news for the registry */
+  let held: CoolDown | undefined;
   const done = async (r: Result): Promise<CallResult> => {
     let f = finish(r, op, siteName, log);
     // log: something was sent this call (a ledger hold-back sends nothing, and reads nothing back)
     if (op.readback && log.length && (f.write === "accepted" || f.write === "may_have_applied"))
       f = await readBack(site, theirs, op, args, f, opts);
+    if (!op.readOnly && f.nextCall?.action === "check_site")
+      f.next = `${f.next ?? "check the site before any retry"}${whereToLook(op, args)}`;
     const sessions = [jar, sessionOrNone(siteName)];
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
+    if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
     if (ledger) settleWrite(ledger, f.write ?? "may_have_applied", f);
+    // a proof's answer is the readback's, not news of the site for the next call
+    if (!proof) coolAfter(siteName, op, f, log, opts.ignoreCoolDown);
     const out = { ...f, ms: Date.now() - t0 };
-    if (how.source && !proof)
+    if (how.source && !proof && !held)
       afterCall(siteName, op, how.source, out, {
         fetchImpl: opts.fetchImpl,
         minIntervalMs: opts.minIntervalMs,
@@ -1004,6 +1126,9 @@ async function run(
         : nextFor("input", siteName, op);
     return done({ ok: false, class: "input", reason: (e as Error).message, next });
   }
+  // A site that said stop is not asked again until its wait is over: before the write's ledger, as nothing is sent.
+  held = opts.ignoreCoolDown ? undefined : cooling(siteName);
+  if (held) return done(cooled(held, siteName));
   // auth recovery steps taken this call: 1 re-import, 2 the profile's cookies, 3 a trigger run
   let authStep = 0;
   /** where the user signs in again when a re-import brought back no new login (`reimportIfBrowser`) */
@@ -1033,6 +1158,8 @@ async function run(
         ...(signIn ? { nextCall: signIn.step } : {}),
       });
   }
+  /** the gen slots' seed; a write's is its ledger record's, so one idempotency key sends the same values each time */
+  let gen = randomBytes(8).toString("hex");
   if (write) {
     let gate: WriteGate | undefined;
     try {
@@ -1051,6 +1178,7 @@ async function run(
     }
     if (gate && !gate.send) return done(heldBack(gate, op));
     ledger = gate?.id;
+    if (gate) gen = gate.seed;
   }
 
   // No login on record for this site: the session has no source (a login records one, logout clears it),
@@ -1074,6 +1202,7 @@ async function run(
     log,
     shared: site.shared,
     unconfirmed: capped,
+    gen,
   };
   // a proof's op is named by a label, not one the site holds
   const remembered = proof ? undefined : rememberedTier(siteName, op.name);
@@ -1163,7 +1292,8 @@ async function run(
         });
       }
     }
-    if (a.class === "blocked" && tier < (write ? 2 : 3)) {
+    // a 451 is the site's answer to this network: a browser on it gets the same
+    if (a.class === "blocked" && tier < (write ? 2 : 3) && a.status !== 451) {
       notes.push(`tier ${tier} was blocked (${a.reason})`);
       tier++;
       continue;
@@ -1254,6 +1384,7 @@ export async function heal(
     const sessions = [resolved ? sessionOrNone(siteName) : undefined];
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
+    if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
     return { ...f, ...extra, ms: Date.now() - t0 };
   };
   const found = resolve(siteName, opName);
@@ -1281,6 +1412,7 @@ export async function heal(
     log,
     shared: site.shared,
     unconfirmed: capped,
+    gen: randomBytes(8).toString("hex"),
   };
   const tier = Math.min(Math.max(op.minTier, rememberedTier(siteName, op.name) ?? 1), 2) as Tier;
   const h = await safeHeal(
@@ -1291,7 +1423,10 @@ export async function heal(
       browser: ctx.maxTier > 1 && !capped,
     }),
   );
-  if (h.outcome === "healed") return done(success(h.attempt, { healed: true }), { strategy: h.strategy });
+  if (h.outcome === "healed")
+    return done(success(h.attempt, { healed: true, heal: { strategy: h.strategy, changes: h.changes } }), {
+      strategy: h.strategy,
+    });
   if (h.outcome === "identical") {
     // The same template is no proof it works: its answer says whether the op does.
     const filled = withDefaults(op, args);

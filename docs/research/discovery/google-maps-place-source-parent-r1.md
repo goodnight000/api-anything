@@ -1,0 +1,9 @@
+# Google Maps source boundary reconciled
+
+2026-10-27 UTC. The parent confirmed the task completed without children and read the [source report](google-maps-place-source-r1.md). The only opened Maps page exposed a five-line JavaScript shell with no place fields. B/C remain indexed, grounded and unopened. All links use search routes, so distinctness from saved searchPlaces remains unproved. Zero APIs were added; no raw frontend exchange or qualification gate passed.
+
+The worker stopped all further Maps reads. The parent persisted a conservative Google Maps brand stop across aliases, routes and transports. Google Maps uses shared google.com/www.google.com hosts; the stop records that product scope explicitly and also covers maps.google.com. It establishes no access state for another Google product and permits no transport or route switch for stopped Maps data. Origin status and cause are unknown; login, HTTP denial, rate and bot challenge were not proved. Existing searchPlaces was not freshly tested.
+
+The source report hash and terminal reconciliation are retained under ignored `bench/explore/state/discovery/coordinator-google-maps-place-source-parent-r1/`. No raw exchanges exist to rehash or qualify. Worker reports no local commands, browser, home, mutex or process, so no live resources remain. Registry and publication files remain unchanged. Historical totals remain 45 sites, 60 operations and 170 saved cases.
+
+Trip's local recovery check at 19:48:12.975518 UTC exited 75 at 80.71% CPU and 88.48% policy memory. This carried resample 3 exhausted the existing r11 budget. No local pair or workload resulted. Trip audit and Coursera qualification remain pending, with fresh paired 88% recovery plus per-command admission required before local replacement. No goal completion is claimed.

@@ -1,0 +1,96 @@
+{
+  "name": "jet2holidays",
+  "displayName": "Jet2holidays",
+  "baseUrl": "https://www.jet2holidays.com",
+  "description": "Public destination descriptions, popular resort labels and editorial activity categories.",
+  "operations": [
+    {
+      "name": "getDestination",
+      "description": "Read advertised destination metadata from the public destination document.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.jet2holidays.com/destinations/%7Bgroup%7D/%7Bdestination%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "group",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "destination",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.jet2holidays.com/destinations/{group}/{destination}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.jet2holidays.com",
+        "path": "/destinations/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "html",
+          "fields": {
+            "title": ".destination-description > div:first-child > div:nth-child(2)",
+            "resortListLabel": ".title-links > div:first-child > div:nth-child(2)",
+            "resorts": "all:.title-links a",
+            "language": "#language + p",
+            "currency": "#currency + p",
+            "activityCategories": "all:.poi-teaser.categories h3",
+            "sourceURL": "link[rel=\"canonical\"]@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "group",
+          "type": "string",
+          "required": true,
+          "description": "Route grouping such as portugal or canary-islands. This is not a country assertion.",
+          "example": "portugal",
+          "pattern": "[a-z0-9-]{3,80}",
+          "hint": "Lowercase destination-route slug copied from a Jet2holidays destination link"
+        },
+        {
+          "name": "destination",
+          "type": "string",
+          "required": true,
+          "description": "Destination slug from the public destination link.",
+          "example": "algarve",
+          "pattern": "[a-z0-9-]{3,80}",
+          "hint": "Lowercase destination-route slug copied from a Jet2holidays destination link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "group": "portugal",
+            "destination": "madeira"
+          },
+          "expect": "result",
+          "purpose": "Madeira must give its own title and popular resort list, distinct from Algarve."
+        }
+      ]
+    }
+  ]
+}
