@@ -607,8 +607,11 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       ...cur!,
       operations: cur!.operations.map((x) => {
         if (x.name !== op) return x;
+        // an earlier learn_site's holdout gives way to this one, which ran on this version of the op
         const key = JSON.stringify(Object.entries(check.data.args).sort());
-        const rest = (x.checks ?? []).filter((c) => JSON.stringify(Object.entries(c.args).sort()) !== key);
+        const rest = (x.checks ?? []).filter(
+          (c) => c.purpose !== HOLDOUT_PURPOSE && JSON.stringify(Object.entries(c.args).sort()) !== key,
+        );
         return { ...x, checks: [...rest, check.data] };
       }),
     }));

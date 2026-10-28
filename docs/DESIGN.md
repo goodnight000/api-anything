@@ -1151,7 +1151,9 @@ user's own, and verify's record of each op's checks; `--yes` sends them through 
 `consent: true`. Both refuse an op that fails the scans or the shared rules, or `checks.ts`'s gate
 (below). The agent skill shows the preview to the user and runs `--yes` only on their explicit OK.
 `learn_site` keeps its holdout call as the verify record of the op's holdout check when that is its
-only check (`recordCases`), with what the run proved (clean replay, holdout, tier): a publish of that
+only check (`recordCases`); learning an op again replaces an earlier `learn_site`'s holdout check with
+its own, which ran on the version it saves, while a check recorded otherwise stays and leaves the
+record to `verify`. The record keeps what the run proved (clean replay, holdout, tier): a publish of that
 version passes the gate with no verify first and sends that evidence (`proofOf`), so a public read the
 user shares after the fact goes up as a candidate, as it would have automatically.
 
