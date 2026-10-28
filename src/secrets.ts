@@ -416,7 +416,9 @@ export function redact(
   if (!leaks(out)) return out;
   const i = out.indexOf(": ");
   const lead = i > 0 ? out.slice(0, i) : "";
-  return lead && !leaks(lead) ? `${lead}: ${OMITTED}` : OMITTED;
+  // the sentence that stands in must not spell the value itself ("session", "redacted")
+  const instead = lead && !leaks(lead) ? [`${lead}: ${OMITTED}`, `${lead}: ${REDACTED}`, lead] : [OMITTED, REDACTED];
+  return instead.find((t) => !leaks(t)) ?? "";
 }
 
 /**

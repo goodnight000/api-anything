@@ -80,6 +80,25 @@ test("redact: a cut value spelled in JSON escapes leaves none of its first chara
   assert.equal(redact(body, session, { cut: true }), body);
 });
 
+test("redact: the sentence left in a text's place never spells the value it hides", () => {
+  const cookie = (name: string, value: string) => ({
+    name,
+    value,
+    domain: "x.test",
+    path: "/",
+    expires: -1,
+    httpOnly: false,
+    secure: false,
+  });
+  // "session" is in OMITTED's sentence, "redacted" in REDACTED
+  const one = { cookies: [cookie("a", "session")], values: {} };
+  const two = { cookies: [cookie("a", "session"), cookie("b", "redacted")], values: {} };
+  const text = String.raw`HTTP 401: \u0073ession`;
+  assert.equal(redact(text, one), `HTTP 401: ${REDACTED}`);
+  assert.equal(redact(text, two), "HTTP 401");
+  assert.equal(redact(String.raw`\u0073ession: \u0073ession`, two), "");
+});
+
 test("redact: the site's own address, short values and ordinary text are left alone", () => {
   const text = "redirected to https://www.x.test/ with abc; no session here";
   assert.equal(redact(text, session), text);
