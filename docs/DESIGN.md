@@ -1190,14 +1190,16 @@ does, and judges every case: `pass`, `fail`, or `inconclusive` when the answer i
 about the op. Each case's answer comes from one version of the op: the one its call resolved, or the
 one a heal or the registry put in its place. Its outcomes are kept per op in
 `~/.api-anything/checks/<site>.json`, with a hash of the op as saved when verify ends (in schema
-order; `learnedAt`, `unproven` and `version` aside), and only when every case answered from that
-version: cases that answered from different ones (a heal part way, or another process saving the op)
-run once more, and if they are still mixed the op gets no record, and loses the one it had. The cases
-are chosen from one version too: when that is not the one saved when verify ends, they run once more
-from the saved one. A case the site's cool-down answered (`CallResult.cooling`) sent nothing, so no version answered it, and
-a run of nothing else leaves the op's record as it was. So an op changed since, or saved by
-something else while its last cases ran, has none. When two passing cases whose args differ only in an op's
-`unproven` params answer differently, and the same holds, verify clears the mark. A read with `paging` gets one more
+order; `learnedAt`, `unproven` and `version` aside). Each case is tagged with the hash of the version
+that answered it, or with none when the site's cool-down answered it (`CallResult.cooling`): nothing
+was sent, so that case is no version and mixes nothing. A run is clean when its cases were chosen
+from the op saved now and every tagged case answered from it. A run that is not clean (a heal part
+way, another process saving the op, cases chosen from an earlier version) runs once more from the op
+saved now, and that second run is the one judged. A judged run that sent nothing leaves the op's
+record as it was; a clean one becomes the record, inconclusive cases and all; any other takes the
+record away. So an op changed since, or saved by something else while its last cases ran, has none,
+and a rate limit part way through keeps the failures the cases before it saw. When two passing cases whose args differ only in an op's
+`unproven` params answer differently, in a run that becomes the record, verify clears the mark. A read with `paging` gets one more
 case after its example, `next page`: the call again with the paging param set to the example's
 `nextPage` (or, for numbered pages, the example's page number plus one). It fails when the answer
 has rows and every one of them was on page 1 (`got: "page 1 again"`), the sign of a server that

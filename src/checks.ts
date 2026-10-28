@@ -173,7 +173,8 @@ export interface Verified {
  * the hash of the op its answer came from, as the call last reported it; none for a call that sent
  * nothing because the site cools down.
  */
-type Run = { results: CaseResult[]; plan: string; from: (string | undefined)[]; proven: boolean } | { skipped: string };
+type Ran = { results: CaseResult[]; plan: string; from: (string | undefined)[]; proven: boolean };
+type Run = Ran | { skipped: string };
 
 async function runCases(name: string, op: Operation, opts: CallOptions): Promise<Run> {
   const example = exampleArgs(op);
@@ -225,28 +226,35 @@ async function runCases(name: string, op: Operation, opts: CallOptions): Promise
   return { results, plan: opHash(op), from, proven: !!op.unproven && answersDiffer(op, op.unproven.params, answers) };
 }
 
-/** Whether `run`'s cases were chosen from `op` as it is saved now, and every one answered from it. */
-const allFrom = (op: Operation | undefined, run: Run | undefined) =>
-  !!op && !!run && "from" in run && run.plan === opHash(op) && run.from.every((h) => h === opHash(op));
+/**
+ * Whether `run`'s cases were chosen from `op` as it is saved now, and every one that was sent answered
+ * from it. A case the cool-down refused is no version, so it mixes nothing.
+ */
+const clean = (op: Operation, run: Run): run is Ran =>
+  "from" in run && run.plan === opHash(op) && run.from.every((h) => h === undefined || h === opHash(op));
+
+/** Whether any of `run`'s cases was sent: one the cool-down refused was not. */
+const sent = (run: Run | undefined): run is Ran => !!run && "from" in run && run.from.some((h) => h !== undefined);
 
 /**
  * Run every read's example and checks, record the outcomes, and clear `unproven` where the answers
- * differ. Both only for an op whose every case answered from the version saved when verify ends: an
- * op saved meanwhile by anything else (an `add` in another process) gets neither.
+ * differ. Both only for an op whose cases were chosen from the version saved when verify ends and
+ * whose every case that was sent answered from it: an op saved meanwhile by anything else (an `add`
+ * in another process) gets neither, and loses the record it had. An op none of whose cases was sent
+ * (the site cools down) keeps its record as it was.
  */
 export async function verifySite(name: string, opts: CallOptions = {}): Promise<Verified> {
   const site = loadSite(name)?.site;
   if (!site) throw new Error(`no site "${name}"`);
   const runs = new Map<string, Run>();
   for (const op of site.operations) if (op.readOnly) runs.set(op.name, await runCases(name, op, opts));
-  // Cases that answered from different versions (a heal part way through them, or a save between
-  // them), or that were chosen from another version than the one saved now (whose own checks may
-  // differ), prove no one version: they all run once more, on the op as it is now.
+  // Cases that answered from another version than the one saved now (a heal part way through them,
+  // or a save between them), or that were chosen from another (whose own checks may differ), prove no
+  // one version: they all run once more, on the op as it is now, and that run is the one judged.
   const then = loadSite(name)?.site ?? site;
   for (const [n, run] of runs) {
     const op = then.operations.find((o) => o.name === n);
-    if (op?.readOnly && "from" in run && !allFrom(op, run) && (new Set(run.from).size > 1 || run.plan !== opHash(op)))
-      runs.set(n, await runCases(name, op, opts));
+    if (op?.readOnly && "from" in run && !clean(op, run)) runs.set(n, await runCases(name, op, opts));
   }
   const proven: string[] = [];
   if ([...runs.values()].some((r) => "proven" in r && r.proven))
@@ -256,7 +264,7 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
         ...cur,
         operations: cur.operations.map((o) => {
           const run = runs.get(o.name);
-          if (!o.unproven || !run || !("proven" in run) || !run.proven || !allFrom(o, run)) return o;
+          if (!o.unproven || !sent(run) || !clean(o, run) || !run.proven) return o;
           proven.push(o.name);
           const { unproven: _, ...rest } = o;
           return rest;
@@ -268,9 +276,10 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
   const at = new Date().toISOString();
   for (const op of now.operations) {
     const run = runs.get(op.name);
-    if (run && "results" in run && allFrom(op, run)) record[op.name] = { hash: opHash(op), at, results: run.results };
+    if (!sent(run)) continue;
+    if (clean(op, run)) record[op.name] = { hash: opHash(op), at, results: run.results };
     // a run that answered and proved no one version leaves no record, not an older one standing
-    else if (run && "from" in run && run.from.some((h) => h !== undefined)) delete record[op.name];
+    else delete record[op.name];
   }
   for (const k of Object.keys(record)) if (!now.operations.some((o) => o.name === k)) delete record[k];
   writePrivate(recordFile(name), JSON.stringify(record, null, 1));

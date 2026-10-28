@@ -1082,7 +1082,7 @@ test("a heal by the next-page case keeps the record, on the healed version", asy
   assert.equal(loadRecord("page-heal").search?.hash, opHash(now));
 });
 
-test("verify records nothing for a version put back as it read it while its cases sent another", async () => {
+test("verify runs once more a version put back as it read it while its cases sent another, and records that run", async () => {
   const read = (name: string, path: string, more: Record<string, unknown> = {}) => ({
     name,
     readOnly: true,
@@ -1113,9 +1113,10 @@ test("verify records nothing for a version put back as it read it while its case
     return json(path === "/broken" ? {} : [{ title: "ok" }]);
   }) as typeof fetch;
   await verifySite("aba", { maxTier: 1, minIntervalMs: 0, fetchImpl });
-  assert.ok(!paths.includes("/broken"), paths.join(" "));
-  assert.equal(loadRecord("aba").target, undefined, "no case sent A");
-  assert.match(plan("aba").errors.join("\n"), /target: its checks have not run on this version/);
+  // B answered A's cases: they run once more, on A, and A's answers are its record
+  assert.deepEqual(paths, ["/first", "/working", "/working", "/broken", "/broken"]);
+  assert.equal(loadRecord("aba").target?.hash, opHash(a.operations[1]!));
+  assert.match(plan("aba").errors.join("\n"), /target: example expects result, and answered empty/);
 });
 
 test("verify records nothing when an op's cases answered from different versions, twice", async () => {
@@ -1223,6 +1224,69 @@ test("a verify the site's cool-down answers sends nothing and leaves the record 
   assert.equal(sent, 0);
   assert.deepEqual(loadRecord("demo").search, before);
   assert.match(plan("demo").errors.join("\n"), failing);
+});
+
+test("a rate limit part way through verify keeps the failure its earlier cases saw", async () => {
+  saveSite(
+    spec(
+      {},
+      {
+        params: [{ name: "q", example: "kittens" }],
+        checks: [
+          { args: { q: "zzzz" }, expect: "empty" },
+          { args: { q: "dogs" }, expect: "result" },
+          { args: { q: "cats" }, expect: "result" },
+        ],
+      },
+    ),
+  );
+  const slow = () => new Response("slow down", { status: 429, headers: { "retry-after": "60" } });
+  const filters = (q: string) => json({ hits: q === "zzzz" ? [] : [{ t: q }] });
+  let answer = filters;
+  const sent: string[] = [];
+  const opts = {
+    maxTier: 1 as const,
+    minIntervalMs: 0,
+    fetchImpl: (async (raw: string | URL | Request) => {
+      const q = new URL(String(raw)).searchParams.get("q")!;
+      sent.push(q);
+      return answer(q);
+    }) as typeof fetch,
+  };
+  await verifySite("demo", opts);
+  assert.deepEqual(plan("demo").errors, []);
+
+  // the site stops filtering (check 1 fails), then rate-limits check 2: check 3 is not sent
+  answer = (q) => (q === "dogs" ? slow() : json({ hits: [{ t: q }] }));
+  sent.length = 0;
+  const v = await verifySite("demo", opts);
+  assert.deepEqual(sent, ["kittens", "zzzz", "dogs"]);
+  const rows = [
+    ["example", "pass"],
+    ["check 1", "fail"],
+    ["check 2", "inconclusive"],
+    ["check 3", "inconclusive"],
+  ];
+  assert.deepEqual(
+    v.results.map((r) => ("outcome" in r ? [r.case, r.outcome] : r)),
+    rows,
+  );
+  assert.deepEqual(
+    loadRecord("demo").search?.results.map((r) => [r.case, r.outcome]),
+    rows,
+  );
+  assert.match(plan("demo").errors.join("\n"), /search: check 1 \(q=zzzz\) expects empty, and answered result/);
+
+  // the same when the example fails and the very next case meets the limit
+  clearCoolDown("demo");
+  answer = filters;
+  await verifySite("demo", opts);
+  assert.deepEqual(plan("demo").errors, []);
+  answer = (q) => (q === "kittens" ? json({ hits: [] }) : slow());
+  sent.length = 0;
+  await verifySite("demo", opts);
+  assert.deepEqual(sent, ["kittens", "zzzz"]);
+  assert.match(plan("demo").errors.join("\n"), /search: example expects result, and answered empty/);
 });
 
 test("a verify that stays mixed takes away the record the op had", async () => {
