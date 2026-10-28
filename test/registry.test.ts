@@ -21,7 +21,7 @@ import type { SearchMatch } from "../src/registry-api.js";
 import { loadSession, mergeCapture, saveSession, siteOf } from "../src/session.js";
 import { parseSite, type Site } from "../src/spec.js";
 import { loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
-import { LIMITS, vetShared } from "../src/vet.js";
+import { LIMITS, readbackProblems, uploadProblems, vetShared } from "../src/vet.js";
 import { type FakeRegistry, hashOf, served, startRegistry } from "./fixture/registry.js";
 
 const BUNDLED = new URL("../sites/", import.meta.url);
@@ -53,7 +53,10 @@ test("every bundled spec passes the shared rules: CI runs this on every pull req
     const md = new URL(f.replace(/\.json$/, ".md"), BUNDLED);
     const text = readFileSync(new URL(f, BUNDLED), "utf8");
     assert.ok(Buffer.byteLength(text) <= LIMITS.file, `${f} is over the ${LIMITS.file} bytes pull takes`);
-    assert.deepEqual(errors(parseSite(JSON.parse(text)), existsSync(md) ? readFileSync(md, "utf8") : undefined), [], f);
+    const site = parseSite(JSON.parse(text));
+    assert.deepEqual(errors(site, existsSync(md) ? readFileSync(md, "utf8") : undefined), [], f);
+    // vetShared takes a readback by its shape; here the whole site is at hand
+    for (const op of site.operations) assert.deepEqual(readbackProblems(site, op), [], `${f} ${op.name}`);
   }
 });
 
@@ -659,46 +662,34 @@ test("the shared rules check paging: a param of the read that goes in a slot, an
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
 });
 
-test("the shared rules check a write's readback: a read of the same site, given the write's values", () => {
+const postOp = (readback: Record<string, unknown>) => ({
+  name: "post",
+  readOnly: false,
+  request: { method: "POST", url: "https://news.example.com/api/post", headers: {}, body: '{"title":"x"}' },
+  slots: [{ param: "title", at: ["body", "json:/title"] }],
+  params: [{ name: "title" }],
+  trigger: { url: "https://news.example.com/submit" },
+  match: { host: "news.example.com", path: "/api/post" },
+  readback,
+});
+
+test("a write's readback: its shape is a shared rule, its fit to the site's read is checked where the site is whole", () => {
   const read = spec().operations[0]!;
   const withWrite = (readback: Record<string, unknown>, onRead?: Record<string, unknown>) =>
-    spec({
-      operations: [
-        { ...read, ...(onRead ? { readback: onRead } : {}) },
-        {
-          name: "post",
-          readOnly: false,
-          request: { method: "POST", url: "https://news.example.com/api/post", headers: {}, body: '{"title":"x"}' },
-          slots: [{ param: "title", at: ["body", "json:/title"] }],
-          params: [{ name: "title" }],
-          trigger: { url: "https://news.example.com/submit" },
-          match: { host: "news.example.com", path: "/api/post" },
-          readback,
-        },
-      ],
-    });
-  assert.deepEqual(errors(withWrite({ op: "search", args: { q: "{title}" } })), []);
-  assert.deepEqual(
-    errors(withWrite({ op: "search", args: { q: "new" }, find: { field: "title", equals: "{title}" } })),
-    [],
-  );
-  const refused: [string, Site, RegExp][] = [
-    ["no such op", withWrite({ op: "nope", args: { q: "{title}" } }), /post: readback op nope is no operation of demo/],
-    ["a write", withWrite({ op: "post", args: { title: "{title}" } }), /readback op post is a write/],
+    spec({ operations: [{ ...read, ...(onRead ? { readback: onRead } : {}) }, postOp(readback)] });
+  const problems = (s: Site) => readbackProblems(s, s.operations.at(-1)!);
+  for (const ok of [
+    withWrite({ op: "search", args: { q: "{title}" } }),
+    withWrite({ op: "search", args: { q: "new" }, find: { field: "title", equals: "{title}" } }),
+  ]) {
+    assert.deepEqual(errors(ok), []);
+    assert.deepEqual(problems(ok), []);
+  }
+  const shape: [string, Site, RegExp][] = [
     [
       "on a read",
       withWrite({ op: "search", args: { q: "{title}" } }, { op: "search", args: { q: "{q}" } }),
       /search: a read has no readback/,
-    ],
-    [
-      "an arg no param takes",
-      withWrite({ op: "search", args: { q: "{title}", page: "2" } }),
-      /readback sets page, which is no param of search/,
-    ],
-    [
-      "a required param unset",
-      withWrite({ op: "search", find: { field: "title", equals: "{title}" } }),
-      /readback leaves search's required q unset/,
     ],
     [
       "a hole no write param fills",
@@ -712,7 +703,121 @@ test("the shared rules check a write's readback: a read of the same site, given 
     ],
     ["long", withWrite({ op: "search", args: { q: `{title}${"x".repeat(500)}` } }), /readback arg q is 507 characters/],
   ];
+  for (const [what, s, re] of shape) {
+    assert.match(errors(s).join("\n"), re, what);
+    if (what !== "on a read") assert.match(problems(s).join("\n"), re, what);
+  }
+  // A pulled site may hold another read than the one the write was written against (an upgrade, a
+  // review version), so loading it never fails on these: the readback command, a re-learn and publish do.
+  const fit: [string, Site, RegExp][] = [
+    ["no such op", withWrite({ op: "nope", args: { q: "{title}" } }), /readback op nope is no operation of demo/],
+    ["a write", withWrite({ op: "post", args: { title: "{title}" } }), /readback op post is a write/],
+    [
+      "an arg no param takes",
+      withWrite({ op: "search", args: { q: "{title}", page: "2" } }),
+      /readback sets page, which is no param of search/,
+    ],
+    [
+      "a required param unset",
+      withWrite({ op: "search", find: { field: "title", equals: "{title}" } }),
+      /readback leaves search's required q unset/,
+    ],
+  ];
+  for (const [what, s, re] of fit) {
+    assert.deepEqual(errors(s), [], what);
+    assert.match(problems(s).join("\n"), re, what);
+  }
+  // a ref vetted alone, as an upload or a one-op upgrade is
+  assert.deepEqual(errors(spec({ operations: [postOp({ op: "search", args: { q: "{title}" } })] })), []);
+});
+
+test("a shared spec whose write's readback no longer fits its read still loads", () => {
+  const read = spec().operations[0]!;
+  // the registry renamed the read's param after the user wrote their readback against it
+  const site = spec({
+    shared: { from: "https://registry.example/v1/sites/demo", sha256: "0".repeat(64) },
+    operations: [
+      { ...read, params: [{ name: "query" }], slots: [{ param: "query", at: ["query:q"] }] },
+      postOp({ op: "search", args: { q: "{title}" } }),
+    ],
+  });
+  saveSite(site);
+  const loaded = loadSite("demo");
+  assert.equal(loaded?.site.operations.length, 2);
+  assert.match(readbackProblems(loaded!.site, loaded!.site.operations[1]!).join("\n"), /readback sets q/);
+});
+
+test("a write's carried read meets the rules of any read: addresses, credentials, mutations; off its site warns", () => {
+  const read = spec().operations[0]!;
+  const { readOnly: _r, response: _x, ...snapshot } = read;
+  const carrying = (over: Record<string, unknown> = {}, rb: Record<string, unknown> = {}) =>
+    spec({
+      operations: [
+        postOp({ read: { ...snapshot, response: { extract: "hits" }, ...over }, args: { q: "{title}" }, ...rb }),
+      ],
+    });
+  const ok = carrying();
+  assert.ok("read" in ok.operations[0]!.readback!, "parsed as a carried read");
+  assert.deepEqual(errors(ok), []);
+  assert.deepEqual(uploadProblems(ok.operations[0]!), []);
+  assert.match(
+    uploadProblems(spec({ operations: [postOp({ op: "search", args: { q: "{title}" } })] }).operations[0]!).join(),
+    /names search/,
+  );
+  const refused: [string, Site, RegExp][] = [
+    [
+      "http",
+      carrying({ request: { method: "GET", url: "http://news.example.com/api/search?q={q}" } }),
+      /post: readback search: request http:\/\/news.example.com\/api\/search\?q=\{q\} is not https/,
+    ],
+    [
+      "a private host",
+      carrying({ request: { method: "GET", url: "https://192.168.1.4/api?q={q}" } }),
+      /readback search: request .* has no public host/,
+    ],
+    [
+      "a literal credential",
+      carrying({
+        request: {
+          method: "GET",
+          url: "https://news.example.com/api/search?q={q}",
+          headers: { authorization: "Bearer abcdefghijklmnopqrstuvwxyz0123456789" },
+        },
+      }),
+      /readback search: request header:authorization holds a literal credential/,
+    ],
+    [
+      "a GraphQL mutation",
+      carrying({
+        request: {
+          method: "POST",
+          url: "https://news.example.com/graphql",
+          headers: { "content-type": "application/json" },
+          body: '{"query":"mutation { deleteAll }"}',
+        },
+      }),
+      /readback search: a GraphQL mutation cannot be a read/,
+    ],
+    [
+      "a write method",
+      carrying({ request: { method: "DELETE", url: "https://news.example.com/api/x?q={q}" } }),
+      /readback search: a DELETE request cannot be a read/,
+    ],
+    [
+      "an arg it does not take",
+      carrying({}, { args: { q: "{title}", page: "1" } }),
+      /post: readback sets page, which is no param of search/,
+    ],
+    [
+      "its required param unset",
+      carrying({}, { args: {}, find: { field: "t", equals: "{title}" } }),
+      /readback leaves search's required q unset/,
+    ],
+  ];
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
+  const off = vetShared(carrying({ trigger: { url: "https://elsewhere.example.net/search" } }));
+  assert.deepEqual(off.errors, []);
+  assert.match(off.warnings.join("\n"), /readback search: sends to or opens elsewhere.example.net/);
 });
 
 test("publish runs on verify's record: every counted check passes, and inconclusive ones are shown", async () => {

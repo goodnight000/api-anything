@@ -30,7 +30,7 @@ import {
 import { registerLearn } from "./mcp-learn.js";
 import { type Pulled, pull, search } from "./registry.js";
 import { settle } from "./report.js";
-import type { Operation, Paging, Param } from "./spec.js";
+import { type Operation, type Paging, type Param, readbackName } from "./spec.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
 import { SHARED_NOTE } from "./vet.js";
 
@@ -495,7 +495,7 @@ export function createServer({
               ...(o.version ? { status: o.version.status } : {}),
               ...(returnedFields(o.response) ? { returns: returnedFields(o.response) } : {}),
               ...(o.paging ? { pages: pagesOf(o.paging) } : {}),
-              ...(o.readback ? { readback: o.readback.op } : {}),
+              ...(o.readback ? { readback: readbackName(o.readback) } : {}),
               inputSchema: inputSchema(o),
             })),
           ...(r.site.shared ? { shared: SHARED_NOTE } : {}),
@@ -596,7 +596,9 @@ export function createServer({
         o.description ?? `${o.name} on ${s.name}.`,
         returns ? `Items carry: ${returns.join(", ")}.` : "",
         o.paging ? `Pages ${pagesOf(o.paging)}.` : "",
-        o.readback ? `Its readback, ${o.readback.op}, looks for it after it is sent: write applied when found.` : "",
+        o.readback
+          ? `Its readback, ${readbackName(o.readback)}, looks for it after it is sent: write applied when found.`
+          : "",
         o.readOnly ? "" : `${WRITE_DESCRIPTION} again and idempotencyKey: use call_write_operation.`,
         `The site's notes: list_operations {"site":"${s.name}"}. Answers as call_operation does.`,
       ]

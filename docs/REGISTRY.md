@@ -194,7 +194,7 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
   since the match is built only from the request's stable identity. A version that turns linkedin
   `search` into a GET of `/psettings/close-account` is never served without a maintainer. Degrading
   the incumbent first changes nothing, since a degraded version still counts;
-- sends to or opens a host off its site, or lists `public` names;
+- sends to or opens a host off its site (its readback's read included), or lists `public` names;
 - holds something the export secret scan flags.
 
 ## Maintenance by the crowd
@@ -223,6 +223,8 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
   (goodreads `getBook` and `getWorkId` both match `/book/show/*`). The best is served: live over
   candidate over degraded; of two live versions the incumbent; otherwise by success rate, then by
   confirmations.
+- A write's proof is inside its version: its readback carries the read it runs, so the hash covers it,
+  a maintainer's approval binds it, and a later version of that read changes nothing about it.
 - Each version keeps its report counts beside it (installs confirming it, oks, failures, installs that
   reported it), so a search, a site or the index reads versions only, never reports. A report recounts
   its version and moves its status, except that a version `STATS_LIVE_UP_TO` (100) or more installs

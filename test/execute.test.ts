@@ -1,6 +1,6 @@
 /** The ladder's rules with an injected fetch and maxTier 1 (no browser): writes, heal guards, rate. */
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
@@ -1105,6 +1105,68 @@ test("a value of the jar before the send that redacting the rotated one would ex
   assert.equal(r.class, "auth", JSON.stringify(r));
   assert.ok(!r.reason!.includes(old) && !r.reason!.includes(rotated), r.reason!);
   assert.ok(r.reason!.includes(OMITTED), r.reason!);
+});
+
+/** The to-do write alone, carrying the read its readback runs, as a shared spec holds it. */
+const carrying = () => {
+  const s = pagedAndTodos({ param: "after" });
+  const { readOnly: _r, ...read } = s.operations[1]!;
+  return parseSite({
+    ...s,
+    operations: [{ ...s.operations[2]!, readback: { read, find: { field: "title", equals: "{title}" } } }],
+  });
+};
+
+test("readback: a carried read proves the write as a named one does, and leaves no trace on the spec or its state", async () => {
+  saveSite(carrying());
+  const file = join(HOME, "sites", "t.json");
+  const bytes = readFileSync(file, "utf8");
+  const list: { title: string }[] = [];
+  const w = (h: Handler) => ({ ...opts(h), allowWrites: true, again: true });
+  const r = await call(
+    "t",
+    "add",
+    { title: "milk" },
+    w((_u, i) => {
+      if (i?.method === "POST") list.push(JSON.parse(String(i.body)));
+      return i?.method === "POST" ? json({ ok: true }) : json({ todos: list });
+    }),
+  );
+  assert.deepEqual([r.ok, r.class, r.write], [true, "ok", "applied"], JSON.stringify(r));
+  assert.match(r.reason ?? "", /read back with todos: found it/);
+  assert.deepEqual(
+    seen.map((x) => [x.method, new URL(x.url).pathname]),
+    [
+      ["POST", "/api/todos"],
+      ["GET", "/api/todos"],
+    ],
+  );
+
+  // the read drifted: no answer, so the write stays accepted, and nothing heals, marks or remembers it
+  seen = [];
+  const drift = await call(
+    "t",
+    "add",
+    { title: "eggs" },
+    w((_u, i) => (i?.method === "POST" ? json({ ok: true }) : json({ items: [] }))),
+  );
+  assert.deepEqual([drift.ok, drift.write], [true, "accepted"], JSON.stringify(drift));
+  assert.match(drift.reason ?? "", /could not read it back with todos \(drift/);
+  assert.deepEqual(
+    seen.map((x) => x.method),
+    ["POST", "GET"],
+  );
+  const missed = await call(
+    "t",
+    "add",
+    { title: "jam" },
+    w((_u, i) => (i?.method === "POST" ? json({ ok: true }) : json({ todos: [] }))),
+  );
+  assert.deepEqual([missed.ok, missed.write], [true, "accepted"]);
+  assert.match(missed.reason ?? "", /read back with todos: not found/);
+  assert.equal(readFileSync(file, "utf8"), bytes, "the spec is as it was");
+  assert.deepEqual(heals(), []);
+  assert.ok(!existsSync(join(HOME, "state.json")), "no tier remembered, nothing marked stale");
 });
 
 test("a cookie a redirect set, sent on the next hop and rotated again, is redacted from the reason", async () => {

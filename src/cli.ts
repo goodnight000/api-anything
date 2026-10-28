@@ -49,6 +49,7 @@ import {
   type Paging,
   type Param,
   type Readback,
+  readbackName,
   TriggerStepSchema,
 } from "./spec.js";
 import { exportSite, listSites, loadSite, siteNotes, updateSite } from "./store.js";
@@ -1061,7 +1062,7 @@ function cmdOps({ pos }: Parsed): number {
       ...(o.paging
         ? { pages: o.paging.next ? `by ${o.paging.param}: pass the result's nextPage` : `by ${o.paging.param}` }
         : {}),
-      ...(o.readback ? { readback: o.readback.op } : {}),
+      ...(o.readback ? { readback: readbackName(o.readback) } : {}),
       ...(o.unproven ? { unproven: o.unproven.reason } : {}),
       trigger: o.trigger.url,
     })),

@@ -16,6 +16,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { browserAvailable } from "../src/browser.js";
 import { printConfig } from "../src/clients.js";
 import { addOperation } from "../src/heal.js";
+import { embedReadback } from "../src/publish.js";
+import { parseSite } from "../src/spec.js";
 import type { TriggerStep } from "../src/types.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
@@ -1263,6 +1265,28 @@ describe("paging and readback: a list an agent can walk, and a write it can see 
     const dup = await run("call", "todo", "add", "title=pay rent", "--allow-writes");
     assert.deepEqual([dup.out.class, dup.out.write], ["duplicate", "not_sent"]);
     assert.equal(posts() - before, 2, "each write sent once, the readback only read");
+    assert.equal((await run("ops", "todo")).out.operations[1].readback, "list");
+
+    // as a pulled spec holds it, the readback carries the read: a re-learn of the write keeps it while it fits
+    const file = join(HOME, "sites", "todo.json");
+    const spec = parseSite(JSON.parse(readFileSync(file, "utf8")));
+    const carried = embedReadback(spec, spec.operations[1]!);
+    writeFileSync(file, JSON.stringify({ ...spec, operations: [spec.operations[0], carried] }));
+    const again = await run(
+      "add",
+      "todo",
+      "add",
+      "--from",
+      "caddtodo",
+      "--pick-request",
+      "2",
+      "--example",
+      "title=buy milk",
+      "--write",
+    );
+    assert.equal(again.code, 0, again.stdout);
+    const kept = parseSite(JSON.parse(readFileSync(file, "utf8"))).operations.find((o) => o.name === "add")!;
+    assert.deepEqual(kept.readback, carried.readback);
     assert.equal((await run("ops", "todo")).out.operations[1].readback, "list");
   });
 });

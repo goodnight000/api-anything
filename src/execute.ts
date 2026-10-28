@@ -56,7 +56,7 @@ import {
   sessionFile,
   withLock,
 } from "./session.js";
-import type { Operation, Site } from "./spec.js";
+import { type Operation, readbackName, type Site } from "./spec.js";
 import {
   beginWrite,
   lastHealAt,
@@ -71,6 +71,7 @@ import {
   type WriteStatus,
 } from "./store.js";
 import type { StoredCookie } from "./types.js";
+import { proofOp } from "./vet.js";
 
 export type Tier = 1 | 2 | 3;
 
@@ -817,26 +818,32 @@ function resolve(
  * A write's readback: the op's read, run once after the write was sent. It is a read, never a
  * resend. Finding the write makes the result `applied` (and ok, whatever its own answer was); not
  * finding it, or a read that fails, changes nothing but `reason`: the site may show it later.
+ * A read the op carries (a shared write's) runs as a proof: under the write's own version, so with
+ * the trust its spec has, and leaving nothing behind (no remembered tier, heal or report).
  */
 async function readBack(
-  site: string,
+  site: Site,
+  theirs: boolean,
   op: Operation,
   args: Record<string, unknown>,
   r: Result,
   opts: CallOptions,
 ): Promise<Result> {
   const rb = op.readback!;
+  const name = readbackName(rb);
   const readArgs = Object.fromEntries(Object.entries(rb.args).map(([k, v]) => [k, fillTemplate(v, args)]));
-  const read = await call(site, rb.op, readArgs, {
-    ...opts,
-    allowWrites: false,
-    again: undefined,
-    idempotencyKey: undefined,
-  });
+  const o: CallOptions = { ...opts, allowWrites: false, again: undefined, idempotencyKey: undefined };
+  const read =
+    "op" in rb
+      ? await call(site.name, rb.op, readArgs, o)
+      : await run(site, { ...proofOp(rb.read), ...(op.version ? { version: op.version } : {}) }, readArgs, o, {
+          theirs,
+          proof: true,
+        });
   const noted = (note: string): Result => ({ ...r, reason: r.reason ? `${r.reason}; ${note}` : note });
   if (!read.ok)
     return noted(
-      `could not read it back with ${rb.op} (${read.class}: ${read.reason ?? "no reason"}), so it stays ${r.write}`,
+      `could not read it back with ${name} (${read.class}: ${read.reason ?? "no reason"}), so it stays ${r.write}`,
     );
   const items = Array.isArray(read.data) ? read.data : read.data == null ? [] : [read.data];
   const want = rb.find && fillTemplate(rb.find.equals, args).trim();
@@ -848,10 +855,10 @@ async function readBack(
     : !(read.data == null || read.data === "" || (typeof read.data === "object" && !Object.keys(read.data).length));
   if (!found)
     return noted(
-      `read back with ${rb.op}: not found${read.truncated ? " in the part of its answer that fitted" : ""}, so it stays ${r.write}: the site may not show it yet; check the site before any retry`,
+      `read back with ${name}: not found${read.truncated ? " in the part of its answer that fitted" : ""}, so it stays ${r.write}: the site may not show it yet; check the site before any retry`,
     );
   const { retry: _retry, nextCall: _next, next: _hint, server: _server, ...kept } = r;
-  const note = `read back with ${rb.op}: found it`;
+  const note = `read back with ${name}: found it`;
   return { ...kept, ok: true, class: "ok", write: "applied", reason: r.reason ? `${r.reason}; ${note}` : note };
 }
 
@@ -901,34 +908,47 @@ export async function call(
   opts: CallOptions = {},
 ): Promise<CallResult> {
   const t0 = Date.now();
+  const found = resolve(siteName, opName);
+  if ("ok" in found) return { ...finish(found, undefined, undefined, []), ms: Date.now() - t0 };
+  return run(found.site, found.op, args, opts, { theirs: found.theirs, source: found.source }, t0);
+}
+
+/**
+ * A resolved op's call. `proof`: a write's readback running the read it carries (`readBack`), which
+ * answers and changes nothing: no tier remembered, no heal, adopt or stale mark, no report.
+ */
+async function run(
+  site: Site,
+  op: Operation,
+  args: Record<string, unknown>,
+  opts: CallOptions,
+  how: { theirs: boolean; source?: Resolved["source"]; proof?: boolean },
+  t0 = Date.now(),
+): Promise<CallResult> {
   const log: Attempt[] = [];
-  let resolved: Operation | undefined;
+  const siteName = site.name;
+  const { theirs, proof } = how;
   /** the jar as the call found it: a value it rotated out can still be quoted in a reason */
   let jar: Session | undefined;
   /** this write's ledger record, settled with what the call did */
   let ledger: string | undefined;
   const done = async (r: Result): Promise<CallResult> => {
-    let f = finish(r, resolved, resolved ? siteName : undefined, log);
+    let f = finish(r, op, siteName, log);
     // log: something was sent this call (a ledger hold-back sends nothing, and reads nothing back)
-    if (resolved?.readback && log.length && (f.write === "accepted" || f.write === "may_have_applied"))
-      f = await readBack(siteName, resolved, args, f, opts);
-    const sessions = [jar, resolved ? sessionOrNone(siteName) : undefined];
+    if (op.readback && log.length && (f.write === "accepted" || f.write === "may_have_applied"))
+      f = await readBack(site, theirs, op, args, f, opts);
+    const sessions = [jar, sessionOrNone(siteName)];
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
     if (ledger) settleWrite(ledger, f.write ?? "may_have_applied", f);
     const out = { ...f, ms: Date.now() - t0 };
-    if (resolved && "source" in found)
-      afterCall(siteName, resolved, found.source, out, {
+    if (how.source && !proof)
+      afterCall(siteName, op, how.source, out, {
         fetchImpl: opts.fetchImpl,
         minIntervalMs: opts.minIntervalMs,
       });
     return out;
   };
-  const found = resolve(siteName, opName);
-  if ("ok" in found) return done(found);
-  const { site, op, theirs } = found;
-  resolved = op;
-  siteName = site.name;
   const write = !op.readOnly;
   if (write && !opts.allowWrites) {
     return done({
@@ -1037,7 +1057,8 @@ export async function call(
     shared: site.shared,
     unconfirmed: capped,
   };
-  const remembered = rememberedTier(siteName, op.name);
+  // a proof's op is named by a label, not one the site holds
+  const remembered = proof ? undefined : rememberedTier(siteName, op.name);
   // A remembered escalation is a speed hint, not a requirement: under a lower cap, start at the op's own tier.
   let tier = Math.max(op.minTier, remembered !== undefined && remembered <= ctx.maxTier ? remembered : 1) as Tier;
   // Why a call ran above tier 1, so a slow call explains itself.
@@ -1072,7 +1093,7 @@ export async function call(
     if (a.class === "ok") {
       // Only an escalation is remembered; a tier the spec itself asks for is not, so editing minTier takes effect.
       const keep = tier > op.minTier ? tier : undefined;
-      if (remembered !== keep) rememberTier(siteName, op.name, keep);
+      if (remembered !== keep && !proof) rememberTier(siteName, op.name, keep);
       return done(noted(a));
     }
     const fail = (x = a, reason = a.note ? `${a.reason}; ${a.note}` : a.reason): Promise<CallResult> =>
@@ -1177,7 +1198,8 @@ export async function call(
         }
       }
     }
-    if (a.class === "drift") return done(await onDrift(ctx, site, op, a));
+    // a proof that drifted is no answer: the write stays as it was, and its read is not healed here
+    if (a.class === "drift" && !proof) return done(await onDrift(ctx, site, op, a));
     // Recovery is spent, plain HTTP still says auth, and the site has no login on record that could
     // have run out: a wall that answers 419 or 401 to what is not a browser looks the same. One tier-2
     // attempt tells them apart, for a read only: a page can send a request more than once (its own
@@ -1186,14 +1208,14 @@ export async function call(
     if (a.class === "auth" && tier === 1 && !write && ctx.maxTier >= 2 && browserAvailable() && noLogin()) {
       const b = await attempt(ctx, op, 2);
       if (b.class === "ok") {
-        rememberTier(siteName, op.name, 2);
+        if (!proof) rememberTier(siteName, op.name, 2);
         const why = `tier 1 said auth with no login on record for this site (${a.reason}); a real page got the answer`;
         return done(success(b, { reason: why }));
       }
     }
     // A credential marked public (a web app's shared bearer) answers auth when the site rotated it,
     // which no login fixes: re-learn it from the page, as for drift.
-    if (a.class === "auth" && op.readOnly && op.public?.length && noLogin())
+    if (a.class === "auth" && op.readOnly && op.public?.length && noLogin() && !proof)
       return done(await onDrift(ctx, site, op, { ...a, class: "drift" }));
     return fail();
   }
