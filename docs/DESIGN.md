@@ -686,6 +686,15 @@ call. The tier-3 answer is the matching request whose declared parameter positio
 materialized call, including short and structured values, and whose response judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
 A param's default is filled into the args once, before the first tier, so every tier runs with the
 same values: the tier-3 trigger opens `?count=20`, never a literal `{count}`.
+Before any recovery or browser, a read that tier 1 answers `auth` or `blocked`, from a site with no
+login on record (as below), whose request carries browser identity headers (`user-agent`,
+`sec-ch-ua*`, `sec-fetch-*`) that no slot fills, is sent once more at tier 1 without them, all else
+unchanged. Some walls refuse a client that claims to be Chrome without Chrome's TLS (Hacker News's
+`/from` answers 419 "Sorry"), and which headers trip one differs by site, so all of them go. An ok
+answer is the call's, at tier 1, and nothing is kept: the next call sends the stored template first
+and pays the one extra fast request again. A 429 is the call's answer; any other leaves the call
+with tier 1's first answer. It runs under `--max-tier 1` and with no browser, once per call, never
+for a write.
 An `auth` answer starts recovery at whichever tier got it (an op with `minTier: 2` or `3`, or one a
 remembered escalation starts there), at most once per call. At tier 3 only the re-import applies,
 and only to a read: the page just ran with the profile's own cookies and session values, so there is

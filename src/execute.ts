@@ -240,6 +240,25 @@ function bare(ctx: Ctx, op: Operation): boolean {
   return method !== "GET" && method !== "HEAD";
 }
 
+/** Headers a browser computes per request about itself: Node's fetch carrying them is not Chrome's TLS. */
+const IDENTITY = /^(user-agent|sec-ch-ua.*|sec-fetch-.*)$/;
+
+/**
+ * The op without the browser's identity headers, when its request carries one that no slot or volatile
+ * fills; else undefined. Some walls (Hacker News's "Sorry") refuse a client that claims Chrome but is not
+ * it, and which combination trips one differs by site, so all of them go.
+ */
+function withoutIdentity(op: Operation): Operation | undefined {
+  const names = Object.keys(op.request.headers).filter((h) => IDENTITY.test(h));
+  const filled = [...op.slots, ...op.volatile].some((s) => {
+    const at = s.at[0]!.toLowerCase();
+    return at.startsWith("header:") && IDENTITY.test(at.slice(7));
+  });
+  if (!names.length || filled) return undefined;
+  const headers = Object.fromEntries(Object.entries(op.request.headers).filter(([h]) => !IDENTITY.test(h)));
+  return { ...op, request: { ...op.request, headers } };
+}
+
 /** What one attempt did to a write. */
 const statusOf = (a: Attempt): WriteStatus =>
   a.unsent ? "not_sent" : a.class === "ok" ? "accepted" : a.rejected || notRun(a) ? "not_applied" : "may_have_applied";
@@ -1015,6 +1034,7 @@ export async function call(
   const notes: string[] = tier > op.minTier ? [`started at tier ${tier}: an earlier call escalated there`] : [];
   const noted = (a: Attempt) => success(a, notes.length ? { reason: notes.join("; ") } : {});
   let examplesChecked = false;
+  let plainTried = false;
   for (;;) {
     if (tier > ctx.maxTier) {
       if (capped && tier === 3 && (opts.maxTier ?? 3) >= 3) return done(needsHuman(siteName, notes));
@@ -1045,19 +1065,36 @@ export async function call(
       if (remembered !== keep) rememberTier(siteName, op.name, keep);
       return done(noted(a));
     }
-    const reason = a.note ? `${a.reason}; ${a.note}` : a.reason;
-    const fail = (): Promise<CallResult> =>
+    const fail = (x = a, reason = a.note ? `${a.reason}; ${a.note}` : a.reason): Promise<CallResult> =>
       done({
         ok: false,
-        class: a.class,
+        class: x.class,
         tier,
         reason,
-        next: nextFor(a.class, siteName, op, a, signIn?.text),
-        ...(a.class === "auth" && signIn ? { nextCall: signIn.step } : {}),
-        ...stepOf(a),
-        ...(a.server ? { server: true as const } : {}),
+        next: nextFor(x.class, siteName, op, x, signIn?.text),
+        ...(x.class === "auth" && signIn ? { nextCall: signIn.step } : {}),
+        ...stepOf(x),
+        ...(x.server ? { server: true as const } : {}),
       });
     if (write && !notRun(a)) return fail();
+    // Plain HTTP refused a read from a site with no login on record. Some walls refuse a client that
+    // claims to be Chrome without Chrome's TLS (Hacker News's 419 "Sorry"): the same request goes once
+    // more without the browser's identity headers, before any recovery or browser. Nothing is kept, so
+    // the next call sends the stored template first and pays this one fast request again.
+    const plain =
+      tier === 1 && !write && !plainTried && (a.class === "auth" || a.class === "blocked") && withoutIdentity(op);
+    if (plain && noLogin()) {
+      plainTried = true;
+      const b = await attempt(ctx, plain, 1);
+      const why = `tier 1 said ${a.class} (${a.reason})`;
+      if (b.class === "ok") {
+        if (remembered !== undefined) rememberTier(siteName, op.name, undefined);
+        const reason = [...notes, `${why}; plain HTTP answered without the browser's identity headers`];
+        return done(success(b, { reason: reason.join("; ") }));
+      }
+      // a 429 is the site's answer to this client too: a browser would only add load
+      if (b.class === "rate") return fail(b, `${why}; without the browser's identity headers: ${b.reason}`);
+    }
     // A bare 403 is a wall or a refusal of this one entity (a private profile): if the example args
     // answer through the same tier, the args are the problem, and a browser run would not help.
     if (a.class === "blocked" && a.missing && !write && !examplesChecked) {
