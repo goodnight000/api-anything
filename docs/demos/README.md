@@ -71,10 +71,9 @@ The script runs three commands and prints each before it runs:
    in headless Chrome. It saves `hn-demo.links`, with one parameter, `domain`.
 2. `jq` reads the saved spec. The domain is stored as a slot, `{"param":"domain","at":["query:site"]}`,
    so later calls fill it in. They do not replay the github.com answer.
-3. `api-anything call hn-demo links domain=arxiv.org` calls the operation with a domain that was
-   not used during learning. The recording below passed `--max-tier 1` and got tier 1. Since then
-   Hacker News's `/from` page answers plain HTTP carrying the browser's headers with `419 Sorry`, so the script
-   no longer limits the tier, and the call answers at tier 2, from a page.
+3. `api-anything call hn-demo links domain=arxiv.org --max-tier 1` calls the operation with a
+   domain that was not used during learning. `--max-tier 1` allows only plain HTTP, with no
+   browser.
 
 ```json
 {

@@ -317,14 +317,15 @@ api-anything add hn-demo links \
   --example domain=github.com --example2 domain=github.io --match path=/from \
   --html '{"items":"tr.athing","fields":{"title":".titleline > a","url":".titleline > a@href"}}'
 
-api-anything call hn-demo links domain=arxiv.org      # 30 arxiv.org stories
+api-anything call hn-demo links domain=arxiv.org      # 30 arxiv.org stories, tier 1
 ```
 
 The browser loads the page once per example. The part of the request that changed with the input
 becomes a parameter. You, or your agent, pick the request and the fields; API Anything builds the
 template without an LLM. If example 2 gets example 1's data, the op is marked `unproven`: the
-server may not read that param at all. A learned op sends the browser's own headers, and Hacker News's
-`/from` page refuses them over plain HTTP today, so this one answers at tier 2, from a page.
+server may not read that param at all. A learned op sends the browser's own headers. Where plain HTTP is
+refused for them (Hacker News's `/from` answers `419`), a read is sent once more without them before
+any browser is used.
 
 [Watch it learn and call, 25 s recording →](docs/demos/README.md#2-teach-once-call-with-new-inputs)
 
