@@ -98,6 +98,9 @@ test("signInFills: a step typing into a password or code field, or a password-li
     "#otp",
     "input[name=totp_code]",
     "#mfa-code",
+    "input[name=pass]",
+    "#user_pass",
+    "input[name='pass']",
   ])
     assert.equal(signInFills([fill(selector, "x")]).length, 1, selector);
   const [why] = signInFills([{ action: "click", selector: "#go" }, fill("#q", "Hunter2-RealPassw0rd!")]);
@@ -110,6 +113,9 @@ test("signInFills: a step typing into a password or code field, or a password-li
     fill("#q"),
     fill("#footprint"),
     fill("input[name=passport]"),
+    fill("input[name=passenger]"),
+    fill("#compass"),
+    fill("#bypass-cache"),
     fill("#search", "{user}-{q}"),
     fill("#q", "new york pizza"),
   ])

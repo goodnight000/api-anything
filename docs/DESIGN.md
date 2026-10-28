@@ -1250,7 +1250,8 @@ so before it types, the run asks the page what the field is: a `type=password` i
 its control), fails the run with "a sign-in is the user's: ask them to run api-anything login
 <site>", and add saves nothing. A hand-written step is caught without a page: `signInFills`
 (`secrets.ts`) flags a fill whose selector names a password or code field (`type=password`, those
-autocomplete tokens, `password`/`passwd`/`passcode`, `pw`/`pwd`/`otp`/`totp`/`mfa`/`2fa` as a word)
+autocomplete tokens, `password`/`passwd`/`passcode`, `pass`/`pw`/`pwd`/`otp`/`totp`/`mfa`/`2fa` as a
+word, so `user_pass` but not `passport`, `passenger` or `compass`)
 or whose literal (outside `{param}`s) is random-looking; add's save and `export` refuse it, and
 `vetShared` rejects it on pull, publish and load.
 

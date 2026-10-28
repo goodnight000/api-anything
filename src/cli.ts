@@ -954,7 +954,9 @@ function cmdHeals({ pos }: Parsed): number {
 function cmdRevert({ pos }: Parsed): number {
   const [site, name] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything revert <site> <op>");
-  requireSite(site);
+  const { site: s } = requireSite(site);
+  if (!s.operations.some((o) => o.name === name))
+    throw new Fail(`no operation "${name}" on ${s.name}`, `api-anything ops ${s.name}`);
   try {
     const r = revertHeal(site, name);
     out({

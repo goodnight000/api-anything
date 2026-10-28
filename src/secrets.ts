@@ -91,7 +91,7 @@ export function opaqueToken(text: string): boolean {
 export const SIGN_IN_AUTOCOMPLETE = ["current-password", "new-password", "one-time-code"];
 // A selector naming a password or one-time-code field: by its type, its autocomplete, or a word in its name or id.
 const SIGN_IN_SELECTOR =
-  /type\s*=\s*["']?password|current-password|new-password|one-time-code|pass(?:word|wd|code)|(?<![a-z])(?:pw|pwd|otp|totp|mfa|2fa)(?![a-z])/i;
+  /type\s*=\s*["']?password|current-password|new-password|one-time-code|pass(?:word|wd|code)|(?<![a-z])(?:pass|pw|pwd|otp|totp|mfa|2fa)(?![a-z])/i;
 
 export const SIGN_IN_REFUSAL =
   "a sign-in is the user's: ask them to run api-anything login <site> (it imports the cookies of the browser they are signed in with, no password)";
