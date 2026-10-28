@@ -358,8 +358,8 @@ Known limits:
   learned with a type (not `null`) that no item carries now, or none with that type: when the
   example args' answer still has it, the call is `ok` and its `reason` names the field; otherwise a
   heal is tried, and if it cannot bring the field back the call is `drift` naming it, with a `next`
-  to re-add with a new `--pick`. A field learned `null` or absent, or present in some items of a
-  list, is optional. A field that keeps its type and changes its meaning (cents instead of units)
+  to re-add with a new `--pick`. A field learned `null` or absent, missing from some items of the
+  learned list, or present in some items of a list now, is optional. A field that keeps its type and changes its meaning (cents instead of units)
   is not detected.
 - A write's 2xx is `ok` unless its answer says it was refused: an error field that holds an error
   (`userErrors`, `error: "..."`), `ok`/`success` false, an error word as the root `status`, a body

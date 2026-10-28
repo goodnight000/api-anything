@@ -1604,7 +1604,7 @@ function learnResponse(e: Exchange, values: string[], warnings: string[]): Respo
       contentType: r.contentType,
       ...(xssiPrefix ? { xssiPrefix } : {}),
       ...(extract ? { extract } : {}),
-      shape: inferShape(data),
+      shape: inferShape(data, 200, true),
     };
   }
   warnings.push(

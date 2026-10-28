@@ -645,8 +645,9 @@ field. Otherwise a heal runs, its candidate held to the same types (a recapture 
 fields' learned types over the new answer's shape), and a heal that cannot bring the field back
 ends in `drift` naming it ("picked field price disappeared from the response"), with a `next` to
 re-add with a new `--pick` or `--extract` (`nextCall` `relearn`); with no example args to tell, the
-same. A field learned `null`, or absent from the learned answer's first item, is optional and not
-judged, and in a list a field some items still carry is the data. Not caught: a field that keeps
+same. A field learned `null`, absent from the learned answer's first item, or absent from any
+other item of the learned list (a `salePrice` only items on sale carry; the learned shape types it
+`null`), is optional and not judged, and in a list a field some items still carry is the data. Not caught: a field that keeps
 its type and changes its meaning (`price` now holding the list price, or cents instead of units).
 The shape records key paths and types, not what a value means.
 
