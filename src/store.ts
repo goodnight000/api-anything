@@ -22,6 +22,7 @@ import {
   opUrls,
   redact,
   scanSecrets,
+  signInFills,
 } from "./secrets.js";
 import { ensureDir, home, loadSession, readJson, safeName, withLock, writePrivate } from "./session.js";
 import { parseSite, type Site } from "./spec.js";
@@ -423,6 +424,8 @@ export function exportSite(
         `${where(leaf)} holds a literal credential (${n}); make it a session: ref, or list ${n} in the op's public names if the site ships it to everyone`,
       ]);
     }
+    for (const fill of signInFills(op.trigger.steps))
+      named.push([`$.operations[${i}].trigger.steps`, `$.operations[${i}].trigger ${fill}`]);
     for (const leaf of walk(op.request)) {
       const ip = leaf.type === "string" && !leaf.container ? ipIn(leaf.value) : undefined;
       if (ip)

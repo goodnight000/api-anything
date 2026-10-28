@@ -5,7 +5,7 @@
  */
 import { parse } from "tldts";
 import { siteOf } from "./domain.js";
-import { literalCredentials, providerKeys, scanSecrets } from "./secrets.js";
+import { literalCredentials, providerKeys, scanSecrets, signInFills } from "./secrets.js";
 import type { Operation, Request, Site } from "./spec.js";
 
 export const LIMITS = {
@@ -381,6 +381,7 @@ export function vetShared(site: Site, notes?: string): Vetted {
     const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
     for (const leaf of literalCredentials(op.request, pub))
       errors.push(at(`request ${leaf.at.join(" > ")} holds a literal credential`));
+    for (const fill of signInFills(op.trigger.steps)) errors.push(at(`trigger ${fill}`));
     for (const name of pub)
       if (op.request.headers[name] !== undefined) {
         warnings.push(at(`sends the literal ${name} it lists as public: every caller sends that same value`));

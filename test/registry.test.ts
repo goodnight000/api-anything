@@ -103,6 +103,22 @@ test("the shared rules refuse what a hostile or careless spec could do with some
       /goto .* no public host/,
     ],
     [
+      "a password typed by a step",
+      spec(
+        {},
+        {
+          trigger: {
+            url: "https://news.example.com/login",
+            steps: [
+              { action: "fill", selector: "#user", value: "jane" },
+              { action: "fill", selector: "input[type=password]", value: "Hunter2-RealPassw0rd!" },
+            ],
+          },
+        },
+      ),
+      /trigger steps\[1\] fills a password or one-time-code field .*api-anything login/,
+    ],
+    [
       "a literal bearer",
       spec(
         {},

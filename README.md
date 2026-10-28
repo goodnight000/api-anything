@@ -458,7 +458,8 @@ api-anything login linkedin
 `login` imports that site's cookies from a browser profile you're already signed in to, so there's
 usually no password to type. If several profiles are signed in, it asks which one. If none can be
 imported, it opens a window to sign in by hand. A spec holds references to cookies and tokens, never
-their values, so a refreshed session works without re-learning anything.
+their values, so a refreshed session works without re-learning anything. No password goes in one
+either: a trigger step that would type into a password or one-time-code field fails instead.
 
 <details>
 <summary><b>What counts as signed in, and what happens on <code>auth</code></b></summary>

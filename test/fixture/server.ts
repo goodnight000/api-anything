@@ -256,6 +256,14 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
         200,
         `<!doctype html><html><body><button id="edit">Edit</button><script>document.getElementById("edit").onclick=()=>{addEventListener("beforeunload",e=>{e.preventDefault();e.returnValue=""});addEventListener("pagehide",()=>navigator.sendBeacon("/api/autosave","draft"))};fetch("/api/scoped?q=unsaved")</script></body></html>`,
       );
+    // A sign-in box beside a search, on one page. The password and code fields are named by their
+    // type and autocomplete only, as many sites' are. The search sends the page's CSRF cookie in its
+    // URL, the way some APIs take an access_token in the query.
+    if (p === "/signin-box")
+      return html(
+        200,
+        `<!doctype html><html><body><form><input id="user" name="username" autocomplete="username"><input name="secret" type="password"><input id="code" name="code" autocomplete="one-time-code"><button type="button">Sign in</button></form><input id="q"><button id="find">Find</button><script>const ct0=(document.cookie.match(/(?:^|; )ct0=([^;]*)/)||[])[1]||"";const find=q=>fetch("/api/scoped?q="+encodeURIComponent(q)+"&access_token="+ct0);document.getElementById("find").onclick=()=>find(document.getElementById("q").value);const q=new URLSearchParams(location.search).get("q");if(q)find(q)</script></body></html>`,
+      );
     // A page that greets with an alert (or asks with a prompt) before it loads its data.
     if (p === "/greet") {
       const say = u.searchParams.get("ask") ? 'prompt("Your name?")' : 'alert("Welcome back!")';

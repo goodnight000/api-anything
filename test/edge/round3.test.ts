@@ -488,9 +488,10 @@ describe("agent surface", () => {
       mcpNext("check the args against: api-anything ops linkedin; do not heal or re-add"),
       'check the args against: list_operations {"site":"linkedin"}; do not heal or re-add',
     );
+    // x was never imported: the login tool could not refresh it (mcp.test.ts has the imported case)
     assert.match(
       mcpNext("ask the user to run: api-anything login x; then retry once"),
-      /^the login tool \{"site":"x"\}/,
+      /^ask the user to run in a terminal: api-anything login x \(.*no password\).*--window.*; then retry once$/,
     );
     assert.match(
       mcpNext("api-anything heal x getUser; if that fails, re-learn it with api-anything add x getUser ..."),

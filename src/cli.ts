@@ -41,6 +41,7 @@ import { type Outline, outline } from "./outline.js";
 import { plan, uploadName } from "./publish.js";
 import { pull, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
+import { captureLive, redact } from "./secrets.js";
 import { loadSession } from "./session.js";
 import { AGENTS, type Agent, askYesNo, setup, summary } from "./setup.js";
 import { shareOps } from "./share.js";
@@ -569,23 +570,28 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
   const stopped = halted ? [...halted.site, ...halted.elsewhere] : [];
   const ranked = rankCandidates(c.exchanges, examples, { pages: pageUrls(c.exchanges, capturePages(c)) });
   const values = Object.values(examples).map(String);
-  const candidates = ranked.slice(0, limit).map((x, i) => ({
-    id: x.id,
-    kind: x.resourceType,
-    method: x.method,
-    url: x.url.length > 160 ? `${x.url.slice(0, 157)}...` : x.url,
-    ...(x.status !== undefined ? { status: x.status } : {}),
-    ...(x.contentType ? { type: x.contentType.split(";")[0] } : {}),
-    ...(x.operationName ? { operationName: x.operationName } : {}),
-    ...(x.hits.length ? { carries: x.hits } : {}),
-    size: x.size,
-    ...(v.outline && i < 3
-      ? outlineOf(
-          c.exchanges.find((e) => e.id === x.id),
-          values,
-        )
-      : {}),
-  }));
+  // the URLs shown carry the run's live values as the refs a spec would hold there
+  const live = captureLive(c, values);
+  const candidates = ranked.slice(0, limit).map((x, i) => {
+    const url = redact(x.url, live, { named: true });
+    return {
+      id: x.id,
+      kind: x.resourceType,
+      method: x.method,
+      url: url.length > 160 ? `${url.slice(0, 157)}...` : url,
+      ...(x.status !== undefined ? { status: x.status } : {}),
+      ...(x.contentType ? { type: x.contentType.split(";")[0] } : {}),
+      ...(x.operationName ? { operationName: x.operationName } : {}),
+      ...(x.hits.length ? { carries: x.hits } : {}),
+      size: x.size,
+      ...(v.outline && i < 3
+        ? outlineOf(
+            c.exchanges.find((e) => e.id === x.id),
+            values,
+          )
+        : {}),
+    };
+  });
   const top = ranked[0];
   const html = top && /html/i.test(top.contentType ?? "");
   // a bot wall is not fixed by picking another request or writing a recipe

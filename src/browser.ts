@@ -8,6 +8,7 @@ import { basename, join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import type { BrowserContext, Cookie, chromium, Dialog, Frame, Page, Request, Response, Route } from "playwright-core";
 import { botWall } from "./classify.js";
+import { SIGN_IN_AUTOCOMPLETE, SIGN_IN_REFUSAL } from "./secrets.js";
 import { home, siteOf, writePrivate } from "./session.js";
 import type { Request as Hop } from "./spec.js";
 import type { CaptureResult, Exchange, SeenDialog, StoredCookie, TriggerStep } from "./types.js";
@@ -588,8 +589,22 @@ async function runStep(page: Page, s: TriggerStep): Promise<void> {
   switch (s.action) {
     case "click":
       return page.click(need(s.selector, "a selector"));
-    case "fill":
-      return page.fill(need(s.selector, "a selector"), s.value ?? "");
+    case "fill": {
+      const selector = need(s.selector, "a selector");
+      // asked of the page, not the selector: a password typed here would be saved in the spec
+      const field = await page.waitForSelector(selector, { state: "attached" });
+      const secret = await field
+        .evaluate((el, names) => {
+          const f = el instanceof HTMLLabelElement && el.control ? el.control : el;
+          const auto = (f.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/);
+          return f.getAttribute("type")?.toLowerCase() === "password" || auto.some((t) => names.includes(t));
+        }, SIGN_IN_AUTOCOMPLETE)
+        .finally(() => field.dispose());
+      if (secret)
+        throw new Error(`trigger step fills a password or one-time-code field (${selector}): ${SIGN_IN_REFUSAL}`);
+      // by selector, as before: an app that re-renders the input between the two finds the new one
+      return page.fill(selector, s.value ?? "");
+    }
     case "press":
       return s.selector ? page.press(s.selector, need(s.value, "a key")) : page.keyboard.press(need(s.value, "a key"));
     case "wait":
