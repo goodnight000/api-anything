@@ -46,7 +46,16 @@ Store the captured request **verbatim** (method, url, headers, body string) plus
 { "ref": "cookie:ct0",    "at": ["header:x-csrf-token"] }
 { "ref": "cookie:JSESSIONID", "transform": "strip-quotes", "at": ["header:csrf-token"] }
 { "ref": "session:x-goog-batchexecute-bgr", "at": ["header:x-goog-batchexecute-bgr"] }
+{ "gen": "uuid",          "at": ["header:idempotency-key"] }  // a value the page makes per request
 ```
+
+A `gen` slot holds what the page makes for each request (an idempotency key from
+`crypto.randomUUID()`, an `x-request-id`): no value is stored, and each call fills a new UUID v4,
+drawn from a seed the call holds, so its own retries (a 401 re-sent once) carry the same one. A write's seed is its
+ledger record's (see Writes): with the caller's `idempotencyKey` it is an HMAC of that key, so
+every call with the key sends the same value and the site dedupes the caller's repeats too.
+Learning makes one only from two runs (step 3 below); a recapture has one run, so it keeps the op's
+gen slots where the page still sends a UUID, and a ref it put there gives way.
 
 Step kinds: `path:<i>` (URL path segment), `query:<key>`, `header:<name>`, `form:<key>`,
 `json:<RFC6901 pointer>` (the current string is parsed as JSON), `b64` (the current string is
@@ -126,7 +135,13 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    param. A position that changes although the args did not (including the text around the arg in a
    templated leaf, such as a signed URL; browser-computed headers never count) is a nonce/signature, so the op gets `minTier: 3`,
    unless one tier-1 replay of run 1's template with example 2's args still answers ok: then the value is
-   session-scoped (Google's `f.sid`), not a signature, and `minTier` stays 1. Everything else is a constant.
+   session-scoped (Google's `f.sid`), not a signature, and `minTier` stays 1. A whole leaf that is a UUID in
+   both runs, a different one in each, and in neither run held by a cookie, storage, or anything loaded before
+   the request (an address, an answer's body or headers) is one the page made for the request: a `gen` slot,
+   not a nonce, whatever its name. A session ref step 4 gave it by its name (`Idempotency-Key` reads as a
+   credential) gives way, and its value is not stored: kept, run 1's key would go with every call, and a site
+   that dedupes by it answers a new order with the old one. A UUID the site handed out is the site's, and stays a
+   ref. A key in another shape stays as before. Everything else is a constant.
    That includes a place step 2 gave a param which stays as it was although the param changed (the endpoint's own
    segment in `/api/search?q=search`, when example 2 is `q=kitten`): run 2 disproves it, so it is no slot, and learning
    runs again without it, which makes the leaf a constant to every step (the match names the segment, a credential in
@@ -517,10 +532,18 @@ Ten minutes covers an agent's re-send after an unclear answer, a login or a heal
 user looking at the site; a repeat placed on purpose later (the same comment an hour on) goes
 through. `again` (CLI `--again`, MCP `again`, library option) skips the check, for a user who
 checked. Check and record are one step under the lock, so two processes racing to send the same
-write let one through. An `idempotencyKey` replaces the digest check: the caller says which calls
-are one. A repeat with a key whose write may have gone through returns that call's record (`ok`,
+write let one through. An `idempotencyKey` replaces the digest check among keyed calls: the caller
+says which calls are one, so another key is another write. A repeat with a key whose write may have gone through returns that call's record (`ok`,
 `class`, `write`) and sends nothing; a key whose write did not run may be sent again; a key used for
-other args is refused as `input`. Records are kept 24 hours. When the record cannot be written (a
+other args is refused as `input`. A key with no such record still meets a keyless call: the same
+digest within the window of one with no key is `duplicate`, as without a key. An agent that adds a
+key only to its retry of a lost answer is repeating that call, and was sending it twice. The key
+belongs on the first call. Records are kept 24 hours. The record also seeds the op's `gen` slots
+(the key's HMAC, else the record's random id), and holds no generated value.
+
+A failed write whose `nextCall` is `check_site` says where to look in its `next`: the trigger's page
+filled with the call's args (redacted like every `next`), and the op's readback with its filled
+args when it has one. When the record cannot be written (a
 read-only home) the write is not sent unless the caller passed `again`; a corrupt ledger is started
 over, as `state.json` is.
 

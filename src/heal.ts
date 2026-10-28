@@ -13,11 +13,13 @@ import {
   type Args,
   ASSET_EXT,
   arrayAround,
+  asGenerated,
   capturePages,
   checkExamples,
   hashLike,
   learnOperation,
   matches,
+  UUID,
   unplaced,
 } from "./learn.js";
 
@@ -1130,7 +1132,8 @@ export async function rescan(
 function template(op: Operation, args: Args): string {
   let req = op.request;
   try {
-    req = buildRequest(op, args, { cookies: [], values: {} });
+    // one seed for both sides: generated values are no change
+    req = buildRequest(op, args, { cookies: [], values: {} }, "");
   } catch {
     /* compare raw */
   }
@@ -1364,6 +1367,20 @@ export async function healOperation(
     }));
   } catch (e) {
     return { outcome: "failed", attempt: last, fallback, reason: `re-learning failed: ${(e as Error).message}` };
+  }
+  // One run cannot show the page makes a value: a gen place that still holds a UUID, or that a ref took, stays one.
+  const gens = op.slots.flatMap((s) => {
+    const there = fresh.slots.find((f) => JSON.stringify(f.at) === JSON.stringify(s.at));
+    if (!s.gen || there?.param !== undefined || there?.template !== undefined) return [];
+    try {
+      return there?.ref || UUID.test(asText(getAt(fresh.request, s.at))) ? [s.at] : [];
+    } catch {
+      return []; // the place is gone
+    }
+  });
+  if (gens.length) {
+    fresh = { ...fresh, ...asGenerated(fresh, gens, sessionValues) };
+    settings = settings.filter((n) => n in sessionValues);
   }
   // A deploy that adds an auth/anti-bot header: its value is needed to validate (and later send) the candidate.
   mergeCapture(site, [], { from: fresh.request.url, values: sessionValues }, { settings, urls: opUrls(fresh) });

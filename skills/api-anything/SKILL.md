@@ -353,8 +353,10 @@ Every failure carries:
 - A write with the same args as one sent in the last 10 minutes that was accepted or may have gone
   through is refused (`class: "duplicate"`, nothing sent). Pass `--again` (MCP: `again: true`) only
   when the user checked the site, the write isn't there, and they want it sent again. To make your
-  own repeats safe, pass `--idempotency-key <k>` (MCP: `idempotencyKey`): a repeat with the same key
-  returns the first call's record instead of sending, while that write may have gone through.
+  own repeats safe, pass `--idempotency-key <k>` (MCP: `idempotencyKey`) on the first call: a repeat
+  with the same key returns the first call's record instead of sending, while that write may have
+  gone through, and a site that takes an idempotency key gets the same one each time. Adding a key
+  only to a retry does not make it a new write: it is refused as `duplicate` like the bare repeat.
 - Before the first real write, run `api-anything call <site> <op> ... --dry`. It prints the exact
   request with the credentials redacted, so you can check that the ids and text are the ones
   intended, byte for byte.

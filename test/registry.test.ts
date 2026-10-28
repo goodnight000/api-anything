@@ -57,6 +57,37 @@ test("every bundled spec passes the shared rules: CI runs this on every pull req
   }
 });
 
+test("a write whose idempotency key is a gen slot passes the shared rules: it is no credential", () => {
+  const order = spec(
+    {},
+    {
+      name: "order",
+      readOnly: false,
+      request: {
+        method: "POST",
+        url: "https://news.example.com/api/order",
+        headers: { "idempotency-key": "" },
+        body: '{"item":"x"}',
+      },
+      slots: [
+        { param: "item", at: ["body", "json:/item"] },
+        { gen: "uuid", at: ["header:idempotency-key"] },
+      ],
+      params: [{ name: "item" }],
+      match: { host: "news.example.com", path: "/api/order" },
+    },
+  );
+  assert.equal(order.operations[0]!.slots[1]!.gen, "uuid");
+  const v = vetShared(order);
+  assert.deepEqual(v.errors, []);
+  assert.ok(!v.warnings.some((w) => /idempotency|credential|secret/i.test(w)), v.warnings.join("\n"));
+  // one slot, one source
+  assert.throws(
+    () => spec({}, { slots: [{ gen: "uuid", param: "q", at: ["query:q"] }] }),
+    /exactly one of param, ref or gen/,
+  );
+});
+
 test("the shared rules refuse what a hostile or careless spec could do with someone's sessions", () => {
   assert.deepEqual(errors(spec()), []);
   const refused: [string, Site, RegExp][] = [

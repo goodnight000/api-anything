@@ -1080,3 +1080,106 @@ test("readback: with no find, any data counts; read args take the write's values
   );
   assert.equal(empty.write, "accepted");
 });
+
+const shop = parseSite({
+  name: "g",
+  baseUrl: "https://g.test",
+  operations: [
+    {
+      name: "order",
+      readOnly: false,
+      request: {
+        method: "POST",
+        url: "https://g.test/api/order",
+        headers: { "content-type": "application/json", "idempotency-key": "" },
+        body: '{"item":"x"}',
+      },
+      slots: [
+        { param: "item", at: ["body", "json:/item"] },
+        { gen: "uuid", at: ["header:idempotency-key"] },
+      ],
+      trigger: { url: "https://g.test/p/{item}" },
+      params: [{ name: "item" }],
+    },
+  ],
+});
+
+test("a gen slot: each call sends its own UUID, and one idempotency key always sends the same one", async () => {
+  saveSite(shop);
+  const keys: string[] = [];
+  let status = 200;
+  const w = (idempotencyKey?: string) => ({
+    ...opts((_u, init) => {
+      keys.push((init!.headers as Record<string, string>)["idempotency-key"]!);
+      return json(status < 400 ? { ok: true } : { error: "bad" }, status);
+    }),
+    allowWrites: true,
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+  });
+  assert.equal((await call("g", "order", { item: "fridge" }, w())).write, "accepted");
+  assert.equal((await call("g", "order", { item: "toaster" }, w())).write, "accepted");
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1], "a new order is not the last one replayed");
+  for (const k of keys) assert.match(k, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+
+  // the caller's key: a send the site refused may go again, and carries the same value, so the site dedupes it too
+  status = 400;
+  assert.equal((await call("g", "order", { item: "stove" }, w("order-7"))).write, "not_applied");
+  status = 200;
+  assert.equal((await call("g", "order", { item: "stove" }, w("order-7"))).write, "accepted");
+  assert.equal(keys.length, 4);
+  assert.equal(keys[2], keys[3]);
+  assert.ok(!keys.slice(0, 2).includes(keys[2]!));
+  // another key is another write, with its own value
+  await call("g", "order", { item: "stove" }, w("order-8"));
+  assert.equal(keys.length, 5);
+  assert.notEqual(keys[4], keys[3]);
+  // the ledger holds no generated value
+  const ledger = readFileSync(join(HOME, "writes.json"), "utf8");
+  for (const k of keys) assert.ok(!ledger.includes(k));
+});
+
+test("a retry that adds an idempotency key after an unclear answer is the same write: held back, and told where to look", async () => {
+  const w = (h: Handler, idempotencyKey?: string) => ({ ...opts(h), allowWrites: true, idempotencyKey });
+  const lost = await call(
+    "t",
+    "post",
+    { text: "fridge" },
+    w(() => new Response("bad gateway", { status: 502 })),
+  );
+  assert.deepEqual([lost.write, lost.retry], ["may_have_applied", "no"]);
+  assert.match(lost.next ?? "", /check the site.*Look on https:\/\/t\.test\/compose/);
+  const retry = await call(
+    "t",
+    "post",
+    { text: "fridge" },
+    w(() => json({ ok: true }), "fresh-key"),
+  );
+  assert.deepEqual([retry.class, retry.write, retry.retry], ["duplicate", "not_sent", "no"]);
+  assert.equal(seen.length, 1, "sent once");
+  assert.match(retry.next ?? "", /Look on https:\/\/t\.test\/compose/);
+  // other args with a key are another write
+  assert.equal(
+    (
+      await call(
+        "t",
+        "post",
+        { text: "stove" },
+        w(() => json({ ok: true }), "fresh-key"),
+      )
+    ).ok,
+    true,
+  );
+  assert.equal(seen.length, 2);
+
+  // with a readback, the result names it too
+  saveSite(pagedAndTodos({ param: "after" }, { op: "todos", find: { field: "title", equals: "{title}" } }));
+  const unclear = await call(
+    "t",
+    "add",
+    { title: "milk" },
+    w((_u, i) => (i?.method === "POST" ? new Response("", { status: 502 }) : json({ todos: [] }))),
+  );
+  assert.equal(unclear.write, "may_have_applied");
+  assert.match(unclear.next ?? "", /Look on https:\/\/t\.test\/todos, or with its readback: the read todos/);
+});

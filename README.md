@@ -434,7 +434,8 @@ Every call answers in fields, so an agent or a script can act without parsing pr
 - Learning a write intercepts and aborts the request, so learning never performs it.
 - A write is sent once. It is retried only when the server certainly didn't run it (400, 401, 403, 404).
 - The same write within 10 minutes is refused as `duplicate`, unless you pass `--again`.
-  `--idempotency-key` makes a repeat return the first call's record.
+  `--idempotency-key` on the first call makes a repeat return that call's record.
+- A key the page makes per request (`Idempotency-Key: crypto.randomUUID()`) is made fresh for each call, not replayed.
 - `accepted` is a 2xx. Only a `readback` that finds the new item makes it `applied`.
 
 [![Demo: a write refused without --allow-writes, applied once, then refused as a duplicate](docs/demos/safety.gif)](docs/demos/README.md#5-a-write-refused-by-default-sent-once-never-twice)

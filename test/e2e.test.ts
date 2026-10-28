@@ -420,6 +420,42 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     assert.deepEqual(r.captures, []);
   });
 
+  test("21. the page's own Idempotency-Key is made fresh per call, not replayed: a second order is a second order", async () => {
+    const sent = () => fx.calls.filter((c) => c.path === "/api/order");
+    const r = await addOperation({
+      site: SITE,
+      op: "order",
+      trigger: {
+        url: `${fx.url}/checkout/{item}`,
+        steps: [
+          { action: "click", selector: "#buy" },
+          { action: "wait", ms: 300 },
+        ],
+      },
+      examples: [{ item: "fridge" }, { item: "toaster" }],
+      write: true,
+    });
+    assert.equal(sent().length, 0, "learning sent no order");
+    assert.deepEqual(
+      r.operation.slots.find((s) => s.at[0] === "header:idempotency-key"),
+      { gen: "uuid", at: ["header:idempotency-key"] },
+    );
+    assert.equal(r.operation.minTier, 1);
+    const w = { ...fast, allowWrites: true, maxTier: 1 as const };
+    const a = await call(SITE, "order", { item: "fridge" }, w);
+    const b = await call(SITE, "order", { item: "toaster" }, w);
+    assert.deepEqual([a.ok, b.ok], [true, true], JSON.stringify([a, b]));
+    assert.notDeepEqual((a.data as { orderId: string }).orderId, (b.data as { orderId: string }).orderId);
+    const keys = sent().map((c) => c.headers["idempotency-key"]);
+    assert.equal(new Set(keys).size, 2, JSON.stringify(keys));
+    // the caller's key reaches the site: sent again on purpose, the site itself answers with the same order
+    const k1 = await call(SITE, "order", { item: "kettle" }, { ...w, idempotencyKey: "kettle-1" });
+    const k2 = await call(SITE, "order", { item: "kettle" }, { ...w, idempotencyKey: "kettle-1", again: true });
+    assert.equal(sent().length, 4);
+    assert.equal(sent()[2]!.headers["idempotency-key"], sent()[3]!.headers["idempotency-key"]);
+    assert.deepEqual((k2.data as { orderId: string }).orderId, (k1.data as { orderId: string }).orderId);
+  });
+
   test("16. a site that walls plain HTTP answers at tier 2, and the result says why", async () => {
     await addOperation({
       site: SITE,

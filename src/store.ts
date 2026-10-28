@@ -304,7 +304,8 @@ const hmac = (key: Buffer, value: unknown) =>
   createHmac("sha256", key).update(JSON.stringify(value)).digest("hex").slice(0, 32);
 
 export type WriteGate =
-  | { send: true; id: string }
+  /** `seed`: the call's gen slots are drawn from it: the key's HMAC, else the record's id */
+  | { send: true; id: string; seed: string }
   /** an unsettled write with the same args within the window */
   | { send: false; why: "duplicate"; earlier: WriteRecord }
   /** the idempotency key's write may have gone through: its record answers */
@@ -316,6 +317,8 @@ export type WriteGate =
  * Record a write before it is sent, under the ledger's lock so two processes cannot both pass, or
  * say why it must not be sent. `again` skips both checks (the user saw the site and wants it sent).
  * With an idempotency key the key decides, not the args' digest: the caller says which calls are one.
+ * A key with no live record of its own still meets a keyless call with the same args: an agent that
+ * adds a key only to its retry of an unclear answer is repeating that call.
  * Throws when the record cannot be written (a read-only home).
  */
 export function beginWrite(
@@ -343,15 +346,17 @@ export function beginWrite(
         const used = mine.findLast((r) => r.key === key);
         if (used && used.digest !== digest) return { send: false, why: "key_reused", earlier: used };
         if (used && unsettled(used)) return { send: false, why: "replay", earlier: used };
-      } else {
-        const earlier = mine.findLast((r) => r.digest === digest && now - r.at < DUPLICATE_WINDOW_MS && unsettled(r));
-        if (earlier) return { send: false, why: "duplicate", earlier };
       }
+      // with a key, only keyless calls: another key is another write, as the caller said
+      const earlier = mine.findLast(
+        (r) => (!key || !r.key) && r.digest === digest && now - r.at < DUPLICATE_WINDOW_MS && unsettled(r),
+      );
+      if (earlier) return { send: false, why: "duplicate", earlier };
     }
     const id = randomBytes(8).toString("hex");
     all.push({ id, site, op, digest, ...(key ? { key } : {}), at: now, status: "sending" });
     writePrivate(writesFile(), JSON.stringify(all, null, 1));
-    return { send: true, id };
+    return { send: true, id, seed: key ?? id };
   });
 }
 
