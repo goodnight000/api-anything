@@ -8,7 +8,7 @@ import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { verifySite } from "./checks.js";
 import { botWall, emptyResults, loginPath, signInForm } from "./classify.js";
 import { launchOf, printConfig } from "./clients.js";
-import { call, heal, type Tier } from "./execute.js";
+import { type CallResult, call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
 import {
   addOperation,
@@ -18,6 +18,7 @@ import {
   fillTrigger,
   loadCapture,
   PROFILE_HINT,
+  revertHeal,
   unplaced,
 } from "./heal.js";
 import { buildRequest } from "./http.js";
@@ -51,7 +52,7 @@ import {
   type Readback,
   TriggerStepSchema,
 } from "./spec.js";
-import { exportSite, listSites, loadSite, siteNotes, updateSite } from "./store.js";
+import { exportSite, listSites, loadHeals, loadSite, siteNotes, updateSite } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { readbackProblems, SHARED_NOTE } from "./vet.js";
 
@@ -155,12 +156,13 @@ const HELP: Record<string, string> = {
   An op whose captured response is a bot challenge, a sign-in page, a rate limit or a server failure
   is not saved.`,
   call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--dry]
-  Calls an operation: {ok, class, data, tier, healed?, ms, next?}; a failure also says retry
+  Calls an operation: {ok, class, data, tier, healed?, heal?, ms, next?}; a failure also says retry
   (safe, after_wait, after_fix, no), retryAfterMs and nextCall, and a write says write (not_sent,
   not_applied, accepted, may_have_applied, applied: its readback found it). A paged read says
-  nextPage (pass it as the op's paging param) and hasMore. --dry prints the request with
-  credentials redacted.
-  --again           send a write refused as a duplicate (the same args within 10 minutes, and the
+  nextPage (pass it as the op's paging param) and hasMore. A call that healed the op says how and
+  what changed in its request in heal (undo: api-anything revert <site> <op>). --dry prints the
+  request with credentials redacted.
+  --again          send a write refused as a duplicate (the same args within 10 minutes, and the
                     first may have gone through): only when the user checked the site
   --idempotency-key <k>  a repeat of a write with the same key returns the first call's record`,
   verify: `api-anything verify [site]
@@ -191,6 +193,16 @@ const HELP: Record<string, string> = {
   arg formats and login advice from <site>.md beside its spec.`,
   heal: `api-anything heal <site> <op> [k=v ...]
   Forces a heal (rescan, then recapture) even when the op is marked stale. Reads only.`,
+  heals: `api-anything heals [site]
+  Lists the last 20 heals and reverts (of one site, or all), newest first: when, which op, how (rescan,
+  recapture, revert) and what changed in its request template, one line each, with {param} and
+  cookie:/session: refs in place of values. A call that heals says the same in its heal field.`,
+  revert: `api-anything revert <site> <op>
+  Puts back the op as it was before its last heal (heals.jsonl keeps it), and logs the revert; run it
+  again to take back the heal before that. Refused when the op has no heal to take back, or changed
+  after it (learned again or edited). A pulled spec's copy keeps its shared record, and the op gets back
+  the registry version it was. The next call sends the old request: if the site really changed, it
+  drifts and may heal again, so learn the op again with add if the heal was wrong.`,
   export: `api-anything export <site> [--out <file>] [--keep-examples] [--force]
   Writes a shareable spec: examples and response shapes stripped, and refused if a live cookie or
   session value is inside. --keep-examples keeps param examples you confirmed are public (so verify works).`,
@@ -273,6 +285,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything check <site> <op> [k=v ...] --expect result|empty|input
   api-anything readback <site> <write-op> <read-op> [k=v ...] [--find field=value]
   api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site>
+  api-anything heals [site] | revert <site> <op>
   api-anything mcp [--allow-writes] [--sites a,b] [--print-config]
 
 api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
@@ -874,8 +887,49 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     maxTier,
   });
   out(pulled ? { ...r, pulled: site } : r);
+  if (r.heal) process.stderr.write(healNote(site, name, r.heal));
   if (!r.ok) process.stderr.write(`next: ${r.next}\n`);
   return r.ok ? 0 : 1;
+}
+
+/** A heal, for the human at the terminal: how, what changed, and how to take it back. */
+function healNote(site: string, op: string, h: NonNullable<CallResult["heal"]>): string {
+  const undo = h.strategy === "registry" ? "" : `undo: api-anything revert ${site} ${op}\n`;
+  return `healed ${op} by ${h.strategy}:\n${h.changes.map((c) => `  ${c}\n`).join("")}${undo}`;
+}
+
+/** The last 20 heals and reverts, newest first, with what each changed. */
+function cmdHeals({ pos }: Parsed): number {
+  const site = pos[0] ? requireSite(pos[0]).site.name : undefined;
+  const heals = loadHeals(site)
+    .slice(-20)
+    .reverse()
+    .map(({ previous, saved: _s, diff, changes, ...h }) => ({
+      ...h,
+      changes: changes ?? [diff],
+      ...(h.strategy !== "revert" && !previous ? { revertible: false } : {}),
+    }));
+  out({ ok: true, heals });
+  return 0;
+}
+
+function cmdRevert({ pos }: Parsed): number {
+  const [site, name] = pos;
+  if (!site || !name) throw new Fail("missing <site> <op>", "api-anything revert <site> <op>");
+  requireSite(site);
+  try {
+    const r = revertHeal(site, name);
+    out({
+      ok: true,
+      site: r.site,
+      op: name,
+      reverted: { at: r.reverted.at, strategy: r.reverted.strategy },
+      changes: r.changes,
+    });
+    return 0;
+  } catch (e) {
+    throw new Fail((e as Error).message, `api-anything heals ${site} lists ${name}'s heals`);
+  }
 }
 
 async function cmdVerify({ pos }: Parsed): Promise<number> {
@@ -1298,6 +1352,8 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   sites: { run: cmdSites, flags: [] },
   ops: { run: cmdOps, flags: [] },
   heal: { run: cmdHeal, flags: [] },
+  heals: { run: cmdHeals, flags: [] },
+  revert: { run: cmdRevert, flags: [] },
   export: { run: cmdExport, flags: ["out", "keep-examples", "force"] },
   search: { run: cmdSearch, flags: [] },
   interface: { run: cmdInterface, flags: [] },

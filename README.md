@@ -427,6 +427,7 @@ Every call answers in fields, so an agent or a script can act without parsing pr
 | `retry` | `safe` `after_wait` `after_fix` `no` | whether to send it again; `retryAfterMs` says when |
 | `nextCall` | `login` `relearn` `fix_args` `check_site` `allow_writes` ... | the one step to take next; over MCP, with the tool and its args |
 | `nextPage`, `hasMore` | the site's own cursor | how to get the next page of a list |
+| `heal` | `{strategy, changes}` | how a call that repaired the op did it, and what changed in its request; `api-anything revert` undoes it |
 
 **Writes are guarded at every step.**
 

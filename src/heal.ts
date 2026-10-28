@@ -39,10 +39,30 @@ import {
   siteOf,
   writePrivate,
 } from "./session.js";
-import type { Match, Operation, Paging, Param, ResponseSpec, Site, Slot, Trigger, Volatile } from "./spec.js";
-import { appendHeal, clearStale, loadSite, rememberTier, updateSite } from "./store.js";
+import {
+  type Match,
+  type Operation,
+  OperationSchema,
+  type Paging,
+  type Param,
+  type ResponseSpec,
+  type Site,
+  type Slot,
+  type Trigger,
+  type Volatile,
+} from "./spec.js";
+import {
+  appendHeal,
+  clearStale,
+  type HealRecord,
+  loadHeals,
+  loadSite,
+  rememberTier,
+  templateHash,
+  updateSite,
+} from "./store.js";
 import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
-import { notARead, pagingProblems, readbackProblems } from "./vet.js";
+import { notARead, pagingProblems, readbackProblems, vetShared } from "./vet.js";
 
 export const profileDir = () => join(home(), "profile");
 
@@ -1137,20 +1157,63 @@ function template(op: Operation, args: Args): string {
   return JSON.stringify([req, op.slots, op.volatile]);
 }
 
-function summarize(a: Operation, b: Operation): string {
-  const parts: string[] = [];
-  if (a.request.url !== b.request.url)
-    parts.push(`url ${new URL(a.request.url).pathname} -> ${new URL(b.request.url).pathname}`);
-  const names = new Set([...Object.keys(a.request.headers), ...Object.keys(b.request.headers)]);
-  const headers = [...names].filter((n) => a.request.headers[n] !== b.request.headers[n]);
-  if (headers.length) parts.push(`headers ${headers.join(",")}`);
-  if (a.request.body !== b.request.body) parts.push("body");
-  if (JSON.stringify(a.slots) !== JSON.stringify(b.slots)) parts.push(`slots ${a.slots.length} -> ${b.slots.length}`);
-  return parts.join("; ") || "template unchanged";
+/** The op's request with each slot's `{param}` or ref template in its place: a change shows those, not values. */
+function placeholders(op: Operation): Operation["request"] {
+  let req = op.request;
+  for (const s of op.slots) {
+    try {
+      req = setAt(req, s.at, s.template ?? `{${s.param ?? s.ref}}`);
+    } catch {
+      /* position gone; the leaf shows as it is */
+    }
+  }
+  return req;
+}
+
+const MAX_CHANGES = 12;
+const shown = (v: string) => JSON.stringify(v.length > 80 ? `${v.slice(0, 77)}...` : v);
+
+/**
+ * What changed in the wire template from `a` to `b`, one line each: the method, origin and path, then
+ * every query, header, form and body leaf added, removed or changed (`header:x-app-version: "1" -> "2"`).
+ */
+export function templateChanges(a: Operation, b: Operation): string[] {
+  const [ra, rb] = [placeholders(a), placeholders(b)];
+  const out: string[] = [];
+  if (ra.method !== rb.method) out.push(`method: ${ra.method} -> ${rb.method}`);
+  const parts = (url: string) => /^([^:/?#]+:\/\/[^/?#]*)([^?#]*)/.exec(url) ?? ["", url, ""];
+  const [, oa = "", pa = ""] = parts(ra.url);
+  const [, ob = "", pb = ""] = parts(rb.url);
+  if (oa !== ob) out.push(`origin: ${oa} -> ${ob}`);
+  if (pa !== pb) out.push(`path: ${pa} -> ${pb}`);
+  // a JSON body's own leaves say more than the whole text; path segments are said above
+  const leaves = (req: Operation["request"]) =>
+    new Map(
+      walk(req)
+        .filter((l) => !l.container && !l.at[0]!.startsWith("path:"))
+        .map((l) => [l.at.join(" > "), l.value]),
+    );
+  const [la, lb] = [leaves(ra), leaves(rb)];
+  for (const [at, v] of la) {
+    if (!lb.has(at)) out.push(`${at}: removed (was ${shown(v)})`);
+    else if (lb.get(at) !== v) out.push(`${at}: ${shown(v)} -> ${shown(lb.get(at)!)}`);
+  }
+  for (const [at, v] of lb) if (!la.has(at)) out.push(`${at}: added ${shown(v)}`);
+  if (!out.length) out.push("the request reads the same: only how a param is filled changed");
+  return out.length > MAX_CHANGES
+    ? [...out.slice(0, MAX_CHANGES - 1), `and ${out.length - MAX_CHANGES + 1} more`]
+    : out;
 }
 
 export type HealResult =
-  | { outcome: "healed"; strategy: "rescan" | "recapture"; operation: Operation; attempt: Attempt }
+  | {
+      outcome: "healed";
+      strategy: "rescan" | "recapture";
+      operation: Operation;
+      attempt: Attempt;
+      /** what changed in the template; see templateChanges */
+      changes: string[];
+    }
   | {
       outcome: "identical" | "failed";
       reason: string;
@@ -1172,9 +1235,9 @@ export const learnedNothing = (a: Pick<Attempt, "class" | "server">) => STOP.has
 
 function saveHealed(
   site: string,
+  before: Operation,
   op: Operation,
   strategy: "rescan" | "recapture",
-  diff: string,
   attempt: Attempt,
 ): HealResult {
   const allowed = new Set((op.public ?? []).map((h) => `$.request.headers.${h}`));
@@ -1191,9 +1254,60 @@ function saveHealed(
     return putOperation(current, healed);
   });
   recordOrigins(site, opUrls(op));
-  appendHeal({ site, op: op.name, strategy, diff });
+  const changes = templateChanges(before, op);
+  appendHeal({
+    site,
+    op: op.name,
+    strategy,
+    diff: changes.join("; "),
+    changes,
+    previous: before,
+    saved: templateHash(healed),
+  });
   clearStale(site, op.name);
-  return { outcome: "healed", strategy, operation: op, attempt };
+  return { outcome: "healed", strategy, operation: op, attempt, changes };
+}
+
+/**
+ * Put back the op as it was before its last heal that is not reverted yet, from heals.jsonl. Refused
+ * when no heal kept it, or when the op changed since (learned again, edited): that is newer work. A
+ * pulled spec's user copy keeps its `shared` record, and the op gets back the registry version it was.
+ */
+export function revertHeal(siteName: string, name: string): { site: string; reverted: HealRecord; changes: string[] } {
+  const r = loadSite(siteName);
+  if (!r) throw new Error(`no site "${siteName}"`);
+  const site = r.site.name;
+  const current = r.site.operations.find((o) => o.name === name);
+  if (!current) throw new Error(`no operation "${name}" on ${site}`);
+  // a revert takes back the newest heal it finds; a second one, the heal before that
+  const open: HealRecord[] = [];
+  for (const h of loadHeals(site)) if (h.op === name) h.strategy === "revert" ? open.pop() : open.push(h);
+  const last = open.at(-1);
+  if (!last) throw new Error(`${name} on ${site} has no heal to revert`);
+  if (!last.previous) throw new Error(`the last heal of ${name} (${last.at}) was logged without the op as it was`);
+  if (last.saved && last.saved !== templateHash(current))
+    throw new Error(
+      `${name} changed after its last heal (${last.at}): learned again or edited, so reverting would undo that; nothing changed`,
+    );
+  const previous = OperationSchema.parse(last.previous);
+  const swap = (s: Site): Site => ({ ...s, operations: s.operations.map((o) => (o.name === name ? previous : o)) });
+  if (r.site.shared) {
+    const { errors } = vetShared(swap(r.site));
+    if (errors.length) throw new Error(`the op as it was fails today's shared rules: ${errors.join("; ")}`);
+  }
+  updateSite(site, (cur) => swap(cur ?? r.site));
+  const changes = templateChanges(current, previous);
+  appendHeal({
+    site,
+    op: name,
+    strategy: "revert",
+    diff: changes.join("; "),
+    changes,
+    previous: current,
+    saved: templateHash(previous),
+  });
+  clearStale(site, name);
+  return { site, reverted: last, changes };
 }
 
 const withDefaults = (op: Operation, args: Args): Args => {
@@ -1246,7 +1360,7 @@ export async function healOperation(
   if (scanned) {
     budget--;
     last = await o.validate(scanned.operation);
-    if (last.class === "ok") return saveHealed(site, scanned.operation, "rescan", scanned.diff, last);
+    if (last.class === "ok") return saveHealed(site, op, scanned.operation, "rescan", last);
     if (learnedNothing(last))
       return { outcome: "failed", attempt: last, transient: true, reason: swapped.replace("%s", last.reason) };
     if (!budget) return { outcome: "failed", attempt: last, reason: swapped.replace("%s", last.reason) };
@@ -1434,7 +1548,7 @@ export async function healOperation(
     return { outcome: "identical", fallback, reason: "re-learning produced a byte-identical template" };
   }
   last = await o.validate(candidate);
-  if (last.class === "ok") return saveHealed(site, candidate, "recapture", summarize(op, candidate), last);
+  if (last.class === "ok") return saveHealed(site, op, candidate, "recapture", last);
   return {
     outcome: "failed",
     attempt: last,

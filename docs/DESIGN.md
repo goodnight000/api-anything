@@ -647,7 +647,25 @@ Heal strategies, cheapest first:
   learned `session:` refs are stored before the check.
 
 A healed template is saved to the user's spec dir only after validation. Every heal is
-appended to `~/.api-anything/heals.jsonl` (op, strategy, diff summary). A tier an op escalated to
+appended to `~/.api-anything/heals.jsonl`: op, strategy, what changed, the op as it was before
+(`previous`) and a hash of the template it saved. A heal shows its work rather than patching in
+silence. The call that healed answers `heal: {strategy, changes}` beside `healed: true` (the CLI also
+prints it, with how to undo it, on stderr). `changes` is one line per change to the wire template:
+the method, origin and path, then each query, header, form and body leaf added, removed or changed
+(`header:x-app-version: "1" -> "2"`, `query:term: added "{q}"`). It is read with every slot's
+`{param}` or `cookie:`/`session:` ref in its place, so a moved param shows as a moved `{q}` and a
+value never shows. Lines are capped at 12, values at 80 characters. A registry version adopted in
+place of a drifted one says `strategy: "registry"`. The changes and the stored op hold refs, never
+a credential. They are redacted against the jar anyway, as the result's `reason` is. `api-anything
+heals [site]` lists the last 20 heals and reverts with their changes. `api-anything revert <site>
+<op>` puts back the op as it was before its last heal not yet reverted, logged as a `revert`, and a
+second revert takes back the heal before that. It refuses when no heal kept the op, or when the op's
+template changed after the heal (learned again or edited: reverting would undo newer work). A revert
+writes the user copy, as a heal does. A pulled spec's copy keeps its `shared` record, and the op gets
+back the registry `version` it was, after the restored spec passes `vetShared`. A revert is no heal
+for the heal-loop guard, and it clears a stale mark. The next call sends the old template: if the
+site really changed, it drifts again and heals again, so a wrong heal is fixed by learning the op
+again. A heal-back upload of the healed version (see Sharing) is not taken back. A tier an op escalated to
 (above its own `minTier`) is remembered per op as a speed hint (a lower `--max-tier` still tries
 its own tier), and a call that ran above tier 1 says why in `reason`. Every failure also carries
 `retry` and `nextCall`, filled in one place from the class, the attempt (a busy profile is

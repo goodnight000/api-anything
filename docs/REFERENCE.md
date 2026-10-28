@@ -134,8 +134,20 @@ One routine, run the trigger, match the request, learn the template, does three 
      its anchor;
    - **recapture**: run the trigger again with your current args and re-learn from it.
 
-   A healed template is saved only after a replay succeeds. Each heal is logged to
-   `~/.api-anything/heals.jsonl`. Two guards stop heal loops: a heal that produces an identical
+   A healed template is saved only after a replay succeeds. The call that healed says how and
+   what changed in `heal`, one line per change to the request, with `{param}` and refs in place of
+   values (the CLI prints it on stderr too):
+
+   ```
+   "healed":true,"heal":{"strategy":"rescan","changes":["path: /api/graphql/Aa1.../UserByName -> /api/graphql/Zz9.../UserByName"]}
+   ```
+
+   Each heal is logged to `~/.api-anything/heals.jsonl` with the op as it was. `api-anything heals
+   [site]` lists the last 20 with their changes, and `api-anything revert <site> <op>` puts the op
+   back as it was before its last heal. It refuses if the op changed after that heal (learned again
+   or edited). Run it again to take back the heal before. A reverted op whose site really changed
+   drifts and heals again on a later call, so learn it again with `add` if the heal was wrong.
+   Two guards stop heal loops: a heal that produces an identical
    template is not drift, and an op that drifts again within 10 minutes of a heal is marked
    stale for 30 minutes.
 3. **Fallback.** For reads, the triggered browser run has already received the answer. When a
