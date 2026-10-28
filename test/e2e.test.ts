@@ -626,4 +626,38 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     assert.equal(out.candidates[0].kind, "document");
     assert.match(out.next, /inspect .* --html/);
   });
+
+  test("21. a step that types into a password or one-time-code field fails the run and saves nothing; capture shows a live token as its ref", async () => {
+    const before = readFileSync(specFile(), "utf8");
+    // the selectors say nothing of a password: the page's own type and autocomplete do
+    for (const selector of ["input[name=secret]", "#code"])
+      await assert.rejects(
+        addOperation({
+          site: SITE,
+          op: "signIn",
+          trigger: {
+            url: `${fx.url}/signin-box`,
+            steps: [
+              { action: "fill", selector: "#user", value: "{user}" },
+              { action: "fill", selector, value: "Hunter2-RealPassw0rd!" },
+              { action: "fill", selector: "#q", value: "{q}" },
+              { action: "click", selector: "#find" },
+            ],
+          },
+          examples: [
+            { user: "jane", q: "pizza" },
+            { user: "jdoe", q: "pasta" },
+          ],
+        }),
+        /fills a password or one-time-code field .*a sign-in is the user's: ask them to run api-anything login/,
+        selector,
+      );
+    assert.equal(readFileSync(specFile(), "utf8"), before, "nothing saved");
+    assert.ok(!readFileSync(join(HOME, "sessions", `${SITE}.json`), "utf8").includes("Hunter2"));
+
+    await closeBrowser(); // the CLI launches its own Chrome on the same profile
+    const r = await cli("capture", `${fx.url}/signin-box?q=pizza`, "--example", "q=pizza");
+    const found = JSON.parse(r.stdout).candidates.find((c: { url: string }) => c.url.includes("/api/scoped"));
+    assert.match(found.url, /\/api\/scoped\?q=pizza&access_token=\[cookie:ct0\]$/);
+  });
 });

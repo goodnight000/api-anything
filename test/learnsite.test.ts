@@ -154,6 +154,27 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
     assert.equal(calls[0]!.o.evidence.cleanReplay, "failed");
   });
 
+  test("the request URLs shown carry the run's live cookie as its ref, never its value", async () => {
+    stubShare((c) => ({ site: c.site, op: c.ops[0]!, shared: false, reason: "not public" }));
+    const r = await learnSite(
+      {
+        site: "fx",
+        op: "findBoxed",
+        trigger: `${fx.url}/signin-box?q={q}`,
+        args: { q: "alice" },
+        args2: { q: "bobby" },
+        args3: { q: "carol" },
+      },
+      fast,
+    );
+    const urls = [r.chosen, ...(r.alternatives ?? [])].map((c) => c?.url ?? "");
+    assert.match(r.chosen?.url ?? "", /\/api\/scoped\?q=alice&access_token=\[cookie:ct0\]$/, JSON.stringify(r));
+    assert.ok(
+      urls.every((u) => !/access_token=[0-9a-f]{32}/.test(u)),
+      urls.join("\n"),
+    );
+  });
+
   test("a server-rendered list is picked as an html recipe; with no site or op, the host's site and the path name them", async () => {
     stubShare((c) => ({ site: c.site, op: c.ops[0]!, shared: true }));
     const r = await learnSite(

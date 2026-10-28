@@ -24,7 +24,7 @@ import {
 export { unplaced };
 
 import type { NextAction } from "./execute.js";
-import { besideOrigins, credentialsOf, opUrls, scanSecrets } from "./secrets.js";
+import { besideOrigins, credentialsOf, opUrls, scanSecrets, signInFills } from "./secrets.js";
 import {
   cookieHeaderFor,
   home,
@@ -712,6 +712,7 @@ function saveOperation(
 
   const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
   const secrets = scanSecrets(operation, credentialsOf(besideOrigins(session, opUrls(operation))), allowed).secrets;
+  secrets.push(...signInFills(operation.trigger.steps).map((f) => `trigger ${f}`));
   if (secrets.length) throw new Error(`refusing to save a spec containing a credential: ${secrets.join("; ")}`);
   // Re-read under the lock: another add or a heal may have saved this site since we started.
   let replaced = false;

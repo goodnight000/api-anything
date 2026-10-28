@@ -22,6 +22,9 @@ $ api-anything capture "https://hn.algolia.com/?q=sqlite" --example q=sqlite
   {"id":1,"kind":"document","method":"GET","url":"https://hn.algolia.com/?q=sqlite","status":200,"type":"text/html","size":2841}, ...]}
 ```
 
+A candidate URL that carries one of the run's cookie or web-storage values (an
+`?access_token=` some APIs take) shows it as the ref a spec would hold there, such as
+`access_token=[cookie:auth]`, never the value; `learn_site`'s `chosen` and `alternatives` do the same.
 `api-anything inspect <capture> <id>` shows a candidate's response, without a browser. Then describe
 how to make the page fire that request. Give two example values, so the learner can tell params
 from nonces:
@@ -195,8 +198,10 @@ A write learned while signed in is checked before it is sent: if the session has
 cookie (expired or missing), api-anything re-imports first, and if there is still none the call
 returns `class: "auth"` and sends nothing.
 
-On macOS the first import shows one Keychain prompt ("security wants to use the … Safe Storage" key);
-allow it. The imported session is the *same* one as your browser, so if the site logs it out, both
+On macOS the first import shows one Keychain prompt ("security wants to use the … Safe Storage" key).
+Choose **Allow**, not **Always Allow**: that key decrypts every cookie the browser holds, and Always
+Allow lets any process that runs `security` read it from then on without asking you again. With Allow,
+each import asks. The imported session is the *same* one as your browser, so if the site logs it out, both
 go — avoid heavy automated traffic on it. Other ways in:
 
 - `--window` opens a visible Chrome window to sign in by hand (an independent session). Use it when
@@ -207,6 +212,11 @@ go — avoid heavy automated traffic on it. Other ways in:
   otherwise `login` answers `ok: false`, says why, and keeps the session you had.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
 - `api-anything logout <site>` clears the stored session.
+
+A trigger step never signs in: a `--steps` fill into a password or one-time-code field (the page's
+`type=password`, or `autocomplete` `current-password`, `new-password`, `one-time-code`) fails the run
+and saves nothing, since a step's value is stored in the spec. A hand-written step like that is
+refused by `export`, `publish` and `pull`.
 
 Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 

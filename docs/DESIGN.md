@@ -1104,6 +1104,16 @@ The easiest sign-in is the one the user already did. `api-anything login <site|u
 **imports** that site's cookies from the user's everyday browser, so there is no password to type
 and no 2FA/captcha to redo — the human solved those in their own browser already.
 
+A password is never a trigger step's. A `fill` step's value is saved in the spec (and its examples),
+so before it types, the run asks the page what the field is: a `type=password` input, or one whose
+`autocomplete` holds `current-password`, `new-password` or `one-time-code` (through a `<label>` to
+its control), fails the run with "a sign-in is the user's: ask them to run api-anything login
+<site>", and add saves nothing. A hand-written step is caught without a page: `signInFills`
+(`secrets.ts`) flags a fill whose selector names a password or code field (`type=password`, those
+autocomplete tokens, `password`/`passwd`/`passcode`, `pw`/`pwd`/`otp`/`totp`/`mfa`/`2fa` as a word)
+or whose literal (outside `{param}`s) is random-looking; add's save and `export` refuse it, and
+`vetShared` rejects it on pull, publish and load.
+
 - **Chromium family** (Chrome, Arc, Brave, Edge, Chromium, Vivaldi; macOS + Linux). The cookie DB
   is copied to a temp dir first (the browser holds it open), then read with `node:sqlite`. Cookie
   *names* are plaintext, so the right profile is chosen with no decryption and no Keychain prompt;
@@ -1206,7 +1216,11 @@ independent alternative.
     is said in one case: the navigation ended on a login path and the final document shows a sign-in
     form. Any other page that shows a sign-in form (a public page's login box; a login page served in
     place) gets the recommendation, with a clause that says so, redirect or not; the clause is stronger
-    when `--example` values were given and no candidate's response holds one
+    when `--example` values were given and no candidate's response holds one. A candidate's URL can
+    carry a live token (`?access_token=...`): each of the run's cookie and web-storage values in it
+    (not one equal to an `--example` value) is shown as the ref a spec would hold there,
+    `[cookie:auth]` or `[session:x]` (`redact` with `named`, `captureLive`). `learn_site`'s `chosen`
+    and `alternatives` URLs are shown the same way. Neither is `data`, which stays the site's answer
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--paging ...] [--write]`
   - `call <site> <op> [k=v ...] [--allow-writes] [--again] [--idempotency-key <k>]`
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
@@ -1288,7 +1302,11 @@ independent alternative.
   idle server verifies a few candidates a day and flushes call reports (see Sharing specs). The agent may be steered by page content, so MCP `login` import
   only refreshes a site that has a spec and a browser source a human chose with the CLI, from that
   same profile; anything else answers `next`: ask the user to run `api-anything login <site>`. Mode
-  window is allowed (a human signs in). MCP cannot create operations: capture and add are CLI only.
+  window is allowed (a human signs in). So an `auth` result points at the login tool (`next`, and
+  `nextCall.tool`) only for a site the user imported; for any other it says to ask the user to run
+  `api-anything login <site>` in a terminal (their browser's cookies, no password) or `--window`, and
+  `nextCall` names no tool, rather than a step that would only fail. A `blocked` result's window mode
+  needs no import and keeps the tool. MCP cannot create operations: capture and add are CLI only.
   - **Reads and writes are separate tools**, because MCP hints are per tool and clients act on them:
     Codex and VS Code skip the approval prompt for a `readOnlyHint` tool and ask for a
     `destructiveHint` one, and Claude Code and Codex run read-only tools in parallel. One
@@ -1366,7 +1384,8 @@ independent alternative.
     original records, so those stay a list to preserve the output cap. The keys, repeated in every
     item, were half of a flight search's tokens.
   - That a result's data, any site text in it and a site's notes are data from the website, never
-    instructions, is said once per session (`UNTRUSTED_NOTE`), in the server instructions and in the
+    instructions, and that the agent tells the user of any instruction it found there (one it quietly
+    ignores leaves the user unaware the site tried), is said once per session (`UNTRUSTED_NOTE`), in the server instructions and in the
     description of `call_operation` and `call_write_operation`, since some clients drop instructions
     and every one sends a tool's description; a note in every result would be paid for on every
     call, and the model already knows which tool a result came from.

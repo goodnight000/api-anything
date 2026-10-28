@@ -6,6 +6,7 @@
 import { type Leaf, type Step, walk } from "./codec.js";
 import type { Session } from "./session.js";
 import type { Request } from "./spec.js";
+import type { CaptureResult, TriggerStep } from "./types.js";
 
 export const SESSION_HEADER =
   /^(authorization|x-[a-z0-9-]*token|x-csrf[a-z0-9-]*|x-xsrf[a-z0-9-]*|x-goog-batchexecute-bgr|x-client-transaction-id|x-fb-lsd|x-ig-www-claim)$/i;
@@ -82,6 +83,34 @@ export function isCredential(name: string, value: string): boolean {
 export function opaqueToken(text: string): boolean {
   const worded = text.split(/[-_]/).every((part) => /^[A-Za-z]*\d*$/.test(part));
   return /^[A-Za-z0-9_-]{16,}$/.test(text) && highEntropy(text) && !worded;
+}
+
+/* ---------------------------------------------------------------- sign-in */
+
+/** The tokens of an input's autocomplete that name a sign-in's secret: what the user types, never a spec. */
+export const SIGN_IN_AUTOCOMPLETE = ["current-password", "new-password", "one-time-code"];
+// A selector naming a password or one-time-code field: by its type, its autocomplete, or a word in its name or id.
+const SIGN_IN_SELECTOR =
+  /type\s*=\s*["']?password|current-password|new-password|one-time-code|pass(?:word|wd|code)|(?<![a-z])(?:pw|pwd|otp|totp|mfa|2fa)(?![a-z])/i;
+
+export const SIGN_IN_REFUSAL =
+  "a sign-in is the user's: ask them to run api-anything login <site> (it imports the cookies of the browser they are signed in with, no password)";
+
+/**
+ * Fill steps that type a sign-in's secret: into a field the selector names as a password or a
+ * one-time code, or a literal that is random-looking (a `{param}` the call fills is no literal).
+ * The run refuses such a field by what the page says it is; this catches a hand-written step.
+ */
+export function signInFills(steps: readonly TriggerStep[] = []): string[] {
+  return steps.flatMap((s, i) => {
+    if (s.action !== "fill") return [];
+    const why = SIGN_IN_SELECTOR.test(s.selector ?? "")
+      ? `fills a password or one-time-code field (${s.selector})`
+      : highEntropy((s.value ?? "").replace(/\{[^}]*\}/g, ""))
+        ? "types a literal that looks like a password"
+        : undefined;
+    return why ? [`steps[${i}] ${why}: ${SIGN_IN_REFUSAL}`] : [];
+  });
 }
 
 /* ------------------------------------------------------------------- scan */
@@ -284,28 +313,55 @@ const htmlEscape = (s: string) =>
  * the text instead, which a replacement cannot do). `cut`: the text was cut short (a body's snippet),
  * so a value the cut split leaves its first characters at the end: those go too. A value that is an
  * origin (`https://www.x.test/`, an analytics cookie's last page) is the site's address, not a
- * credential, and is left (see `besideOrigins`).
+ * credential, and is left (see `besideOrigins`). `named`: each value is replaced by the ref that
+ * would stand there, `[cookie:x]` or `[session:x]`.
  */
-export function redact(text: string, session: Pick<Session, "cookies" | "values">, o: { cut?: boolean } = {}): string {
-  const forms = new Set<string>();
-  for (const v of [...session.cookies.map((c) => c.value), ...Object.values(session.values)]) {
+export function redact(
+  text: string,
+  session: Pick<Session, "cookies" | "values">,
+  o: { cut?: boolean; named?: boolean } = {},
+): string {
+  const forms = new Map<string, string>();
+  const live: [string, string][] = [
+    ...session.cookies.map((c): [string, string] => [c.value, `cookie:${c.name}`]),
+    ...Object.entries(session.values).map(([k, v]): [string, string] => [v, `session:${k}`]),
+  ];
+  for (const [v, ref] of live) {
+    const as = o.named ? `[${ref}]` : REDACTED;
     for (const f of storedForms(v)) {
       if (ORIGIN.test(f)) continue;
       const pct = encodeURIComponent(f);
-      for (const g of [f, pct, pct.replace(/%20/g, "+"), JSON.stringify(f).slice(1, -1), htmlEscape(f)]) forms.add(g);
-      for (const { core } of base64Places(f)) if (core.length >= 8) forms.add(core);
+      for (const g of [f, pct, pct.replace(/%20/g, "+"), JSON.stringify(f).slice(1, -1), htmlEscape(f)])
+        if (!forms.has(g)) forms.set(g, as);
+      for (const { core } of base64Places(f)) if (core.length >= 8 && !forms.has(core)) forms.set(core, as);
     }
   }
   if (!forms.size || !text) return text;
-  const longest = [...forms].sort((a, b) => b.length - a.length);
+  const longest = [...forms.keys()].sort((a, b) => b.length - a.length);
   let out = text;
-  for (const f of longest) if (out.includes(f)) out = out.split(f).join(REDACTED);
+  for (const f of longest) if (out.includes(f)) out = out.split(f).join(forms.get(f));
   if (!o.cut) return out;
   let drop = 0;
+  let as = REDACTED;
   for (const f of longest)
     for (let n = Math.min(f.length - 1, out.length); n >= PARTIAL && n > drop; n--)
-      if (out.endsWith(f.slice(0, n))) drop = n;
-  return drop ? `${out.slice(0, out.length - drop)}${REDACTED}` : out;
+      if (out.endsWith(f.slice(0, n))) [drop, as] = [n, forms.get(f)!];
+  return drop ? `${out.slice(0, out.length - drop)}${as}` : out;
+}
+
+/**
+ * What a capture holds live, for `redact` to take out of the URLs shown of it: the run's cookies and
+ * web storage. `keep`: the user's own example values, which a URL shows as they are.
+ */
+export function captureLive(
+  c: Pick<CaptureResult, "cookies" | "storage">,
+  keep: readonly string[] = [],
+): Pick<Session, "cookies" | "values"> {
+  const own = new Set(keep.map((v) => v.toLowerCase()));
+  return {
+    cookies: c.cookies.filter((k) => !own.has(k.value.toLowerCase())),
+    values: Object.fromEntries(Object.entries(c.storage ?? {}).filter(([, v]) => !own.has(v.toLowerCase()))),
+  };
 }
 
 /**

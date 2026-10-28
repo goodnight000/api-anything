@@ -300,3 +300,14 @@ test("export: shapes and typed example values stripped, examples kept on request
     "$.operations[0].request.headers.authorization holds the live session value authorization",
   ]);
 });
+
+test("export refuses a hand-written step that types a password, which no live session holds", async () => {
+  const { exportSite } = await import("../src/store.js");
+  fresh();
+  const op = site("x").operations[0]!;
+  const steps = [{ action: "fill" as const, selector: "#pw", value: "Hunter2-RealPassw0rd!" }];
+  saveSite({ ...site("x"), operations: [{ ...op, trigger: { ...op.trigger, steps } }] });
+  assert.deepEqual(exportSite("demo").secrets, [
+    "$.operations[0].trigger steps[0] fills a password or one-time-code field (#pw): a sign-in is the user's: ask them to run api-anything login <site> (it imports the cookies of the browser they are signed in with, no password)",
+  ]);
+});

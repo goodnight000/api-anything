@@ -30,6 +30,7 @@ import { outline } from "./outline.js";
 import { sharedName } from "./registry.js";
 import type { Evidence } from "./registry-api.js";
 import { summarize } from "./search.js";
+import { captureLive, redact } from "./secrets.js";
 import { safeName } from "./session.js";
 import { HOLDOUT_PURPOSE, type ShareOutcome, shareOps } from "./share.js";
 import { CheckSchema, type Operation } from "./spec.js";
@@ -301,13 +302,16 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
 
   // the request and the recipe: the agent's, else the outline's
   const values = Object.values(input.args).map(asText);
+  // the URLs shown carry the run's live values as the refs a spec would hold there
+  const live = captureLive(c1, values);
+  const shownUrl = (u: string) => clip(redact(u, live, { named: true }));
   const ranked = rankCandidates(c1.exchanges, input.args, { pages: pageUrls(c1.exchanges, capturePages(c1)) });
   const exchange = (id: number) => c1.exchanges.find((e) => e.id === id);
   const refusal = (id: number) => notARead(asRequest(exchange(id)!));
   const options: Choice[] = ranked.slice(0, 6).map((c) => ({
     request: c.id,
     method: c.method,
-    url: clip(c.url),
+    url: shownUrl(c.url),
     ...(c.contentType ? { type: c.contentType.split(";")[0] } : {}),
     ...(c.hits.length ? { carries: c.hits } : {}),
     ...suggest(exchange(c.id)!, c.hits, values),
@@ -331,7 +335,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     chosen = options.find((x) => x.request === e.id) ?? {
       request: e.id,
       method: e.request.method,
-      url: clip(e.request.url),
+      url: shownUrl(e.request.url),
       ...suggest(e, [], values),
     };
   } else {
