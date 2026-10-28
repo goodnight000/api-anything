@@ -14,7 +14,7 @@ import { importSession } from "../src/login.js";
 import { OMITTED } from "../src/secrets.js";
 import { saveSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
-import { saveSite, staleMark } from "../src/store.js";
+import { coolDown, cooling, saveSite, staleMark } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 import { makeChromiumDb } from "./fixture/cookie-db.js";
 
@@ -1183,6 +1183,37 @@ test("readback: a carried read proves the write as a named one does, and leaves 
   assert.equal(readFileSync(file, "utf8"), bytes, "the spec is as it was");
   assert.deepEqual(heals(), []);
   assert.ok(!existsSync(join(HOME, "state.json")), "no tier remembered, nothing marked stale");
+});
+
+test("readback: a read the site limits cools it down, carried or named, after a forced write too", async () => {
+  const limited: Handler = (_u, i) =>
+    i?.method === "POST"
+      ? json({ ok: true })
+      : new Response("slow down", { status: 429, headers: { "retry-after": "30" } });
+  const named = pagedAndTodos({ param: "after" }, { op: "todos", find: { field: "title", equals: "{title}" } });
+  for (const [shape, s] of [
+    ["carried", carrying()],
+    ["named", named],
+  ] as const)
+    for (const force of [false, true]) {
+      saveSite(s);
+      rmSync(join(HOME, "state.json"), { force: true });
+      // forced through a cool-down: the write's success ends it, and the read's 429 starts one again
+      if (force) coolDown("t", { class: "rate", reason: "HTTP 429" }, 600_000);
+      seen = [];
+      const r = await call(
+        "t",
+        "add",
+        { title: "milk" },
+        { ...opts(limited), allowWrites: true, again: true, ...(force ? { ignoreCoolDown: true } : {}) },
+      );
+      const what = `${shape}${force ? ", forced" : ""}`;
+      assert.deepEqual([r.ok, r.write, seen.map((x) => x.method)], [true, "accepted", ["POST", "GET"]], what);
+      assert.match(r.reason ?? "", /could not read it back with todos \(rate/, what);
+      const c = cooling("t");
+      assert.equal(c?.class, "rate", what);
+      assert.ok(c!.until - Date.now() <= 30_000, `${what}: the read's Retry-After, not the old wait`);
+    }
 });
 
 test("a cookie a redirect set, sent on the next hop and rotated again, is redacted from the reason", async () => {

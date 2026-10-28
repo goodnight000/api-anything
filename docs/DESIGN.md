@@ -571,8 +571,9 @@ trigger, match, response and params (no examples) as `publish` exports them, and
 label. Publish embeds it, and checks the named read fits first; the local spec keeps the name. A
 carried read runs as the write's proof: through the same tiers, with the trust its spec has, but it
 remembers no tier, heals nothing and reports nothing, so a drift or a miss leaves the write
-`accepted` or `may_have_applied`. A later repair of that read on the site does not change a published
-proof; a new version of the write does.
+`accepted` or `may_have_applied`; its `rate` or `blocked` answer cools the site down as any call's
+does. A later repair of that read on the site does not change a published proof; a new version of
+the write does.
 
 An agent that skims an unclear answer sends the write again, so a write is recorded before it is
 sent (`writes.json` in `~/.api-anything`, under its lock, written atomically): site, op, time, a
@@ -692,8 +693,8 @@ answered and when; nothing is reported to the registry for that answer. A blocke
 asks for `api-anything login <site> --window`. Any login for the site (an import, a cookies file, the
 window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. The call
 option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends that one call through
-it: one that succeeds ends it, since the site answered; one the site limits or blocks again sets it
-anew from that answer, as any call does. MCP has no way to skip it. The idle MCP server's verification of candidates skips a cooling site too.
+it: one that succeeds ends it, since the site answered (before a write's readback, which may set it
+again); one the site limits or blocks again sets it anew from that answer, as any call does. MCP has no way to skip it. The idle MCP server's verification of candidates skips a cooling site too.
 
 | tier | transport | when |
 |---|---|---|

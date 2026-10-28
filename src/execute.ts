@@ -899,7 +899,8 @@ function resolve(
  * resend. Finding the write makes the result `applied` (and ok, whatever its own answer was); not
  * finding it, or a read that fails, changes nothing but `reason`: the site may show it later.
  * A read the op carries (a shared write's) runs as a proof: under the write's own version, so with
- * the trust its spec has, and leaving nothing behind (no remembered tier, heal or report).
+ * the trust its spec has, and leaving nothing behind (no remembered tier, heal or report) but the
+ * cool-down a rate limit or block sets.
  */
 async function readBack(
   site: Site,
@@ -977,11 +978,9 @@ function cooled(c: CoolDown, site: string, now = Date.now()): Result {
 /**
  * Leave a site alone once it said stop: a rate limit (for its Retry-After, capped, or a few minutes),
  * a block at every tier the op climbs to, or a 451. Another call now would only meet it again.
- * A `forced` call (sent through the cool-down) that succeeds ends it: the site answered.
  */
-function coolAfter(site: string, op: Operation, r: Result, log: Attempt[], forced?: boolean): void {
+function coolAfter(site: string, op: Operation, r: Result, log: Attempt[]): void {
   const last = log.at(-1);
-  if (r.ok && forced && last) clearCoolDown(site);
   if (r.ok || !last || last.class !== r.class) return;
   if (r.class === "rate") {
     const ms = r.retryAfterMs ?? RATE_COOL_MS;
@@ -1048,7 +1047,8 @@ export async function call(
 
 /**
  * A resolved op's call. `proof`: a write's readback running the read it carries (`readBack`), which
- * answers and changes nothing: no tier remembered, no heal, adopt or stale mark, no report.
+ * answers and changes nothing: no tier remembered, no heal, adopt or stale mark, no report. Its rate
+ * limit or block still cools the site down, as a named readback's does.
  */
 async function run(
   site: Site,
@@ -1069,6 +1069,8 @@ async function run(
   let held: CoolDown | undefined;
   const done = async (r: Result): Promise<CallResult> => {
     let f = finish(r, op, siteName, log);
+    // A forced call the site answered ends the cool-down: before its readback, which may start another.
+    if (f.ok && opts.ignoreCoolDown && log.length) clearCoolDown(siteName);
     // log: something was sent this call (a ledger hold-back sends nothing, and reads nothing back)
     if (op.readback && log.length && (f.write === "accepted" || f.write === "may_have_applied"))
       f = await readBack(site, theirs, op, args, f, opts);
@@ -1079,8 +1081,8 @@ async function run(
     if (f.next) f.next = hide(f.next, sessions);
     if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
     if (ledger) settleWrite(ledger, f.write ?? "may_have_applied", f);
-    // a proof's answer is the readback's, not news of the site for the next call
-    if (!proof) coolAfter(siteName, op, f, log, opts.ignoreCoolDown);
+    // a proof's rate limit or block is the site's, as any call's
+    coolAfter(siteName, op, f, log);
     const out = { ...f, ms: Date.now() - t0 };
     if (how.source && !proof && !held)
       afterCall(siteName, op, how.source, out, {
