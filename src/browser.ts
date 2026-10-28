@@ -1293,11 +1293,14 @@ export async function pageFetch(o: {
   redirect?: (from: Hop, status: number, location: string, taken: number) => Hop | Promise<Hop>;
   /** "omit": send none of the profile's cookies (someone else's spec, a request that may change something) */
   credentials?: "include" | "omit";
+  /** waits for the site's send slot, once Chrome is up: its start overlaps the wait */
+  pace?: () => Promise<void>;
 }): Promise<PageFetchResult> {
   const timeoutMs = o.timeoutMs ?? 30_000;
   const release = hold();
   try {
     const ctx = await openBrowser(o);
+    await o.pace?.();
     const once = async (entry: OriginPage, hop: Hop, left: number) => {
       const { page } = entry;
       const origin = new URL(hop.url).origin;

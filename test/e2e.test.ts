@@ -17,7 +17,7 @@ import { call, heal } from "../src/execute.js";
 import { addOperation, capturePage, profileDir } from "../src/heal.js";
 import { importSession, windowLogin } from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
-import { rememberedTier, staleMark } from "../src/store.js";
+import { clearCoolDown, rememberedTier, staleMark } from "../src/store.js";
 import { makeChromiumDb } from "./fixture/cookie-db.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
@@ -227,6 +227,13 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     assert.match(r.stderr, /^next: rate limited/m);
     assert.equal(hits(), before + 1);
     assert.equal(heals().length, healCount);
+    // the site said stop: the next call sends nothing, and --force does
+    const held = await cli("call", SITE, "limited");
+    assert.match(JSON.parse(held.stdout).reason, /^not sent: fixture answered rate/);
+    assert.equal(hits(), before + 1);
+    await cli("call", SITE, "limited", "--force");
+    assert.equal(hits(), before + 2);
+    clearCoolDown(SITE); // the rest of this file calls the same site
   });
 
   test("8. layered f.req form encoding with the XSSI prefix works for a new query", async () => {

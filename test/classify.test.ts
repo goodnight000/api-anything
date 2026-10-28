@@ -139,6 +139,33 @@ test("rate: 429 and rate-limit wording on errors", () => {
   assert.equal(cls(op(), json(420, { message: "Rate limit exceeded" })), "rate");
 });
 
+test("rate: any failure that names its wait in Retry-After; a 2xx with one is still its answer", () => {
+  const rows: [Observed, string, number | undefined][] = [
+    [json(503, "down for maintenance", { "retry-after": "120" }), "rate", 120_000],
+    [json(403, { message: "locked" }, { "retry-after": "60" }), "rate", 60_000],
+    [json(500, "boom", { "retry-after": "30" }), "rate", 30_000],
+    [json(503, "down for maintenance"), "error", undefined],
+    [json(429, {}, { "retry-after": "300" }), "rate", 300_000],
+    [json(200, { data: { user: { id: 1 } } }, { "retry-after": "5" }), "ok", undefined],
+  ];
+  for (const [r, want, ms] of rows) {
+    const c = classify(op(), r);
+    assert.deepEqual([c.class, c.retryAfterMs], [want, ms], `${r.status} ${JSON.stringify(r.headers)}`);
+  }
+  // a wall that names a wait is still a wall
+  const wall = html(503, "<html><head><title>Just a moment...</title></head><div id=cf-chl-x></div></html>");
+  assert.equal(cls(op(), { ...wall, headers: { ...wall.headers, "retry-after": "10" } }), "blocked");
+});
+
+test("blocked: 451 is refused to this network or region, with or without a body", () => {
+  for (const r of [json(451, { message: "Unavailable for legal reasons" }), json(451, "")]) {
+    const c = classify(op(), r);
+    assert.equal(c.class, "blocked");
+    assert.match(c.reason, /^HTTP 451: not available from this network or region/);
+    assert.equal(c.missing, undefined);
+  }
+});
+
 test("blocked: vendor challenge pages even at 200, cf-mitigated, bare 403", () => {
   assert.equal(
     cls(

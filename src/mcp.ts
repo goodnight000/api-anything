@@ -133,9 +133,11 @@ export function mcpNext(next: string): string {
     .replace(
       /(?:ask the user to run(?: in a terminal)?:? )?api-anything login ([\w.-]+)( --window)?/g,
       (_, site, window) =>
-        window || userImported(site)
-          ? `the login tool {"site":"${site}"} (mode "window" when the user must sign in or clear a challenge by hand)`
-          : `ask the user to run in a terminal: api-anything login ${site} (it imports the cookies of the browser they are signed in with, no password), or api-anything login ${site} --window to sign in by hand`,
+        window
+          ? `the login tool {"site":"${site}","mode":"window"} (the user signs in or clears the challenge by hand)`
+          : userImported(site)
+            ? `the login tool {"site":"${site}"} (mode "window" when the user must sign in or clear a challenge by hand)`
+            : `ask the user to run in a terminal: api-anything login ${site} (it imports the cookies of the browser they are signed in with, no password), or api-anything login ${site} --window to sign in by hand`,
     )
     .replace(/api-anything add creates one/, "a new site is added with the CLI");
   return /\bapi-anything (heal|add|capture|verify|export|publish|setup)\b/.test(out)

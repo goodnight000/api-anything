@@ -168,7 +168,7 @@ don't capture pages the user didn't ask for.
    the request whose URL or operationName matches the data you want. Add `--outline` to get a
    summary of each top candidate's response (see above) instead of inspecting them one by one. `kind` is the resource type:
    `document` is the page itself. If the output has `blocked`, the site served a bot challenge:
-   follow `next` (the user logs in and clears it) instead of picking a request. Do the same when
+   follow `next` (the user runs `api-anything login <site> --window` and clears it) instead of picking a request. Do the same when
    `next` says the page is a sign-in page (the user logs in) or answered an HTTP error (check the URL).
    "Sign-in page" is said only when the page landed on a login path and shows a sign-in form.
    When `next` adds that the page also shows a sign-in form, go on: a login is needed only if the
@@ -245,7 +245,7 @@ don't capture pages the user didn't ask for.
      capture does not carry them, the capture was made with other values: pass those with `--example`.
    - If `add` refuses because the captured response is a challenge or sign-in page (`blocked`,
      `auth`), or the trigger landed on a sign-in page, nothing was saved and the recipe is not the
-     problem: ask the user to run `api-anything login <site>`, then add again. A rate limit or a
+     problem: ask the user to run `api-anything login <site>` (with `--window` for a challenge), then add again. A rate limit or a
      server failure: wait a few minutes, then add again.
 3. **Call** it with a new value: `api-anything call site search q=otters`. Check that `data` is what
    the user wanted.
@@ -339,8 +339,8 @@ Every failure carries:
 | class | meaning | what to do |
 |---|---|---|
 | `auth` | not logged in, or the session expired | ask the user to run `api-anything login <site>` |
-| `rate` | the site is throttling | stop; tell the user; do not retry now |
-| `blocked` | bot challenge, even after escalating to the browser | ask the user to log in and clear the challenge |
+| `rate` | the site is throttling | stop; tell the user; do not retry before `retryAfterMs` |
+| `blocked` | bot challenge, or a refusal of this machine or network, even after escalating to the browser; or not available in this region (451) | follow `next`: usually ask the user to run `api-anything login <site> --window` and clear it; for a 451, tell the user and stop |
 | `drift` | the site changed and healing failed | follow `next` once (`api-anything heal <site> <op>`, or re-`add` with a new `--extract` when the response changed); then stop |
 | `input` | bad, unknown or missing args, or the thing does not exist / has no results (the op's example still answers) | fix the args per `api-anything ops <site>`; never heal or re-add for this |
 | `refused` | a write without permission | see the write rules below |
@@ -399,7 +399,9 @@ Every failure carries:
 - Prefer `ops` over reading spec files, and a single `call` over capture runs. A capture is for
   learning, not for fetching data.
 - Don't loop `call` over hundreds of values without asking. api-anything spaces requests to one site
-  at least 1 s apart.
+  about 1 s apart, across processes too. After a rate limit or a block it leaves the site alone for a
+  while: calls answer `rate` or `blocked` at once with nothing sent, and `retryAfterMs` says how long.
+  Wait it out or stop; don't try to get around it.
 
 ## Sharing
 

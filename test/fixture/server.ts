@@ -90,6 +90,8 @@ if((m=p.match(/^\\/u\\/([^/]+)$/))){
   document.getElementById("follow").addEventListener("click",()=>fetch("/api/follow?user="+m[1]).then(r=>r.json()).then(out,()=>{}));
 }else if(p==="/walled"){
   fetch("/api/walled").then(r=>r.json()).then(out);
+}else if(p==="/shut-out"){
+  fetch("/api/shut-out?q="+encodeURIComponent(new URLSearchParams(location.search).get("q")||"")).then(r=>r.json()).then(out,()=>{});
 }else if(p.startsWith("/spa/")){
   // a client-routed SPA: its own links and history changes are routed without a page load
   const route=()=>{
@@ -197,7 +199,10 @@ export async function startFixture(): Promise<Fixture> {
     if (p === "/search" || p === "/cal") return html(200, page(state.build));
     if (p === "/compose")
       return html(200, page(state.build, '<textarea id="text"></textarea><button id="post">Post</button>'));
-    if (["/feed", "/scoped", "/stores", "/walled", "/reviews", "/todos"].includes(p) || p.startsWith("/spa/"))
+    if (
+      ["/feed", "/scoped", "/stores", "/walled", "/shut-out", "/reviews", "/todos"].includes(p) ||
+      p.startsWith("/spa/")
+    )
       return html(200, page(state.build));
     // A bot challenge that never solves, in a real browser too: the interstitial on every load.
     if (p === "/challenged")
@@ -501,6 +506,8 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       }
       return json(res, 200, { data: { items: ["behind the wall"] } });
     }
+    // A site that refuses this machine outright, a real browser too: a bare 403, no challenge, no sign-in.
+    if (p === "/api/shut-out") return json(res, 403, { message: "Forbidden" });
     if (p === "/api/scoped")
       return json(res, 200, {
         data: { results: [`${u.searchParams.get("q")} one`, `${u.searchParams.get("q")} two`] },

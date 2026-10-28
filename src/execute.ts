@@ -36,6 +36,7 @@ import {
   buildRequest,
   holdsRef,
   nextHop,
+  pace,
   RedirectRefused,
   refusePrivate,
   refusePrivateHop,
@@ -60,10 +61,15 @@ import {
 } from "./session.js";
 import type { Operation, Site } from "./spec.js";
 import {
+  BLOCKED_COOL_MS,
   beginWrite,
+  type CoolDown,
+  coolDown,
+  cooling,
   lastHealAt,
   loadSite,
   markStale,
+  RATE_COOL_MS,
   type Resolved,
   rememberedTier,
   rememberTier,
@@ -93,9 +99,11 @@ export interface CallOptions {
   fetchImpl?: typeof fetch;
   /** highest transport tier to use (default 3); 1 also means no browser at all, so no recapture or cookie refresh */
   maxTier?: Tier;
-  /** per-site gap between tier-1 requests (default 1000) */
+  /** per-site gap between requests, ±30%, at every tier (default 1000) */
   minIntervalMs?: number;
   timeoutMs?: number;
+  /** send even while the site cools down after a rate limit or a block (CLI --force); only when the user asks */
+  ignoreCoolDown?: boolean;
 }
 
 export type { WriteStatus };
@@ -257,6 +265,8 @@ function writeStatus(log: Attempt[]): WriteStatus {
 export function stepOf(a: Attempt): Partial<Result> {
   const wait = a.retryAfterMs !== undefined ? { retryAfterMs: a.retryAfterMs } : {};
   if (a.hint === PROFILE_HINT) return { ...wait, nextCall: { action: "retry" }, retry: "after_wait" };
+  // refused to this network or region: no tier, login or wait changes that
+  if (a.class === "blocked" && a.status === 451) return { nextCall: { action: "report" }, retry: "no" };
   if (a.step) return { ...wait, nextCall: { action: a.step } };
   // refused for its args; a refusal that says the session is gone or names a limit keeps its class's step
   if (a.rejected && a.class === "error") return { ...wait, nextCall: { action: "fix_args" } };
@@ -311,6 +321,9 @@ export function finish(r: Result, op: Operation | undefined, site: string | unde
   return out;
 }
 
+const REGION =
+  "the site says this is not available from this network or region (HTTP 451): do not retry; tell the user";
+
 /** `signIn`: how the user signs in again, when it is not `api-anything login` (`reimportIfBrowser`) */
 function nextFor(
   c: CallResult["class"],
@@ -336,7 +349,10 @@ function nextFor(
         ? "rate limited: do not retry before retryAfterMs (the time in reason)"
         : "rate limited: do not retry now; wait a few minutes";
     case "blocked":
-      return `the site is challenging automated requests: ask the user to run api-anything login ${site} and clear the challenge, then retry once`;
+      if (a?.status === 451) return REGION;
+      if (a?.missing)
+        return `the site refuses requests from this machine or network (a 403 with no challenge or sign-in to clear): do not retry as it is; a window may show why: ask the user to run api-anything login ${site} --window, then retry once`;
+      return `the site is challenging automated requests: ask the user to run api-anything login ${site} --window and clear the challenge in the window, then retry once`;
     case "drift":
       if (!op.readOnly)
         return `${ran ? "the write may have run: check the site first, then " : ""}re-learn it with api-anything add ${site} ${op.name} ... --write`;
@@ -432,6 +448,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   try {
     if (tier === 3) {
       // For a write this is the UI sending it: the one attempt.
+      await pace(ctx.site, ctx.opts.minIntervalMs);
       const run = await runOpTrigger(ctx.site, op, ctx.args);
       const judged = run.matched && judgeExchange(op, run.matched);
       // The page is told nothing of a redirect that was stopped, its status included: this is the answer.
@@ -504,6 +521,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         retryOnNavigation: op.readOnly,
         // the page's own cookies, unless they may not go (`bare`)
         ...(none ? { credentials: "omit" as const } : {}),
+        pace: () => pace(ctx.site, ctx.opts.minIntervalMs),
         // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
         redirect: async (from, status, location, taken) => {
           const next = nextHop(op, session, from, status, location, taken);
@@ -853,6 +871,36 @@ function whereToLook(op: Operation, args: Record<string, unknown>): string {
   return `. Look on ${fillTrigger(op.trigger, args).url}${read}`;
 }
 
+/** The answer while the site cools down (`coolAfter`): nothing is sent. */
+function cooled(c: CoolDown, site: string, now = Date.now()): Result {
+  const reason = `not sent: ${site} answered ${c.class} at ${new Date(c.at).toISOString()} (${c.reason}), so nothing goes to it until ${new Date(c.until).toISOString()}`;
+  const wait = { ok: false, class: c.class, reason, retryAfterMs: Math.max(0, c.until - now) };
+  if (c.class === "rate") return { ...wait, next: "rate limited: do not retry before retryAfterMs; nothing was sent" };
+  if (c.status === 451) return { ...wait, next: REGION, nextCall: { action: "report" }, retry: "no" };
+  return {
+    ...wait,
+    next: `the site blocked its last call at every tier: do not retry before retryAfterMs. To look sooner, ask the user to run api-anything login ${site} --window (a login ends the wait), then retry once`,
+  };
+}
+
+/**
+ * Leave a site alone once it said stop: a rate limit (for its Retry-After, capped, or a few minutes),
+ * a block at every tier the op climbs to, or a 451. Another call now would only meet it again.
+ */
+function coolAfter(site: string, op: Operation, r: Result, log: Attempt[]): void {
+  const last = log.at(-1);
+  if (r.ok || !last || last.class !== r.class) return;
+  if (r.class === "rate") {
+    const ms = r.retryAfterMs ?? RATE_COOL_MS;
+    if (ms > 0) coolDown(site, { class: "rate", reason: r.reason ?? last.reason }, ms);
+  } else if (r.class === "blocked" && (last.status === 451 || last.tier === (op.readOnly ? 3 : 2)))
+    coolDown(
+      site,
+      { class: "blocked", reason: r.reason ?? last.reason, ...(last.status ? { status: last.status } : {}) },
+      BLOCKED_COOL_MS,
+    );
+}
+
 /** The answer to a write the ledger held back: nothing is sent. */
 function heldBack(g: Exclude<WriteGate, { send: true }>, op: Operation): Result {
   const when = new Date(g.earlier.at).toISOString();
@@ -905,6 +953,8 @@ export async function call(
   let jar: Session | undefined;
   /** this write's ledger record, settled with what the call did */
   let ledger: string | undefined;
+  /** the site's cool-down this call was answered from, sending nothing: no news for the registry */
+  let held: CoolDown | undefined;
   const done = async (r: Result): Promise<CallResult> => {
     let f = finish(r, resolved, resolved ? siteName : undefined, log);
     // log: something was sent this call (a ledger hold-back sends nothing, and reads nothing back)
@@ -916,8 +966,9 @@ export async function call(
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
     if (ledger) settleWrite(ledger, f.write ?? "may_have_applied", f);
+    if (resolved) coolAfter(siteName, resolved, f, log);
     const out = { ...f, ms: Date.now() - t0 };
-    if (resolved && "source" in found)
+    if (resolved && "source" in found && !held)
       afterCall(siteName, resolved, found.source, out, {
         fetchImpl: opts.fetchImpl,
         minIntervalMs: opts.minIntervalMs,
@@ -975,6 +1026,9 @@ export async function call(
         : nextFor("input", siteName, op);
     return done({ ok: false, class: "input", reason: (e as Error).message, next });
   }
+  // A site that said stop is not asked again until its wait is over: before the write's ledger, as nothing is sent.
+  held = opts.ignoreCoolDown ? undefined : cooling(siteName);
+  if (held) return done(cooled(held, siteName));
   // auth recovery steps taken this call: 1 re-import, 2 the profile's cookies, 3 a trigger run
   let authStep = 0;
   /** where the user signs in again when a re-import brought back no new login (`reimportIfBrowser`) */
@@ -1119,7 +1173,8 @@ export async function call(
         });
       }
     }
-    if (a.class === "blocked" && tier < (write ? 2 : 3)) {
+    // a 451 is the site's answer to this network: a browser on it gets the same
+    if (a.class === "blocked" && tier < (write ? 2 : 3) && a.status !== 451) {
       notes.push(`tier ${tier} was blocked (${a.reason})`);
       tier++;
       continue;

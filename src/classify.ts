@@ -555,6 +555,14 @@ function classifyResponse(
     ...(waitMs !== undefined ? { retryAfterMs: waitMs } : {}),
   });
   if (r.status === 429) return rate(`HTTP 429${wait}`);
+  // Unavailable For Legal Reasons: refused to this network or region, the same at every tier
+  if (r.status === 451)
+    return is(
+      "blocked",
+      `HTTP 451: not available from this network or region${body.trim() ? `: ${snippet(body)}` : ""}`,
+    );
+  // a failure that names its wait (a 503 in maintenance, a 403 lockout) is a limit: sooner meets it again
+  if (r.status >= 400 && waitMs !== undefined) return rate(`HTTP ${r.status}${wait}: ${snippet(body)}`);
   if (r.status >= 400 && REQUIRE_LOGIN.test(body)) return is("auth", `HTTP ${r.status}: ${snippet(body)}`);
   if (r.status >= 400 && RATE.test(body)) return rate(`HTTP ${r.status}${wait}: ${snippet(body)}`);
   // Laravel answers a stale CSRF token with 419, Rails with 422 InvalidAuthenticityToken.

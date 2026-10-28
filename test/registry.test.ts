@@ -20,7 +20,7 @@ import { pull, search, summarize } from "../src/registry.js";
 import type { SearchMatch } from "../src/registry-api.js";
 import { loadSession, mergeCapture, saveSession, siteOf } from "../src/session.js";
 import { parseSite, type Site } from "../src/spec.js";
-import { loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
+import { clearCoolDown, loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
 import { LIMITS, vetShared } from "../src/vet.js";
 import { type FakeRegistry, hashOf, served, startRegistry } from "./fixture/registry.js";
 
@@ -804,8 +804,9 @@ test("publish runs on verify's record: every counted check passes, and inconclus
   saveSite({ ...s, operations: [{ ...s.operations[0]!, version: { hash: "a".repeat(64), status: "candidate" } }] });
   assert.deepEqual(plan("demo").errors, []);
 
-  // a check that fails holds the spec back
+  // a check that fails holds the spec back (once the 429's cool-down is over: until then nothing is sent)
   answers.cats = () => json({ hits: [] });
+  clearCoolDown("demo");
   await verifySite("demo", opts);
   assert.match(plan("demo").errors.join("\n"), /search: check 2 \(q=cats\) expects result, and answered empty/);
   // and a changed op has no record until verify runs on it again

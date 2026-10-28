@@ -224,8 +224,8 @@ node examples/research.mjs anthropic --linkedin
 
 This searches companies, then uses each returned `universalName` to fetch company details, for
 at most three companies. It sends no messages. The JSON can feed an agent's brief, a local
-report, or your existing job runner. Use one persistent MCP process for shared pacing, because
-independent CLI processes are rate-limited separately. Treat `auth`, `rate`, `blocked` and
+report, or your existing job runner. Requests to one site are paced across processes, so CLI runs
+in parallel queue up rather than arrive together. Treat `auth`, `rate`, `blocked` and
 `drift` as incomplete work. Recordings and captured output for both demos are in
 [docs/demos](demos/README.md).
 

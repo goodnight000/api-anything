@@ -366,7 +366,13 @@ test("a call of a registry version is reported after it returns, with its outcom
     new Response("boom", { status: 500 }),
   ];
   for (const r of answers) {
-    const res = await call("demo", "search", { q: "x" }, { maxTier: 1, minIntervalMs: 0, fetchImpl: async () => r });
+    // each one sent: the 429's cool-down would answer the next without sending, and report nothing
+    const res = await call(
+      "demo",
+      "search",
+      { q: "x" },
+      { maxTier: 1, minIntervalMs: 0, ignoreCoolDown: true, fetchImpl: async () => r },
+    );
     assert.ok(res.class, JSON.stringify(res));
   }
   // an unknown arg is the caller's mistake: reported as input

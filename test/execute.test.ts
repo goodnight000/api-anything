@@ -1,12 +1,16 @@
 /** The ladder's rules with an injected fetch and maxTier 1 (no browser): writes, heal guards, rate. */
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { type CallResult, call, finish, stepOf } from "../src/execute.js";
 import { type Attempt, PROFILE_HINT } from "../src/heal.js";
 import { buildRequest } from "../src/http.js";
+import { importSession } from "../src/login.js";
 import { saveSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
 import { saveSite, staleMark } from "../src/store.js";
@@ -830,6 +834,7 @@ test("contract through call(): a read's rate limit and a write's three outcomes"
   );
   assert.deepEqual([rate.class, rate.retry, rate.retryAfterMs, rate.write], ["rate", "after_wait", 120_000, undefined]);
   assert.equal(rate.nextCall?.action, "retry");
+  rmSync(join(HOME, "state.json"), { force: true }); // the site's cool-down, which would answer the writes below unsent
 
   const w = (h: Handler) => ({ ...opts(h), allowWrites: true, again: true });
   const cases: [Handler | undefined, Partial<CallResult>][] = [
@@ -1183,3 +1188,177 @@ test("a retry that adds an idempotency key after an unclear answer is the same w
   assert.equal(unclear.write, "may_have_applied");
   assert.match(unclear.next ?? "", /Look on https:\/\/t\.test\/todos, or with its readback: the read todos/);
 });
+
+/* ------------------------------------------------- pacing and cool-downs */
+
+describe("a site that said stop, and the pace between sends (localhost)", () => {
+  let server: Server;
+  let base = "";
+  let hits: number[] = [];
+  let answer: (res: ServerResponse) => void = (res) => res.end();
+  before(async () => {
+    server = createServer((_req, res) => {
+      hits.push(Date.now());
+      answer(res);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+  after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const local = () =>
+    parseSite({
+      name: "local",
+      baseUrl: base,
+      operations: [
+        {
+          name: "get",
+          readOnly: true,
+          request: { method: "GET", url: `${base}/api/get?q=a`, headers: {} },
+          slots: [{ param: "q", at: ["query:q"] }],
+          trigger: { url: `${base}/s?q={q}` },
+          params: [{ name: "q", example: "a" }],
+          response: { extract: "items" },
+        },
+        {
+          name: "post",
+          readOnly: false,
+          request: {
+            method: "POST",
+            url: `${base}/api/post`,
+            headers: { "content-type": "application/json" },
+            body: '{"text":"x"}',
+          },
+          slots: [{ param: "text", at: ["body", "json:/text"] }],
+          trigger: { url: `${base}/compose` },
+          params: [{ name: "text" }],
+        },
+      ],
+    });
+  const reply =
+    (status: number, body: unknown, headers: Record<string, string> = {}) =>
+    (res: ServerResponse) => {
+      res.writeHead(status, { "content-type": "application/json", ...headers });
+      res.end(JSON.stringify(body));
+    };
+  const fast = { maxTier: 1 as const, minIntervalMs: 0 };
+  beforeEach(() => {
+    saveSite(local());
+    hits = [];
+  });
+
+  test("calls from separate processes are paced as one: about the interval apart, never all at once", async () => {
+    answer = reply(200, { items: [1] });
+    const interval = 1000;
+    // every child waits for the same moment, so unpaced they would arrive together
+    const start = Date.now() + 4000;
+    const child = () =>
+      new Promise<string>((resolve, reject) => {
+        const p = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", CHILD], {
+          env: {
+            ...process.env,
+            AA_EXECUTE: new URL("../src/execute.ts", import.meta.url).href,
+            AA_START: String(start),
+            AA_INTERVAL: String(interval),
+          },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let out = "";
+        p.stdout.on("data", (d) => (out += d));
+        p.stderr.on("data", (d) => (out += d));
+        p.on("error", reject);
+        p.on("close", () => resolve(out));
+      });
+    const outs = await Promise.all([child(), child(), child()]);
+    assert.deepEqual(outs, ["true", "true", "true"], outs.join("\n"));
+    const at = hits.sort((a, b) => a - b);
+    const gaps = at.slice(1).map((t, i) => t - at[i]!);
+    assert.equal(gaps.length, 2);
+    for (const g of gaps) assert.ok(g >= interval * 0.7 - 5, `arrivals ${gaps.join(", ")} ms apart`);
+  });
+
+  test("a 429's Retry-After is kept: the next calls send nothing until it is over, a write too", async () => {
+    answer = reply(429, { message: "Too Many Requests" }, { "retry-after": "300" });
+    const first = await call("local", "get", { q: "x" }, fast);
+    assert.deepEqual([first.class, first.retryAfterMs, hits.length], ["rate", 300_000, 1]);
+
+    answer = reply(200, { items: [1] });
+    const second = await call("local", "get", { q: "y" }, fast);
+    assert.equal(hits.length, 1, "nothing sent while the site cools down");
+    assert.deepEqual(
+      [second.ok, second.class, second.retry, second.nextCall?.action],
+      [false, "rate", "after_wait", "retry"],
+    );
+    assert.ok(second.retryAfterMs! <= 300_000 && second.retryAfterMs! > 290_000, String(second.retryAfterMs));
+    assert.match(
+      second.reason ?? "",
+      /^not sent: local answered rate at .*HTTP 429 \(the server says retry after 300 s\)/,
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    const third = await call("local", "get", { q: "z" }, fast);
+    assert.ok(third.retryAfterMs! < second.retryAfterMs!, "counts down");
+
+    // a write is not sent either, and its ledger holds nothing that would refuse it later as a duplicate
+    const w = await call("local", "post", { text: "hi" }, { ...fast, allowWrites: true });
+    assert.deepEqual([w.class, w.write, hits.length], ["rate", "not_sent", 1]);
+
+    // the user's override sends
+    const forced = await call("local", "get", { q: "x" }, { ...fast, ignoreCoolDown: true });
+    assert.deepEqual([forced.ok, hits.length], [true, 2]);
+    const sent = await call("local", "post", { text: "hi" }, { ...fast, allowWrites: true, ignoreCoolDown: true });
+    assert.deepEqual([sent.write, hits.length], ["accepted", 3]);
+  });
+
+  test("a bare 429 cools down for a few minutes; a long Retry-After is capped", async () => {
+    answer = reply(429, {});
+    await call("local", "get", { q: "x" }, fast);
+    const bare = await call("local", "get", { q: "x" }, fast);
+    assert.ok(bare.retryAfterMs! > 170_000 && bare.retryAfterMs! <= 180_000, String(bare.retryAfterMs));
+
+    rmSync(join(HOME, "state.json"));
+    answer = reply(429, {}, { "retry-after": String(24 * 3600) });
+    await call("local", "get", { q: "x" }, fast);
+    const capped = await call("local", "get", { q: "x" }, fast);
+    assert.ok(capped.retryAfterMs! <= 30 * 60_000, String(capped.retryAfterMs));
+    assert.equal(hits.length, 2);
+  });
+
+  test("a failure that names its wait is rate, and is kept the same way", async () => {
+    answer = reply(503, { message: "down for maintenance" }, { "retry-after": "120" });
+    const r = await call("local", "get", { q: "x" }, fast);
+    assert.deepEqual([r.class, r.retry, r.retryAfterMs], ["rate", "after_wait", 120_000]);
+    await call("local", "get", { q: "x" }, fast);
+    assert.equal(hits.length, 1);
+  });
+
+  test("a login ends the cool-down", async () => {
+    answer = reply(429, {}, { "retry-after": "300" });
+    await call("local", "get", { q: "x" }, fast);
+    const file = join(HOME, "cookies.json");
+    writeFileSync(file, JSON.stringify([{ name: "sid", value: "s1", domain: "127.0.0.1", path: "/" }]));
+    assert.ok(await importSession("local", `${base}/`, { file, pushProfile: false }));
+    answer = reply(200, { items: [1] });
+    const r = await call("local", "get", { q: "x" }, fast);
+    assert.deepEqual([r.ok, hits.length], [true, 2]);
+  });
+
+  test("451: refused to this network or region; no tier climbed, no retry, and none sent again for a while", async () => {
+    answer = reply(451, { message: "Unavailable For Legal Reasons" });
+    // tier 3 allowed: a browser on the same network would get the same answer, so none is started
+    const r = await call("local", "get", { q: "x" }, { minIntervalMs: 0 });
+    assert.deepEqual([r.class, r.tier, r.retry, r.nextCall?.action, hits.length], ["blocked", 1, "no", "report", 1]);
+    assert.match(r.next ?? "", /not available from this network or region/);
+    const again = await call("local", "get", { q: "x" }, { minIntervalMs: 0 });
+    assert.deepEqual([again.class, again.retry, hits.length], ["blocked", "no", 1]);
+    assert.ok(again.retryAfterMs! > 9 * 60_000 && again.retryAfterMs! <= 10 * 60_000, String(again.retryAfterMs));
+  });
+});
+
+const CHILD = `
+const { call } = await import(process.env.AA_EXECUTE);
+await new Promise((r) => setTimeout(r, Math.max(0, Number(process.env.AA_START) - Date.now())));
+const r = await call("local", "get", { q: "c" }, { maxTier: 1, minIntervalMs: Number(process.env.AA_INTERVAL) });
+process.stdout.write(String(r.ok));
+`;

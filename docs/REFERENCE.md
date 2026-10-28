@@ -251,7 +251,13 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 ## Safety and terms of service
 
 - api-anything automates your own browser session on your own accounts. It is meant for things you
-  could do by hand, at human pace. HTTP replays to one site are paced at 1 s within one process; browser navigation may fire multiple requests.
+  could do by hand, at human pace. Requests to one site are spaced about 1 s apart (0.7 to 1.3 s, at
+  random), at every tier and across processes: separate CLI runs and agents in parallel queue up for
+  the same slot. A trigger run is a page load, which may fire many requests of the page's own.
+- When a site answers a rate limit, api-anything leaves it alone for its Retry-After (at most 30
+  minutes), or 3 minutes without one; after a block at every tier, or a 451, for 10 minutes. Calls
+  meanwhile answer `rate` or `blocked` at once with nothing sent, and `retryAfterMs` counts down.
+  `api-anything login <site>` ends the wait, and so does `api-anything call ... --force`.
 - **Writes** (posting, sending, buying) are learned by intercepting the request and aborting it
   in the browser, so learning never performs them. Without `--write`, `add` and `capture` stop a
   POST, PUT, PATCH or DELETE the steps send (a GraphQL query, or the request `--match` pins, passes):
@@ -350,15 +356,13 @@ Known limits:
   example 2, or until `verify` sees two passing cases that differ only in those params answer
   differently. A param the server ignores is not caught when the two answers differ for another
   reason (a timestamp, a shuffled order).
-- Request pacing (1 s per site) holds within one process: separate CLI runs are not paced
-  against each other.
 - Chrome locks its profile to one process. An MCP server releases it after 3 s idle; another
   process waits up to 15 s for it, then fails with a hint.
 - Optional request structure (a reply block that only some calls have) needs a separate op.
 - Rescan only reads scripts that the page references directly. An id inside a lazily loaded
   chunk heals through recapture instead, which is slower.
 - A site behind a bot wall that challenges a real Chrome as well needs you to clear it by hand
-  (`api-anything login`). There is no CAPTCHA solving and no TLS impersonation. A trigger run or
+  (`api-anything login <site> --window`). There is no CAPTCHA solving and no TLS impersonation. A trigger run or
   repair that ends on a challenge that did not solve is `blocked` and marks nothing stale.
 - Paging returns the site's own next cursor, and only when the answer holds one. Numbered pages
   get no `nextPage`. When the output cap cuts a page, the cut items are on neither that page nor
