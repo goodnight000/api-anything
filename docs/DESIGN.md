@@ -1193,7 +1193,8 @@ order; `learnedAt`, `unproven` and `version` aside), and only when every case an
 version: cases that answered from different ones (a heal part way, or another process saving the op)
 run once more, and if they are still mixed the op gets no record. The cases
 are chosen from one version too: when that is not the one saved when verify ends, they run once more
-from the saved one. So an op changed since, or saved by
+from the saved one. A case the site's cool-down answered sent nothing, so no version answered it, and
+a run of nothing else leaves the op's record as it was. So an op changed since, or saved by
 something else while its last cases ran, has none. When two passing cases whose args differ only in an op's
 `unproven` params answer differently, and the same holds, verify clears the mark. A read with `paging` gets one more
 case after its example, `next page`: the call again with the paging param set to the example's

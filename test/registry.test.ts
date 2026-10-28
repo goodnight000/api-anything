@@ -20,7 +20,7 @@ import { pull, search, summarize } from "../src/registry.js";
 import type { SearchMatch } from "../src/registry-api.js";
 import { loadSession, mergeCapture, saveSession, siteOf } from "../src/session.js";
 import { type Operation, OperationSchema, parseSite, type Site } from "../src/spec.js";
-import { clearCoolDown, loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
+import { clearCoolDown, coolDown, loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
 import { LIMITS, readbackProblems, uploadProblems, vetShared } from "../src/vet.js";
 import { type FakeRegistry, hashOf, served, startRegistry } from "./fixture/registry.js";
 
@@ -1195,6 +1195,28 @@ test("verify runs the cases of the version it records: a check another process s
   assert.deepEqual(urls, ["/first", "/search?q=example", "/search?q=example", "/search?q=absent"]);
   assert.equal(loadRecord("plan").search?.hash, opHash(b.operations[1]!));
   assert.match(plan("plan").errors.join("\n"), /search: check 1 \(q=absent\) expects empty, and answered result/);
+});
+
+test("a verify the site's cool-down answers sends nothing and leaves the record as it was", async () => {
+  saveSite(
+    spec({}, { params: [{ name: "q", example: "kittens" }], checks: [{ args: { q: "zzzz" }, expect: "empty" }] }),
+  );
+  let sent = 0;
+  const fetchImpl = (async () => {
+    sent++;
+    return json({ hits: [{ title: "a row" }] });
+  }) as typeof fetch;
+  const opts = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl };
+  await verifySite("demo", opts);
+  const failing = /search: check 1 \(q=zzzz\) expects empty, and answered result/;
+  assert.match(plan("demo").errors.join("\n"), failing);
+  const before = loadRecord("demo").search;
+  coolDown("demo", { class: "rate", reason: "HTTP 429" }, 60_000);
+  sent = 0;
+  await verifySite("demo", opts);
+  assert.equal(sent, 0);
+  assert.deepEqual(loadRecord("demo").search, before);
+  assert.match(plan("demo").errors.join("\n"), failing);
 });
 
 test("a check that passes as input, refused before anything is sent, is recorded", async () => {
