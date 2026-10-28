@@ -21,7 +21,8 @@ const ARGS = z.record(z.string(), z.unknown());
 const DESCRIPTION =
   "Learn an operation for a website nobody has shared yet, in one call: use it after find_sites found no site or no operation for what the user asked. " +
   "Give the https page URL on a public host that shows the answer, with {param} placeholders (trigger: https://site.com/search?q={q}), the user's own values (args), and two other real values of the same kind that you pick (args2, args3: other searches, other ids, other places the site has). " +
-  "It loads the page in a browser with args and with args2, picks the data request and the fields, and checks the result with args3 and with a replay that sends no cookies. " +
+  "When the catalog already has an operation for the same page on that domain (one search words do not find while it is unconfirmed), it calls that with args instead and answers with `reused`: no browser, nothing learned; fresh: true learns the page anyway. " +
+  "Otherwise it loads the page in a browser with args and with args2, picks the data request and the fields, and checks the result with args3 and with a replay that sends no cookies. " +
   "The answer to the user's request is in `data`; `signature` is the new operation, callable from then on with call_operation. " +
   "`chosen` is the request and recipe it used, and `alternatives` the other candidates: if data is not what the user wanted, call learn_site again with the same args, `captures` from the result (no browser), and pickRequest and/or a recipe (extract and pick for JSON, html or embedded for a page). " +
   "Sharing with the catalog is automatic for a public read when the user turned sharing on; if they never answered whether to share, it asks them once (or `next` tells you to ask). An operation that needed a login is shared only with the user's yes. Only reads: a write is learned with the CLI. " +
@@ -57,6 +58,12 @@ export function registerLearn(server: McpServer, o: { allowWrites: boolean }): v
           .tuple([z.string(), z.string()])
           .optional()
           .describe("an earlier result's captures: learn again from them, with no browser"),
+        fresh: z
+          .boolean()
+          .optional()
+          .describe(
+            "learn the page anew, not calling an op someone shared for it: when a reused answer is not what the user wanted",
+          ),
         write: z.boolean().optional().describe("not supported: writes are learned with the CLI"),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },

@@ -253,13 +253,16 @@ const HELP: Record<string, string> = {
   --args and --args2, picks the request carrying them and the fields from the first run's outline, saves
   the op with --args2 as its example, calls it with --args3 (kept as the op's check) and once with no
   cookies, then shares it when sharing is on and it is public. A login op is shared only on your yes.
+  First, when the registry has a read for the same page on that domain, it calls that with --args and
+  answers with reused: no browser, nothing learned (--fresh, a recipe or --from learns anyway).
   <trigger>   page URL with {param} placeholders, e.g. https://site.com/search?q={q}
   --args      the values you want the answer for
   --args2     another real value of the same kind (the op's shared example)
   --args3     a third, different from both (the holdout check)
   --from <id> --from2 <id>   learn again from an earlier learn's captures, with no browser
+  --fresh     learn the page even when a shared op answers for it (its data was not what you wanted)
   --pick-request <n>, --extract, --pick, --html, --embedded   choose the request and the recipe (see add)
-  Output: data, signature, chosen and alternatives (request and recipe), proof, shared.`,
+  Output: data, signature, chosen and alternatives (request and recipe), proof, shared; or data and reused.`,
 };
 
 const USAGE = `api-anything ${VERSION}: turn a website into operations an agent can call.
@@ -365,6 +368,7 @@ const OPTIONS = {
   match: { type: "string", multiple: true },
   from: { type: "string" },
   "pick-request": { type: "string" },
+  fresh: { type: "boolean" },
   from2: { type: "string" },
   embedded: { type: "string" },
   public: { type: "string" },
@@ -1103,7 +1107,7 @@ async function cmdSearch({ pos }: Parsed): Promise<number> {
     ...(r.registryError ? { registryError: r.registryError } : {}),
     ...(r.matches.length ? { shared: SHARED_NOTE } : {}),
     next: !top
-      ? "nobody shared one yet: learn it with api-anything capture and add, then share it with api-anything publish"
+      ? "nothing matched. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, search with that, which also finds unconfirmed ones; else learn it with api-anything learn"
       : !top.operations.length && top.interfaces?.length
         ? `${top.domain} offers its own agent interface: ${top.interfaces.map((i) => `${i.kind} ${i.url}`).join(", ")}`
         : top.installed
@@ -1245,6 +1249,7 @@ async function cmdLearn({ v, pos }: Parsed): Promise<number> {
       ...(v.html ? { html: json(v.html, HtmlRecipeSchema, "html") } : {}),
       ...(v.embedded ? { embedded: v.embedded } : {}),
       ...(v.from && v.from2 ? { captures: [v.from, v.from2] as [string, string] } : {}),
+      ...(v.fresh ? { fresh: true } : {}),
       ...(v.write ? { write: true } : {}),
     },
     { consent: process.stdin.isTTY && process.stderr.isTTY ? askYesNo : undefined },
@@ -1337,6 +1342,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "embedded",
       "from",
       "from2",
+      "fresh",
       "write",
     ],
   },

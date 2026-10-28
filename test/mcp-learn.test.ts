@@ -10,14 +10,17 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { resolver } from "../src/http.js";
 import { loadSettings, QUESTION, saveSettings } from "../src/identity.js";
-import { hooks, type LearnSiteOptions, learnSite } from "../src/learnsite.js";
+import { hooks, type LearnSiteOptions, learnSite, sameTrigger } from "../src/learnsite.js";
 import { createServer } from "../src/mcp.js";
 import { learnTool } from "../src/mcp-learn.js";
+import { settle } from "../src/report.js";
 import { HOLDOUT_PURPOSE, shareOps } from "../src/share.js";
+import { type Operation, parseSite } from "../src/spec.js";
 import { loadSite } from "../src/store.js";
 import { notARead } from "../src/vet.js";
-import { startRegistry } from "./fixture/registry.js";
+import { hashOf, served, startRegistry } from "./fixture/registry.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -456,6 +459,8 @@ async function sharing(
   body: (o: {
     home: string;
     reg: Awaited<ReturnType<typeof startRegistry>>;
+    /** what reached the site */
+    hits: string[];
     learn: (op: string, o?: LearnSiteOptions) => ReturnType<typeof learnSite>;
     input: (op: string) => Parameters<typeof learnSite>[0];
   }) => Promise<void>,
@@ -482,7 +487,13 @@ async function sharing(
     ],
   });
   try {
-    await body({ home, reg, input, learn: (op, o = {}) => learnSite(input(op), { minIntervalMs: 0, ...o }) });
+    await body({
+      home,
+      reg,
+      hits: s.hits,
+      input,
+      learn: (op, o = {}) => learnSite(input(op), { minIntervalMs: 0, ...o }),
+    });
   } finally {
     if (was === undefined) delete process.env.API_ANYTHING_REGISTRY;
     else process.env.API_ANYTHING_REGISTRY = was;
@@ -609,3 +620,127 @@ test("with no way to ask, learn_site's next asks the user; the setup and publish
     );
     assert.equal(reg.received.find((r) => r.path === "/v1/versions")!.verified, true);
   }));
+
+/* -------------------------------------------- an op someone shared, before any browser */
+
+/** example-com as the registry serves it: a candidate read behind the page `trigger`. */
+function shopSite(trigger: string, extract = "items") {
+  return parseSite({
+    name: "example-com",
+    baseUrl: EX,
+    operations: [
+      {
+        name: "searchShop",
+        request: { method: "GET", url: `${EX}/api/search?q=bobby`, headers: {} },
+        slots: [{ param: "q", at: ["query:q"] }],
+        params: [{ name: "q", example: "bobby" }],
+        trigger: { url: trigger },
+        match: { host: "www.example.com", path: "/api/search" },
+        response: { extract },
+        readOnly: true,
+      },
+    ],
+  });
+}
+
+/** A pulled candidate goes only to public addresses: www.example.com resolves to one here, with no DNS query. */
+async function publicDns(body: () => Promise<void>) {
+  const real = resolver.lookup;
+  resolver.lookup = async () => [{ address: "93.184.215.14" }];
+  try {
+    await body();
+  } finally {
+    resolver.lookup = real;
+  }
+}
+
+test("learn_site calls an op someone shared for the same page: the data, no browser, nothing learned or uploaded, and the call reported", () =>
+  publicDns(() =>
+    sharing(async ({ reg, hits }) => {
+      saveSettings({ share: true, askedAt: "2026-10-25T00:00:00.000Z" });
+      const shop = shopSite(`${EX}/shop?q={q}`);
+      reg.matches = [{ name: "example-com", domain: "example.com", operations: [] }];
+      reg.sites.set("example-com", served(shop, undefined, "candidate"));
+      // the agent's own placeholder name, and no browser at all
+      const input = {
+        trigger: "https://example.com/shop?q={query}",
+        args: { query: "alice" },
+        args2: { query: "bobby" },
+        args3: { query: "carol" },
+      };
+      const r = await learnSite(input, { minIntervalMs: 0 });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.deepEqual(r.reused, { site: "example-com", op: "searchShop", status: "candidate" });
+      assert.deepEqual(r.data, [{ name: "alice one" }, { name: "alice two" }]);
+      assert.equal(r.signature, "searchShop(q)");
+      assert.match(r.next ?? "", /^this is example-com\.searchShop, shared by others: call_operation it .*fresh: true/);
+      assert.deepEqual([r.captures, r.shared, r.proof], [undefined, undefined, undefined]);
+      assert.deepEqual(hits, ["GET /api/search?q=alice"], "one call: no holdout, no clean replay");
+      assert.equal(reg.uploads().length, 0);
+      assert.equal(loadSite("example-com")!.site.shared?.by, "agent", "pulled as an agent pulls: reads only");
+      await settle(5000);
+      assert.deepEqual(
+        reg.reports().map((x) => [x.hash, x.outcome]),
+        [[hashOf("example-com", shop.operations[0]!), "ok"]],
+      );
+
+      // fresh: the shared op was not what the user wanted, so the page is learned, which needs a browser here
+      const own = await learnSite({ ...input, fresh: true }, { minIntervalMs: 0 });
+      assert.equal(own.reused, undefined);
+      assert.match(own.error ?? "", /needs a Chromium browser/);
+      assert.equal(hits.length, 1, "the shared op was not called again");
+    }),
+  ));
+
+test("learn_site learns when the shared op is for another page or its call answers nothing", () =>
+  publicDns(() =>
+    sharing(async ({ reg, hits }) => {
+      reg.matches = [{ name: "example-com", domain: "example.com", operations: [] }];
+      const args = { args: { q: "alice" }, args2: { q: "bobby" }, args3: { q: "carol" } };
+      for (const [what, shop] of [
+        ["another page", shopSite(`${EX}/books?q={q}`)],
+        ["an empty answer", shopSite(`${EX}/shop?q={q}`, "nothing.here")],
+      ] as const) {
+        reg.sites.set("example-com", served(shop, undefined, "candidate"));
+        const r = await learnSite({ trigger: `${EX}/shop?q={q}`, ...args }, { minIntervalMs: 0 });
+        assert.equal(r.reused, undefined, what);
+        // learning comes next, and needs the browser this machine lacks
+        assert.match(r.error ?? "", /needs a Chromium browser/, what);
+      }
+      assert.ok(
+        hits.every((h) => h.startsWith("GET /api/search")),
+        hits.join("; "),
+      );
+    }),
+  ));
+
+test("sameTrigger: the same page with placeholders at the same places, whatever their names", () => {
+  const op = (url: string, params = [{ name: "q", type: "string" as const, required: true }]) =>
+    ({ trigger: { url }, params }) as unknown as Operation;
+  assert.deepEqual(
+    sameTrigger(op("https://www.example.com/s?q={q}"), "https://example.com/s?q={term}", { term: "x" }),
+    {
+      q: "x",
+    },
+  );
+  assert.deepEqual(
+    sameTrigger(
+      op("https://a.example.com/book/{id}?lang=en", [{ name: "id", type: "string" as const, required: true }]),
+      "https://a.example.com/book/{book}?lang=en",
+      { book: 7 },
+    ),
+    { id: 7 },
+  );
+  assert.equal(sameTrigger(op("https://example.com/s?q={q}"), "https://example.com/t?q={q}", { q: "x" }), undefined);
+  assert.equal(sameTrigger(op("https://example.com/s?q={q}"), "https://example.com/s?q=fixed", { q: "x" }), undefined);
+  assert.equal(
+    sameTrigger(op("https://example.com/s?q={q}"), "https://example.com/s?q={q}&p=2", { q: "x" }),
+    undefined,
+  );
+  assert.equal(sameTrigger(op("https://example.com/s?q={q}"), "https://example.org/s?q={q}", { q: "x" }), undefined);
+  assert.equal(
+    sameTrigger(op("https://example.com/s?q={q}"), "https://example.com/s?q={q}", { q: "x", page: 2 }),
+    undefined,
+    "an arg the op lacks",
+  );
+});
