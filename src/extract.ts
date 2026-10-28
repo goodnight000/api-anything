@@ -130,7 +130,7 @@ export function splitPick(s: string): string[] {
   return out;
 }
 
-function pickEntry(p: string): { name: string; path: string; re?: RegExp } {
+export function pickEntry(p: string): { name: string; path: string; re?: RegExp } {
   const [, name, rest] = /^([\w$-]+)=(.+)$/.exec(p) ?? [p, undefined, p];
   const cut = rest.indexOf("~");
   const path = cut < 0 ? rest : rest.slice(0, cut);

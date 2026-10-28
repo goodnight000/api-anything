@@ -95,6 +95,10 @@ the user.
      args once: if those still return data, the answer is `ok: false`, `class: "input"`, "no
      results for these args ... the operation works". Treat that as "nothing found" for these
      args, not as a broken op.
+   - A picked field can be missing for one thing only (an item with no price): then the answer is
+     `ok: true` with that field absent and a `reason` naming it ("the answer for these args has no
+     price"). Tell the user that field is missing rather than inventing a value. When the field is
+     gone for the example args too, the call is `class: "drift"` naming it instead.
 
 ## Turning a site into an API: intent first
 
@@ -325,7 +329,7 @@ Every failure carries:
 | `auth` | not logged in, or the session expired | ask the user to run `api-anything login <site>` |
 | `rate` | the site is throttling | stop; tell the user; do not retry now |
 | `blocked` | bot challenge, even after escalating to the browser | ask the user to log in and clear the challenge |
-| `drift` | the site changed and healing failed | follow `next` once (`api-anything heal <site> <op>`, or re-`add` with a new `--extract` when the response changed); then stop |
+| `drift` | the site changed and healing failed, or a picked field the op returns is gone (the reason names it) | follow `next` once (`api-anything heal <site> <op>`, or re-`add` with a new `--extract` or `--pick` when the response changed); then stop |
 | `input` | bad, unknown or missing args, or the thing does not exist / has no results (the op's example still answers) | fix the args per `api-anything ops <site>`; never heal or re-add for this |
 | `refused` | a write without permission | see the write rules below |
 | `duplicate` | the same write (same args) was sent in the last 10 minutes and may have gone through; nothing was sent | tell the user to check the site; see the write rules below |

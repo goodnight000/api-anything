@@ -4,7 +4,7 @@
  */
 import { join } from "node:path";
 import { atStep, browserAvailable, PageUnreachable, ProfileInUse, runTrigger, waitReport } from "./browser.js";
-import { botWall, type Class, judge } from "./classify.js";
+import { botWall, type Class, judge, pickedShape } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { capOutput, extract } from "./extract.js";
@@ -59,6 +59,8 @@ export interface Attempt {
   ambiguous?: boolean;
   /** the args may be the problem (data missing, or a bare 403); see Classified.missing */
   missing?: boolean;
+  /** picked fields gone from an answer that has the rest (in `data`); see Classified.lost */
+  lost?: string[];
   /** the server failed or could not be reached; see Classified.server */
   server?: boolean;
   /** the first answer was a redirect, so the server took the request (a write ran) */
@@ -1381,6 +1383,7 @@ export async function healOperation(
     }),
   };
   // The interface (params, trigger, match, what to extract) is the caller's contract; only the wire template heals.
+  const pinned = pickedShape(op.response);
   const candidate: Operation = {
     ...fresh,
     description: op.description,
@@ -1396,6 +1399,8 @@ export async function healOperation(
     minTier: Math.max(op.minTier, fresh.minTier) as Operation["minTier"],
     response: {
       ...fresh.response,
+      // the picked fields' learned types are the recipe's too: a candidate whose answer lacks one fails its replay
+      ...(pinned ? { shape: { ...fresh.response.shape, ...pinned } } : {}),
       format: op.response.format,
       extract: op.response.extract,
       pick: op.response.pick,

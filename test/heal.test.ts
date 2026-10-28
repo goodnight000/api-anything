@@ -229,6 +229,39 @@ fetch("/api/search?${key}="+encodeURIComponent(p.get("q"))+"&page="+encodeURICom
     assert.deepEqual((r.data as unknown[])[0], { q: "cats", page: "2" });
   });
 
+  test("a recapture whose answer lost a picked field is not saved: the call is drift naming it", async () => {
+    let v2 = false;
+    const { server, base } = await serve((req, res) => {
+      const u = new URL(req.url!, "http://x");
+      const key = v2 ? "term" : "q";
+      if (u.pathname.startsWith("/api/")) {
+        if (!u.searchParams.has(key))
+          return void res.writeHead(400, { "content-type": "application/json" }).end('{"error":"unknown argument"}');
+        const q = u.searchParams.get(key);
+        res.writeHead(200, { "content-type": "application/json" });
+        return void res.end(JSON.stringify({ results: [v2 ? { q, cost: 3 } : { q, price: 3 }] }));
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(
+        `<html><body><script>fetch("/api/search?${key}="+encodeURIComponent(new URLSearchParams(location.search).get("q")))</script></body></html>`,
+      );
+    });
+    servers.push(server);
+    await addOperation({
+      site: "p1",
+      op: "search",
+      trigger: { url: `${base}/s?q={q}` },
+      examples: [{ q: "hello" }, { q: "world" }],
+      response: { extract: "results", pick: ["q", "price"] },
+    });
+    v2 = true;
+    const r = await call("p1", "search", { q: "cats" }, fast);
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(r.class, "drift");
+    assert.match(r.reason ?? "", /picked field price disappeared/);
+    assert.match(loadSite("p1")!.site.operations[0]!.request.url, /[?&]q=/, "the candidate was not saved");
+  });
+
   test("a failed heal marks the op stale, so the next call skips the browser", async () => {
     const { server, base } = await search();
     servers.push(server);
