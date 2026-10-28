@@ -411,9 +411,19 @@ const sessionOrNone = (site: string): Session | undefined => {
   }
 };
 
-/** `text` without the live values of any of `sessions`; see `redact`. */
-const hide = (text: string, sessions: (Session | undefined)[], cut = false) =>
-  sessions.reduce((t, s) => (s ? redact(t, s, { cut }) : t), text);
+/**
+ * `text` without the live values of any of `sessions`; see `redact`. One pass over their union: a
+ * pass per session would check each only after its own replacements, and a later one can expose
+ * an earlier one's value.
+ */
+const hide = (text: string, sessions: (Pick<Session, "cookies" | "values"> | undefined)[], cut = false) => {
+  const all = sessions.filter((s) => s !== undefined);
+  const union = {
+    cookies: all.flatMap((s) => s.cookies),
+    values: Object.fromEntries(all.flatMap((s, i) => Object.entries(s.values).map(([k, v]) => [`${i}:${k}`, v]))),
+  };
+  return redact(text, union, { cut });
+};
 
 /**
  * One try at a tier, logged for the call's write status. A reason quotes the response, which can

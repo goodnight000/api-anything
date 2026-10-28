@@ -7,6 +7,7 @@ import { after, before, beforeEach, describe, test } from "node:test";
 import { type CallResult, call, finish, stepOf } from "../src/execute.js";
 import { type Attempt, PROFILE_HINT } from "../src/heal.js";
 import { buildRequest } from "../src/http.js";
+import { OMITTED } from "../src/secrets.js";
 import { saveSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
 import { saveSite, staleMark } from "../src/store.js";
@@ -1079,6 +1080,31 @@ test("readback: with no find, any data counts; read args take the write's values
     w((_u, i) => (i?.method === "POST" ? json({ ok: true }) : json({ data: { edges: [] } }))),
   );
   assert.equal(empty.write, "accepted");
+});
+
+test("a value of the jar before the send that redacting the rotated one would expose never reaches the reason", async () => {
+  // Redacting each snapshot on its own checks the first before the second's replacement spells it.
+  const rotated = "RotatedSid4Kq9Lm2";
+  const old = `Old[redacted]Tail7Xw`;
+  saveSession("t", {
+    cookies: [{ name: "sid", value: old, domain: "t.test", path: "/", expires: -1, httpOnly: true, secure: true }],
+    values: {},
+  });
+  const r = await call(
+    "t",
+    "user",
+    { name: "bob" },
+    opts(
+      () =>
+        new Response(`bad session Old${rotated}Tail7Xw`, {
+          status: 401,
+          headers: { "content-type": "text/plain", "set-cookie": `sid=${rotated}; Path=/` },
+        }),
+    ),
+  );
+  assert.equal(r.class, "auth", JSON.stringify(r));
+  assert.ok(!r.reason!.includes(old) && !r.reason!.includes(rotated), r.reason!);
+  assert.ok(r.reason!.includes(OMITTED), r.reason!);
 });
 
 test("a cookie a redirect set, sent on the next hop and rotated again, is redacted from the reason", async () => {

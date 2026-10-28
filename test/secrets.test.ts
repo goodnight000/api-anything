@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { REDACTED, redact } from "../src/secrets.js";
+import { liveIn, OMITTED, REDACTED, redact, scanSecrets } from "../src/secrets.js";
+import type { Session } from "../src/session.js";
 
 const TOKEN = "Tk4Rf9Lp2Wq7Zx3Nm8Vb";
 const SPACED = "a b/c+d=e&f Long Enough";
@@ -63,4 +64,52 @@ test("redact: a value a cut split leaves none of its first characters at the end
   // under 4 characters says nothing about the value; without cut nothing is dropped
   assert.equal(redact(`ends in ${TOKEN.slice(0, 3)}`, session, { cut: true }), `ends in ${TOKEN.slice(0, 3)}`);
   assert.equal(redact(`ends in ${TOKEN.slice(0, 9)}`, session), `ends in ${TOKEN.slice(0, 9)}`);
+});
+
+// A value with the characters encodings treat apart: base64 of it holds / and +, and p and + have entities.
+const ODD = "Wq7?Lp2>Wx9~Zr4+Nd8";
+const odd = { cookies: [], values: { k: ODD } };
+
+test("redact: a live value left in an encoding the replacements miss takes the response out, the lead kept", () => {
+  const b64 = Buffer.from(ODD).toString("base64");
+  const leaks: [Pick<Session, "cookies" | "values">, string, string][] = [
+    [session, TOKEN, `%54${TOKEN.slice(1)}`], // only the first byte percent-escaped
+    [session, TOKEN, `%2554${TOKEN.slice(1)}`], // that escape escaped again
+    [session, TOKEN, Buffer.from(`%54${TOKEN.slice(1)}`).toString("base64")],
+    [odd, ODD, encodeURIComponent(b64)],
+    [odd, ODD, encodeURIComponent(ODD).replace(/%3F/g, "%3f")],
+    [odd, ODD, ODD.replace("p", "&#112;")],
+    [odd, ODD, ODD.replace("p", "&#x70;")],
+    [odd, ODD, ODD.replace("+", "&#43;")], // Go's html/template
+  ];
+  for (const [s, value, f] of leaks)
+    for (const cut of [false, true]) {
+      const out = redact(`HTTP 401: invalid session ${f}; try again`, s, { cut });
+      assert.equal(out, `HTTP 401: ${OMITTED}`, f);
+      assert.ok(!liveIn(out, s), f);
+      assert.ok(!out.includes(value), out);
+    }
+});
+
+test("redact: a lead that holds the value itself is left out with the rest", () => {
+  assert.equal(redact(`session %54${TOKEN.slice(1)}: refused`, session), OMITTED);
+});
+
+test("redact: text that only looks like a token, and no live value, is left alone", () => {
+  // built here, so the secret scan of this repository finds no token-shaped literal
+  const part = (s: string) => Buffer.from(s).toString("base64url");
+  const jwt = [part('{"alg":"HS256"}'), part('{"sub":"Q7xK2pL9vR4mT8"}'), part("signature-for-this-jwt")].join(".");
+  const text = `HTTP 401: token ${jwt} expired at https://www.x.test/ for abc`;
+  // only the heuristics see it: a JWT shape, which no live value is
+  assert.ok(scanSecrets(text, session).warnings.length);
+  assert.ok(!liveIn(text, session));
+  assert.equal(redact(text, session), text);
+  assert.equal(redact(text, session, { cut: true }), text);
+});
+
+test("liveIn: reads HTML character references, the origin and short values are no live value", () => {
+  assert.ok(liveIn(`<p>${[...TOKEN].map((c) => `&#${c.charCodeAt(0)};`).join("")}</p>`, session));
+  assert.ok(liveIn(`<p>${ODD.replace("+", "&#x2B;")}</p>`, odd));
+  assert.ok(!liveIn("see https://www.x.test/ and abc", session));
+  assert.ok(scanSecrets(ODD.replace("+", "&#43;"), odd).secrets.length);
 });

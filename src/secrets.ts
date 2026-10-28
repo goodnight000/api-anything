@@ -111,6 +111,12 @@ const jsonUnescape = (s: string) =>
   s.replace(/\\(u[0-9a-fA-F]{4}|["\\/bfnrt])/g, (_, c: string) =>
     c.length > 1 ? String.fromCharCode(parseInt(c.slice(1), 16)) : (ESC[c] ?? c),
   );
+// Go's html/template writes + as &#43;
+const htmlCharRefs = (s: string) =>
+  s.replace(/&#(?:x([0-9a-fA-F]{1,6})|(\d{1,7}));/g, (m, hex: string | undefined, dec: string | undefined) => {
+    const n = hex ? Number.parseInt(hex, 16) : Number(dec);
+    return n <= 0x10ffff ? String.fromCodePoint(n) : m;
+  });
 
 /**
  * Keys a provider issues to one account, by their own prefix: no site ships one for every visitor.
@@ -184,7 +190,8 @@ function inBase64(value: string): (text: string) => boolean {
 
 /**
  * Every text a spec string may hide a value in: percent-decoded (+ as a space or not),
- * JSON-unescaped (`\/`, `\u002b`) and base64 runs decoded, in any order, up to 3 layers deep.
+ * JSON-unescaped (`\/`, `\u002b`), HTML character references read (`&#43;`, `&#x2b;`) and base64
+ * runs decoded, in any order, up to 3 layers deep.
  */
 function decodings(v: string): Set<string> {
   const out = new Set([v]);
@@ -192,7 +199,7 @@ function decodings(v: string): Set<string> {
   for (let depth = 0; depth < 3 && frontier.length; depth++) {
     const next: string[] = [];
     for (const f of frontier) {
-      for (const d of [pctDecode(f, false), pctDecode(f, true), jsonUnescape(f), ...base64Texts(f)]) {
+      for (const d of [pctDecode(f, false), pctDecode(f, true), jsonUnescape(f), htmlCharRefs(f), ...base64Texts(f)]) {
         if (out.has(d)) continue;
         out.add(d);
         next.push(d);
@@ -278,15 +285,52 @@ const ORIGIN = /^https?:\/\/[^/?#]+\/?$/i;
 const htmlEscape = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
+type Live = { label: string; form: string; encoded: (text: string) => boolean };
+
+/** The exact live values a text is searched for: each stored form, with its base64 test. */
+function liveValues(session: Pick<Session, "cookies" | "values">, skip?: RegExp): Live[] {
+  const live: Live[] = [];
+  const add = (label: string, v: string) => {
+    for (const form of storedForms(v)) if (!skip?.test(form)) live.push({ label, form, encoded: inBase64(form) });
+  };
+  for (const c of session.cookies) add(`cookie ${c.name}`, c.value);
+  for (const [k, v] of Object.entries(session.values)) add(`session value ${k}`, v);
+  return live;
+}
+
+const holds = (decoded: string[], l: Live) => decoded.some((d) => d.includes(l.form) || l.encoded(d));
+
+/** `liveIn` for one session, set up once to ask of several texts. */
+function liveTest(session: Pick<Session, "cookies" | "values">): (text: string) => boolean {
+  const live = liveValues(session, ORIGIN);
+  return (text) => {
+    if (!live.length || !text) return false;
+    const decoded = [...decodings(text)];
+    return live.some((l) => holds(decoded, l));
+  };
+}
+
+/**
+ * Whether `text` holds a live cookie or session value, exactly: in any layer `decodings` reads, or
+ * base64-encoded at any byte offset. The values are the ones `redact` replaces (6+ chars, origins
+ * left out); the shape heuristics of `scanSecrets` play no part, since they misfire.
+ */
+export const liveIn = (text: string, session: Pick<Session, "cookies" | "values">) => liveTest(session)(text);
+
+/** What a redacted text says instead when a live value is left in it after the replacements. */
+export const OMITTED = "the response is left out: it echoed a session value";
+
 /**
  * `text` with every live cookie and session value in it replaced by `[redacted]`: each stored form
  * (as stored, unquoted, URL-decoded) as it is and percent-encoded, form-encoded, JSON-escaped (a
- * \u escape in the text is read as its character first),
- * HTML-escaped and base64-encoded at any byte offset (`scanSecrets` reads the same layers by decoding
- * the text instead, which a replacement cannot do). `cut`: the text was cut short (a body's snippet),
- * so a value the cut split leaves its first characters at the end: those go too. A value that is an
- * origin (`https://www.x.test/`, an analytics cookie's last page) is the site's address, not a
- * credential, and is left (see `besideOrigins`).
+ * \u escape in the text is read as its character first), HTML-escaped and base64-encoded at any byte
+ * offset. `cut`: the text was cut short (a body's snippet), so a value the cut split leaves its first
+ * characters at the end: those go too. A value that is an origin (`https://www.x.test/`, an analytics
+ * cookie's last page) is the site's address, not a credential, and is left (see `besideOrigins`).
+ *
+ * It fails closed: a replacement cannot reach every encoding, so the result is then read the way
+ * `scanSecrets` reads a spec (`liveIn`), and a text still holding a live value is replaced by
+ * `OMITTED`, after its lead ("HTTP 401") when the lead holds none. Which value it was is not said.
  */
 export function redact(text: string, session: Pick<Session, "cookies" | "values">, o: { cut?: boolean } = {}): string {
   const forms = new Set<string>();
@@ -303,12 +347,18 @@ export function redact(text: string, session: Pick<Session, "cookies" | "values"
   // a JSON body can spell any character \u00XX, all or some of them: read those as the characters first
   let out = text.replace(/\\u([0-9a-fA-F]{4})/g, (_, h: string) => String.fromCharCode(Number.parseInt(h, 16)));
   for (const f of longest) if (out.includes(f)) out = out.split(f).join(REDACTED);
-  if (!o.cut) return out;
-  let drop = 0;
-  for (const f of longest)
-    for (let n = Math.min(f.length - 1, out.length); n >= PARTIAL && n > drop; n--)
-      if (out.endsWith(f.slice(0, n))) drop = n;
-  return drop ? `${out.slice(0, out.length - drop)}${REDACTED}` : out;
+  if (o.cut) {
+    let drop = 0;
+    for (const f of longest)
+      for (let n = Math.min(f.length - 1, out.length); n >= PARTIAL && n > drop; n--)
+        if (out.endsWith(f.slice(0, n))) drop = n;
+    if (drop) out = `${out.slice(0, out.length - drop)}${REDACTED}`;
+  }
+  const live = liveTest(session);
+  if (!live(out)) return out;
+  const i = out.indexOf(": ");
+  const lead = i > 0 ? out.slice(0, i) : "";
+  return lead && !live(lead) ? `${lead}: ${OMITTED}` : OMITTED;
 }
 
 /**
@@ -323,20 +373,14 @@ export function scanSecrets(
   session: Session,
   allowed: Set<string> = new Set(),
 ): { secrets: string[]; warnings: string[] } {
-  const live: [string, string, (text: string) => boolean][] = [];
-  const add = (label: string, v: string) => {
-    for (const f of storedForms(v)) live.push([label, f, inBase64(f)]);
-  };
-  for (const c of session.cookies) add(`cookie ${c.name}`, c.value);
-  for (const [k, v] of Object.entries(session.values)) add(`session value ${k}`, v);
+  const live = liveValues(session);
   const secrets: string[] = [];
   const warnings: string[] = [];
   const visit = (v: unknown, path: string) => {
     if (allowed.has(path)) return;
     if (typeof v === "string") {
-      const forms = live.length ? [...decodings(v)] : [];
-      for (const [label, s, encoded] of live)
-        if (forms.some((f) => f.includes(s) || encoded(f))) secrets.push(`${path} holds the live ${label}`);
+      const decoded = live.length ? [...decodings(v)] : [];
+      for (const l of live) if (holds(decoded, l)) secrets.push(`${path} holds the live ${l.label}`);
       const text = pctDecode(v, false); // percent-encoded bodies hide the blob's shape
       const hit = (
         [

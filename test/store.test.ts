@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { OMITTED } from "../src/secrets.js";
 import { saveSession } from "../src/session.js";
 import type { Site } from "../src/spec.js";
 import {
@@ -138,6 +139,9 @@ test("a stale mark and the heal log never keep a live session value", () => {
   appendHeal({ site: "x", op: "getUser", strategy: "recapture", diff: `token ${encodeURIComponent(live)} -> ref` });
   const log = readFileSync(join(home, "heals.jsonl"), "utf8");
   assert.ok(!log.includes(live) && log.includes("[redacted]"), log);
+  // an encoding the replacements miss: the response is left out
+  markStale("x", "getUser", `heal failed: HTTP 401: bad session %25${live.charCodeAt(0).toString(16)}${live.slice(1)}`);
+  assert.equal(staleMark("x", "getUser")?.reason, `heal failed: ${OMITTED}`);
 });
 
 test("write ledger: an unsettled write holds back its repeat, under a local key and without the args", () => {
