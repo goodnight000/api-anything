@@ -1217,6 +1217,12 @@ test("a verify the site's cool-down answers sends nothing and leaves the record 
   assert.equal(sent, 0);
   assert.deepEqual(loadRecord("demo").search, before);
   assert.match(plan("demo").errors.join("\n"), failing);
+  // a session value that spells the cool-down's words is redacted out of its reason: still nothing was sent
+  saveSession("demo", { cookies: [], values: { setting: "not sent" }, kinds: { setting: "setting" } });
+  await verifySite("demo", opts);
+  assert.equal(sent, 0);
+  assert.deepEqual(loadRecord("demo").search, before);
+  assert.match(plan("demo").errors.join("\n"), failing);
 });
 
 test("a verify that stays mixed takes away the record the op had", async () => {

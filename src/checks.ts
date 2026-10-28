@@ -175,10 +175,6 @@ export interface Verified {
  */
 type Run = { results: CaseResult[]; plan: string; from: (string | undefined)[]; proven: boolean } | { skipped: string };
 
-/** The answer while the site cools down: nothing was sent, so no op answered it. */
-const cooled = (r: CallResult) =>
-  !r.ok && (r.class === "rate" || r.class === "blocked") && !!r.reason?.startsWith("not sent:");
-
 async function runCases(name: string, op: Operation, opts: CallOptions): Promise<Run> {
   const example = exampleArgs(op);
   const cases: [string, Record<string, unknown>, Check["expect"], Check?][] = [
@@ -205,7 +201,7 @@ async function runCases(name: string, op: Operation, opts: CallOptions): Promise
         last = opHash(o);
       },
     });
-    from.push(cooled(r) ? undefined : last);
+    from.push(r.cooling ? undefined : last);
     return r;
   };
   for (const [label, args, expect, check] of cases) {

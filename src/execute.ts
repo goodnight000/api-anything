@@ -197,6 +197,8 @@ export interface CallResult {
   nextCall?: NextCall;
   /** the server failed or could not be reached: the answer says nothing about the request or the args */
   server?: true;
+  /** the site cools down after a rate limit or block: nothing was sent, so no version of the op answered */
+  cooling?: true;
 }
 
 type Result = Omit<CallResult, "ms">;
@@ -966,7 +968,7 @@ function whereToLook(op: Operation, args: Record<string, unknown>): string {
 /** The answer while the site cools down (`coolAfter`): nothing is sent. */
 function cooled(c: CoolDown, site: string, now = Date.now()): Result {
   const reason = `not sent: ${site} answered ${c.class} at ${new Date(c.at).toISOString()} (${c.reason}), so nothing goes to it until ${new Date(c.until).toISOString()}`;
-  const wait = { ok: false, class: c.class, reason, retryAfterMs: Math.max(0, c.until - now) };
+  const wait = { ok: false, class: c.class, reason, retryAfterMs: Math.max(0, c.until - now), cooling: true as const };
   if (c.class === "rate") return { ...wait, next: "rate limited: do not retry before retryAfterMs; nothing was sent" };
   if (c.status === 451) return { ...wait, next: REGION, nextCall: { action: "report" }, retry: "no" };
   return {

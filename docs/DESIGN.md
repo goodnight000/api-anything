@@ -688,8 +688,8 @@ sets it for the site's Retry-After, capped at 30 minutes, or 3 minutes without o
 at every tier the op climbs to (3 for a read, 2 for a write), or a 451 at any tier, sets 10 minutes. A
 local `blocked` (a tier cap, no browser, an unconfirmed op) sets none. While it lasts, `call()`
 answers `rate` or `blocked` without sending anything, a write before its ledger records it
-(`write: "not_sent"`), with `retryAfterMs` counting down to its end and a `reason` naming what the site
-answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
+(`write: "not_sent"`), with `cooling: true`, `retryAfterMs` counting down to its end and a `reason`
+naming what the site answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
 asks for `api-anything login <site> --window`. Any login for the site (an import, a cookies file, the
 window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. The call
 option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends that one call through
@@ -1194,7 +1194,7 @@ order; `learnedAt`, `unproven` and `version` aside), and only when every case an
 version: cases that answered from different ones (a heal part way, or another process saving the op)
 run once more, and if they are still mixed the op gets no record, and loses the one it had. The cases
 are chosen from one version too: when that is not the one saved when verify ends, they run once more
-from the saved one. A case the site's cool-down answered sent nothing, so no version answered it, and
+from the saved one. A case the site's cool-down answered (`CallResult.cooling`) sent nothing, so no version answered it, and
 a run of nothing else leaves the op's record as it was. So an op changed since, or saved by
 something else while its last cases ran, has none. When two passing cases whose args differ only in an op's
 `unproven` params answer differently, and the same holds, verify clears the mark. A read with `paging` gets one more
