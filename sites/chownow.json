@@ -1,0 +1,92 @@
+{
+  "name": "chownow",
+  "displayName": "ChowNow",
+  "baseUrl": "https://order.chownow.com",
+  "description": "Public restaurant identity and nested published menu data from ChowNow source documents.",
+  "operations": [
+    {
+      "name": "getPublicMenu",
+      "description": "Read the public restaurant identity and nested published menu from document JSON-LD. Use restaurant and location IDs from the same real public URL.",
+      "request": {
+        "method": "GET",
+        "url": "https://order.chownow.com/order/%7BrestaurantId%7D/locations/%7BlocationId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "restaurantId",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "locationId",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://order.chownow.com/order/{restaurantId}/locations/{locationId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "order.chownow.com",
+        "path": "/order/*/locations/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "name",
+          "address",
+          "hasMenu"
+        ],
+        "embedded": {
+          "regex": "<script type=\"application/ld\\+json\">(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "restaurantId",
+          "type": "string",
+          "required": true,
+          "description": "Restaurant ID from /order/<restaurantId>/locations/<locationId>. Copy both IDs from the same real public ChowNow URL.",
+          "example": "44216",
+          "pattern": "[0-9]+",
+          "hint": "Digits copied from the same public restaurant/location URL"
+        },
+        {
+          "name": "locationId",
+          "type": "string",
+          "required": true,
+          "description": "Location ID paired with restaurantId in the same real public ChowNow URL.",
+          "example": "66421",
+          "pattern": "[0-9]+",
+          "hint": "Digits copied from the same public restaurant/location URL"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "restaurantId": "36632",
+            "locationId": "55612"
+          },
+          "expect": "result",
+          "purpose": "Different Chicago restaurant and menu from the Bozeman example; includes an item with no published offer."
+        }
+      ]
+    }
+  ]
+}

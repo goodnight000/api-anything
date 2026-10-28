@@ -1,0 +1,83 @@
+{
+  "name": "trip",
+  "displayName": "Trip.com",
+  "baseUrl": "https://www.trip.com",
+  "description": "Public destination hotel lists from Trip.com landing pages, without dates or live availability.",
+  "operations": [
+    {
+      "name": "listHotels",
+      "description": "List the hotels in a public destination landing page, without dates or live availability.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.trip.com/hotels/%7Bdestination%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "destination",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.trip.com/hotels/{destination}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.trip.com",
+        "path": "/hotels/*/"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "itemListElement[*].item",
+        "pick": [
+          "name",
+          "url",
+          "stars=starRating.ratingValue",
+          "rating=aggregateRating.ratingValue",
+          "reviews=aggregateRating.reviewCount"
+        ],
+        "embedded": {
+          "regex": "<script type=\"application/ld\\+json\">\\s*(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "destination",
+          "type": "string",
+          "required": true,
+          "description": "Destination route segment from a Trip.com hotel-list URL, such as london-hotels-list-338. Use the full slug with its city ID.",
+          "example": "shanghai-hotels-list-2"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "destination": "london-hotels-list-338"
+          },
+          "expect": "result",
+          "purpose": "London returns Park Grand Heathrow and Royal National Hotel instead of the Shanghai and Singapore example hotels."
+        }
+      ]
+    }
+  ]
+}

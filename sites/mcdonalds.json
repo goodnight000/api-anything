@@ -1,0 +1,79 @@
+{
+  "name": "mcdonalds",
+  "displayName": "McDonald's US",
+  "baseUrl": "https://www.mcdonalds.com",
+  "description": "Public national US menu product descriptions. No restaurant pricing, availability or customized nutrition.",
+  "operations": [
+    {
+      "name": "getProduct",
+      "description": "Read US national product identity and standard-recipe description, including calorie prose when present.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.mcdonalds.com/us/en-us/product/%7BproductSlug%7D.html",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "productSlug",
+          "at": [
+            "path:3"
+          ],
+          "template": "{productSlug}.html"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.mcdonalds.com/us/en-us/product/{productSlug}.html"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.mcdonalds.com",
+        "path": "/us/en-us/product/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html;charset=utf-8",
+        "html": {
+          "items": "html",
+          "fields": {
+            "name": ".cmp-product-details-main__heading-title",
+            "sourceUrl": "link[rel=\"canonical\"]@href",
+            "locale": "@lang",
+            "productId": "#page-root@data-product-id",
+            "description": ".cmp-product-details-main__description"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "productSlug",
+          "type": "string",
+          "required": true,
+          "description": "Existing US product URL slug, without .html. Preserve size prefixes from the real item link.",
+          "example": "big-mac",
+          "pattern": "[a-z0-9-]+",
+          "hint": "US product link slug such as big-mac or small-french-fries"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "productSlug": "small-french-fries"
+          },
+          "expect": "result",
+          "purpose": "Small fries must differ from the Big Mac example."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "name": "tradingview",
+  "displayName": "TradingView",
+  "baseUrl": "https://www.tradingview.com",
+  "description": "Public exchange-qualified stock instrument metadata from overview documents.",
+  "operations": [
+    {
+      "name": "getInstrument",
+      "description": "Read public instrument identity, exchange, currency and ISIN metadata from its overview document.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.tradingview.com/symbols/%7Binstrument%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "instrument",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.tradingview.com/symbols/{instrument}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.tradingview.com",
+        "path": "/symbols/*/"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "instrument=pro_symbol",
+          "symbol=short_name",
+          "name=description",
+          "exchange=exchange",
+          "instrumentType=type",
+          "currency=currency",
+          "isin=isin_displayed",
+          "timeZone=timezone"
+        ],
+        "embedded": {
+          "regex": "window\\.initData\\.symbolInfo\\s*=\\s*(\\{[^\\n]*\\});"
+        }
+      },
+      "params": [
+        {
+          "name": "instrument",
+          "type": "string",
+          "required": true,
+          "description": "Exact exchange-prefixed overview path identifier, for example NASDAQ-AAPL.",
+          "example": "NASDAQ-AAPL",
+          "pattern": "[A-Z0-9_]+-[A-Z0-9.-]+",
+          "hint": "An overview path identifier such as NASDAQ-AAPL"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "instrument": "NASDAQ-MSFT"
+          },
+          "expect": "result",
+          "purpose": "Public MSFT instrument has a different identity from the Apple example."
+        },
+        {
+          "args": {
+            "instrument": "NASDAQ-NVDA"
+          },
+          "expect": "result",
+          "purpose": "Public NVDA instrument has a different identity from the Apple example."
+        }
+      ]
+    }
+  ]
+}

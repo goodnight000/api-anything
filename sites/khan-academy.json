@@ -1,0 +1,222 @@
+{
+  "name": "khan-academy",
+  "displayName": "Khan Academy",
+  "baseUrl": "https://www.khanacademy.org",
+  "description": "Public course identity and ordered unit metadata from signed-out Khan Academy course pages.",
+  "operations": [
+    {
+      "name": "getCourse",
+      "description": "Get public course identity and short catalog description.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.khanacademy.org/api/internal/graphql/ContentRouteCourseData?hash=2276677658&fastly_cacheable=persist_until_publish&variables=%7B%22path%22%3A%22%7Bsubject%7D%2F%7Bcourse%7D%22%2C%22countryCode%22%3A%22US%22%7D&lang=en&app=khanacademy",
+        "headers": {
+          "accept": "*/*",
+          "referer": "https://www.khanacademy.org/{subject}/{course}",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "subject",
+          "at": [
+            "query:variables",
+            "json:/path"
+          ],
+          "template": "{subject}/{course}"
+        },
+        {
+          "param": "subject",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://www.khanacademy.org/{subject}/{course}"
+        }
+      ],
+      "volatile": [
+        {
+          "at": [
+            "query:hash"
+          ],
+          "shape": {
+            "charset": "digits",
+            "length": 10
+          },
+          "anchor": "hash"
+        }
+      ],
+      "trigger": {
+        "url": "https://www.khanacademy.org/{subject}/{course}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.khanacademy.org",
+        "path": "/api/internal/graphql/ContentRouteCourseData"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "data.contentRoute.listedPathData.course",
+        "pick": [
+          "id",
+          "title=translatedTitle",
+          "description=translatedDescription",
+          "path=relativeUrl",
+          "slug",
+          "locale=kaLocale",
+          "subject=parent.translatedTitle",
+          "subjectPath=parent.relativeUrl"
+        ]
+      },
+      "params": [
+        {
+          "name": "subject",
+          "type": "string",
+          "required": true,
+          "description": "Subject path segment from a public course URL, such as math or science.",
+          "example": "math",
+          "pattern": "[a-z0-9-]+",
+          "hint": "A lowercase path segment from an existing public Khan Academy course link"
+        },
+        {
+          "name": "course",
+          "type": "string",
+          "required": true,
+          "description": "Course slug from a public course URL, such as geometry-tx.",
+          "example": "geometry-tx",
+          "pattern": "[a-z0-9-]+",
+          "hint": "A lowercase path segment from an existing public Khan Academy course link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "subject": "math",
+            "course": "algebra-2-tx"
+          },
+          "expect": "result",
+          "purpose": "Algebra 2 course and units differ from the Geometry example."
+        },
+        {
+          "args": {
+            "subject": "science",
+            "course": "hs-biology-tx"
+          },
+          "expect": "result",
+          "purpose": "Science Biology identity and rendered twelve-unit list differ from both Math learning examples."
+        }
+      ]
+    },
+    {
+      "name": "listUnits",
+      "description": "List public course units in the order returned by the course frontend.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.khanacademy.org/api/internal/graphql/ContentRouteCourseData?hash=2276677658&fastly_cacheable=persist_until_publish&variables=%7B%22path%22%3A%22%7Bsubject%7D%2F%7Bcourse%7D%22%2C%22countryCode%22%3A%22US%22%7D&lang=en&app=khanacademy",
+        "headers": {
+          "accept": "*/*",
+          "referer": "https://www.khanacademy.org/{subject}/{course}",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "subject",
+          "at": [
+            "query:variables",
+            "json:/path"
+          ],
+          "template": "{subject}/{course}"
+        },
+        {
+          "param": "subject",
+          "at": [
+            "header:referer"
+          ],
+          "template": "https://www.khanacademy.org/{subject}/{course}"
+        }
+      ],
+      "volatile": [
+        {
+          "at": [
+            "query:hash"
+          ],
+          "shape": {
+            "charset": "digits",
+            "length": 10
+          },
+          "anchor": "hash"
+        }
+      ],
+      "trigger": {
+        "url": "https://www.khanacademy.org/{subject}/{course}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.khanacademy.org",
+        "path": "/api/internal/graphql/ContentRouteCourseData"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "data.contentRoute.listedPathData.course.unitChildren",
+        "pick": [
+          "id",
+          "title=translatedTitle",
+          "path=relativeUrl",
+          "slug"
+        ]
+      },
+      "params": [
+        {
+          "name": "subject",
+          "type": "string",
+          "required": true,
+          "description": "Subject path segment from a public course URL, such as math or science.",
+          "example": "math",
+          "pattern": "[a-z0-9-]+",
+          "hint": "A lowercase path segment from an existing public Khan Academy course link"
+        },
+        {
+          "name": "course",
+          "type": "string",
+          "required": true,
+          "description": "Course slug from a public course URL, such as geometry-tx.",
+          "example": "geometry-tx",
+          "pattern": "[a-z0-9-]+",
+          "hint": "A lowercase path segment from an existing public Khan Academy course link"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "subject": "math",
+            "course": "algebra-2-tx"
+          },
+          "expect": "result",
+          "purpose": "Algebra 2 course and units differ from the Geometry example."
+        },
+        {
+          "args": {
+            "subject": "science",
+            "course": "hs-biology-tx"
+          },
+          "expect": "result",
+          "purpose": "Science Biology identity and rendered twelve-unit list differ from both Math learning examples."
+        }
+      ]
+    }
+  ]
+}

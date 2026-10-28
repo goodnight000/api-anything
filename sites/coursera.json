@@ -1,0 +1,164 @@
+{
+  "name": "coursera",
+  "displayName": "Coursera",
+  "baseUrl": "https://www.coursera.org",
+  "description": "Public course catalog search and course metadata from signed-out Coursera pages.",
+  "operations": [
+    {
+      "name": "search",
+      "description": "Search the first public catalog result page, including courses, specializations, certificates and guided projects.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.coursera.org/courses?query=%7Bq%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:query"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.coursera.org/courses?query={q}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.coursera.org",
+        "path": "/courses"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "html": {
+          "items": "#searchResults .cds-ProductCard-base",
+          "fields": {
+            "title": ".cds-CommonCard-title",
+            "url": "a.cds-CommonCard-titleLink@href",
+            "provider": ".cds-ProductCard-partnerNames",
+            "summary": ".cds-CommonCard-metadata"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Public catalog search text.",
+          "example": "python"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "cybersecurity"
+          },
+          "expect": "result",
+          "purpose": "Frontend capture gives cybersecurity catalog entries instead of the Python example."
+        },
+        {
+          "args": {
+            "q": "digital marketing"
+          },
+          "expect": "result",
+          "purpose": "Unseen query matches all 12 public frontend cards in order, including title, URL, provider and summary."
+        }
+      ]
+    },
+    {
+      "name": "getCourse",
+      "description": "Read public Course JSON-LD metadata for a course detail page. No paid lesson content or enrollment.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.coursera.org/learn/%7Bslug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.coursera.org/learn/{slug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.coursera.org",
+        "path": "/learn/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html",
+        "pick": [
+          "url=@id",
+          "title=name",
+          "description",
+          "provider=provider.name",
+          "level=educationalLevel",
+          "language=inLanguage",
+          "skills=about",
+          "learningOutcomes=teaches",
+          "rating=aggregateRating.ratingValue",
+          "ratingCount=aggregateRating.ratingCount"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*type=\"application/ld\\+json\"[^>]*>([\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Course slug from a public /learn/ link; specialization and certificate URLs are separate page types.",
+          "example": "python",
+          "pattern": "[a-z0-9][a-z0-9-]{0,199}",
+          "hint": "A slug from a Coursera /learn/ course URL."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "python-basics"
+          },
+          "expect": "result",
+          "purpose": "Second frontend capture is a distinct course identity from /learn/python."
+        },
+        {
+          "args": {
+            "slug": "python-crash-course"
+          },
+          "expect": "result",
+          "purpose": "Unseen course matches public Course JSON-LD exactly across all 10 returned fields."
+        }
+      ]
+    }
+  ]
+}

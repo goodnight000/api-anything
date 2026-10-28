@@ -1,0 +1,348 @@
+{
+  "name": "nike",
+  "displayName": "Nike",
+  "baseUrl": "https://www.nike.com",
+  "description": "Public US catalog categories, product details and initial free-text search shelves, signed out.",
+  "operations": [
+    {
+      "name": "listProducts",
+      "description": "List the initial US product cards for a category path copied from Nike navigation.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.nike.com/w/%7Bcategory%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "category",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.nike.com/w/{category}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.nike.com",
+        "path": "/w/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": ".product-grid .product-card",
+          "fields": {
+            "name": ".product-card__title",
+            "category": ".product-card__subtitle",
+            "price": ".product-price.is--current-price",
+            "url": "a.product-card__link-overlay@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "Single path segment after /w/ from a US Nike category link.",
+          "example": "mens-shoes-nik1zy7ok",
+          "pattern": "[A-Za-z0-9-]+",
+          "hint": "Copy the complete path segment from a public US Nike link."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "category": "womens-shoes-5e1x6zy7ok"
+          },
+          "expect": "result",
+          "purpose": "Women category changes product identities and categories from the men example."
+        },
+        {
+          "args": {
+            "category": "kids-shoes-v4dhzy7ok"
+          },
+          "expect": "result",
+          "purpose": "Unseen kids category matched all 24 captured product cards on identity, category, price and URL."
+        }
+      ]
+    },
+    {
+      "name": "getProduct",
+      "description": "Read US product identity and first listed colorway offer from the public product page. Does not establish stock.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.nike.com/t/%7Bslug%7D/%7Bstyle%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-full-version-list": "\"Google Chrome\";v=\"155.0.8059.85\", \"Chromium\";v=\"155.0.8059.85\", \"Not(A:Brand\";v=\"24.0.0.0\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "style",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.nike.com/t/{slug}/{style}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.nike.com",
+        "path": "/t/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=UTF-8",
+        "extract": "[0]",
+        "pick": [
+          "name",
+          "description",
+          "url",
+          "style=hasVariant[0].mpn",
+          "color=hasVariant[0].color",
+          "price=hasVariant[0].offers.price",
+          "currency=hasVariant[0].offers.priceCurrency"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*type=\"application/ld\\+json\"[^>]*>([\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Path segment after /t/ copied from the product URL.",
+          "example": "jordan-spizike-low-mens-shoes-E3tPjSZP",
+          "pattern": "[A-Za-z0-9-]+",
+          "hint": "Copy the complete path segment from a public US Nike link."
+        },
+        {
+          "name": "style",
+          "type": "string",
+          "required": true,
+          "description": "Final style/color code copied from the same product URL.",
+          "example": "FQ1759-200",
+          "pattern": "[A-Za-z0-9-]+",
+          "hint": "Copy the complete path segment from a public US Nike link."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "air-max-metro-mens-shoes-bWvVBEWx",
+            "style": "IW4935-102"
+          },
+          "expect": "result",
+          "purpose": "Air Max Metro changes identity, color and style from the Spizike example."
+        },
+        {
+          "args": {
+            "slug": "dunk-low-retro-mens-shoes-5FQWGR",
+            "style": "IM4414-700"
+          },
+          "expect": "result",
+          "purpose": "Unseen real product checks a third identity and USD offer against its frontend document."
+        }
+      ]
+    },
+    {
+      "name": "searchProducts",
+      "description": "Search the initial US product shelf by a free-text phrase.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.nike.com/w?q=%7Bquery%7D&vst=%7Bquery%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "query",
+          "at": [
+            "query:q"
+          ]
+        },
+        {
+          "param": "query",
+          "at": [
+            "query:vst"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.nike.com/w?q={query}&vst={query}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.nike.com",
+        "path": "/w"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": ".product-grid .product-card",
+          "fields": {
+            "name": ".product-card__title",
+            "category": ".product-card__subtitle",
+            "price": ".product-price.is--current-price",
+            "url": "a.product-card__link-overlay@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Free-text search phrase; fills q and vst together as in public Nike search links.",
+          "example": "basketball shoes",
+          "pattern": "[A-Za-z0-9 ,'-]{1,120}",
+          "hint": "Use 1 to 120 English letters, digits, spaces, commas, apostrophes or hyphens."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "query": "socks"
+          },
+          "expect": "result",
+          "purpose": "Socks changes product identities from the basketball shoes example."
+        },
+        {
+          "args": {
+            "query": "reflective trail running vest"
+          },
+          "expect": "result",
+          "purpose": "Reserved novel free-text phrase has its own search heading and an initial 24-card shelf in the frontend document."
+        },
+        {
+          "args": {
+            "query": ""
+          },
+          "expect": "input",
+          "purpose": "The declared nonempty phrase pattern rejects an empty input locally without a request."
+        }
+      ]
+    },
+    {
+      "name": "getSizeGuide",
+      "description": "Read the first official size-chart card for a public US Nike guide, preserving labelled rows, aligned cells and measurement systems.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.nike.com/size-fit/%7Bguide%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "guide",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.nike.com/size-fit/{guide}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.nike.com",
+        "path": "/size-fit/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=UTF-8",
+        "pick": [
+          "title",
+          "description",
+          "sizeCharts"
+        ],
+        "embedded": {
+          "regex": "(\\{\"containerType\":\"size_chart\")"
+        }
+      },
+      "params": [
+        {
+          "name": "guide",
+          "type": "string",
+          "required": true,
+          "description": "Guide path segment after /size-fit/ copied from an official US Nike navigation link.",
+          "example": "mens-footwear",
+          "pattern": "[a-z0-9-]{1,80}",
+          "hint": "Copy 1 to 80 lowercase letters, digits or hyphens from the official guide URL."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "guide": "womens-footwear"
+          },
+          "expect": "result",
+          "purpose": "Women footwear changes the leading row, column count and blank cells from the men example."
+        },
+        {
+          "args": {
+            "guide": ""
+          },
+          "expect": "input",
+          "purpose": "An empty guide is refused by the local declared format without a network request."
+        }
+      ]
+    }
+  ]
+}

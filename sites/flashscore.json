@@ -1,0 +1,106 @@
+{
+  "name": "flashscore",
+  "displayName": "Flashscore football pair metadata",
+  "baseUrl": "https://www.flashscore.com",
+  "description": "Public identity and competition metadata for the fixture Flashscore selects from a known football team-pair link. The route does not uniquely select a date or event.",
+  "operations": [
+    {
+      "name": "resolveFootballPairMetadata",
+      "description": "Resolve the fixture selected by a known Flashscore football team-pair link. Identity and competition metadata only; selection can change.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.flashscore.com/match/football/%7Bfirst%7D/%7Bsecond%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "first",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "second",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.flashscore.com/match/football/{first}/{second}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.flashscore.com",
+        "path": "/match/football/*/*/"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=UTF-8",
+        "pick": [
+          "eventId=event_id_c",
+          "sport=sport_name",
+          "competition=header.tournament.tournament",
+          "competitionPath=header.tournament.link",
+          "country=header.country_name",
+          "homeId=participantsData.home[0].id",
+          "homeName=participantsData.home[0].name",
+          "awayId=participantsData.away[0].id",
+          "awayName=participantsData.away[0].name"
+        ],
+        "embedded": {
+          "regex": "window\\.environment\\s*=\\s*(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "first",
+          "type": "string",
+          "required": true,
+          "description": "First team slug-and-ID segment, copied in the original order from a public /match/football/ link. This is not home/away order.",
+          "example": "chelsea-4fGZN2oK",
+          "pattern": "[a-z0-9-]+-[A-Za-z0-9]{8}",
+          "hint": "A complete football team slug-and-ID segment copied from an existing Flashscore match link."
+        },
+        {
+          "name": "second",
+          "type": "string",
+          "required": true,
+          "description": "Second team slug-and-ID segment, copied in the original order from a public /match/football/ link. This is not home/away order.",
+          "example": "manchester-united-ppjDR086",
+          "pattern": "[a-z0-9-]+-[A-Za-z0-9]{8}",
+          "hint": "A complete football team slug-and-ID segment copied from an existing Flashscore match link."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "first": "bournemouth-OtpNdwrc",
+            "second": "leeds-tUxUbLR2"
+          },
+          "expect": "result",
+          "purpose": "Second frontend capture selects event j1Ur5VU6 and Bournemouth/Leeds, excluding the Chelsea example."
+        },
+        {
+          "args": {
+            "first": "brighton-2XrRecc3",
+            "second": "manchester-city-Wtn9Stg0"
+          },
+          "expect": "result",
+          "purpose": "Held-out pair matches independent source event vLaHlpR9, EFL Cup, Manchester City home and Brighton away. URL order differs from home/away."
+        }
+      ]
+    }
+  ]
+}

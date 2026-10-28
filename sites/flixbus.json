@@ -1,0 +1,163 @@
+{
+  "name": "flixbus",
+  "displayName": "FlixBus",
+  "baseUrl": "https://www.flixbus.com",
+  "description": "Public city stop directories and published route guide FAQs.",
+  "operations": [
+    {
+      "name": "listStops",
+      "description": "List published bus stop directory names, addresses and coordinates for a FlixBus city page.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.flixbus.com/bus/%7Bcity%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "city",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.flixbus.com/bus/{city}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.flixbus.com",
+        "path": "/bus/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=UTF-8",
+        "extract": "@graph",
+        "pick": [
+          "name",
+          "streetAddress=address.streetAddress",
+          "locality=address.addressLocality",
+          "postalCode=address.postalCode",
+          "countryCode=address.addressCountry",
+          "latitude=geo.latitude",
+          "longitude=geo.longitude"
+        ],
+        "embedded": {
+          "regex": "<script type=\"application/ld\\+json\">\\s*(\\{\\s*\"@context\":\\s*\"https://schema.org\",\\s*\"@graph\":)"
+        }
+      },
+      "params": [
+        {
+          "name": "city",
+          "type": "string",
+          "required": true,
+          "description": "Complete city slug copied from a FlixBus /bus/ city-page link.",
+          "example": "new-york-ny",
+          "pattern": "[a-z0-9-]+",
+          "hint": "A complete linked city slug, for example boston-ma"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "city": "boston-ma"
+          },
+          "expect": "result",
+          "purpose": "Boston stop directory must differ from New York."
+        },
+        {
+          "args": {
+            "city": "philadelphia-pa"
+          },
+          "expect": "result",
+          "purpose": "Independently compared Philadelphia stop directory differs from New York."
+        }
+      ]
+    },
+    {
+      "name": "getRouteGuide",
+      "description": "Read published questions and HTML answers on a public route guide. Advertised figures are not live quotes or schedules.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.flixbus.com/bus-routes/%7Broute%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "route",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.flixbus.com/bus-routes/{route}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.flixbus.com",
+        "path": "/bus-routes/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=UTF-8",
+        "extract": "mainEntity",
+        "pick": [
+          "question=name",
+          "answerHtml=acceptedAnswer.text"
+        ],
+        "embedded": {
+          "regex": "<script type=\"application/ld\\+json\">\\s*(\\{\\s*\"@context\":\\s*\"https://schema.org\",\\s*\"@type\":\\s*\"FAQPage\")"
+        }
+      },
+      "params": [
+        {
+          "name": "route",
+          "type": "string",
+          "required": true,
+          "description": "Full route slug copied from a FlixBus /bus-routes/ link, including the bus- prefix.",
+          "example": "bus-new-york-ny-boston-ma",
+          "pattern": "bus-[a-z0-9-]+",
+          "hint": "A complete linked route slug, for example bus-boston-ma-new-york-ny"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "route": "bus-boston-ma-new-york-ny"
+          },
+          "expect": "result",
+          "purpose": "Reverse-direction guide differs from the New York to Boston example."
+        },
+        {
+          "args": {
+            "route": "bus-new-york-ny-washington-dc"
+          },
+          "expect": "result",
+          "purpose": "Linked third destination for independent held-out qualification."
+        }
+      ]
+    }
+  ]
+}

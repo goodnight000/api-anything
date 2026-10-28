@@ -1,0 +1,7 @@
+Use the entity ID from an existing public Disney+ browse/entity- URL. It is not established as a partner-feed identifier. Results describe the signed-out document in the observed US English context.
+
+The creditRole label distinguishes Director from Creator; creditedPeople belongs to that role. Cast is the advertised page list and may be incomplete. Metadata does not establish playback, account entitlement, current regional availability or a complete catalog. The observed v=var1 query is retained as fixed context; no variant-selection meaning is claimed.
+
+## Maintainer notes
+
+Qualified on 2026-10-26 UTC, signed out, using real exact-document frontend captures. Other requests were aborted; no fully hydrated GUI was verified. Learning examples are The Mandalorian and Frozen. Held-out Moana 2 matched all six returned fields against a separately fetched source document at tier 1 without healing. Three current-export verification cases and three fresh-home cases passed at tier 1. The fresh home's first call sent no Cookie or Authorization; subsequent calls reused only site-issued guest cookies. Captures cmvpfwnd8b1dfee:1 and cmvpfy3bq58e4bb:1 proved Creator versus Director meaning. The genre selector follows its label because films add runtime before it. Exact source queries and full provenance remain in docs/research/discovery/streaming-qualified-r9.md. Final tier-1 verification and empty-home reuse receipts are recorded there. No login, account flow, subscription or playback was used.

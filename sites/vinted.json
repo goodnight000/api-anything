@@ -1,0 +1,76 @@
+{
+  "name": "vinted",
+  "displayName": "Vinted",
+  "baseUrl": "https://www.vinted.com",
+  "description": "Document metadata for known public US resale items.",
+  "operations": [
+    {
+      "name": "getItemMetadata",
+      "description": "Read a known public US item document’s title, summary description and canonical URL.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.vinted.com/items/%7Bslug%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.vinted.com/items/{slug}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.vinted.com",
+        "path": "/items/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "head",
+          "fields": {
+            "pageTitle": "meta[property=\"og:title\"]@content",
+            "description": "meta[name=\"description\"]@content",
+            "url": "link[rel=\"canonical\"]@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Complete numeric item ID and descriptive slug from a public /items/ link; omit query parameters.",
+          "example": "10544127958-precious-moments-tender-tails-ornaments",
+          "pattern": "[a-z0-9-]{1,200}",
+          "hint": "The single item URL path segment after /items/"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "10544122490-aritzia-grey-sweatpants-tall"
+          },
+          "expect": "result",
+          "purpose": "A distinct apparel item must differ from the ornaments example."
+        }
+      ]
+    }
+  ]
+}

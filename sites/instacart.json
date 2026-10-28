@@ -1,0 +1,101 @@
+{
+  "name": "instacart",
+  "displayName": "Instacart",
+  "baseUrl": "https://www.instacart.com",
+  "description": "Public city retailer directories from Instacart grocery-delivery pages.",
+  "operations": [
+    {
+      "name": "listStores",
+      "description": "List the retailer cards shown by the public grocery-delivery city directory.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.instacart.com/grocery-delivery/%7Bregion%7D/near-me-in-%7Bcity%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "region",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "city",
+          "at": [
+            "path:2"
+          ],
+          "template": "near-me-in-{city}"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.instacart.com/grocery-delivery/{region}/near-me-in-{city}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.instacart.com",
+        "path": "/grocery-delivery/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "[data-experiment-id=seo-location-retailers-grid] a",
+          "fields": {
+            "name": "p:first-child",
+            "url": "@href",
+            "fulfillment": "p:last-child"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "region",
+          "type": "string",
+          "required": true,
+          "description": "Lowercase region segment from a public city directory URL.",
+          "example": "ca",
+          "pattern": "[a-z]{2}",
+          "hint": "A two-letter region segment such as ca, ct or ny"
+        },
+        {
+          "name": "city",
+          "type": "string",
+          "required": true,
+          "description": "City slug including its region suffix, from a public city directory URL.",
+          "example": "san-francisco-ca",
+          "pattern": "[a-z][a-z-]{1,199}",
+          "hint": "A slug such as san-francisco-ca or long-island-city-ny"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "region": "ct",
+            "city": "west-cornwall-ct"
+          },
+          "expect": "result",
+          "purpose": "West Cornwall retailer identities differ from San Francisco."
+        },
+        {
+          "args": {
+            "region": "ny",
+            "city": "long-island-city-ny"
+          },
+          "expect": "result",
+          "purpose": "Unseen Long Island City cards match public frontend retailer identities."
+        }
+      ]
+    }
+  ]
+}

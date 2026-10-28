@@ -1,0 +1,105 @@
+{
+  "name": "ulta",
+  "displayName": "Ulta Beauty",
+  "baseUrl": "https://www.ulta.com",
+  "description": "Public US beauty product documents.",
+  "operations": [
+    {
+      "name": "getProduct",
+      "description": "Read public US product document identity, size and advertised main offer; no stock or delivery guarantees.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.ulta.com/p/%7BproductPath%7D?sku=%7Bsku%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "productPath",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "sku",
+          "at": [
+            "query:sku"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.ulta.com/p/{productPath}?sku={sku}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.ulta.com",
+        "path": "/p/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html",
+        "pick": [
+          "familyId=productID",
+          "sku",
+          "name",
+          "brand",
+          "size=Size",
+          "price=offers.price",
+          "currency=offers.priceCurrency",
+          "offerUrl=offers.url"
+        ],
+        "embedded": {
+          "regex": "<script[^>]*type=\"application/ld\\+json\"[^>]*>(\\{\"@context\":\"https://schema.org/\",\"@type\":\"Product\"[\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "productPath",
+          "type": "string",
+          "required": true,
+          "description": "Full product path segment copied from a public Ulta product link.",
+          "example": "niacinamide-10-zinc-1-serum-oily-skin-pimprod2007111",
+          "pattern": "[A-Za-z0-9-]+",
+          "hint": "Full product path segment, without slash or query."
+        },
+        {
+          "name": "sku",
+          "type": "string",
+          "required": true,
+          "description": "SKU identifier from the same public product link; returned sku is authoritative.",
+          "example": "2551167",
+          "pattern": "[0-9]+",
+          "hint": "A numeric SKU ID copied from the same product link."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "productPath": "glycolic-acid-7-exfoliating-brightening-daily-toner-pimprod2007097",
+            "sku": "2551155"
+          },
+          "expect": "result",
+          "purpose": "Different product family or SKU must return its own identity, selected size and main offer."
+        },
+        {
+          "args": {
+            "productPath": "niacinamide-10-zinc-1-serum-oily-skin-pimprod2007111",
+            "sku": "2614594"
+          },
+          "expect": "result",
+          "purpose": "Different product family or SKU must return its own identity, selected size and main offer."
+        }
+      ]
+    }
+  ]
+}

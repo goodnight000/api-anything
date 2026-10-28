@@ -1,0 +1,81 @@
+{
+  "name": "edx",
+  "displayName": "edX",
+  "baseUrl": "https://www.edx.org",
+  "description": "Initial public course cards from signed-out edX provider pages.",
+  "operations": [
+    {
+      "name": "listCourses",
+      "description": "List initial server-rendered course cards for an edX provider. Programs and additional course pages are excluded.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.edx.org/school/%7Bschool%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "school",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.edx.org/school/{school}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.edx.org",
+        "path": "/school/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "a[href^=\"/learn/\"]",
+          "fields": {
+            "title": "span.font-bold",
+            "provider": "span.text-sm",
+            "url": "@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "school",
+          "type": "string",
+          "required": true,
+          "description": "Provider slug from a public edX /school/ link, such as harvardx or edx.",
+          "example": "harvardx"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "school": "edx"
+          },
+          "expect": "result",
+          "purpose": "The edX provider course cards differ from the Harvard University example."
+        },
+        {
+          "args": {
+            "school": "uc-berkeleyx"
+          },
+          "expect": "result",
+          "purpose": "Third provider has independently grounded initial course titles, provider labels and URLs."
+        }
+      ]
+    }
+  ]
+}

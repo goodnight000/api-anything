@@ -1,0 +1,113 @@
+{
+  "name": "google-play",
+  "displayName": "Google Play app listings",
+  "baseUrl": "https://play.google.com",
+  "description": "Public Android app listing identity and displayed metadata in the response locale.",
+  "operations": [
+    {
+      "name": "getApp",
+      "description": "Read Android app identity, developer, category and paired header display metadata from a public Google Play listing.",
+      "request": {
+        "method": "GET",
+        "url": "https://play.google.com/store/apps/details?id=%7BpackageId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "packageId",
+          "at": [
+            "query:id"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://play.google.com/store/apps/details?id={packageId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "play.google.com",
+        "path": "/store/apps/details"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "packageId=packageId~[?&]id=([^&]+)",
+          "listingUrl",
+          "name",
+          "developer",
+          "developerUrl",
+          "category",
+          "categoryUrl",
+          "headerRatingDisplay",
+          "headerReviewsDisplay",
+          "contentRating",
+          "updatedOnDisplay",
+          "localeDisplay"
+        ],
+        "html": {
+          "items": "html",
+          "fields": {
+            "packageId": "link[rel=\"canonical\"]@href",
+            "listingUrl": "link[rel=\"canonical\"]@href",
+            "name": "h1",
+            "developer": ".Vbfug a",
+            "developerUrl": ".Vbfug a@href",
+            "category": "[itemprop=\"genre\"] a@aria-label",
+            "categoryUrl": "[itemprop=\"genre\"] a@href",
+            "headerRatingDisplay": "[aria-label=\"Information badges\"] [itemprop=\"starRating\"] [role=\"img\"]@aria-label",
+            "headerReviewsDisplay": "[aria-label=\"Information badges\"] .wVqUob .g1rdde",
+            "contentRating": "[itemprop=\"contentRating\"]",
+            "updatedOnDisplay": ".TKjAsc .xg1aie",
+            "localeDisplay": "footer .yVZQTb"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "packageId",
+          "type": "string",
+          "required": true,
+          "description": "Android package ID copied from a public Google Play app link.",
+          "example": "org.videolan.vlc",
+          "pattern": "[A-Za-z][A-Za-z0-9_]*\\.[A-Za-z0-9_.]+",
+          "hint": "A dotted Android package ID, without URL or query syntax."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "packageId": "com.microsoft.todos"
+          },
+          "expect": "result",
+          "purpose": "Different developer and category distinguish the second captured app from VLC."
+        },
+        {
+          "args": {
+            "packageId": "org.scratchjr.android"
+          },
+          "expect": "result",
+          "purpose": "Held-out app identity from a real VLC page app link, compared independently."
+        },
+        {
+          "args": {
+            "packageId": "invalid/path"
+          },
+          "expect": "input",
+          "purpose": "Reject URL path syntax locally before sending."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,181 @@
+{
+  "name": "craigslist",
+  "displayName": "Craigslist",
+  "baseUrl": "https://www.craigslist.org",
+  "description": "Search signed-out public for-sale listings in the San Francisco Bay Area.",
+  "operations": [
+    {
+      "name": "search",
+      "description": "Search public for-sale listings in the SF Bay Area.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.craigslist.org/search/area/sfbay?cat=sss&query=%7Bquery%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "query",
+          "at": [
+            "query:query"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.craigslist.org/search/area/sfbay?cat=sss&query={query}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.craigslist.org",
+        "path": "/search/area/sfbay"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "ol.cl-static-search-results li.cl-static-search-result",
+          "fields": {
+            "title": ".title",
+            "url": "a@href",
+            "price": ".price",
+            "location": ".location"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Search terms for for-sale listings in the SF Bay Area.",
+          "example": "bicycle"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "query": "piano"
+          },
+          "expect": "result",
+          "purpose": "A different product query returns piano listings rather than the bicycle example."
+        },
+        {
+          "args": {
+            "query": "violin"
+          },
+          "expect": "result",
+          "purpose": "Unseen public query returns violin-related listings."
+        }
+      ]
+    },
+    {
+      "name": "getListing",
+      "description": "Read public item details from a listing linked by the SF Bay Area search.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.craigslist.org/view/d/%7Bslug%7D/%7Breference%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "reference",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.craigslist.org/view/d/{slug}/{reference}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.craigslist.org",
+        "path": "/view/d/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "html",
+          "fields": {
+            "title": "#titletextonly",
+            "price": ".postingtitle .price",
+            "locationLabel": ".postingtitletext > span:not([id]):not([class])",
+            "attributes": "all:.attrgroup .attr:not(.serial_number)",
+            "images": "all:#thumbs a.thumb@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "The descriptive path segment after /view/d/ in a public listing URL returned by search.",
+          "example": "los-gatos-specialized-women-sport-275",
+          "pattern": "[a-z0-9-]{1,200}",
+          "hint": "Copy this component from an actual public SF Bay Area search result URL."
+        },
+        {
+          "name": "reference",
+          "type": "string",
+          "required": true,
+          "description": "The opaque last path segment in that same public listing URL, not the numeric post id.",
+          "example": "hqAUqb5uHiQHzNGiWqJgpU",
+          "pattern": "[A-Za-z0-9]{8,40}",
+          "hint": "Copy this component from an actual public SF Bay Area search result URL."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "menlo-park-bianchi-carbon-reparto-corse",
+            "reference": "45wdEzaps6LkigojQXBsRw"
+          },
+          "expect": "result",
+          "purpose": "A distinct public bicycle listing returns its own identity, price and item attributes."
+        },
+        {
+          "args": {
+            "slug": "san-jose-bmx-bikes-redline-mongoose",
+            "reference": "9ToZFhdPjLnt5xgLG4gQBS"
+          },
+          "expect": "result",
+          "purpose": "Held-out actual public search link, unopened until exact candidate preflight, returns its own item details."
+        }
+      ]
+    }
+  ]
+}

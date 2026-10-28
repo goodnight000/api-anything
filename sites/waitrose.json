@@ -1,0 +1,102 @@
+{
+  "name": "waitrose",
+  "displayName": "Waitrose",
+  "baseUrl": "https://www.waitrose.com",
+  "description": "Public UK product document metadata without a selected store.",
+  "operations": [
+    {
+      "name": "getProduct",
+      "description": "Read the public product document title, stated pack size and displayed main item and unit price text.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.waitrose.com/ecom/products/%7Bslug%7D/%7BproductId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Google Chrome\";v=\"155\", \"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "productId",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.waitrose.com/ecom/products/{slug}/{productId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.waitrose.com",
+        "path": "/ecom/products/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "html",
+          "fields": {
+            "title": "[data-testid=\"product-name\"]",
+            "packSizeText": "h1 [class*=\"ProductSize_size\"]",
+            "itemPriceText": "main [data-test=\"product-pod-price\"]",
+            "unitPriceText": "main [class*=\"ProductPricing_pricePerUnit\"]",
+            "sourceUrl": "link[rel=\"canonical\"]@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Product slug from the same public Waitrose product link as productId.",
+          "example": "essential-long-life-semi-skimmed-milk",
+          "pattern": "[a-z0-9-]+",
+          "hint": "Product-link slug, without slash or query."
+        },
+        {
+          "name": "productId",
+          "type": "string",
+          "required": true,
+          "description": "Complete hyphenated ID from the same public product link as slug.",
+          "example": "035307-17781-17782",
+          "pattern": "[0-9-]+",
+          "hint": "Hyphenated product-link ID, preserving leading zeros."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "essential-long-life-skimmed-milk",
+            "productId": "035309-17785-17786"
+          },
+          "expect": "result",
+          "purpose": "Skimmed identity differs from the semi-skimmed example despite equal displayed prices."
+        },
+        {
+          "args": {
+            "slug": "essential-unsweetened-soya-drink",
+            "productId": "035050-17659-17660"
+          },
+          "expect": "result",
+          "purpose": "A source-linked soya drink has a different product identity from both milk examples."
+        }
+      ]
+    }
+  ]
+}
