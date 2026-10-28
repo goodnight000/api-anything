@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { hooks, learnSite } from "../src/learnsite.js";
 import { createServer } from "../src/mcp.js";
 import { learnTool } from "../src/mcp-learn.js";
@@ -473,6 +474,64 @@ test("a learn_site still running at the deadline answers with a job, and its res
         .structuredContent as typeof done;
     assert.equal(done.ok, true, JSON.stringify(done));
     assert.ok(loadSite("shop")?.site.operations.some((o) => o.name === "lookup"));
+  } finally {
+    learnTool.publicOnly = true;
+    await client.close();
+    await s.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("learn_site asks its consent question after it answered with a job, and the job's result says the op was shared", async () => {
+  const home = mkdtempSync(join(tmpdir(), "aa-learn-job-consent-"));
+  process.env.API_ANYTHING_HOME = home;
+  // the holdout call (args3) takes longer than the server's deadline
+  const s = await site({ q: ["carol"], ms: 600 });
+  const shares: (boolean | undefined)[] = [];
+  hooks.share = async (site, ops, o) => {
+    shares.push(o?.consent);
+    return o?.consent
+      ? [{ site, op: ops[0]!, shared: true }]
+      : [{ site, op: ops[0]!, shared: false, needsConsent: true, reason: "it was learned signed in" }];
+  };
+  learnTool.publicOnly = false;
+  const client = new Client({ name: "probe", version: "0" }, { capabilities: { elicitation: {} } });
+  const asked: string[] = [];
+  client.setRequestHandler(ElicitRequestSchema, async (req) => {
+    asked.push(req.params.message);
+    return { action: "accept", content: { share: true } };
+  });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await createServer({ waitMs: 150 }).connect(a);
+  await client.connect(b);
+  try {
+    const read = { method: "GET", path: "/api/search?q={q}", answer: items };
+    const first = await client.callTool({
+      name: "learn_site",
+      arguments: {
+        site: "shop",
+        op: "lookup",
+        trigger: `${s.base}/shop?q={q}`,
+        args: { q: "alice" },
+        args2: { q: "bobby" },
+        args3: { q: "carol" },
+        captures: [capture(home, "ca", s.base, "alice", [read]), capture(home, "cb", s.base, "bobby", [read])],
+        pickRequest: 2,
+        extract: "items",
+      },
+    });
+    const pending = first.structuredContent as { class: string; job: string };
+    assert.equal(pending.class, "pending", JSON.stringify(first));
+    assert.deepEqual(asked, [], "not asked before the deadline");
+    let done = pending as { class: string; job: string; ok?: boolean; shared?: { shared: boolean } };
+    while (done.class === "pending")
+      done = (await client.callTool({ name: "get_job", arguments: { job: pending.job } }))
+        .structuredContent as typeof done;
+    assert.equal(done.ok, true, JSON.stringify(done));
+    assert.equal(asked.length, 1);
+    assert.match(asked[0]!, /shop lookup .*works\. Share it/);
+    assert.deepEqual(shares, [undefined, true], "shared again only with the user's yes");
+    assert.equal(done.shared?.shared, true, JSON.stringify(done));
   } finally {
     learnTool.publicOnly = true;
     await client.close();
