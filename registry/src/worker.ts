@@ -15,7 +15,7 @@ import {
 } from "../../src/registry-api.js";
 import { domainOf } from "../../src/search.js";
 import type { Operation } from "../../src/spec.js";
-import { badAddress } from "../../src/vet.js";
+import { badAddress, uploadProblems } from "../../src/vet.js";
 import { networksOf, sha256Hex, signatureHeaders, signer } from "./auth.js";
 import { catalog, confirmed, entryOf, search } from "./catalog.js";
 import { CSP, homePage, sitemap, sitePage } from "./pages.js";
@@ -539,7 +539,8 @@ async function adminSeed(c: Ctx) {
     if ("errors" in p) throw new HttpError(422, "the seed is refused", p.errors);
     ops.push(p.op);
   }
-  const refused = refusals(site, ops);
+  // a seeded write is held to an upload's rule: its proof is inside its version, never a name
+  const refused = [...ops.flatMap(uploadProblems), ...refusals(site, ops)];
   if (refused.length) throw new HttpError(422, "the seed is refused", refused);
   const db = c.env.DB;
   const now = new Date(c.now).toISOString();
