@@ -338,8 +338,13 @@ Known limits:
   an empty JSON list at the extract path, or, for `--html`, an items selector written as
   `"<container> <item>"` whose container is on the page with no item-tag element in it. A list
   that `--pick` empties (no item has a picked field), or `--html` items with none of their fields
-  found, is missing data, not `[]`: the site may have renamed them. A picked field missing from
-  some or all items is not detected, because it may be optional.
+  found, is missing data, not `[]`: the site may have renamed them. So is a picked field the op
+  learned with a type (not `null`) that no item carries now, or none with that type: when the
+  example args' answer still has it, the call is `ok` and its `reason` names the field; otherwise a
+  heal is tried, and if it cannot bring the field back the call is `drift` naming it, with a `next`
+  to re-add with a new `--pick`. A field learned `null` or absent, or present in some items of a
+  list, is optional. A field that keeps its type and changes its meaning (cents instead of units)
+  is not detected.
 - A write's 2xx is `ok` unless its answer says it was refused: an error field that holds an error
   (`userErrors`, `error: "..."`), `ok`/`success` false, an error word as the root `status`, a body
   status of 400 or more, GraphQL errors with null or no data, or the form page answering with its

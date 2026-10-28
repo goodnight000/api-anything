@@ -1,9 +1,9 @@
 /** Classify every response, never by status code alone. See DESIGN.md "Failure classifier". */
 import { type HTMLElement, parse as parseHtml } from "node-html-parser";
 import { templateRefs } from "./codec.js";
-import { extract, extractEmbedded, extractHtml, getPath, inferShape, parseBody, pick } from "./extract.js";
+import { extract, extractEmbedded, extractHtml, getPath, inferShape, parseBody, pick, pickEntry } from "./extract.js";
 import { siteOf } from "./session.js";
-import type { Operation } from "./spec.js";
+import type { Operation, ResponseSpec } from "./spec.js";
 
 export type Class = "ok" | "drift" | "auth" | "rate" | "blocked" | "input" | "error";
 export interface Classified {
@@ -30,6 +30,11 @@ export interface Classified {
    * terms or "verify it's you" step), for a human to finish in the browser
    */
   unfinished?: string;
+  /**
+   * drift: picked fields the learned shape typed, which no item carries now, or none with that type.
+   * The rest of the data is there: `judge` extracts it, for a call whose example args still carry them.
+   */
+  lost?: string[];
 }
 export interface Observed {
   status: number;
@@ -470,6 +475,25 @@ function unfinishedPage(op: Operation, r: Observed): string | undefined {
   return r.url;
 }
 
+/** A path as the learned shape keys it: `a[0].b` and `a[*].b` -> `a[].b`, `a["x.y"]` -> `a.x.y`. */
+const shapeKey = (path: string) =>
+  path
+    .replace(/\[(\d+|\*)\]/g, "[]")
+    .replace(/\["((?:[^"\\]|\\.)*)"\]/g, (_m, k: string) => `.${JSON.parse(`"${k}"`) as string}`)
+    .replace(/^\./, "");
+
+/** A learned shape key relative to the extract path's target; undefined outside it. */
+function underTarget(extract: string | undefined, k: string): string | undefined {
+  if (!extract) return k;
+  const prefix = shapeKey(extract);
+  // a trailing [*] returns the items themselves, as a list: compare them as "[]..." like any list
+  if (extract.endsWith("[*]") && (k === prefix || k.startsWith(`${prefix}.`) || k.startsWith(`${prefix}[]`)))
+    return `[]${k.slice(prefix.length)}`;
+  if (k.startsWith(`${prefix}.`)) return k.slice(prefix.length + 1);
+  if (k.startsWith(`${prefix}[]`)) return k.slice(prefix.length);
+  return undefined;
+}
+
 /** Learned shape and value, scoped to the extract path when it resolves: other subtrees may come and go. */
 function shapeScope(
   op: Operation,
@@ -479,20 +503,51 @@ function shapeScope(
   const shape = op.response.shape ?? {};
   const ex = op.response.extract;
   if (!ex) return { expected: shape, value: data };
-  const prefix = ex
-    .replace(/\[(\d+|\*)\]/g, "[]")
-    .replace(/\["((?:[^"\\]|\\.)*)"\]/g, (_m, k: string) => `.${JSON.parse(`"${k}"`) as string}`)
-    .replace(/^\./, "");
   const expected: Record<string, string> = {};
-  // a trailing [*] returns the items themselves, as a list: compare them as "[]..." like any list
-  const items = ex.endsWith("[*]");
   for (const [k, t] of Object.entries(shape)) {
-    if (items && (k === prefix || k.startsWith(`${prefix}.`) || k.startsWith(`${prefix}[]`)))
-      expected[`[]${k.slice(prefix.length)}`] = t;
-    else if (k.startsWith(`${prefix}.`)) expected[k.slice(prefix.length + 1)] = t;
-    else if (k.startsWith(`${prefix}[]`)) expected[k.slice(prefix.length)] = t;
+    const at = underTarget(ex, k);
+    if (at !== undefined) expected[at] = t;
   }
   return { expected, value: target };
+}
+
+/** The learned shape's entries for the picked fields: their names are in the pick already. */
+export function pickedShape(res: ResponseSpec): Record<string, string> | undefined {
+  if (!res.shape || !res.pick?.length) return undefined;
+  const keys = new Set(
+    res.pick.flatMap((p) => {
+      const k = shapeKey(pickEntry(p).path);
+      return [k, `[].${k}`];
+    }),
+  );
+  const kept = Object.entries(res.shape).filter(([k]) => keys.has(underTarget(res.extract, k) ?? ""));
+  return kept.length ? Object.fromEntries(kept) : undefined;
+}
+
+const typeOf = (v: unknown) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
+
+/**
+ * Picked fields the learned shape typed (not null) that no item carries now, or none with that type:
+ * the answer would come back without them. A field learned null, or missing from the learned item, is
+ * optional. A field that keeps its type and changes its meaning is not seen.
+ */
+function picksLost(op: Operation, expected: Record<string, string>, target: unknown): { name: string; why: string }[] {
+  const list = Array.isArray(target);
+  const items = (list ? target : [target]).filter((x) => x !== null && typeof x === "object");
+  if (!op.response.pick?.length || !items.length) return [];
+  const out: { name: string; why: string }[] = [];
+  for (const p of op.response.pick) {
+    const { name, path } = pickEntry(p);
+    // a [*] path collects a list per item: the shape types its elements, not the list
+    if (path.includes("[*]")) continue;
+    const want = expected[`${list ? "[]." : ""}${shapeKey(path)}`];
+    if (!want || want === "null") continue;
+    const now = items.map((x) => getPath(x, path)).filter((v) => v !== undefined);
+    if (!now.length) out.push({ name, why: `picked field ${name} disappeared from the response` });
+    else if (!now.some((v) => v === null || typeOf(v) === want))
+      out.push({ name, why: `picked field ${name} is now ${typeOf(now[0])}, learned as ${want}` });
+  }
+  return out;
 }
 
 /** Share of the learned shape still present with the same type; null matches anything. */
@@ -725,7 +780,11 @@ function classifyResponse(
     const e = inBand();
     if (e) return e;
   }
-  if (!gone) return ok();
+  if (!gone) {
+    const lost = scope ? picksLost(op, scope.expected, target) : [];
+    if (!lost.length) return ok();
+    return { ...missing(lost.map((l) => l.why).join("; ")), lost: lost.map((l) => l.name) };
+  }
   // Instagram answers "login_required" and "please wait" as 200 JSON; only trust the wording when the data is gone.
   if (REQUIRE_LOGIN.test(body)) return is("auth", `${gone}: ${snippet(body)}`);
   if (RATE.test(body)) return is("rate", `${gone}: ${snippet(body)}`);
@@ -734,7 +793,7 @@ function classifyResponse(
 }
 
 export interface Judged extends Classified {
-  /** extracted and picked; only when ok */
+  /** extracted and picked; when ok, or drift with `lost` */
   data?: unknown;
   /** the next page's cursor or number, from `paging.next` in the whole answer; only when ok */
   nextPage?: string | number;
@@ -787,7 +846,7 @@ export function judge(op: Operation, r: Observed): Judged {
   } catch (e) {
     return is("error", `the op's response recipe failed: ${(e as Error).message}`);
   }
-  if (c.class !== "ok") return c;
+  if (c.class !== "ok" && !c.lost) return c;
   try {
     // from the whole answer, before extract and pick throw the rest away
     const page = pageOf(op, r.body, readJson);

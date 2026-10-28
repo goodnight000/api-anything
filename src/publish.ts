@@ -233,7 +233,7 @@ export function plan(
     operations: ops.map((p) => summarize(p.upload.operation)),
     stripped: [
       "the example values in each request (the param examples stay)",
-      "response shapes",
+      "response shapes (the picked fields' types stay)",
       "when each op was learned",
       ...(r.site.shared ? ["where it was pulled from"] : []),
     ],

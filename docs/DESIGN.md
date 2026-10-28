@@ -595,7 +595,7 @@ Every response is classified, never by status code alone:
 | class | signals | action |
 |---|---|---|
 | `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`; for an html recipe whose items selector is `<container> <item>`, the container present with no element of the item's tag), no GraphQL `errors` with null `data` or next to a null extract target, no error status in place of the data; any 2xx to a write whose answer does not say it was refused (see Writes) | return |
-| `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, a non-empty list there that the `pick` empties (no item has a picked field: a shared spec has no learned shape, and `data: []` would read as no results), an html recipe whose items all match with none of their fields found, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once (missing data first checks the example args) |
+| `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, a non-empty list there that the `pick` empties (no item has a picked field: a spec may have no learned shape, and `data: []` would read as no results), a picked field the learned shape typed that no item carries now, or none with that type (see below), an html recipe whose items all match with none of their fields found, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once (missing data first checks the example args) |
 | `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or a refused API key ("Invalid Application-ID or API key") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, a sign-in form that embeds a CAPTCHA widget or a vendor script that also rides on ordinary pages (reCAPTCHA on a login page guards the login; an interstitial's own markers still make the page `blocked`), an html/embedded op's page without its data that says "sign in" or shows a sign-in form (a mere Sign-in link, like Google's ServiceLogin button, is not one), a redirect to a login path, `require_login: true`, a trigger that lands on a sign-in page | each step at most once per call, at any tier, a retry that still answers `auth` going on to the next step (a changed analytics cookie changes the request without renewing a token); a write only when it certainly did not run, so never at tier 3: re-import a browser-imported session; then refresh the jar's cookies from the profile, retrying if that changes the request (a tier-2 page sends the profile's cookies itself, so there only a `cookie:` ref counts: an `x-csrf-token` header); for a read with `session:` refs, one trigger run refreshes them and answers; for a write with them, one trigger run with the write intercepted (as when learning it) refreshes them and the write is sent again; for a read whose only credential is one marked public, with no login on record, a heal re-learns it, as for drift (the site rotated its shared bearer); then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429; any 4xx or 5xx that carries a Retry-After (a 503 in maintenance, a 403 lockout: the server named its wait, so sooner meets it again; a wall's markers still make it `blocked`, a 2xx with one is its answer); "please wait", "rate limit" | back off, report; no heal; the site cools down (Execution ladder) |
 | `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, Anubis, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers; 451 (Unavailable For Legal Reasons: not available from this network or region). A page showing a sign-in form is `auth`, not a wall, when its only challenge marker is one that also rides on ordinary pages (a CAPTCHA widget, a vendor script or header on a challenge status); an interstitial's own structure or title on that page is still a wall; a tier-3 run or a heal's recapture whose trigger fired no matching request and ended on a challenge that did not solve (judged before a sign-in page or a page that is down) | escalate transport tier; then diagnostic `gated`, whose `next` asks for `api-anything login <site> --window`: to clear the challenge in the window, or, for a bare 403 at every tier (no challenge to clear), to see why the site refuses this machine or network. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal. A 451 climbs no tier (a browser on the same network gets the same answer): `retry: "no"`, `nextCall` `report`. The site then cools down (Execution ladder) |
@@ -631,6 +631,20 @@ run. If that replay is
 throttled, challenged or logged out, the call stops there with that class and nothing is healed.
 If the examples get no data either and re-learning gives the same request, the response recipe
 drifted (a renamed field): `drift`, with a hint to re-add with a new `--extract`.
+
+**A picked field that went is missing data too**, not an `ok` without it: a field of the `pick` that
+the learned shape typed (not `null`) and that no item carries now, or none with that type (`price`
+renamed `amount`, moved under `pricing`, or `9.5` become `"$9.50"`). It takes the same path: a
+second try, then the example args. When the example args' answer still carries it, the field is
+absent for these args' data only: the call returns that data, `ok`, with a `reason` naming the
+field. Otherwise a heal runs, its candidate held to the same types (a recapture keeps the picked
+fields' learned types over the new answer's shape), and a heal that cannot bring the field back
+ends in `drift` naming it ("picked field price disappeared from the response"), with a `next` to
+re-add with a new `--pick` or `--extract` (`nextCall` `relearn`); with no example args to tell, the
+same. A field learned `null`, or absent from the learned answer's first item, is optional and not
+judged, and in a list a field some items still carry is the data. Not caught: a field that keeps
+its type and changes its meaning (`price` now holding the list price, or cents instead of units).
+The shape records key paths and types, not what a value means.
 
 Two guards against heal loops. A heal that produces a byte-identical template (compared with the
 same args filled in) is not drift. An op healed less than 10 minutes ago that fails again, or
@@ -900,7 +914,7 @@ pulled `~/.api-anything/registry/<site>.json` → the bundled `sites/<site>.json
 of a pulled or bundled spec writes a user copy.
 `api-anything export <site>` writes a shareable copy. It strips examples (unless `--keep-examples`:
 a human confirmed they are public, so `verify` works for others) and samples (response shapes,
-whose keys can be user data; typed example values in the request become null), and it runs an
+whose keys can be user data, but for the picked fields' learned types: the pick names them already, and they let every copy tell a picked field that went; typed example values in the request become null), and it runs an
 exact-match secret scan against live jar/session values, found under any encoding the spec may
 carry them in (percent-encoded up to three layers, JSON- or `\u`-escaped, base64), plus regex
 heuristics. It also refuses any literal the learner would have made a ref (a session field or
@@ -1083,7 +1097,7 @@ matches nothing counting against the site, and a local site under a third of the
 a stray word and is left out. With no match, `find_sites` answers `nextCall: {tool: "learn_site"}`.
 
 **Sharing what this install learned (`shareOps`).** Each op's upload (`VersionUpload`) is built by
-`publish.ts`'s `plan`: the export's stripping (no example values in the request, no response shapes,
+`publish.ts`'s `plan`: the export's stripping (no example values in the request, no response shapes but the picked fields' types,
 no `learnedAt`, no `shared`, no `version`), the param examples kept (learning arranges for them to be
 the agent's chosen second example and holdout, never the user's own request), the site context
 (name, domain, baseUrl, display fields, login cookies) and the caller notes (`<site>.md` before

@@ -668,10 +668,17 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   const examples = exampleArgs(op);
   /** the op's own example args got no data either: the args are not the problem */
   let examplesFail = false;
+  const lost = a.lost?.join(", ");
+  // no example args to tell a field the site dropped from one these args have no value for: fail loudly
+  if (lost && op.readOnly && !examples) examplesFail = true;
   if (a.missing && op.readOnly && examples) {
     if (sameArgs(examples, ctx.args, op)) examplesFail = true;
     else {
       const b = await attempt({ ...ctx, args: examples }, op, a.tier);
+      if (b.class === "ok" && lost)
+        return success(a, {
+          reason: `the answer for these args has no ${lost} (${a.reason}); the example args' answer does, so the operation works`,
+        });
       if (b.class === "ok") {
         return fail(
           { ...a, class: "input" },
@@ -686,6 +693,14 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       examplesFail = true;
     }
   }
+  // the site no longer sends a picked field, for any args: the call fails, naming it, rather than answer without it
+  const dropped = (b: Attempt): Partial<Result> =>
+    b.lost && examplesFail
+      ? {
+          next: `if the site still shows ${b.lost.join(", ")}, re-learn the response recipe with a new --pick (or --extract): api-anything add ${ctx.site} ${op.name} ... --pick <fields> (api-anything capture <trigger url> shows the response); if it is gone for good, drop it from the pick`,
+          nextCall: { action: "relearn" },
+        }
+      : {};
 
   // Another install may have repaired this version already, or it degraded and the registry serves the next
   // best: that version is one request, a heal is a browser run.
@@ -768,6 +783,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
           reason: `the site takes the same request but its response lacks the data (${a.reason}), for the op's example args too`,
           next: `if the site works in a browser, re-learn the response recipe: api-anything add ${ctx.site} ${op.name} ... --extract <path> (api-anything capture <trigger url> shows the response); otherwise report it`,
           nextCall: { action: "relearn" },
+          ...dropped(a),
         },
       );
     }
@@ -780,7 +796,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     );
   }
   const b = h.attempt ?? h.fallback ?? a;
-  return fail(b, { reason: `${b.reason}; heal failed: ${h.reason}` });
+  return fail(b, { reason: `${b.reason}; heal failed: ${h.reason}`, ...dropped(b) });
 }
 
 function resolve(

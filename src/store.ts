@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pickedShape } from "./classify.js";
 import { type Leaf, setAt, walk } from "./codec.js";
 import {
   besideOrigins,
@@ -491,7 +492,11 @@ export function exportSite(
       }
     }
     if (!o.keepExamples) for (const p of op.params) delete p.example;
-    delete op.response.shape;
+    // a shape's keys can be user data; the picked fields' are in the pick already, and their types let
+    // every caller of the copy tell a picked field that went
+    const picked = pickedShape(op.response);
+    if (picked) op.response.shape = picked;
+    else delete op.response.shape;
     const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
     for (const h of pub) allowed.add(`$.operations[${i}].request.headers.${h}`);
     const where = (leaf: Leaf) => `$.operations[${i}].request ${leaf.at.join(" > ")}`;
