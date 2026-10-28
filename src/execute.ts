@@ -29,6 +29,7 @@ import {
   profileDir,
   runOpTrigger,
   type TriggerRun,
+  templateChanges,
 } from "./heal.js";
 import {
   AddressRefused,
@@ -162,6 +163,12 @@ export interface CallResult {
   hasMore?: boolean;
   tier?: Tier;
   healed?: boolean;
+  /**
+   * with healed: how, and what changed in the request template, one line each, with `{param}` and
+   * cookie:/session: refs in place of values. `registry`: the registry's newer version of the op.
+   * A rescan or recapture is undone with `api-anything revert <site> <op>`
+   */
+  heal?: { strategy: "rescan" | "recapture" | "registry"; changes: string[] };
   ms: number;
   reason?: string;
   /** what to do about a failure; follow it at most once */
@@ -715,6 +722,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
         queueOk(next.version.hash, b);
         return success(b, {
           healed: true,
+          heal: { strategy: "registry", changes: templateChanges(op, next) },
           reason: `${a.reason}; the registry now serves another version of ${op.name}, and it answered`,
         });
       }
@@ -757,7 +765,8 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       browser: ctx.maxTier > 1 && !ctx.unconfirmed,
     }),
   );
-  if (h.outcome === "healed") return success(h.attempt, { healed: true });
+  if (h.outcome === "healed")
+    return success(h.attempt, { healed: true, heal: { strategy: h.strategy, changes: h.changes } });
   // Throttled, challenged, logged out, or no browser: nothing was learned about the op, so it is not stale.
   if (h.outcome === "failed" && h.transient) {
     // the replay that would have saved a candidate got no answer, but the site's own request did: that is the tier-3 read
@@ -981,6 +990,7 @@ export async function call(
     const sessions = [jar, resolved ? sessionOrNone(siteName) : undefined];
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
+    if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
     if (ledger) settleWrite(ledger, f.write ?? "may_have_applied", f);
     if (resolved) coolAfter(siteName, resolved, f, log);
     const out = { ...f, ms: Date.now() - t0 };
@@ -1280,6 +1290,7 @@ export async function heal(
     const sessions = [resolved ? sessionOrNone(siteName) : undefined];
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
+    if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
     return { ...f, ...extra, ms: Date.now() - t0 };
   };
   const found = resolve(siteName, opName);
@@ -1318,7 +1329,10 @@ export async function heal(
       browser: ctx.maxTier > 1 && !capped,
     }),
   );
-  if (h.outcome === "healed") return done(success(h.attempt, { healed: true }), { strategy: h.strategy });
+  if (h.outcome === "healed")
+    return done(success(h.attempt, { healed: true, heal: { strategy: h.strategy, changes: h.changes } }), {
+      strategy: h.strategy,
+    });
   if (h.outcome === "identical") {
     // The same template is no proof it works: its answer says whether the op does.
     const filled = withDefaults(op, args);

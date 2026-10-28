@@ -2,7 +2,7 @@
  * Site specs (user dir, then pulled, then bundled), heal log, stale marks, remembered tiers, cool-downs,
  * the per-site send slots, and the write ledger.
  */
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -29,7 +29,7 @@ import {
   signInFills,
 } from "./secrets.js";
 import { ensureDir, home, loadSession, readJson, safeName, withLock, writePrivate } from "./session.js";
-import { parseSite, type Site } from "./spec.js";
+import { type Operation, parseSite, type Site } from "./spec.js";
 import { vetShared } from "./vet.js";
 
 export const BUNDLED_DIR = fileURLToPath(new URL("../sites", import.meta.url));
@@ -175,10 +175,25 @@ function updateState(fn: (s: State) => void): void {
 export interface HealEntry {
   site: string;
   op: string;
-  strategy: "rescan" | "recapture";
+  /** `revert`: `api-anything revert` took back the last heal not taken back yet */
+  strategy: "rescan" | "recapture" | "revert";
   /** short human summary of what changed */
   diff: string;
+  /** what changed in the template, one line each, with `{param}` and refs in place of values */
+  changes?: string[];
+  /** the op as it was before: what a revert puts back. It holds refs, never a credential; redacted anyway */
+  previous?: Operation;
+  /** templateHash of the op saved, so a revert never undoes a later re-learn or edit */
+  saved?: string;
 }
+export type HealRecord = HealEntry & { at: string };
+
+/** The template's identity: its request, slots and volatile ids. */
+export const templateHash = (op: Operation) =>
+  createHash("sha256")
+    .update(JSON.stringify([op.request, op.slots, op.volatile]))
+    .digest("hex")
+    .slice(0, 16);
 
 /** `text` without the site's live session values: what is kept on disk is read by agents too. */
 function hidden(site: string, text: string): string {
@@ -189,16 +204,44 @@ function hidden(site: string, text: string): string {
   }
 }
 
-/** Append to heals.jsonl and remember when the op was last healed (for the heal-loop guard). */
+/** Every string in `v` without the site's live session values. */
+const hiddenAll = (site: string, v: unknown): unknown =>
+  typeof v === "string"
+    ? hidden(site, v)
+    : Array.isArray(v)
+      ? v.map((x) => hiddenAll(site, x))
+      : v && typeof v === "object"
+        ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hiddenAll(site, x)]))
+        : v;
+
+const healsFile = () => join(home(), "heals.jsonl");
+
+/** Append to heals.jsonl and remember when the op was last healed (for the heal-loop guard; a revert is no heal). */
 export function appendHeal(entry: HealEntry, now = Date.now()): void {
   ensureDir(home());
-  const file = join(home(), "heals.jsonl");
-  const line = { at: new Date(now).toISOString(), ...entry, diff: hidden(entry.site, entry.diff) };
+  const file = healsFile();
+  const line = { at: new Date(now).toISOString(), ...(hiddenAll(entry.site, entry) as HealEntry) };
   appendFileSync(file, `${JSON.stringify(line)}\n`, { mode: 0o600 });
   chmodSync(file, 0o600);
-  updateState((s) => {
-    s.healedAt[key(entry.site, entry.op)] = now;
-  });
+  if (entry.strategy !== "revert")
+    updateState((s) => {
+      s.healedAt[key(entry.site, entry.op)] = now;
+    });
+}
+
+/** heals.jsonl, oldest first, one site's or all; a line that does not parse is skipped. */
+export function loadHeals(site?: string): HealRecord[] {
+  if (!existsSync(healsFile())) return [];
+  return readFileSync(healsFile(), "utf8")
+    .split("\n")
+    .flatMap((l) => {
+      try {
+        const h = JSON.parse(l) as HealRecord;
+        return h && typeof h === "object" && (!site || h.site === site) ? [h] : [];
+      } catch {
+        return [];
+      }
+    });
 }
 
 export function lastHealAt(site: string, op: string): number | undefined {
