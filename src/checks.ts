@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { asText } from "./codec.js";
 import { type CallOptions, type CallResult, call } from "./execute.js";
+import type { Evidence } from "./registry-api.js";
 import { home, readJson, safeName, writePrivate } from "./session.js";
 import type { Check, Operation, Site } from "./spec.js";
 import { loadSite, updateSite } from "./store.js";
@@ -35,7 +36,12 @@ interface OpRecord {
   hash: string;
   at: string;
   results: CaseResult[];
+  /** what learn_site proved with these cases (its holdout and clean replay), for a later publish to send */
+  evidence?: Proof;
 }
+
+/** The evidence a run proved, kept for an upload made later; the client version is the uploader's own. */
+export type Proof = Omit<Partial<Evidence>, "clientVersion" | "healedFrom">;
 
 const recordFile = (site: string) => join(home(), "checks", `${safeName(site)}.json`);
 
@@ -225,6 +231,22 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
   for (const k of Object.keys(record)) if (!now.operations.some((o) => o.name === k)) delete record[k];
   writePrivate(recordFile(name), JSON.stringify(record, null, 1));
   return { results, proven };
+}
+
+/**
+ * Keeps cases that ran outside verify as the op's record, as verify would: learn_site's holdout call is
+ * its check's case, so what it learned publishes without a verify of its own, with what it proved.
+ */
+export function recordCases(site: string, op: Operation, results: CaseResult[], evidence?: Proof): void {
+  const record = loadRecord(site);
+  record[op.name] = { hash: opHash(op), at: new Date().toISOString(), results, ...(evidence ? { evidence } : {}) };
+  writePrivate(recordFile(site), JSON.stringify(record, null, 1));
+}
+
+/** The evidence kept with the op's record, while the record is of this version of it. */
+export function proofOf(site: string, op: Operation): Proof | undefined {
+  const rec = loadRecord(site)[op.name];
+  return rec && rec.hash === opHash(op) ? rec.evidence : undefined;
 }
 
 export interface Gate {

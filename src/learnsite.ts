@@ -6,6 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 import { browserAvailable, ProfileInUse } from "./browser.js";
+import { type Proof, recordCases } from "./checks.js";
 import { botWall, judge } from "./classify.js";
 import { cleanCall } from "./clean.js";
 import { asText } from "./codec.js";
@@ -24,6 +25,7 @@ import {
   PROFILE_HINT,
 } from "./heal.js";
 import { buildRequest } from "./http.js";
+import { answerShare, loadSettings, QUESTION } from "./identity.js";
 import { type Args, capturePages, pageUrls, rankCandidates } from "./learn.js";
 import { resolveLoginTarget } from "./login.js";
 import { outline } from "./outline.js";
@@ -484,6 +486,34 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     cleanReplay,
     ...(clean && clean.class !== "ok" ? { cleanReason: clean.reason } : {}),
   };
+  const proven: Proof = {
+    learnedLoggedIn: now.learnedLoggedIn,
+    cleanReplay,
+    holdout: { args: input.args3, ok: true, ...(holdout.tier ? { tier: holdout.tier } : {}) },
+    ...(holdout.tier ? { tier: holdout.tier } : {}),
+  };
+  // The holdout was the check's case: with no other check, publish needs no verify first, and sends
+  // what this run proved when the user shares it later.
+  if (held && check.success && now.checks?.length === 1)
+    recordCases(
+      site,
+      now,
+      [
+        {
+          op,
+          case: "check 1",
+          expect: "result",
+          outcome: "pass",
+          got: "result",
+          args: check.data.args,
+          purpose: HOLDOUT_PURPOSE,
+          ...(holdout.tier ? { tier: holdout.tier } : {}),
+          ...(holdout.healed ? { healed: true } : {}),
+          ms: holdout.ms,
+        },
+      ],
+      proven,
+    );
 
   let shared: ShareOutcome;
   let next: string | undefined;
@@ -499,13 +529,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       reason: `the learned request keeps the user's ${reveals.join(", ")} literally, so sharing it would say what they asked`,
     };
   } else {
-    const evidence: Partial<Evidence> = {
-      clientVersion: VERSION,
-      learnedLoggedIn: now.learnedLoggedIn,
-      cleanReplay,
-      holdout: { args: input.args3, ok: true, ...(holdout.tier ? { tier: holdout.tier } : {}) },
-      ...(holdout.tier ? { tier: holdout.tier } : {}),
-    };
+    const evidence: Partial<Evidence> = { clientVersion: VERSION, ...proven };
     // the user has their answer whatever sharing does
     const share = async (consent?: true): Promise<ShareOutcome> => {
       try {
@@ -515,7 +539,13 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
         return { site, op, shared: false, reason: (e as Error).message.split("\n")[0] };
       }
     };
+    // the first time something could be shared, setup's question is asked if it never was: once
+    if (!loadSettings().askedAt) {
+      const yes = await o.consent?.(QUESTION).catch(() => undefined);
+      if (yes !== undefined) answerShare(yes);
+    }
     shared = await share();
+    const publish = `api-anything publish ${site} ${op} --yes`;
     if (shared.needsConsent) {
       const found = shared.personal?.length ? shared.personal : undefined;
       const yes = await o
@@ -525,7 +555,15 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
         .catch(() => undefined);
       if (yes) shared = await share(true);
       else if (yes === undefined)
-        next = `ask the user whether to share ${op} with the catalog (${shared.reason ?? "it needs their yes"})${found ? `, showing them what may be theirs: ${found.join("; ")}` : ""}; only on their yes, run: api-anything publish ${site} ${op} --yes`;
+        next = `ask the user whether to share ${op} with the catalog (${shared.reason ?? "it needs their yes"})${found ? `, showing them what may be theirs: ${found.join("; ")}` : ""}; only on their yes, run: ${publish}`;
+    }
+    if (!shared.shared && !loadSettings().askedAt) {
+      const ask = `sharing was never set up on this install: ask the user once, in these words: "${QUESTION}" On yes, run api-anything setup --yes --share-only; on no, api-anything setup --no-share --share-only. Either answer is kept, and never asked again`;
+      next = next
+        ? `${next}. ${ask}`
+        : shared.reason?.startsWith("refused")
+          ? ask
+          : `${ask}. On yes, also share ${op}: ${publish}`;
     }
   }
 

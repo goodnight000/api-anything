@@ -21,6 +21,7 @@ import {
   unplaced,
 } from "./heal.js";
 import { buildRequest } from "./http.js";
+import { answerShare } from "./identity.js";
 import { AmbiguousProfile } from "./import.js";
 import { type Candidate, capturePages, pageUrls, rankCandidates } from "./learn.js";
 import { learnSite } from "./learnsite.js";
@@ -234,7 +235,7 @@ const HELP: Record<string, string> = {
                   Gemini CLI, VS Code, Cursor and Claude Desktop, with absolute paths and the other
                   flags given, instead of serving
   --no-learn      hide learn_site`,
-  setup: `api-anything setup [--yes | --no-share] [--agents claude-code,codex,cursor,claude-desktop] [--dry-run]
+  setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop] [--dry-run]
   Connects the MCP server (npx -y api-anything mcp) to each agent found on this machine: Claude Code,
   Codex, Cursor, Claude Desktop. Installs the skill for Claude Code (~/.claude/skills) and Codex
   (~/.agents/skills). Checks for a Chromium browser, makes this install's key, and asks whether to help
@@ -242,6 +243,9 @@ const HELP: Record<string, string> = {
   is backed up to <file>.bak-api-anything before its first edit. Running it again changes nothing.
   --yes        share: answer the question yes without asking
   --no-share   do not share; answer the question no
+  --share-only record --yes or --no-share and nothing else: no agent, skill or key is touched. learn_site
+               asks the question the first time something could be shared; this records the answer
+               given in chat, and changes it later
   --agents     connect these agents only, found or not
   --dry-run    print what would change, and change nothing`,
   learn: `api-anything learn <trigger> --args k=v --args2 k=v --args3 k=v [--site s] [--op o] [--intent text] [options]
@@ -399,6 +403,7 @@ const OPTIONS = {
   agents: { type: "string" },
   "dry-run": { type: "boolean" },
   "no-share": { type: "boolean" },
+  "share-only": { type: "boolean" },
   "no-learn": { type: "boolean" },
   paging: { type: "string" },
   find: { type: "string" },
@@ -1191,6 +1196,17 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
 
 async function cmdSetup({ v }: Parsed): Promise<number> {
   if (v.yes && v["no-share"]) throw new Fail("--yes and --no-share contradict each other", "pass one of them");
+  if (v["share-only"]) {
+    if (!v.yes && !v["no-share"])
+      throw new Fail("--share-only records an answer: pass --yes or --no-share with it", "api-anything setup --help");
+    const share = !!v.yes;
+    if (!v["dry-run"]) answerShare(share);
+    out({ ok: true, ...(v["dry-run"] ? { dryRun: true } : {}), share, shareAsked: true });
+    process.stderr.write(
+      `Sharing: ${v["dry-run"] ? "would be " : ""}${share ? "on. Turn it off with api-anything setup --no-share --share-only" : "off. Turn it on with api-anything setup --yes --share-only"}\n`,
+    );
+    return 0;
+  }
   const agents = v.agents?.split(",").map((a) => a.trim());
   const unknown = agents?.filter((a) => !(AGENTS as readonly string[]).includes(a));
   if (unknown?.length)
@@ -1304,7 +1320,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   pull: { run: cmdPull, flags: [] },
   publish: { run: cmdPublish, flags: ["yes"] },
   mcp: { run: cmdMcp, flags: ["allow-writes", "sites", "print-config", "no-learn"] },
-  setup: { run: cmdSetup, flags: ["yes", "no-share", "agents", "dry-run"] },
+  setup: { run: cmdSetup, flags: ["yes", "no-share", "share-only", "agents", "dry-run"] },
   learn: {
     run: cmdLearn,
     flags: [

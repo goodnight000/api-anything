@@ -45,6 +45,12 @@ export interface ShareOutcome {
   personal?: string[];
 }
 
+/** Why a public op stays here: the user never answered the question, or said no. */
+const offReason = () =>
+  loadSettings().askedAt
+    ? "sharing is off: the user said no (api-anything setup --yes --share-only turns it on)"
+    : "sharing was never asked: the user has not answered whether to share (api-anything setup --yes --share-only, or --no-share --share-only, records it)";
+
 /**
  * Uploads each named op of a local site. A public read (learned logged out, clean replay ok, its hosts
  * on its own site) goes automatically when settings allow sharing; anything else only with `consent`.
@@ -104,7 +110,7 @@ export async function shareOps(
         ...base,
         shared: false,
         ...(op.public && !holding.length
-          ? { reason: "sharing is off in settings (api-anything setup asks)" }
+          ? { reason: offReason() }
           : {
               needsConsent: true,
               reason: op.public

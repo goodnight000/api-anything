@@ -831,8 +831,18 @@ contract is `src/registry-api.ts`. This section is the client's side. The base U
 `API_ANYTHING_REGISTRY` overrides it (https, or http to localhost for tests). Every request refuses
 redirects, has a timeout and reads its answer while streaming up to a cap. Uploads, reports and
 verify jobs are signed with the install's Ed25519 key (`identity.ts`). Nothing is uploaded, reported
-or verified unless setup's question was answered yes (`settings.json` `share`), except an upload the
-user consents to.
+or verified unless setup's question (`QUESTION`) was answered yes (`settings.json` `share`, with
+`askedAt`), except an upload the user consents to.
+
+**The one question, asked once.** A plugin install, `claude mcp add` or `npm -g` never runs setup, so
+`learn_site` asks the same question the first time it reaches the share step (the holdout answered and
+the op holds none of the user's values) with no answer recorded: through MCP elicitation, or the CLI's
+prompt on a terminal. A yes or a no is kept (`answerShare`) and never asked again; a dismissed prompt
+keeps nothing. Unanswered, the share outcome's reason says sharing was never asked (a no says the user
+said no), and the result's `next` gives the agent the question in its words and the commands that
+record the answer, `api-anything setup --yes --share-only` or `--no-share --share-only` (setup's
+answer alone: no agent, skill or key touched), then, on yes, the `publish --yes` that shares the op.
+Nothing is shared without a yes.
 
 **Trust model.** A spec is executable configuration: it names the URLs a call sends the user's
 cookies and session values to, the pages a browser holding the user's sessions opens and what it
@@ -1016,6 +1026,10 @@ previews each upload exactly as it would be sent, what was stripped, every warni
 user's own, and verify's record of each op's checks; `--yes` sends them through `shareOps` with
 `consent: true`. Both refuse an op that fails the scans or the shared rules, or `checks.ts`'s gate
 (below). The agent skill shows the preview to the user and runs `--yes` only on their explicit OK.
+`learn_site` keeps its holdout call as the verify record of the op's holdout check when that is its
+only check (`recordCases`), with what the run proved (clean replay, holdout, tier): a publish of that
+version passes the gate with no verify first and sends that evidence (`proofOf`), so a public read the
+user shares after the fact goes up as a candidate, as it would have automatically.
 
 **Proof before sharing (`checks.ts`).** A read may carry `checks: [{args, expect, purpose?}]`:
 args a human confirmed on the site and what it answers them with, `result` (data), `empty` (its own

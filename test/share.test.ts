@@ -212,13 +212,21 @@ test("shareOps: anything that is not a public read waits for the user's yes", as
   assert.equal(fake.uploads()[0]!.evidence.learnedLoggedIn, true);
 });
 
-test("shareOps with sharing off sends nothing on its own; consent still sends", async () => {
+test("shareOps with sharing never asked or off sends nothing on its own, and says which; consent still sends", async () => {
   saveSite(site());
-  const [off] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } });
-  assert.deepEqual(off, { site: "demo", as: "example-com", op: "search", shared: false, reason: off!.reason });
-  assert.match(off!.reason!, /sharing is off/);
+  const [unasked] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } });
+  assert.deepEqual(unasked, {
+    site: "demo",
+    as: "example-com",
+    op: "search",
+    shared: false,
+    reason: unasked!.reason,
+  });
+  assert.match(unasked!.reason!, /never asked.*setup --yes --share-only/);
   shareOn(false);
-  assert.equal((await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } }))[0]!.shared, false);
+  const [off] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } });
+  assert.equal(off!.shared, false);
+  assert.match(off!.reason!, /sharing is off: the user said no/);
   assert.equal(uploads().length, 0);
   const [yes] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" }, consent: true });
   assert.equal(yes!.shared, true);
