@@ -38,6 +38,7 @@ import {
   refusePrivateHop,
   type Sent,
   send,
+  unknownArgs,
   withDefaults,
 } from "./http.js";
 import { loadSettings } from "./identity.js";
@@ -195,6 +196,8 @@ interface Ctx {
   shared?: Site["shared"];
   /** `unconfirmed`: no browser run in the user's profile for it (tier 3, a recapture, a cookie refresh) */
   unconfirmed?: boolean;
+  /** every cookie a tier-1 redirect chain set: one sent on the next hop can be rotated out before the call ends */
+  seen?: StoredCookie[];
 }
 
 /**
@@ -396,13 +399,15 @@ const hide = (text: string, sessions: (Session | undefined)[], cut = false) =>
 /**
  * One try at a tier, logged for the call's write status. A reason quotes the response, which can
  * echo a credential (a 401 naming the token it refused): redacted against the jar as it was before
- * the send and after it (a rotated cookie), with the snippet's cut end treated as cut.
+ * the send and after it (a rotated cookie), and against every cookie a redirect set along the way (one
+ * sent on the next hop, then rotated again), with the snippet's cut end treated as cut.
  */
 async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   const before = sessionOrNone(ctx.site);
   const a = await tryTier(ctx, op, tier);
   ctx.log.push(a);
-  return { ...a, reason: hide(a.reason, [before, sessionOrNone(ctx.site)], true) };
+  const seen = { cookies: ctx.seen ?? [], values: {} };
+  return { ...a, reason: hide(a.reason, [before, sessionOrNone(ctx.site), seen], true) };
 }
 
 async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
@@ -454,6 +459,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       });
       // A rotating cookie (a rolling session, __cf_bm) must ride on the next call.
       if (sent.setCookies) {
+        ctx.seen = [...(ctx.seen ?? []), ...sent.setCookies];
         try {
           mergeCapture(ctx.site, sent.setCookies);
         } catch {
@@ -771,6 +777,8 @@ function resolve(
       class: "input",
       reason: `no operation "${opName}" on ${r.site.name}`,
       next: `api-anything ops ${r.site.name}`,
+      // the site is known though the op is not: the step lists its ops
+      nextCall: { action: "fix_args", site: r.site.name },
     };
   // someone else's: pulled, bundled, or a heal's copy of a pulled one
   return { site: r.site, op, theirs: r.source !== "user" || !!r.site.shared, source: r.source };
@@ -901,17 +909,8 @@ export async function call(
       next: nextFor("refused", siteName, op),
     });
   }
-  // A misspelled optional arg would silently fall back to its default: refuse it.
-  const unknown = Object.keys(args).filter((k) => !op.params.some((p) => p.name === k));
-  if (unknown.length) {
-    const takes = op.params.map((p) => p.name).join(", ") || "no args";
-    return done({
-      ok: false,
-      class: "input",
-      reason: `unknown arg ${unknown.join(", ")}; ${op.name} takes ${takes}`,
-      next: nextFor("input", siteName, op),
-    });
-  }
+  const unknown = unknownArgs(op, args);
+  if (unknown) return done({ ok: false, class: "input", reason: unknown, next: nextFor("input", siteName, op) });
   // Resolved once: the tier-3 trigger and its answer's match take a default just as the request does.
   args = withDefaults(op, args);
   let session: Session;

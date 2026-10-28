@@ -1320,11 +1320,13 @@ export async function pageFetch(o: {
       const late = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`no response within ${timeoutMs} ms`)), left + 1000);
       });
+      // cut short by the deadline, the window says nothing about the page: the call ran out of time
+      const why =
+        left < START_MS
+          ? `no response within ${timeoutMs} ms: the page never sent the request`
+          : `the page did not send the request within ${START_MS} ms`;
       const quiet = new Promise<never>((_, reject) => {
-        quietTimer = setTimeout(
-          () => void (!w.started && reject(new NotStarted(`the page did not send the request within ${START_MS} ms`))),
-          Math.min(START_MS, left),
-        );
+        quietTimer = setTimeout(() => void (!w.started && reject(new NotStarted(why))), Math.min(START_MS, left));
       });
       try {
         const r = await Promise.race([run, late, quiet]);

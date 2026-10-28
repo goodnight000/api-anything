@@ -37,13 +37,14 @@ export function credentialName(name: string): boolean {
 
 /**
  * The leaves of a request holding a literal the learner would have made a ref: a hand-written or
- * older spec's credential. `pub`: the lower-cased names the op lists as public.
+ * older spec's credential. `pub`: the lower-cased names the op lists as public. A header is judged
+ * whole, JSON or not, as learning judges it: a JSON authorization header is one credential.
  */
 export function literalCredentials(req: Request, pub: Set<string>): Leaf[] {
   return walk(req).filter(
     (l) =>
       l.type === "string" &&
-      !l.container &&
+      (!l.container || (l.at.length === 1 && headerName(l.at) !== undefined)) &&
       !pub.has(leafName(l.at).toLowerCase()) &&
       isCredential(leafName(l.at), l.value),
   );
@@ -279,7 +280,8 @@ const htmlEscape = (s: string) =>
 
 /**
  * `text` with every live cookie and session value in it replaced by `[redacted]`: each stored form
- * (as stored, unquoted, URL-decoded) as it is and percent-encoded, form-encoded, JSON-escaped,
+ * (as stored, unquoted, URL-decoded) as it is and percent-encoded, form-encoded, JSON-escaped (a
+ * \u escape in the text is read as its character first),
  * HTML-escaped and base64-encoded at any byte offset (`scanSecrets` reads the same layers by decoding
  * the text instead, which a replacement cannot do). `cut`: the text was cut short (a body's snippet),
  * so a value the cut split leaves its first characters at the end: those go too. A value that is an
@@ -298,7 +300,8 @@ export function redact(text: string, session: Pick<Session, "cookies" | "values"
   }
   if (!forms.size || !text) return text;
   const longest = [...forms].sort((a, b) => b.length - a.length);
-  let out = text;
+  // a JSON body can spell any character \u00XX, all or some of them: read those as the characters first
+  let out = text.replace(/\\u([0-9a-fA-F]{4})/g, (_, h: string) => String.fromCharCode(Number.parseInt(h, 16)));
   for (const f of longest) if (out.includes(f)) out = out.split(f).join(REDACTED);
   if (!o.cut) return out;
   let drop = 0;

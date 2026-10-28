@@ -73,10 +73,13 @@ verbatim, plus these fields:
 
 ```sh
 npm install
+npm run cli -- <command>  # the CLI from source, e.g. npm run cli -- ops hacker-news
 npm run format  # Biome: format and apply safe lint fixes
 npm run lint    # what CI runs: formatting and lint, no changes
 npm run check   # typecheck src and test
 npm test        # unit + offline e2e (the browser parts skip when no Chromium browser is installed)
+npm run build   # compile src to dist/ (npm install runs it too, through prepare)
+npm run demo -- 'agent memory'  # examples/research.mjs against Hacker News (live site)
 npm run smoke:pack  # pack, install the tarball in a temp dir, run its CLI and library (needs the npm registry)
 ```
 

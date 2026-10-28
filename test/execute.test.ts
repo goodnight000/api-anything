@@ -1080,3 +1080,37 @@ test("readback: with no find, any data counts; read args take the write's values
   );
   assert.equal(empty.write, "accepted");
 });
+
+test("a cookie a redirect set, sent on the next hop and rotated again, is redacted from the reason", async () => {
+  const middle = "MiddleSecretABC987";
+  saveSite(
+    parseSite({
+      name: "hops",
+      baseUrl: "https://hops.test",
+      operations: [
+        {
+          name: "read",
+          readOnly: true,
+          request: { method: "GET", url: "https://hops.test/start", headers: {} },
+          trigger: { url: "https://hops.test/" },
+        },
+      ],
+    }),
+  );
+  const r = await call(
+    "hops",
+    "read",
+    {},
+    opts((url) =>
+      url.endsWith("/start")
+        ? new Response(null, { status: 302, headers: { location: "/answer", "set-cookie": `sid=${middle}; Path=/` } })
+        : new Response(`backend failed for session ${middle}`, {
+            status: 500,
+            headers: { "content-type": "text/plain", "set-cookie": "sid=FinalSecretXYZ654; Path=/" },
+          }),
+    ),
+  );
+  assert.equal(r.ok, false);
+  assert.ok(!r.reason!.includes(middle), r.reason!);
+  assert.match(r.reason!, /\[redacted\]/);
+});

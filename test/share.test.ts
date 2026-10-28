@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { DAILY_JOBS, verifyCandidates } from "../src/background.js";
+import { verifySite } from "../src/checks.js";
 import { cleanCall } from "../src/clean.js";
 import { call } from "../src/execute.js";
 import { resolver } from "../src/http.js";
@@ -112,6 +113,17 @@ test("shareOps: a public read goes automatically, signed, and the local op recor
   assert.equal(u!.operation.response.shape, undefined);
   assert.deepEqual(loadSite("demo")!.site.operations[0]!.version, { hash: out!.hash, status: "candidate" });
   assert.equal(uploads()[0]!.verified, true, "signed, and the signature verifies");
+});
+
+test("shareOps: an op whose recorded check fails on this version is refused, as publish refuses it", async () => {
+  shareOn();
+  saveSite(site({ checks: [{ args: { q: "zzzz" }, expect: "empty" }] }));
+  const fetchImpl = (async () => json({ hits: [{ title: "something" }] })) as typeof fetch;
+  await verifySite("demo", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  const [out] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } });
+  assert.equal(out!.shared, false, JSON.stringify(out));
+  assert.match(out!.reason!, /refused: .*check 1 \(q=zzzz\) expects empty, and answered result/);
+  assert.equal(uploads().length, 0);
 });
 
 test("shareOps: a read whose clean replay met a bot wall is public too, and goes automatically", async () => {

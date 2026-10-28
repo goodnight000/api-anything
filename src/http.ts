@@ -199,6 +199,13 @@ export function withDefaults(op: Operation, args: Record<string, unknown>): Reco
   return out;
 }
 
+/** Why the args name a param the op doesn't take, or undefined: a misspelled optional arg would silently fall back to its default. */
+export function unknownArgs(op: Operation, args: Record<string, unknown>): string | undefined {
+  const unknown = Object.keys(args).filter((k) => !op.params.some((p) => p.name === k));
+  if (!unknown.length) return undefined;
+  return `unknown arg ${unknown.join(", ")}; ${op.name} takes ${op.params.map((p) => p.name).join(", ") || "no args"}`;
+}
+
 /** What a value the param does not allow should be instead (its pattern, enum or bounds), or undefined when it is allowed. */
 export function refusal(p: Pick<Param, "pattern" | "hint" | "enum" | "min" | "max">, text: string): string | undefined {
   if (p.pattern !== undefined && !new RegExp(`^(?:${p.pattern})$`).test(text))

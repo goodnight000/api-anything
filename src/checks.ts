@@ -104,11 +104,10 @@ function repeats(first: unknown, second: unknown): boolean {
 
 /** A paged read's page after its example's: it must answer, and not with page 1 again. */
 async function nextPageCase(
-  site: string,
   op: Operation,
   args: Record<string, unknown>,
   first: CallResult,
-  opts: CallOptions,
+  send: (args: Record<string, unknown>) => Promise<CallResult>,
 ): Promise<CaseResult> {
   const p = op.paging!;
   const base = { op: op.name, case: "next page", expect: "result" as const };
@@ -131,9 +130,15 @@ async function nextPageCase(
             ? `page 1 answered no next page at ${p.next}: give ${op.name} an example with more than one page, or fix paging.next`
             : `the example sets no page number in ${p.param} to add one to`,
     };
-  const r = await call(site, op.name, { ...args, [p.param]: next }, opts);
+  const r = await send({ ...args, [p.param]: next });
   const j = judgeCase("result", r);
-  const one: CaseResult = { ...base, ...j, ...(r.tier ? { tier: r.tier } : {}), ms: r.ms };
+  const one: CaseResult = {
+    ...base,
+    ...j,
+    ...(r.tier ? { tier: r.tier } : {}),
+    ...(r.healed ? { healed: true } : {}),
+    ms: r.ms,
+  };
   // a cursor to an empty page is how some lists end: it shows nothing about the param
   if (j.got === "empty") return { ...one, outcome: "inconclusive", reason: "the next page is empty" };
   if (j.outcome !== "pass") return { ...one, reason: r.reason ?? `answered ${j.got}`, next: r.next };
@@ -160,6 +165,13 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
   const results: Verified["results"] = [];
   const proven: string[] = [];
   const ran: Record<string, CaseResult[]> = {};
+  // The versions of each op its cases were sent with: the one verify read, and each one a case healed it
+  // to. One saved meanwhile by anything else (an `add` in another process) is a version none of them ran.
+  const versions = new Map(site.operations.map((o) => [o.name, new Set([opHash(o)])]));
+  const hashNow = (op: string) => {
+    const o = loadSite(name)?.site.operations.find((x) => x.name === op);
+    return o ? opHash(o) : undefined;
+  };
   for (const op of site.operations) {
     if (!op.readOnly) continue;
     const example = exampleArgs(op);
@@ -179,8 +191,14 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
     }
     const answers: { args: Record<string, unknown>; data: string }[] = [];
     ran[op.name] = [];
-    for (const [label, args, expect, check] of cases) {
+    const send = async (args: Record<string, unknown>) => {
       const r = await call(name, op.name, args, opts);
+      const healedTo = r.healed ? hashNow(op.name) : undefined;
+      if (healedTo) versions.get(op.name)!.add(healedTo);
+      return r;
+    };
+    for (const [label, args, expect, check] of cases) {
+      const r = await send(args);
       const j = judgeCase(expect, r);
       if (j.outcome === "pass" && (j.got === "result" || j.got === "empty"))
         answers.push({ args, data: JSON.stringify(r.data ?? null) });
@@ -198,20 +216,21 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
       results.push(one);
       ran[op.name]!.push(one);
       if (op.paging && label === "example") {
-        const page = await nextPageCase(name, op, args, r, opts);
+        const page = await nextPageCase(op, args, r, send);
         results.push(page);
         ran[op.name]!.push(page);
       }
     }
     if (op.unproven && answersDiffer(op, op.unproven.params, answers)) proven.push(op.name);
   }
+  const answered = (o: Operation) => !!versions.get(o.name)?.has(opHash(o));
   if (proven.length)
     updateSite(name, (cur) => {
       if (!cur) throw new Error(`site "${name}" disappeared during verify`);
       return {
         ...cur,
         operations: cur.operations.map((o) => {
-          if (!proven.includes(o.name)) return o;
+          if (!proven.includes(o.name) || !answered(o)) return o;
           const { unproven: _, ...rest } = o;
           return rest;
         }),
@@ -221,7 +240,8 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
   const now = loadSite(name)?.site ?? site;
   const record = loadRecord(name);
   const at = new Date().toISOString();
-  for (const op of now.operations) if (ran[op.name]) record[op.name] = { hash: opHash(op), at, results: ran[op.name]! };
+  for (const op of now.operations)
+    if (ran[op.name] && answered(op)) record[op.name] = { hash: opHash(op), at, results: ran[op.name]! };
   for (const k of Object.keys(record)) if (!now.operations.some((o) => o.name === k)) delete record[k];
   writePrivate(recordFile(name), JSON.stringify(record, null, 1));
   return { results, proven };
@@ -229,6 +249,8 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
 
 export interface Gate {
   errors: string[];
+  /** each op's failing cases on its current version: what refuses even a share that needs no `verify` (shareOps) */
+  failed: Map<string, string[]>;
   /** the record's cases for every op, current ones only, for the publish preview */
   rows: { op: string; verified?: string; results: CaseResult[] }[];
 }
@@ -250,15 +272,19 @@ const label = (r: CaseResult) =>
 export function gate(site: Site): Gate {
   const record = loadRecord(site.name);
   const errors: string[] = [];
+  const failed: Gate["failed"] = new Map();
   const rows: Gate["rows"] = [];
   for (const op of site.operations) {
     const rec = record[op.name];
     const current = rec && rec.hash === opHash(op) ? rec : undefined;
     if (op.checks?.length && !current)
       errors.push(`${op.name}: its checks have not run on this version of it: api-anything verify ${site.name}`);
-    for (const r of current?.results ?? [])
-      if (r.outcome === "fail") errors.push(`${op.name}: ${label(r)} expects ${r.expect}, and answered ${r.got}`);
+    const fails = (current?.results ?? [])
+      .filter((r) => r.outcome === "fail")
+      .map((r) => `${op.name}: ${label(r)} expects ${r.expect}, and answered ${r.got}`);
+    if (fails.length) failed.set(op.name, fails);
+    errors.push(...fails);
     rows.push({ op: op.name, ...(current ? { verified: current.at } : {}), results: current?.results ?? [] });
   }
-  return { errors, rows };
+  return { errors, failed, rows };
 }

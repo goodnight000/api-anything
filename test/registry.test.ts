@@ -10,7 +10,7 @@ import { after, before, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { verifySite } from "../src/checks.js";
+import { loadRecord, opHash, verifySite } from "../src/checks.js";
 import { call, heal } from "../src/execute.js";
 import { healOperation } from "../src/heal.js";
 import { resolver } from "../src/http.js";
@@ -80,6 +80,21 @@ test("the shared rules refuse what a hostile or careless spec could do with some
             method: "GET",
             url: "https://news.example.com/api",
             headers: { authorization: "Bearer Zx9Qw8vLm7Kj6HgF5dS4aP3oI2uY1tRe" },
+          },
+        },
+      ),
+      /literal credential/,
+    ],
+    [
+      // learning makes a JSON authorization header one session ref: judged whole, not leaf by leaf
+      "a literal JSON authorization header",
+      spec(
+        {},
+        {
+          request: {
+            method: "GET",
+            url: "https://news.example.com/api",
+            headers: { authorization: '{"user":"alice","pin":"751903"}' },
           },
         },
       ),
@@ -766,6 +781,140 @@ test("publish runs on verify's record: every counted check passes, and inconclus
   t.operations[0]!.checks = t.operations[0]!.checks!.slice(0, 1);
   saveSite(t);
   assert.match(plan("demo").errors.join("\n"), /its checks have not run on this version/);
+});
+
+test("verify records nothing for an op saved meanwhile by something else: its answers came from the old version", async () => {
+  let n = 0;
+  const fetchImpl = (async (u: string | URL | Request) => {
+    // while verify runs, another process saves the op with a request none of its cases sent
+    if (++n === 2) {
+      const s = loadSite("demo")!.site;
+      saveSite({
+        ...s,
+        operations: [
+          { ...s.operations[0]!, request: { ...s.operations[0]!.request, url: "https://news.example.com/v2?q=x" } },
+        ],
+      });
+    }
+    return json({ hits: new URL(String(u)).searchParams.get("q") === "zzzz" ? [] : [{ t: "a" }] });
+  }) as typeof fetch;
+  saveSite(
+    spec(
+      {},
+      {
+        params: [{ name: "q", example: "kittens" }],
+        unproven: { params: ["q"], reason: "example 2 (q=cats) was answered with example 1's data" },
+        checks: [{ args: { q: "zzzz" }, expect: "empty" }],
+      },
+    ),
+  );
+  await verifySite("demo", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  const now = loadSite("demo")!.site;
+  assert.match(plan("demo").errors.join("\n"), /its checks have not run on this version/);
+  assert.ok(now.operations[0]!.unproven, "no case ran on the saved version: its mark stays");
+});
+
+/** A read with a hex token in its query that the search page reissues: a 404 to the old token heals it. */
+const reissuable = (name: string, op: Record<string, unknown>) =>
+  parseSite({
+    name,
+    baseUrl: "https://news.example.com",
+    operations: [
+      {
+        name: "search",
+        readOnly: true,
+        volatile: [{ at: ["query:t"], shape: { charset: "hex", length: 32 }, anchor: "apiToken" }],
+        trigger: { url: "https://news.example.com/search" },
+        match: { path: "/api" },
+        response: { format: "json", extract: "hits" },
+        ...op,
+      },
+    ],
+  });
+const OLD = "a1".repeat(16);
+const FRESH = "b2".repeat(16);
+const reissued = () => new Response(`apiToken:"${FRESH}"`, { headers: { "content-type": "text/html" } });
+
+test("a heal vouches only for the version it saved: one saved meanwhile by something else gets no record", async () => {
+  saveSite(
+    reissuable("heal-race", {
+      request: { method: "GET", url: `https://news.example.com/api?q=kittens&t=${OLD}`, headers: {} },
+      params: [{ name: "q", example: "kittens" }],
+      slots: [{ param: "q", at: ["query:q"] }],
+      checks: [{ args: { q: "zzzz" }, expect: "empty" }],
+      unproven: { params: ["q"], reason: "same examples" },
+    }),
+  );
+  const fetchImpl = (async (raw: string | URL | Request) => {
+    const u = new URL(String(raw));
+    if (u.pathname === "/search") return reissued();
+    if (u.searchParams.get("t") === OLD) return new Response("old route", { status: 404 });
+    if (u.searchParams.get("q") === "zzzz") {
+      // the example healed the op; now another process saves a version no case sends
+      const s = loadSite("heal-race")!.site;
+      saveSite({
+        ...s,
+        operations: s.operations.map((o) => ({
+          ...o,
+          request: { ...o.request, url: o.request.url.replace("/api?", "/never-tested?") },
+        })),
+      });
+      return json({ hits: [] });
+    }
+    return json({ hits: [{ id: 1 }] });
+  }) as typeof fetch;
+  const v = await verifySite("heal-race", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  assert.ok(
+    v.results.some((r) => "healed" in r && r.healed),
+    JSON.stringify(v),
+  );
+  const now = loadSite("heal-race")!.site.operations[0]!;
+  assert.notEqual(loadRecord("heal-race").search?.hash, opHash(now));
+  assert.ok(now.unproven, "its unproven mark stays");
+});
+
+test("a heal by the next-page case keeps the record, on the healed version", async () => {
+  saveSite(
+    reissuable("page-heal", {
+      request: { method: "GET", url: `https://news.example.com/api?page=1&t=${OLD}`, headers: {} },
+      params: [{ name: "page", example: "1" }],
+      slots: [{ param: "page", at: ["query:page"] }],
+      paging: { param: "page" },
+      checks: [{ args: { page: "3" }, expect: "empty" }],
+    }),
+  );
+  const fetchImpl = (async (raw: string | URL | Request) => {
+    const u = new URL(String(raw));
+    if (u.pathname === "/search") return reissued();
+    const page = u.searchParams.get("page");
+    if (page === "2" && u.searchParams.get("t") === OLD)
+      return json({ errors: [{ message: "PersistedQueryNotFound" }] });
+    return json({ hits: page === "3" ? [] : [{ id: page }] });
+  }) as typeof fetch;
+  await verifySite("page-heal", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  const now = loadSite("page-heal")!.site.operations[0]!;
+  assert.ok(now.request.url.includes(FRESH), "the next-page case healed it");
+  assert.equal(loadRecord("page-heal").search?.hash, opHash(now));
+});
+
+test("publish takes an op named like an Object.prototype key", () => {
+  saveSite(
+    parseSite({
+      name: "demo",
+      baseUrl: "https://news.example.com",
+      operations: [
+        {
+          name: "constructor",
+          readOnly: true,
+          request: { method: "GET", url: "https://news.example.com/api", headers: {} },
+          trigger: { url: "https://news.example.com/" },
+          match: { path: "/api" },
+          response: { format: "json" },
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(plan("demo").errors, []);
 });
 
 test("verify asks a paged read for its next page: page 1 again fails and holds publish back", async () => {

@@ -191,6 +191,7 @@ export function plan(
     ...(notes ? { notes } : {}),
   };
   const warnings = new Set(ex.warnings);
+  const checked = gate({ ...r.site, operations: r.site.operations.filter((op) => wanted.includes(op.name)) });
   const ops = wanted.map((n): OpPlan => {
     const i = ex.spec.operations.findIndex((op) => op.name === n);
     const operation = ex.spec.operations[i]!;
@@ -216,6 +217,7 @@ export function plan(
       errors: [
         ...new Set([...theirs, ...strict]),
         ...vet.errors,
+        ...(checked.failed.get(n) ?? []),
         ...(Buffer.byteLength(bytes) > LIMITS.file
           ? [`the upload of ${n} is ${Buffer.byteLength(bytes)} bytes; at most ${LIMITS.file}`]
           : []),
@@ -223,7 +225,6 @@ export function plan(
       personal: personal(upload),
     };
   });
-  const checked = gate({ ...r.site, operations: r.site.operations.filter((op) => wanted.includes(op.name)) });
   return {
     site: name,
     ...(as !== name ? { as } : {}),

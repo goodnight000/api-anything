@@ -1413,6 +1413,31 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
     }
   });
 
+  test("a tier-2 page still busy at the deadline is reported as the deadline, not as a stalled page", async () => {
+    // the root page's renderer is busy for 1.5 s right after load, so its fetch can't start before a 1 s deadline
+    const busy = createHttpServer((req, res) => {
+      if (req.url !== "/") return;
+      res
+        .writeHead(200, { "content-type": "text/html" })
+        .end("<!doctype html><script>setTimeout(()=>{for(const e=Date.now()+1500;Date.now()<e;);})</script>");
+    });
+    await new Promise<void>((r) => busy.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(busy.address() as AddressInfo).port}`;
+    try {
+      site("t2up", rd("up", "/plain", { minTier: 2 }));
+      assert.equal((await call("t2up", "up", {}, { maxTier: 2, minIntervalMs: 0 })).ok, true, "Chrome is up");
+      const request = { method: "GET", url: `${base}/api`, headers: {} };
+      saveSite(parseSite({ name: "t2busy", baseUrl: base, operations: [rd("n", "/api", { minTier: 2, request })] }));
+      const r = await call("t2busy", "n", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 1000 });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.reason ?? "", /no response within 1000 ms/);
+      assert.doesNotMatch(r.reason ?? "", /within 2000 ms/);
+    } finally {
+      busy.closeAllConnections();
+      busy.close();
+    }
+  });
+
   test("a cached page that never sends the fetch is replaced, the write goes once, and what the page sends when it wakes never leaves", async () => {
     site("t2stall", rd("up", "/plain", { minTier: 2 }), {
       ...rd("save", "/api/stalled", { minTier: 2 }),

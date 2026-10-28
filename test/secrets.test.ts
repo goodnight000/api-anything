@@ -40,6 +40,15 @@ test("redact: every encoding a body can echo a live value in", () => {
   }
 });
 
+test("redact: a value a JSON body spells in \\u escapes, all of it or some", () => {
+  const u = (c: string) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+  for (const f of [[...TOKEN].map(u).join(""), [...TOKEN].map((c, i) => (i % 2 ? u(c) : c)).join("")]) {
+    const out = redact(`{"error":"invalid session ${f}"}`, session);
+    assert.ok(out.includes(REDACTED), out);
+    assert.ok(!out.includes(f), out);
+  }
+});
+
 test("redact: the site's own address, short values and ordinary text are left alone", () => {
   const text = "redirected to https://www.x.test/ with abc; no session here";
   assert.equal(redact(text, session), text);

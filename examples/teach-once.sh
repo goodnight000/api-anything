@@ -21,8 +21,8 @@ EOF
 echo -e "\n# 2. The saved template has a slot where the domain goes." >&2
 run "jq -c '.operations[] | select(.name == \"links\").slots' \"$home/sites/hn-demo.json\""
 
-echo -e "\n# 3. Call it with a new input, plain HTTP only. Summarized with jq." >&2
-run "api-anything call hn-demo links domain=$(printf %q "$domain") --max-tier 1" | jq --arg d "$domain" '
+echo -e "\n# 3. Call it with a new input. Summarized with jq; tier 1 is plain HTTP, tier 2 a browser page." >&2
+run "api-anything call hn-demo links domain=$(printf %q "$domain")" | jq --arg d "$domain" '
   [(.data // [])[].url | capture("^https?://(?<host>[^/]+)").host] as $hosts
   | {ok, class, tier, ms, reason, results: ($hosts | length),
      from_domain: ($hosts | map(select(. == $d or endswith("." + $d))) | length),

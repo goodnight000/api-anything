@@ -5,7 +5,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { type LearnSiteInput, type LearnSiteResult, learnSite } from "./learnsite.js";
-import { asTable, mcpNext, mcpNextCall } from "./mcp.js";
+import { asTable, mcpNext, mcpNextCall, type Reply, reply } from "./mcp.js";
 import { badAddress } from "./vet.js";
 
 /**
@@ -18,6 +18,8 @@ export const learnTool = { enabled: true, publicOnly: true };
 
 const ARGS = z.record(z.string(), z.unknown());
 
+const LEARN_NOTE = "learning loads the page in a browser for each value, and can take a few minutes";
+
 const DESCRIPTION =
   "Learn an operation for a website nobody has shared yet, in one call: use it after find_sites found no site or no operation for what the user asked. " +
   "Give the https page URL on a public host that shows the answer, with {param} placeholders (trigger: https://site.com/search?q={q}), the user's own values (args), and two other real values of the same kind that you pick (args2, args3: other searches, other ids, other places the site has). " +
@@ -27,8 +29,11 @@ const DESCRIPTION =
   "Sharing with the catalog is automatic for a public read when the user turned sharing on; an operation that needed a login is shared only with the user's yes. Only reads: a write is learned with the CLI. " +
   "On failure follow `next` once (nextCall is the same step as data).";
 
-export function registerLearn(server: McpServer, o: { allowWrites: boolean }): void {
-  void o;
+/** `asJob`: the server's deadline, so a learn still loading pages answers with a job, as any slow tool does. */
+export function registerLearn(
+  server: McpServer,
+  o: { asJob: (key: string, note: string, work: () => Promise<Reply>) => Promise<Reply> },
+): void {
   if (!learnTool.enabled) return;
   server.registerTool(
     "learn_site",
@@ -61,62 +66,58 @@ export function registerLearn(server: McpServer, o: { allowWrites: boolean }): v
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
-    async (input: LearnSiteInput) => {
-      let r: LearnSiteResult;
-      // a write is refused by learnSite whatever its trigger
-      const bad = learnTool.publicOnly && !input.write ? badAddress(input.trigger ?? "") : undefined;
-      if (bad)
-        r = {
-          ok: false,
-          class: "refused",
-          error: `trigger ${input.trigger} ${bad}: learn_site loads only https pages on a public host`,
-          next: "give the https URL of the site's public page; a page on this machine or the local network is learned with the CLI, by the user: api-anything learn <url> ...",
-          nextCall: { action: "fix_args" },
-        };
-      else
-        try {
-          const caps = server.server.getClientCapabilities();
-          r = await learnSite(input, {
-            consent: caps?.elicitation
-              ? async (message) => {
-                  const a = await server.server.elicitInput({
-                    message,
-                    requestedSchema: {
-                      type: "object",
-                      properties: { share: { type: "boolean", title: "Share it", default: false } },
-                      required: ["share"],
-                    },
-                  });
-                  // a dismissed prompt is no answer: the agent asks instead
-                  return a.action === "cancel" ? undefined : a.action === "accept" && a.content?.share === true;
-                }
-              : undefined,
-          });
-        } catch (e) {
-          r = { ok: false, error: (e as Error).message.split("\n")[0]!, next: "report this error to the user" };
-        }
-      const nextCall =
-        r.nextCall?.action === "relearn"
-          ? {
-              ...r.nextCall,
-              tool: "learn_site",
-              args: { ...input, ...(r.captures?.length === 2 ? { captures: r.captures } : {}) },
-            }
-          : r.nextCall && mcpNextCall(r.nextCall);
-      return {
-        content: [
+    (input: LearnSiteInput) =>
+      o.asJob(`learn ${JSON.stringify(input)}`, LEARN_NOTE, async () => {
+        let r: LearnSiteResult;
+        // a write is refused by learnSite whatever its trigger
+        const bad = learnTool.publicOnly && !input.write ? badAddress(input.trigger ?? "") : undefined;
+        if (bad)
+          r = {
+            ok: false,
+            class: "refused",
+            error: `trigger ${input.trigger} ${bad}: learn_site loads only https pages on a public host`,
+            next: "give the https URL of the site's public page; a page on this machine or the local network is learned with the CLI, by the user: api-anything learn <url> ...",
+            nextCall: { action: "fix_args" },
+          };
+        else
+          try {
+            const caps = server.server.getClientCapabilities();
+            r = await learnSite(input, {
+              consent: caps?.elicitation
+                ? async (message) => {
+                    const a = await server.server.elicitInput({
+                      message,
+                      requestedSchema: {
+                        type: "object",
+                        properties: { share: { type: "boolean", title: "Share it", default: false } },
+                        required: ["share"],
+                      },
+                    });
+                    // a dismissed prompt is no answer: the agent asks instead
+                    return a.action === "cancel" ? undefined : a.action === "accept" && a.content?.share === true;
+                  }
+                : undefined,
+            });
+          } catch (e) {
+            r = { ok: false, error: (e as Error).message.split("\n")[0]!, next: "report this error to the user" };
+          }
+        const nextCall =
+          r.nextCall?.action === "relearn"
+            ? {
+                ...r.nextCall,
+                tool: "learn_site",
+                args: { ...input, ...(r.captures?.length === 2 ? { captures: r.captures } : {}) },
+              }
+            : r.nextCall && mcpNextCall(r.nextCall);
+        return reply(
           {
-            type: "text" as const,
-            text: JSON.stringify({
-              ...r,
-              ...(r.data !== undefined ? { data: asTable(r.data) } : {}),
-              ...(r.next ? { next: mcpNext(r.next) } : {}),
-              ...(nextCall ? { nextCall } : {}),
-            }),
+            ...r,
+            ...(r.data !== undefined ? { data: asTable(r.data) } : {}),
+            ...(r.next ? { next: mcpNext(r.next) } : {}),
+            ...(nextCall ? { nextCall } : {}),
           },
-        ],
-        isError: !r.ok,
-      };
-    },
+          !r.ok,
+        );
+      }),
   );
 }

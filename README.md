@@ -317,13 +317,14 @@ api-anything add hn-demo links \
   --example domain=github.com --example2 domain=github.io --match path=/from \
   --html '{"items":"tr.athing","fields":{"title":".titleline > a","url":".titleline > a@href"}}'
 
-api-anything call hn-demo links domain=arxiv.org      # 30 arxiv.org stories, tier 1
+api-anything call hn-demo links domain=arxiv.org      # 30 arxiv.org stories
 ```
 
 The browser loads the page once per example. The part of the request that changed with the input
 becomes a parameter. You, or your agent, pick the request and the fields; API Anything builds the
 template without an LLM. If example 2 gets example 1's data, the op is marked `unproven`: the
-server may not read that param at all.
+server may not read that param at all. A learned op sends the browser's own headers, and Hacker News's
+`/from` page refuses them over plain HTTP today, so this one answers at tier 2, from a page.
 
 [Watch it learn and call, 25 s recording →](docs/demos/README.md#2-teach-once-call-with-new-inputs)
 
@@ -512,6 +513,20 @@ The catalog grows when agents use it. Three ways to speed that up:
    `api-anything learn` at one, and sharing does the rest.
 3. **Add a site spec by pull request.** Every spec in `sites/` passes the same rules a shared one
    does. [Contributing](CONTRIBUTING.md)
+
+From a checkout (Node 22.13+):
+
+```sh
+npm ci                     # install; also builds dist/
+npm run cli -- <command>   # the CLI from source: npm run cli -- call hacker-news search query=sqlite
+npm test                   # unit + offline e2e; the browser tests skip without a Chromium browser
+npm run check              # typecheck src and test
+npm run lint               # what CI runs: formatting and lint, no changes
+npm run format             # apply formatting and safe lint fixes
+npm run build              # compile src to dist/
+npm run demo -- 'agent memory'  # examples/research.mjs: a research brief from Hacker News
+npm run smoke:pack         # pack, install the tarball in a temp dir, run its CLI and library (needs the npm registry)
+```
 
 ## Limits
 
