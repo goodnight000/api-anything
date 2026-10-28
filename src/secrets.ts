@@ -396,21 +396,25 @@ export function redact(
     for (const f of longest)
       for (let n = Math.min(f.length - 1, out.length); n >= PARTIAL && n > drop; n--)
         if (out.endsWith(f.slice(0, n))) [drop, as] = [n, forms.get(f)!];
-    if (drop) out = `${out.slice(0, out.length - drop)}${as}`;
-    else {
-      // A value spelled in escapes no form holds (\u0053, \/) shows its first characters only decoded.
-      // Read so for this test alone: the text keeps the escapes it has.
-      const max = Math.max(...stored.map(([f]) => f.length));
-      for (let k = Math.max(0, out.length - 6 * max); k <= out.length - PARTIAL && out.includes("\\", k); k++) {
-        // a cut inside an escape leaves its start, which reads as nothing yet
-        const d = jsonUnescape(out.slice(k).replace(/\\(?:u[0-9a-fA-F]{0,3})?$/, ""));
-        const hit = d.length >= PARTIAL && stored.find(([f]) => f.startsWith(d));
-        if (hit) {
-          out = `${out.slice(0, k)}${hit[1]}`;
-          break;
-        }
+    let from = out.length - drop;
+    // A value spelled in escapes no form holds (\u0053, \/) shows its first characters only decoded.
+    // Read so for this test alone: the text keeps the escapes it has. Read even when a raw tail matched:
+    // that can be another value's prefix with this one's escapes before it, and the earlier start is cut.
+    const max = Math.max(...stored.map(([f]) => f.length));
+    for (
+      let k = Math.max(0, out.length - 6 * max);
+      k < from && k <= out.length - PARTIAL && out.includes("\\", k);
+      k++
+    ) {
+      // a cut inside an escape leaves its start, which reads as nothing yet
+      const d = jsonUnescape(out.slice(k).replace(/\\(?:u[0-9a-fA-F]{0,3})?$/, ""));
+      const hit = d.length >= PARTIAL && stored.find(([f]) => f.startsWith(d));
+      if (hit) {
+        [from, as] = [k, hit[1]];
+        break;
       }
     }
+    if (from < out.length) out = `${out.slice(0, from)}${as}`;
   }
   const leaks = liveTest(session);
   if (!leaks(out)) return out;

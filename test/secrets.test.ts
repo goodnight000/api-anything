@@ -80,6 +80,26 @@ test("redact: a cut value spelled in JSON escapes leaves none of its first chara
   assert.equal(redact(body, session, { cut: true }), body);
 });
 
+test("redact: a cut value's escaped start goes even when its raw rest is another value's prefix", () => {
+  const u = (c: string) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+  const cookie = (name: string, value: string) => ({
+    name,
+    value,
+    domain: "x.test",
+    path: "/",
+    expires: -1,
+    httpOnly: true,
+    secure: true,
+  });
+  // the text ends in "kettle" escaped, then "sessio": the start of the other value too
+  const both = { cookies: [cookie("a", "session"), cookie("b", "kettlesessionMore")], values: {} };
+  const text = `HTTP 401: {"e":"${[..."kettle"].map(u).join("")}sessio`;
+  assert.equal(redact(text, both, { cut: true }), `HTTP 401: {"e":"${REDACTED}`);
+  assert.equal(redact(text, both, { cut: true, named: true }), `HTTP 401: {"e":"[cookie:b]`);
+  // a raw tail with no escapes before it is cut where it starts, as before
+  assert.equal(redact(`HTTP 401: {"e":"plain sessio`, both, { cut: true }), `HTTP 401: {"e":"plain ${REDACTED}`);
+});
+
 test("redact: the sentence left in a text's place never spells the value it hides", () => {
   const cookie = (name: string, value: string) => ({
     name,

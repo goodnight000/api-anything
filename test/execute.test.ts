@@ -578,6 +578,33 @@ test("a response that echoes a live credential never puts it in reason, whole or
   }
 });
 
+test("a reason cut inside a value spelled in escapes, then another value's prefix, keeps neither", async () => {
+  const cookie = (name: string, value: string) => ({
+    name,
+    value,
+    domain: "t.test",
+    path: "/",
+    expires: -1,
+    httpOnly: true,
+    secure: true,
+  });
+  saveSession("t", { cookies: [cookie("a", "session"), cookie("b", "kettlesessionMore")], values: {} });
+  try {
+    const u = (c: string) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+    const body = `{"e":"${[..."kettle"].map(u).join("")}sessio`;
+    const r = await call(
+      "t",
+      "user",
+      { name: "bob" },
+      opts(() => new Response(body, { status: 401 })),
+    );
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.equal(r.reason, `HTTP 401: {"e":"[redacted]`);
+  } finally {
+    rmSync(join(HOME, "sessions"), { recursive: true, force: true });
+  }
+});
+
 test("the same write while the last one is unsettled is refused unless the caller says again", async () => {
   const w = { ...opts(() => json({ ok: true })), allowWrites: true };
   const first = await call("t", "post", { text: "same" }, w);
