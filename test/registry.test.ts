@@ -978,6 +978,36 @@ test("a heal vouches only for the version it saved: one saved meanwhile by somet
   assert.ok(now.unproven, "its unproven mark stays");
 });
 
+test("verify credits an op that answers only once plain HTTP drops the browser's identity headers", async () => {
+  const chrome = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/156.0.0.0 Safari/537.36";
+  saveSite(
+    spec(
+      {},
+      {
+        request: {
+          method: "GET",
+          url: "https://news.example.com/api/search?q=kittens",
+          headers: { "user-agent": chrome },
+        },
+        params: [{ name: "q", example: "kittens" }],
+        checks: [{ args: { q: "zzzz" }, expect: "empty" }],
+      },
+    ),
+  );
+  // the site refuses what claims to be Chrome over plain HTTP, as Hacker News's /from does
+  const fetchImpl = (async (u: string | URL | Request, init?: RequestInit) =>
+    /Chrome/.test(new Headers(init?.headers).get("user-agent") ?? "")
+      ? new Response("Sorry", { status: 419, headers: { "content-type": "text/plain" } })
+      : json({ hits: new URL(String(u)).searchParams.get("q") === "zzzz" ? [] : [{ t: "a" }] })) as typeof fetch;
+  const v = await verifySite("demo", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  assert.ok(
+    v.results.every((r) => "outcome" in r && r.outcome === "pass"),
+    JSON.stringify(v),
+  );
+  assert.equal(loadRecord("demo").search?.hash, opHash(loadSite("demo")!.site.operations[0]!));
+  assert.deepEqual(plan("demo").errors, []);
+});
+
 test("a heal by the next-page case keeps the record, on the healed version", async () => {
   saveSite(
     reissuable("page-heal", {

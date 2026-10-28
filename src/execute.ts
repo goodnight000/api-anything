@@ -435,14 +435,13 @@ const hide = (text: string, sessions: (Pick<Session, "cookies" | "values"> | und
  * One try at a tier, logged for the call's write status. A reason quotes the response, which can
  * echo a credential (a 401 naming the token it refused): redacted against the jar as it was before
  * the send and after it (a rotated cookie), and against every cookie a redirect set along the way (one
- * sent on the next hop, then rotated again), with the snippet's cut end treated as cut. `version`:
- * the op as stored, told to `onSent`, when `op` is a variant of it sent once (the plain retry).
+ * sent on the next hop, then rotated again), with the snippet's cut end treated as cut.
  */
-async function attempt(ctx: Ctx, op: Operation, tier: Tier, version = op): Promise<Attempt> {
+async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   const before = sessionOrNone(ctx.site);
   const a = await tryTier(ctx, op, tier);
   ctx.log.push(a);
-  if (!a.unsent) ctx.opts.onSent?.(version);
+  if (!a.unsent) ctx.opts.onSent?.(op);
   const seen = { cookies: ctx.seen ?? [], values: {} };
   return { ...a, reason: hide(a.reason, [before, sessionOrNone(ctx.site), seen], true) };
 }
@@ -1130,7 +1129,7 @@ async function run(
       tier === 1 && !write && !plainTried && (a.class === "auth" || a.class === "blocked") && withoutIdentity(op);
     if (plain && noLogin()) {
       plainTried = true;
-      const b = await attempt(ctx, plain, 1, op);
+      const b = await attempt(ctx, plain, 1);
       const why = `tier 1 said ${a.class} (${a.reason})`;
       if (b.class === "ok") {
         if (remembered !== undefined) rememberTier(siteName, op.name, undefined);
