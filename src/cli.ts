@@ -154,7 +154,7 @@ const HELP: Record<string, string> = {
   data, so nothing shows the server reads those params (publish refuses the op until it does).
   An op whose captured response is a bot challenge, a sign-in page, a rate limit or a server failure
   is not saved.`,
-  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--dry]
+  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, ms, next?}; a failure also says retry
   (safe, after_wait, after_fix, no), retryAfterMs and nextCall, and a write says write (not_sent,
   not_applied, accepted, may_have_applied, applied: its readback found it). A paged read says
@@ -162,7 +162,10 @@ const HELP: Record<string, string> = {
   credentials redacted.
   --again           send a write refused as a duplicate (the same args within 10 minutes, and the
                     first may have gone through): only when the user checked the site
-  --idempotency-key <k>  a repeat of a write with the same key returns the first call's record`,
+  --idempotency-key <k>  a repeat of a write with the same key returns the first call's record
+  --force           send even while the site cools down: after a rate limit (its Retry-After, or
+                    3 minutes) or a block at every tier (10 minutes) calls answer without sending;
+                    a login for the site also ends the wait`,
   verify: `api-anything verify [site]
   Calls every read operation with its stored example args and its checks, healing as needed, and
   judges each case: pass, fail, or inconclusive (a challenge, a sign-in page, a rate limit, or a server
@@ -590,7 +593,7 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     ...(wall ? { blocked: wall } : {}),
     ...(page.status ? { pageStatus: page.status } : {}),
     next: wall
-      ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> (clear the challenge in the window), then capture again`
+      ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> --window (clear the challenge in the window), then capture again`
       : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),
   });
   return 0;
@@ -872,6 +875,7 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     again: v.again,
     idempotencyKey: v["idempotency-key"],
     maxTier,
+    ignoreCoolDown: v.force,
   });
   out(pulled ? { ...r, pulled: site } : r);
   if (!r.ok) process.stderr.write(`next: ${r.next}\n`);
@@ -1291,7 +1295,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "paging",
     ],
   },
-  call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "dry"] },
+  call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "force", "dry"] },
   verify: { run: cmdVerify, flags: [] },
   check: { run: cmdCheck, flags: ["expect", "purpose"] },
   readback: { run: cmdReadback, flags: ["find"] },

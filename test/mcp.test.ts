@@ -13,6 +13,7 @@ import {
   asTable,
   createServer,
   inputSchema,
+  mcpNext,
   mcpNextCall,
   READ_HINTS,
   type ServerOptions,
@@ -232,6 +233,13 @@ test("MCP names the tool for a next step one of its tools takes, with the call's
     tool: "login",
     args: { site: "x", mode: "window" },
   });
+  // a hint that asks for the window names that mode, with nothing of the CLI's flag left over
+  const windowed = mcpNext(
+    "ask the user to run api-anything login x --window and clear the challenge, then retry once",
+  );
+  assert.match(windowed, /the login tool \{"site":"x","mode":"window"\} \(the user signs in or clears the challenge/);
+  assert.doesNotMatch(windowed, /--window/);
+  assert.match(mcpNext("ask the user to run: api-anything login x; then retry once"), /the login tool \{"site":"x"\} /);
   assert.equal(mcpNextCall({ action: "fix_args", site: "x" }).tool, "list_operations");
   assert.deepEqual(mcpNextCall({ action: "retry", site: "x", op: "get" }).args, { site: "x", op: "get" });
   const again = { tool: "x__get", args: { q: "a" } };

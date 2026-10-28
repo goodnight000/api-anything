@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { test } from "node:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, test } from "node:test";
 import { buildRequest, nextHop, privateAddress, publicAddress, resolver, send } from "../src/http.js";
 import type { Session } from "../src/session.js";
 import { type Operation, OperationSchema } from "../src/spec.js";
 import type { StoredCookie } from "../src/types.js";
+
+// the send slots (pace.json) live in the home
+const HOME = mkdtempSync(join(tmpdir(), "api-anything-http-"));
+process.env.API_ANYTHING_HOME = HOME;
+after(() => rmSync(HOME, { recursive: true, force: true }));
 
 const cookie = (name: string, value: string, domain: string): StoredCookie => ({
   name,
@@ -212,7 +220,8 @@ test("send against a local server: GET has no body, per-site pacing, timeout", a
     const b = await send(get, { id: "456" }, local, { site: "pace", minIntervalMs: 150, fetchImpl: timed });
     assert.equal(a.body, "GET /items?id=123 sid=abc");
     assert.equal(b.body, "GET /items?id=456 sid=abc");
-    assert.ok(calls[1]! - calls[0]! >= 149, `paced ${calls[1]! - calls[0]!} ms apart`);
+    // the interval ±30%: never an exact period
+    assert.ok(calls[1]! - calls[0]! >= 104, `paced ${calls[1]! - calls[0]!} ms apart`);
     assert.equal(a.url, `${base}/items?id=123`);
 
     const slow = { ...get, request: { ...get.request, url: `${base}/slow?id=1` } };

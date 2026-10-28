@@ -1,4 +1,7 @@
-/** Site specs (user dir, then pulled, then bundled), heal log, stale marks, remembered tiers, and the write ledger. */
+/**
+ * Site specs (user dir, then pulled, then bundled), heal log, stale marks, remembered tiers, cool-downs,
+ * the per-site send slots, and the write ledger.
+ */
 import { createHmac, randomBytes } from "node:crypto";
 import {
   appendFileSync,
@@ -124,10 +127,21 @@ export interface StaleMark {
   tier3?: boolean;
 }
 
+/** A site that said stop: calls to it are answered without sending until `until`. */
+export interface CoolDown {
+  class: "rate" | "blocked";
+  at: number;
+  until: number;
+  reason: string;
+  /** the answer's HTTP status (451: refused to this network or region) */
+  status?: number;
+}
+
 interface State {
   stale: Record<string, StaleMark>;
   tier: Record<string, 1 | 2 | 3>;
   healedAt: Record<string, number>;
+  cool: Record<string, CoolDown>;
 }
 
 const stateFile = () => join(home(), "state.json");
@@ -141,7 +155,7 @@ function loadState(): State {
     // tier memory and stale marks are hints: a corrupt file is started over, never a failed call
     s = {};
   }
-  return { stale: s.stale ?? {}, tier: s.tier ?? {}, healedAt: s.healedAt ?? {} };
+  return { stale: s.stale ?? {}, tier: s.tier ?? {}, healedAt: s.healedAt ?? {}, cool: s.cool ?? {} };
 }
 
 function updateState(fn: (s: State) => void): void {
@@ -232,6 +246,71 @@ export function rememberTier(site: string, op: string, tier: 1 | 2 | 3 | undefin
 
 export function rememberedTier(site: string, op: string): 1 | 2 | 3 | undefined {
   return loadState().tier[key(site, op)];
+}
+
+/** A rate limit's wait when the site names none, and the longest one kept whatever it names. */
+export const RATE_COOL_MS = 3 * 60_000;
+export const MAX_COOL_MS = 30 * 60_000;
+/** A block on every tier a call could use: each further call would only meet the wall again. */
+export const BLOCKED_COOL_MS = 10 * 60_000;
+
+export function coolDown(
+  site: string,
+  c: Pick<CoolDown, "class" | "reason" | "status">,
+  ms: number,
+  now = Date.now(),
+): void {
+  const reason = hidden(site, c.reason);
+  updateState((s) => {
+    s.cool[safeName(site)] = { ...c, reason, at: now, until: now + Math.min(ms, MAX_COOL_MS) };
+  });
+}
+
+/** The site's cool-down, if it has not run out. */
+export function cooling(site: string, now = Date.now()): CoolDown | undefined {
+  const c = loadState().cool[safeName(site)];
+  return c && c.until > now ? c : undefined;
+}
+
+/** A login ends a site's cool-down: the user has seen the site, and what it answers may have changed. */
+export function clearCoolDown(site: string): void {
+  if (loadState().cool[safeName(site)]) updateState((s) => void delete s.cool[safeName(site)]);
+}
+
+/* ----------------------------------------------------------------- pacing */
+
+const paceFile = () => join(home(), "pace.json");
+const ownSlots = new Map<string, number>();
+
+/**
+ * Reserve the next moment a request may go to `site`, and move the site's slot on by the interval
+ * ±30% (an exact period is a robot's). The slots are kept in pace.json under its lock, so separate
+ * processes (a CLI loop, agents in parallel) queue up too; a home that cannot be written paces this
+ * process only.
+ */
+export function reserveSend(site: string, intervalMs: number, now = Date.now()): number {
+  const gap = Math.round(intervalMs * (0.7 + Math.random() * 0.6));
+  try {
+    return withLock(paceFile(), () => {
+      let slots: Record<string, unknown>;
+      try {
+        slots = readJson<Record<string, unknown>>(paceFile(), {});
+      } catch {
+        slots = {};
+      }
+      if (!slots || typeof slots !== "object" || Array.isArray(slots)) slots = {};
+      // a slot in the past holds nothing back
+      for (const [k, t] of Object.entries(slots)) if (!(typeof t === "number" && t > now)) delete slots[k];
+      const at = Math.max(now, (slots[site] as number | undefined) ?? 0);
+      slots[site] = at + gap;
+      writePrivate(paceFile(), JSON.stringify(slots));
+      return at;
+    });
+  } catch {
+    const at = Math.max(now, ownSlots.get(site) ?? 0);
+    ownSlots.set(site, at + gap);
+    return at;
+  }
 }
 
 /* ------------------------------------------------------------ write ledger */

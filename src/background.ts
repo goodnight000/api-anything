@@ -14,6 +14,7 @@ import { type ServedSite, type VerifyJob, versionHashText } from "./registry-api
 import { flushReports, outcomeOf, queueReport, withSignal } from "./report.js";
 import { home, readJson, safeName, withLock, writePrivate } from "./session.js";
 import { type Operation, parseSite } from "./spec.js";
+import { cooling } from "./store.js";
 import { vetShared } from "./vet.js";
 
 export const DAILY_JOBS = 20;
@@ -79,7 +80,8 @@ export async function verifyCandidates(
     for (const job of jobs ?? []) {
       if (o.signal?.aborted) break;
       const c = await candidate(job, sites, o.signal).catch(() => undefined);
-      if (!c?.op.readOnly || c.op.minTier > 1) continue;
+      // a site that said stop (a limit, a block) is left alone here too
+      if (!c?.op.readOnly || c.op.minTier > 1 || cooling(c.site)) continue;
       if (!spend(o.now ?? new Date())) break;
       const fetchImpl = o.fetchImpl ?? fetch;
       const r = await cleanCall(c.op, job.args ?? {}, {

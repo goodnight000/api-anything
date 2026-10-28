@@ -127,6 +127,10 @@ export function mcpNext(next: string): string {
       'list_operations {"site":"$1"} (it pulls a shared site)',
     )
     .replace(
+      /(?:ask the user to run:? )?api-anything login ([\w.-]+) --window/g,
+      'the login tool {"site":"$1","mode":"window"} (the user signs in or clears the challenge by hand)',
+    )
+    .replace(
       /(?:ask the user to run:? )?api-anything login ([\w.-]+)/g,
       'the login tool {"site":"$1"} (mode "window" when the user must sign in or clear a challenge by hand)',
     )

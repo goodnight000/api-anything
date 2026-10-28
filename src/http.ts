@@ -6,6 +6,7 @@ import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js"
 import { matches } from "./learn.js";
 import { cookieHeaderFor, cookieValue, parseSetCookie, type Session } from "./session.js";
 import type { Match, Operation, Param, Request } from "./spec.js";
+import { reserveSend } from "./store.js";
 import type { StoredCookie } from "./types.js";
 import { badAddress } from "./vet.js";
 
@@ -27,7 +28,7 @@ export interface SendOptions {
   site: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
-  /** minimum gap between requests to one site (default 1 s) */
+  /** gap between requests to one site, ±30% (default 1 s); 0 sends without pacing */
   minIntervalMs?: number;
   /**
    * someone else's spec, or a candidate verified in the background: the request and every redirect hop
@@ -287,14 +288,11 @@ export class BadHeader extends Error {
   }
 }
 
-const lastSend = new Map<string, number>();
-
-/** Reserve the next send slot for a site, then wait for it; concurrent callers queue up. */
-async function pace(site: string, minIntervalMs: number): Promise<void> {
-  const now = Date.now();
-  const at = Math.max(now, (lastSend.get(site) ?? 0) + minIntervalMs);
-  lastSend.set(site, at);
-  if (at > now) await new Promise((r) => setTimeout(r, at - now));
+/** Reserve the next send slot for a site, then wait for it; concurrent callers, in any process, queue up. */
+export async function pace(site: string, minIntervalMs = 1000): Promise<void> {
+  if (minIntervalMs <= 0) return;
+  const wait = reserveSend(site, minIntervalMs) - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
 
 export const REDIRECT = new Set([301, 302, 303, 307, 308]);
@@ -440,7 +438,7 @@ export async function send(
 ): Promise<Sent> {
   const req = buildRequest(op, args, session);
   if (opts.publicOnly) await refusePrivate(op, req.url);
-  await pace(opts.site, opts.minIntervalMs ?? 1000);
+  await pace(opts.site, opts.minIntervalMs);
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const signal = AbortSignal.timeout(timeoutMs);
   let hop: Request = { ...req, body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body };
