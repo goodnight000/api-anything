@@ -95,6 +95,11 @@ export interface CallOptions {
   /** per-site gap between tier-1 requests (default 1000) */
   minIntervalMs?: number;
   timeoutMs?: number;
+  /**
+   * @internal `verify`'s, no option of the CLI or MCP: told of the version each attempt of the call
+   * sent (a heal's candidate, a registry replacement), so a record names only versions that answered it
+   */
+  onSent?: (op: Operation) => void;
 }
 
 export type { WriteStatus };
@@ -430,12 +435,14 @@ const hide = (text: string, sessions: (Pick<Session, "cookies" | "values"> | und
  * One try at a tier, logged for the call's write status. A reason quotes the response, which can
  * echo a credential (a 401 naming the token it refused): redacted against the jar as it was before
  * the send and after it (a rotated cookie), and against every cookie a redirect set along the way (one
- * sent on the next hop, then rotated again), with the snippet's cut end treated as cut.
+ * sent on the next hop, then rotated again), with the snippet's cut end treated as cut. `version`:
+ * the op as stored, told to `onSent`, when `op` is a variant of it sent once (the plain retry).
  */
-async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
+async function attempt(ctx: Ctx, op: Operation, tier: Tier, version = op): Promise<Attempt> {
   const before = sessionOrNone(ctx.site);
   const a = await tryTier(ctx, op, tier);
   ctx.log.push(a);
+  if (!a.unsent) ctx.opts.onSent?.(version);
   const seen = { cookies: ctx.seen ?? [], values: {} };
   return { ...a, reason: hide(a.reason, [before, sessionOrNone(ctx.site), seen], true) };
 }
@@ -832,7 +839,14 @@ async function readBack(
   const rb = op.readback!;
   const name = readbackName(rb);
   const readArgs = Object.fromEntries(Object.entries(rb.args).map(([k, v]) => [k, fillTemplate(v, args)]));
-  const o: CallOptions = { ...opts, allowWrites: false, again: undefined, idempotencyKey: undefined };
+  // the read is no version of the write
+  const o: CallOptions = {
+    ...opts,
+    allowWrites: false,
+    again: undefined,
+    idempotencyKey: undefined,
+    onSent: undefined,
+  };
   const read =
     "op" in rb
       ? await call(site.name, rb.op, readArgs, o)
@@ -1116,7 +1130,7 @@ async function run(
       tier === 1 && !write && !plainTried && (a.class === "auth" || a.class === "blocked") && withoutIdentity(op);
     if (plain && noLogin()) {
       plainTried = true;
-      const b = await attempt(ctx, plain, 1);
+      const b = await attempt(ctx, plain, 1, op);
       const why = `tier 1 said ${a.class} (${a.reason})`;
       if (b.class === "ok") {
         if (remembered !== undefined) rememberTier(siteName, op.name, undefined);

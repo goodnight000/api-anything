@@ -165,13 +165,9 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
   const results: Verified["results"] = [];
   const proven: string[] = [];
   const ran: Record<string, CaseResult[]> = {};
-  // The versions of each op its cases were sent with: the one verify read, and each one a case healed it
-  // to. One saved meanwhile by anything else (an `add` in another process) is a version none of them ran.
-  const versions = new Map(site.operations.map((o) => [o.name, new Set([opHash(o)])]));
-  const hashNow = (op: string) => {
-    const o = loadSite(name)?.site.operations.find((x) => x.name === op);
-    return o ? opHash(o) : undefined;
-  };
+  // The versions each op's cases were sent with, as the calls report them: one saved meanwhile by
+  // anything else (an `add` in another process), even one put back as verify read it, is none of them.
+  const versions = new Map(site.operations.map((o) => [o.name, new Set<string>()]));
   for (const op of site.operations) {
     if (!op.readOnly) continue;
     const example = exampleArgs(op);
@@ -191,12 +187,9 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
     }
     const answers: { args: Record<string, unknown>; data: string }[] = [];
     ran[op.name] = [];
-    const send = async (args: Record<string, unknown>) => {
-      const r = await call(name, op.name, args, opts);
-      const healedTo = r.healed ? hashNow(op.name) : undefined;
-      if (healedTo) versions.get(op.name)!.add(healedTo);
-      return r;
-    };
+    const sent = versions.get(op.name)!;
+    const send = (args: Record<string, unknown>) =>
+      call(name, op.name, args, { ...opts, onSent: (o) => sent.add(opHash(o)) });
     for (const [label, args, expect, check] of cases) {
       const r = await send(args);
       const j = judgeCase(expect, r);

@@ -1002,6 +1002,42 @@ test("a heal by the next-page case keeps the record, on the healed version", asy
   assert.equal(loadRecord("page-heal").search?.hash, opHash(now));
 });
 
+test("verify records nothing for a version put back as it read it while its cases sent another", async () => {
+  const read = (name: string, path: string, more: Record<string, unknown> = {}) => ({
+    name,
+    readOnly: true,
+    request: { method: "GET", url: `https://news.example.com${path}`, headers: {} },
+    trigger: { url: "https://news.example.com/" },
+    match: { path },
+    ...more,
+  });
+  const a = parseSite({
+    name: "aba",
+    baseUrl: "https://news.example.com",
+    operations: [read("first", "/first"), read("target", "/broken", { checks: [{ args: {}, expect: "result" }] })],
+  });
+  saveSite(a);
+  const b = {
+    ...a,
+    operations: a.operations.map((o) =>
+      o.name === "target" ? { ...o, request: { ...o.request, url: "https://news.example.com/working" } } : o,
+    ),
+  };
+  const paths: string[] = [];
+  const fetchImpl = (async (raw: string | URL | Request) => {
+    const path = new URL(String(raw)).pathname;
+    paths.push(path);
+    // another process saves version B before verify reaches target, then puts A back during B's last request
+    if (path === "/first") saveSite(b);
+    if (path === "/working" && paths.filter((p) => p === path).length === 2) saveSite(a);
+    return json(path === "/broken" ? {} : [{ title: "ok" }]);
+  }) as typeof fetch;
+  await verifySite("aba", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  assert.ok(!paths.includes("/broken"), paths.join(" "));
+  assert.equal(loadRecord("aba").target, undefined, "no case sent A");
+  assert.match(plan("aba").errors.join("\n"), /target: its checks have not run on this version/);
+});
+
 test("publish takes an op named like an Object.prototype key", () => {
   saveSite(
     parseSite({
