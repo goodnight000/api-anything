@@ -1226,6 +1226,36 @@ test("a verify the site's cool-down answers sends nothing and leaves the record 
   assert.match(plan("demo").errors.join("\n"), failing);
 });
 
+test("a run that answered from two versions loses the record even when its rerun is all cooled down", async () => {
+  saveSite(
+    spec({}, { params: [{ name: "q", example: "kittens" }], checks: [{ args: { q: "zzzz" }, expect: "empty" }] }),
+  );
+  const a = loadSite("demo")!.site;
+  const b: Site = {
+    ...a,
+    operations: [
+      { ...a.operations[0]!, request: { ...a.operations[0]!.request, url: "https://news.example.com/v2?q=x" } },
+    ],
+  };
+  let flip = false;
+  const fetchImpl = (async (u: string | URL | Request) => {
+    const q = new URL(String(u)).searchParams.get("q");
+    if (flip && q === "kittens") saveSite(b); // the example answers from A, then B is saved
+    if (flip && q === "zzzz") {
+      saveSite(a); // the check answered from B; A is back, and the site says stop
+      return new Response("slow down", { status: 429, headers: { "retry-after": "60" } });
+    }
+    return json({ hits: q === "zzzz" ? [] : [{ t: q }] });
+  }) as typeof fetch;
+  const opts = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl };
+  await verifySite("demo", opts);
+  assert.deepEqual(plan("demo").errors, [], "A has a passing record");
+  flip = true;
+  await verifySite("demo", opts);
+  assert.equal(loadRecord("demo").search, undefined, "an unproved run leaves no record, not the older one");
+  assert.match(plan("demo").errors.join("\n"), /its checks have not run on this version/);
+});
+
 test("a rate limit part way through verify keeps the failure its earlier cases saw", async () => {
   saveSite(
     spec(

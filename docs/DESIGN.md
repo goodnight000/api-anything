@@ -1196,7 +1196,8 @@ was sent, so that case is no version and mixes nothing. A run is clean when its 
 from the op saved now and every tagged case answered from it. A run that is not clean (a heal part
 way, another process saving the op, cases chosen from an earlier version) runs once more from the op
 saved now, and that second run is the one judged. A judged run that sent nothing leaves the op's
-record as it was; a clean one becomes the record, inconclusive cases and all; any other takes the
+record as it was, unless the first run sent something and was not clean: then the record goes; a
+clean one becomes the record, inconclusive cases and all; any other takes the
 record away. So an op changed since, or saved by something else while its last cases ran, has none,
 and a rate limit part way through keeps the failures the cases before it saw. When two passing cases whose args differ only in an op's
 `unproven` params answer differently, in a run that becomes the record, verify clears the mark. A read with `paging` gets one more

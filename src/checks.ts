@@ -241,7 +241,7 @@ const sent = (run: Run | undefined): run is Ran => !!run && "from" in run && run
  * differ. Both only for an op whose cases were chosen from the version saved when verify ends and
  * whose every case that was sent answered from it: an op saved meanwhile by anything else (an `add`
  * in another process) gets neither, and loses the record it had. An op none of whose cases was sent
- * (the site cools down) keeps its record as it was.
+ * (the site cools down) keeps its record as it was, unless an earlier run of them answered unproved.
  */
 export async function verifySite(name: string, opts: CallOptions = {}): Promise<Verified> {
   const site = loadSite(name)?.site;
@@ -252,9 +252,13 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
   // or a save between them), or that were chosen from another (whose own checks may differ), prove no
   // one version: they all run once more, on the op as it is now, and that run is the one judged.
   const then = loadSite(name)?.site ?? site;
+  /** ops whose first run answered and proved no one version: a rerun the cool-down refuses keeps no record for them */
+  const unproved = new Set<string>();
   for (const [n, run] of runs) {
     const op = then.operations.find((o) => o.name === n);
-    if (op?.readOnly && "from" in run && !clean(op, run)) runs.set(n, await runCases(name, op, opts));
+    if (!op?.readOnly || !("from" in run) || clean(op, run)) continue;
+    if (sent(run)) unproved.add(n);
+    runs.set(n, await runCases(name, op, opts));
   }
   const proven: string[] = [];
   if ([...runs.values()].some((r) => "proven" in r && r.proven))
@@ -276,7 +280,10 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
   const at = new Date().toISOString();
   for (const op of now.operations) {
     const run = runs.get(op.name);
-    if (!sent(run)) continue;
+    if (!sent(run)) {
+      if (unproved.has(op.name)) delete record[op.name];
+      continue;
+    }
     if (clean(op, run)) record[op.name] = { hash: opHash(op), at, results: run.results };
     // a run that answered and proved no one version leaves no record, not an older one standing
     else delete record[op.name];
