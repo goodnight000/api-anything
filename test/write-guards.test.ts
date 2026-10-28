@@ -145,7 +145,7 @@ describe("unsafe requests in browser runs", { skip: !browserAvailable() && "no C
       (e: Error) => {
         assert.match(
           e.message,
-          /^PUT \/api\/cart\/fridge, POST \/api\/order, sent once the steps ran, were stopped in the browser: nothing was sent\. If it is an action, add it again with --write; if it is a read the site sends as PUT, add it with --match method=PUT --match path=\/api\/cart\/fridge\. item was not saved$/,
+          /^PUT \/api\/cart\/fridge, POST \/api\/order, sent once the steps ran, were stopped in the browser: nothing was sent\. If it is an action \(an order, a post, a change\), add it again with --write, which never sends it\. Only if it changes nothing \(a search the site sends as PUT\), add it with --match method=PUT --match path=\/api\/cart\/fridge: a pinned request is sent for real on each learning run and saved as a read\. item was not saved$/,
         );
         return true;
       },
@@ -165,6 +165,18 @@ describe("unsafe requests in browser runs", { skip: !browserAvailable() && "no C
       ["GET /api/item?id=oven"],
     );
     assert.deepEqual(stoppedIn(c, c.url), { site: ["PUT /api/cart/oven", "POST /api/order"], elsewhere: [] });
+    // learning the stopped order from it leads with --write; --match is offered only for what changes nothing
+    const order = c.exchanges.find((e) => e.aborted && e.request.url.endsWith("/api/order"))!;
+    await assert.rejects(
+      addOperation({ site: "shop", op: "item", from: { capture: c, id: order.id }, examples: [{ item: "oven" }] }),
+      (e: Error) => {
+        assert.match(
+          e.message,
+          /was stopped in the browser as a possible write, so it has no answer to learn\. If it is an action \(an order, a post, a change\), add it with --write, which never sends it\. Only if it changes nothing \(a search the site sends as POST\), add it with --match method=POST --match path=\/api\/order and --trigger instead of --from: a pinned request is sent for real on each learning run and saved as a read$/,
+        );
+        return true;
+      },
+    );
   });
 
   test("reads sent as POST on a click: a GraphQL query passes, a pinned --match passes with the beacon beside it stopped", async () => {

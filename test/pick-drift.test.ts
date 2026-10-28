@@ -10,6 +10,7 @@ import { after, beforeEach, test } from "node:test";
 import { verifySite } from "../src/checks.js";
 import { judge } from "../src/classify.js";
 import { call } from "../src/execute.js";
+import { learnOperation } from "../src/learn.js";
 import { type Operation, parseSite } from "../src/spec.js";
 import { exportSite, saveSite } from "../src/store.js";
 
@@ -113,6 +114,54 @@ test("judge: in a list, gone from every item is drift, gone from some is the dat
     ],
   });
   assert.match(retyped.reason, /price is now string, learned as number/);
+});
+
+test("a picked field some items of the learned list lacked is optional: absent from every item later is no drift", () => {
+  const item = (name: string, extra: Record<string, unknown> = {}) => ({
+    name,
+    price: 10,
+    url: `/p/${name}`,
+    ...extra,
+  });
+  const learned = learnOperation({
+    exchanges: [
+      {
+        id: 1,
+        resourceType: "xhr",
+        request: { method: "GET", url: "https://s.test/api/search?q=mug", headers: {} },
+        response: {
+          status: 200,
+          headers: {},
+          contentType: "application/json",
+          body: JSON.stringify({ total: 2, results: [item("mug", { salePrice: 8 }), item("cup")] }),
+        },
+      },
+    ],
+    examples: [{ q: "mug" }],
+    cookies: [],
+    name: "search",
+    trigger: { url: "https://s.test/s?q={q}" },
+    readOnly: true,
+  }).operation;
+  assert.equal(learned.response.shape!["results[].salePrice"], "null");
+  assert.equal(learned.response.shape!["results[].price"], "number");
+  const o = { ...learned, response: { ...learned.response, extract: "results", pick: ["name", "price", "salePrice"] } };
+  const none = answer(o, { total: 2, results: [item("kettle"), item("pot")] });
+  assert.equal(none.class, "ok", JSON.stringify(none));
+  assert.deepEqual(none.data, [
+    { name: "kettle", price: 10 },
+    { name: "pot", price: 10 },
+  ]);
+  // every learned item had price: gone from all of them is still drift
+  const lost = answer(o, {
+    total: 2,
+    results: [
+      { name: "kettle", url: "/p/kettle" },
+      { name: "pot", url: "/p/pot" },
+    ],
+  });
+  assert.equal(lost.class, "drift");
+  assert.deepEqual(lost.lost, ["price"]);
 });
 
 test("call: the field gone for the example args too is a loud drift, after a second try and no heal", async () => {

@@ -204,4 +204,8 @@ test("CLI: call prints the heal and how to undo it; heals lists it; revert takes
   const again = await cli("revert", "fx", "getUser");
   assert.equal(again.code, 1);
   assert.match(again.stdout + again.stderr, /has no heal to revert/);
+  const missing = await cli("revert", "fx", "nope");
+  assert.equal(missing.code, 1);
+  assert.match(missing.stdout, /no operation \\"nope\\" on fx/);
+  assert.match(missing.stderr, /^next: api-anything ops fx$/m);
 });

@@ -416,8 +416,12 @@ same test `notARead` applies; a persisted query, which names its document by a h
 mutation and is aborted). What the page sends while it loads, before the steps run, and a trigger
 with no steps are left alone: a visit sends that too. One aborted on the trigger page's own site,
 with no `--match`, fails the add before run 2 and before anything is saved, naming each request by
-method and path and saying what to do: `--write` if it is the action, `--match` if it is a read the
-site sends as POST. One on another site (an analytics beacon, most often), or beside a pinned
+method and path and saying what to do: `--write` if it is the action, which never sends it, said
+first; a `--match` pin only if it changes nothing (a search the site sends as POST), said with what it
+costs: a pinned request is sent for real on each learning run and saved as a read (seen: an agent took
+the pin for an order endpoint, sent two real orders while learning and saved the order as a read). The
+guard cannot tell a POST search from an order (both fail `notARead`), so the safe answer leads. One on
+another site (an analytics beacon, most often), or beside a pinned
 `--match`, is still aborted, and the add goes on and warns about it. `capture` lists what it stopped
 (`stopped`), and its `next` says the same; `add --from` such a capture refuses to learn a request
 that was stopped, which never left and has no answer. WebSocket messages are not judged here, as
@@ -641,8 +645,9 @@ field. Otherwise a heal runs, its candidate held to the same types (a recapture 
 fields' learned types over the new answer's shape), and a heal that cannot bring the field back
 ends in `drift` naming it ("picked field price disappeared from the response"), with a `next` to
 re-add with a new `--pick` or `--extract` (`nextCall` `relearn`); with no example args to tell, the
-same. A field learned `null`, or absent from the learned answer's first item, is optional and not
-judged, and in a list a field some items still carry is the data. Not caught: a field that keeps
+same. A field learned `null`, absent from the learned answer's first item, or absent from any
+other item of the learned list (a `salePrice` only items on sale carry; the learned shape types it
+`null`), is optional and not judged, and in a list a field some items still carry is the data. Not caught: a field that keeps
 its type and changes its meaning (`price` now holding the list price, or cents instead of units).
 The shape records key paths and types, not what a value means.
 
@@ -676,9 +681,10 @@ answers `rate` or `blocked` without sending anything, a write before its ledger 
 (`write: "not_sent"`), with `retryAfterMs` counting down to its end and a `reason` naming what the site
 answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
 asks for `api-anything login <site> --window`. Any login for the site (an import, a cookies file, the
-window whether or not it saw a sign-in, since a challenge cleared there counts) ends it, and so does
-the call option `ignoreCoolDown` (CLI `call --force`), which only a user asks for: MCP has no way to
-skip it. The idle MCP server's verification of candidates skips a cooling site too.
+window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. The call
+option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends that one call through
+it: one that succeeds ends it, since the site answered; one the site limits or blocks again sets it
+anew from that answer, as any call does. MCP has no way to skip it. The idle MCP server's verification of candidates skips a cooling site too.
 
 | tier | transport | when |
 |---|---|---|
@@ -1145,7 +1151,9 @@ user's own, and verify's record of each op's checks; `--yes` sends them through 
 `consent: true`. Both refuse an op that fails the scans or the shared rules, or `checks.ts`'s gate
 (below). The agent skill shows the preview to the user and runs `--yes` only on their explicit OK.
 `learn_site` keeps its holdout call as the verify record of the op's holdout check when that is its
-only check (`recordCases`), with what the run proved (clean replay, holdout, tier): a publish of that
+only check (`recordCases`); learning an op again replaces an earlier `learn_site`'s holdout check with
+its own, which ran on the version it saves, while a check recorded otherwise stays and leaves the
+record to `verify`. The record keeps what the run proved (clean replay, holdout, tier): a publish of that
 version passes the gate with no verify first and sends that evidence (`proofOf`), so a public read the
 user shares after the fact goes up as a candidate, as it would have automatically.
 
@@ -1242,7 +1250,8 @@ so before it types, the run asks the page what the field is: a `type=password` i
 its control), fails the run with "a sign-in is the user's: ask them to run api-anything login
 <site>", and add saves nothing. A hand-written step is caught without a page: `signInFills`
 (`secrets.ts`) flags a fill whose selector names a password or code field (`type=password`, those
-autocomplete tokens, `password`/`passwd`/`passcode`, `pw`/`pwd`/`otp`/`totp`/`mfa`/`2fa` as a word)
+autocomplete tokens, `password`/`passwd`/`passcode`, `pass`/`pw`/`pwd`/`otp`/`totp`/`mfa`/`2fa` as a
+word, so `user_pass` but not `passport`, `passenger` or `compass`)
 or whose literal (outside `{param}`s) is random-looking; add's save and `export` refuse it, and
 `vetShared` rejects it on pull, publish and load.
 
@@ -1352,9 +1361,10 @@ independent alternative.
     carry a live token (`?access_token=...`): each of the run's cookie and web-storage values in it
     (not one equal to an `--example` value) is shown as the ref a spec would hold there,
     `[cookie:auth]` or `[session:x]` (`redact` with `named`, `captureLive`). `learn_site`'s `chosen`
-    and `alternatives` URLs are shown the same way. Neither is `data`, which stays the site's answer
+    and `alternatives` URLs are shown the same way, and so are the request URLs and bodies `inspect`
+    shows (keeping its `--example` values). None is `data`, which stays the site's answer
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--paging ...] [--write]`
-  - `call <site> <op> [k=v ...] [--allow-writes] [--again] [--idempotency-key <k>] [--force]` (`--force`: send while the site cools down)
+  - `call <site> <op> [k=v ...] [--allow-writes] [--again] [--idempotency-key <k>] [--force]` (`--force`: send while the site cools down; a success ends the cool-down)
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
     flags (`--extract`, `--pick`, `--html`, `--embedded`): what the recipe would return, or a failure
     when a path or selector finds nothing (an empty list at a path is a result, and so is an `--html`

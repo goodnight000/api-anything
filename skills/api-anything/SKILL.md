@@ -362,9 +362,11 @@ Every failure carries:
   one, it aborts the request in the browser, so learning never performs the action. Learning an
   existing write again, or a request a `--write` capture aborted, needs `--write`: `add` refuses to
   save either as a read. Without `--write`, a POST, PUT, PATCH or DELETE the steps send is stopped
-  (a GraphQL query passes), and `add` fails naming it: if it is the action, add it with `--write`;
-  if it is a read the site sends as POST (a search form), pin it with `--match method=POST
-  --match path=...`. `capture` lists what it stopped under `stopped`.
+  (a GraphQL query passes), and `add` fails naming it: if it is the action, add it with `--write`
+  (it is never sent). Pin it with `--match method=POST --match path=...` only when it certainly
+  changes nothing (a search form the site sends as POST): a pinned request is sent for real on each
+  learning run and saved as a read, so pinning an order places orders. When unsure, use `--write`.
+  `capture` lists what it stopped under `stopped`.
 - A tier-3 write call lets out the op's own request once, plus the other requests its learning saw
   the page send. Anything else the page tries (a redesigned button that now deletes) is stopped, and
   the call's `reason` names it: show the user, look at the page, and re-learn with `--write` only if

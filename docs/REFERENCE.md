@@ -25,7 +25,9 @@ $ api-anything capture "https://hn.algolia.com/?q=sqlite" --example q=sqlite
 A candidate URL that carries one of the run's cookie or web-storage values (an
 `?access_token=` some APIs take) shows it as the ref a spec would hold there, such as
 `access_token=[cookie:auth]`, never the value; `learn_site`'s `chosen` and `alternatives` do the same.
-`api-anything inspect <capture> <id>` shows a candidate's response, without a browser. Then describe
+`api-anything inspect <capture> <id>` shows a candidate's response, without a browser, and its
+request's URL and body with the same refs (a value equal to one of its `--example` values stays as
+it is). Then describe
 how to make the page fire that request. Give two example values, so the learner can tell params
 from nonces:
 
@@ -269,12 +271,16 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 - When a site answers a rate limit, api-anything leaves it alone for its Retry-After (at most 30
   minutes), or 3 minutes without one; after a block at every tier, or a 451, for 10 minutes. Calls
   meanwhile answer `rate` or `blocked` at once with nothing sent, and `retryAfterMs` counts down.
-  `api-anything login <site>` ends the wait, and so does `api-anything call ... --force`.
+  `api-anything login <site>` ends the wait. `api-anything call ... --force` sends that one call
+  anyway: when it succeeds the wait ends; when the site limits or blocks it again, the wait starts
+  over from that answer.
 - **Writes** (posting, sending, buying) are learned by intercepting the request and aborting it
   in the browser, so learning never performs them. Without `--write`, `add` and `capture` stop a
   POST, PUT, PATCH or DELETE the steps send (a GraphQL query, or the request `--match` pins, passes):
   one on the page's own site fails the add before its second run, so a forgotten `--write` places no
-  order. A tier-3 write call lets out only the op's own request, once, and the other unsafe requests
+  order. The failure says to add an action again with `--write`, which never sends it, and offers a
+  `--match` pin only for a request that changes nothing (a search sent as POST): a pinned request is
+  sent for real on each learning run and saved as a read, so never pin an order. A tier-3 write call lets out only the op's own request, once, and the other unsafe requests
   its learning saw the trigger send (`trigger.companions`); any other is stopped, and the reason
   names it (a redesign whose button now deletes the account deletes nothing). Card payment is left to
   you: api-anything does not learn card fields, which sit in the payment provider's iframe. Calling a write needs `--allow-writes` on the
@@ -354,8 +360,8 @@ Known limits:
   learned with a type (not `null`) that no item carries now, or none with that type: when the
   example args' answer still has it, the call is `ok` and its `reason` names the field; otherwise a
   heal is tried, and if it cannot bring the field back the call is `drift` naming it, with a `next`
-  to re-add with a new `--pick`. A field learned `null` or absent, or present in some items of a
-  list, is optional. A field that keeps its type and changes its meaning (cents instead of units)
+  to re-add with a new `--pick`. A field learned `null` or absent, missing from some items of the
+  learned list, or present in some items of a list now, is optional. A field that keeps its type and changes its meaning (cents instead of units)
   is not detected.
 - A write's 2xx is `ok` unless its answer says it was refused: an error field that holds an error
   (`userErrors`, `error: "..."`), `ok`/`success` false, an error word as the root `status`, a body

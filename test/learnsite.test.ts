@@ -14,6 +14,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { browserAvailable, closeBrowser } from "../src/browser.js";
+import { gate } from "../src/checks.js";
 import { loadCapture } from "../src/heal.js";
 import { saveSettings } from "../src/identity.js";
 import { hooks, type LearnSiteResult, learnSite } from "../src/learnsite.js";
@@ -324,5 +325,29 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
     const out = JSON.parse(r.stdout);
     assert.deepEqual([out.ok, out.signature, out.data], [true, "searchCli(q)", ["alice one", "alice two"]]);
     assert.equal(out.proof.holdout.ok, true);
+  });
+
+  test("learned again with another holdout, the new one replaces the old, so publish needs no verify", async () => {
+    stubShare((c) => ({ site: c.site, op: c.ops[0]!, shared: false, needsConsent: true, reason: "asked" }));
+    const again = await learnSite(
+      {
+        site: "fx",
+        op: "searchScoped",
+        trigger: `${fx.url}/scoped?q={q}`,
+        args: { q: "alice" },
+        args2: { q: "bobby" },
+        args3: { q: "dave" },
+        captures: scoped.captures as [string, string],
+      },
+      fast,
+    );
+    assert.equal(again.ok, true, JSON.stringify(again));
+    assert.deepEqual(opOf("fx", "searchScoped").checks, [
+      { args: { q: "dave" }, expect: "result", purpose: HOLDOUT_PURPOSE },
+    ]);
+    assert.deepEqual(
+      gate(loadSite("fx")!.site).errors.filter((e) => e.startsWith("searchScoped:")),
+      [],
+    );
   });
 });

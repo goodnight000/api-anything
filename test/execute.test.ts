@@ -1276,7 +1276,8 @@ describe("a site that said stop, and the pace between sends (localhost)", () => 
     const at = hits.sort((a, b) => a - b);
     const gaps = at.slice(1).map((t, i) => t - at[i]!);
     assert.equal(gaps.length, 2);
-    for (const g of gaps) assert.ok(g >= interval * 0.7 - 5, `arrivals ${gaps.join(", ")} ms apart`);
+    // slots are reserved at least 0.7 × the interval apart; arrival adds each process's own send latency
+    for (const g of gaps) assert.ok(g >= interval * 0.7 - 50, `arrivals ${gaps.join(", ")} ms apart`);
   });
 
   test("a 429's Retry-After is kept: the next calls send nothing until it is over, a write too", async () => {
@@ -1309,6 +1310,24 @@ describe("a site that said stop, and the pace between sends (localhost)", () => 
     assert.deepEqual([forced.ok, hits.length], [true, 2]);
     const sent = await call("local", "post", { text: "hi" }, { ...fast, allowWrites: true, ignoreCoolDown: true });
     assert.deepEqual([sent.write, hits.length], ["accepted", 3]);
+  });
+
+  test("a forced call the site answers ends the cool-down; one it limits again starts it over", async () => {
+    answer = reply(429, {}, { "retry-after": "300" });
+    await call("local", "get", { q: "x" }, fast);
+    // limited again: a new cool-down, from this answer's Retry-After
+    answer = reply(429, {}, { "retry-after": "600" });
+    const again = await call("local", "get", { q: "x" }, { ...fast, ignoreCoolDown: true });
+    assert.deepEqual([again.class, again.retryAfterMs, hits.length], ["rate", 600_000, 2]);
+    const held = await call("local", "get", { q: "y" }, fast);
+    assert.ok(held.retryAfterMs! > 590_000, String(held.retryAfterMs));
+    assert.equal(hits.length, 2);
+
+    answer = reply(200, { items: [1] });
+    const forced = await call("local", "get", { q: "x" }, { ...fast, ignoreCoolDown: true });
+    assert.deepEqual([forced.ok, hits.length], [true, 3]);
+    const plain = await call("local", "get", { q: "z" }, fast);
+    assert.deepEqual([plain.ok, hits.length], [true, 4], plain.reason ?? "");
   });
 
   test("a bare 429 cools down for a few minutes; a long Retry-After is capped", async () => {

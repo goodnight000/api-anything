@@ -287,6 +287,27 @@ test("inferShape records key paths and types, first array item only", () => {
   });
 });
 
+test("inferShape with optional types a first item's path another item lacks as null, at any depth", () => {
+  const value = {
+    users: [
+      { id: "1", sale: 2, tags: [{ k: "a", v: 1 }] },
+      { id: "2", tags: [{ k: "b" }] },
+    ],
+  };
+  assert.deepEqual(inferShape(value, 200, true), {
+    users: "array",
+    "users[]": "object",
+    "users[].id": "string",
+    "users[].sale": "null",
+    "users[].tags": "array",
+    "users[].tags[]": "object",
+    "users[].tags[].k": "string",
+    "users[].tags[].v": "null",
+  });
+  // without it, the first item alone
+  assert.equal(inferShape(value)["users[].sale"], "number");
+});
+
 test("getPath steps into JSON-encoded strings (batchexecute payloads)", () => {
   const body = [
     [
