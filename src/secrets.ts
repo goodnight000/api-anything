@@ -347,13 +347,13 @@ function liveTest(session: Pick<Session, "cookies" | "values">): (text: string) 
 export const liveIn = (text: string, session: Pick<Session, "cookies" | "values">) => liveTest(session)(text);
 
 /** What a redacted text says instead when a live value is left in it after the replacements. */
-export const OMITTED = "the response is left out: it echoed a session value";
+export const OMITTED = "[left out: it holds a session value]";
 
 /**
  * `text` with every live cookie and session value in it replaced by `[redacted]`: each stored form
- * (as stored, unquoted, URL-decoded) as it is and percent-encoded, form-encoded, JSON-escaped (a
- * \u escape in the text is read as its character first), HTML-escaped and base64-encoded at any byte
- * offset. `cut`: the text was cut short (a body's snippet), so a value the cut split leaves its first
+ * (as stored, unquoted, URL-decoded) as it is and percent-encoded, form-encoded, JSON-escaped,
+ * HTML-escaped and base64-encoded at any byte offset. The text is otherwise left as it is: it can be
+ * a body `inspect` shows. `cut`: the text was cut short (a body's snippet), so a value the cut split leaves its first
  * characters at the end: those go too. A value that is an origin (`https://www.x.test/`, an analytics
  * cookie's last page) is the site's address, not a credential, and is left (see `besideOrigins`).
  * `named`: each value is replaced by the ref that would stand there, `[cookie:x]` or `[session:x]`.
@@ -385,8 +385,7 @@ export function redact(
   }
   if (!forms.size || !text) return text;
   const longest = [...forms.keys()].sort((a, b) => b.length - a.length);
-  // a JSON body can spell any character \u00XX, all or some of them: read those as the characters first
-  let out = text.replace(/\\u([0-9a-fA-F]{4})/g, (_, h: string) => String.fromCharCode(Number.parseInt(h, 16)));
+  let out = text;
   for (const f of longest) if (out.includes(f)) out = out.split(f).join(forms.get(f));
   if (o.cut) {
     let drop = 0;
