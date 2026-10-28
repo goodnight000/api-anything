@@ -369,6 +369,8 @@ export function redact(
   o: { cut?: boolean; named?: boolean } = {},
 ): string {
   const forms = new Map<string, string>();
+  /** each stored form with its replacement: what a JSON-escaped cut tail is read against */
+  const stored: [string, string][] = [];
   const live: [string, string][] = [
     ...session.cookies.map((c): [string, string] => [c.value, `cookie:${c.name}`]),
     ...Object.entries(session.values).map(([k, v]): [string, string] => [v, `session:${k}`]),
@@ -377,6 +379,7 @@ export function redact(
     const as = o.named ? `[${ref}]` : REDACTED;
     for (const f of storedForms(v)) {
       if (ORIGIN.test(f)) continue;
+      stored.push([f, as]);
       const pct = encodeURIComponent(f);
       for (const g of [f, pct, pct.replace(/%20/g, "+"), JSON.stringify(f).slice(1, -1), htmlEscape(f)])
         if (!forms.has(g)) forms.set(g, as);
@@ -394,6 +397,20 @@ export function redact(
       for (let n = Math.min(f.length - 1, out.length); n >= PARTIAL && n > drop; n--)
         if (out.endsWith(f.slice(0, n))) [drop, as] = [n, forms.get(f)!];
     if (drop) out = `${out.slice(0, out.length - drop)}${as}`;
+    else {
+      // A value spelled in escapes no form holds (\u0053, \/) shows its first characters only decoded.
+      // Read so for this test alone: the text keeps the escapes it has.
+      const max = Math.max(...stored.map(([f]) => f.length));
+      for (let k = Math.max(0, out.length - 6 * max); k <= out.length - PARTIAL && out.includes("\\", k); k++) {
+        // a cut inside an escape leaves its start, which reads as nothing yet
+        const d = jsonUnescape(out.slice(k).replace(/\\(?:u[0-9a-fA-F]{0,3})?$/, ""));
+        const hit = d.length >= PARTIAL && stored.find(([f]) => f.startsWith(d));
+        if (hit) {
+          out = `${out.slice(0, k)}${hit[1]}`;
+          break;
+        }
+      }
+    }
   }
   const leaks = liveTest(session);
   if (!leaks(out)) return out;

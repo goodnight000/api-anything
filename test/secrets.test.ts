@@ -52,6 +52,34 @@ test("redact: a value a JSON body spells in \\u escapes, all of it or some", () 
   assert.equal(redact(body, session), body);
 });
 
+test("redact: a cut value spelled in JSON escapes leaves none of its first characters at the end", () => {
+  const u = (c: string) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+  const ends = [
+    u(TOKEN[0]!) + TOKEN.slice(1, 10), // the first character escaped
+    [...TOKEN.slice(0, 6)].map(u).join(""), // every one
+    `${[...TOKEN.slice(0, 6)].map(u).join("")}\\u00`, // cut inside an escape
+  ];
+  for (const end of ends)
+    assert.equal(
+      redact(`HTTP 401: {"error":"bad ${end}`, session, { cut: true }),
+      `HTTP 401: {"error":"bad ${REDACTED}`,
+    );
+  assert.equal(
+    redact(`HTTP 401: {"error":"bad ${ends[0]}`, session, { cut: true, named: true }),
+    `HTTP 401: {"error":"bad [cookie:sid]`,
+  );
+  // a base64 value holds "/", which PHP and Java write as \/
+  const slashed = `${TOKEN.slice(0, 6)}/${TOKEN.slice(6)}`;
+  const s = { cookies: [], values: { k: slashed } };
+  assert.equal(
+    redact(`HTTP 401: {"error":"bad ${slashed.slice(0, 12).replace("/", "\\/")}`, s, { cut: true }),
+    `HTTP 401: {"error":"bad ${REDACTED}`,
+  );
+  // escapes that spell no live value stay as they are, cut or not
+  const body = String.raw`{"title":"say \u0022hi\u0022"}`;
+  assert.equal(redact(body, session, { cut: true }), body);
+});
+
 test("redact: the site's own address, short values and ordinary text are left alone", () => {
   const text = "redirected to https://www.x.test/ with abc; no session here";
   assert.equal(redact(text, session), text);

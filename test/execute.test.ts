@@ -562,6 +562,17 @@ test("a response that echoes a live credential never puts it in reason, whole or
       );
       assert.ok(!(r.reason ?? "").includes(LIVE.slice(0, 4)), `${cut}: ${r.reason}`);
     }
+    // the body spells the value in JSON escapes, and the snippet ends inside it
+    const escaped = `${"x".repeat(160 - 15 - 9)}session: \\u${LIVE.charCodeAt(0).toString(16).padStart(4, "0")}${LIVE.slice(1)}`;
+    const r = await call(
+      "t",
+      "user",
+      { name: "bob" },
+      opts(() => new Response(escaped, { status: 401 })),
+    );
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.ok(!(r.reason ?? "").includes(LIVE.slice(1, 5)), r.reason ?? "");
+    assert.match(r.reason ?? "", /session: \[redacted\]$/);
   } finally {
     rmSync(join(HOME, "sessions"), { recursive: true, force: true });
   }
