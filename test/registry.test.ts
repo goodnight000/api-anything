@@ -1219,6 +1219,47 @@ test("a verify the site's cool-down answers sends nothing and leaves the record 
   assert.match(plan("demo").errors.join("\n"), failing);
 });
 
+test("a verify that stays mixed takes away the record the op had", async () => {
+  const read = (path: string) =>
+    spec(
+      { name: "flip" },
+      {
+        request: { method: "GET", url: `https://news.example.com${path}?q=example`, headers: {} },
+        match: { path },
+        response: { format: "json" },
+        params: [{ name: "q", required: true, example: "example" }],
+        checks: [{ args: { q: "absent" }, expect: "empty" }],
+      },
+    );
+  const a = read("/a");
+  const b = read("/b");
+  saveSite(a);
+  // A filters at first: its check passes and it has a record
+  await verifySite("flip", {
+    maxTier: 1,
+    minIntervalMs: 0,
+    fetchImpl: (async (raw: string | URL | Request) =>
+      json(new URL(String(raw)).searchParams.get("q") === "absent" ? [] : [{ title: "example" }])) as typeof fetch,
+  });
+  assert.deepEqual(plan("flip").errors, []);
+  // then it stops filtering, while another process swaps A and B on every request, the rerun's too
+  const urls: string[] = [];
+  await verifySite("flip", {
+    maxTier: 1,
+    minIntervalMs: 0,
+    fetchImpl: (async (raw: string | URL | Request) => {
+      const u = new URL(String(raw));
+      urls.push(u.pathname + u.search);
+      saveSite(u.searchParams.get("q") === "example" ? b : a);
+      return json(u.pathname === "/b" && u.searchParams.get("q") === "absent" ? [] : [{ title: "example" }]);
+    }) as typeof fetch,
+  });
+  assert.deepEqual(urls, ["/a?q=example", "/b?q=absent", "/a?q=example", "/b?q=absent"]);
+  assert.equal(loadSite("flip")!.site.operations[0]!.request.url, a.operations[0]!.request.url);
+  assert.equal(loadRecord("flip").search, undefined);
+  assert.match(plan("flip").errors.join("\n"), /search: its checks have not run on this version/);
+});
+
 test("a check that passes as input, refused before anything is sent, is recorded", async () => {
   saveSite(
     spec(

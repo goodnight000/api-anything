@@ -273,6 +273,8 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
   for (const op of now.operations) {
     const run = runs.get(op.name);
     if (run && "results" in run && allFrom(op, run)) record[op.name] = { hash: opHash(op), at, results: run.results };
+    // a run that answered and proved no one version leaves no record, not an older one standing
+    else if (run && "from" in run && run.from.some((h) => h !== undefined)) delete record[op.name];
   }
   for (const k of Object.keys(record)) if (!now.operations.some((o) => o.name === k)) delete record[k];
   writePrivate(recordFile(name), JSON.stringify(record, null, 1));

@@ -1191,7 +1191,7 @@ one a heal or the registry put in its place. Its outcomes are kept per op in
 `~/.api-anything/checks/<site>.json`, with a hash of the op as saved when verify ends (in schema
 order; `learnedAt`, `unproven` and `version` aside), and only when every case answered from that
 version: cases that answered from different ones (a heal part way, or another process saving the op)
-run once more, and if they are still mixed the op gets no record. The cases
+run once more, and if they are still mixed the op gets no record, and loses the one it had. The cases
 are chosen from one version too: when that is not the one saved when verify ends, they run once more
 from the saved one. A case the site's cool-down answered sent nothing, so no version answered it, and
 a run of nothing else leaves the op's record as it was. So an op changed since, or saved by
