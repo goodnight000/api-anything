@@ -117,7 +117,9 @@ Besides its request template, each operation stores two things:
 - **trigger**: how to make the site's own frontend fire the request. This is a URL template,
   plus optional UI steps. A write's trigger may also hold `confirms`: the `confirm()` dialogs its
   learning accepted, each as a step index and a SHA-256 digest (no page text), which a tier-3 call
-  accepts again when the page asks the same question.
+  accepts again when the page asks the same question, and `companions`: the other unsafe requests
+  its learning saw the trigger send on the op's site, by stable identity, the only ones besides its
+  own that a tier-3 call lets out.
 - **match**: how to recognize that request in captured traffic by stable identity only
   (method, host, path with hash-like segments wildcarded, GraphQL operation name). It never
   uses a queryId or hash.
@@ -241,7 +243,13 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 - api-anything automates your own browser session on your own accounts. It is meant for things you
   could do by hand, at human pace. HTTP replays to one site are paced at 1 s within one process; browser navigation may fire multiple requests.
 - **Writes** (posting, sending, buying) are learned by intercepting the request and aborting it
-  in the browser, so learning never performs them. Calling a write needs `--allow-writes` on the
+  in the browser, so learning never performs them. Without `--write`, `add` and `capture` stop a
+  POST, PUT, PATCH or DELETE the steps send (a GraphQL query, or the request `--match` pins, passes):
+  one on the page's own site fails the add before its second run, so a forgotten `--write` places no
+  order. A tier-3 write call lets out only the op's own request, once, and the other unsafe requests
+  its learning saw the trigger send (`trigger.companions`); any other is stopped, and the reason
+  names it (a redesign whose button now deletes the account deletes nothing). Card payment is left to
+  you: api-anything does not learn card fields, which sit in the payment provider's iframe. Calling a write needs `--allow-writes` on the
   CLI, the MCP server (whose `call_write_operation` sends it; `call_operation` never does), or the library. A write is sent once and is retried only when the
   server certainly did not run it (a 400, 401, 403 or 404 answered to the write itself, not after
   a redirect). Timeouts and 5xx errors are reported,
