@@ -1282,7 +1282,17 @@ independent alternative.
   `list_operations`, `call_operation` and `call_write_operation` on a site that is not installed pull it from the registry first
   (see "Agents pull"), and `list_operations` shows each op's registry status. `learn_site` (CLI
   `learn`, `learnsite.ts`) learns a read with the user's args, the agent's second and third values, a
-  holdout call and a clean replay, then shares it (see Sharing specs). It refuses a write, and a chosen
+  holdout call and a clean replay, then shares it (see Sharing specs). Before any browser runs, unless
+  the agent relearns (captures, `pickRequest` or a recipe), it looks for a read already shared for the
+  same page: the registry's site for the trigger's registrable domain (`sharedName`; a user's own copy
+  under that name is looked in as it is) and an op whose `trigger.url` is the same page (`sameTrigger`:
+  host without `www.`, each path segment and query key, placeholders at the same places whatever their
+  names, which map the user's args onto the op's params). It is pulled with `by: "agent"`, so every rule
+  for a pulled spec applies, and called through `call()`; data answers with `reused: {site, op, status}`
+  and nothing is learned or uploaded, and the call's report (with `share` on) is a confirmation. No
+  match, or a call that fails or answers nothing, learns as before. Search words never find a site with
+  only candidates, and two independent learns never hash the same, so without this step nothing a
+  newcomer used would ever collect confirmations. It refuses a write, and a chosen
   request (automatic or `pickRequest`) that the shared rules would refuse as a read or whose method is
   not GET or HEAD (a GraphQL query sent as POST excepted; a GraphQL POST with no query document, a
   persisted query named by a hash or an id, is refused since it may be a mutation), before the holdout

@@ -453,7 +453,7 @@ export function createServer({
               ? `${top.domain} offers its own agent interface (${top.interfaces.map((i) => `${i.kind} ${i.url}`).join(", ")}): tell the user, who can connect it; nothing here calls it`
               : top
                 ? `check that ${top.domain} is the site the user means (a lookalike name can point elsewhere), then call_operation {"site":"${top.site}","op":<an op above>,"args":<its params>}; list_operations {"site":"${top.site}"} first shows the site's notes (caveats, arg formats)`
-                : "nobody shared one yet: learn it with learn_site (the page that shows the data, example args and what you want from it)",
+                : "nothing matched. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, find_sites with that, which also finds unconfirmed ones; else learn it with learn_site (the page that shows the data, example args and what you want from it), which calls an op someone shared for the same page before it opens a browser",
           nextCall:
             top && !top.operations.length
               ? undefined

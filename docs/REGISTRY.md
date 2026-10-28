@@ -61,9 +61,17 @@ registrable domain and the hashed network that asked (demand, below), never the 
 ## Learning an operation that does not exist
 
 1. `find_sites` finds nothing, or the site lacks the op. Its `nextCall` is `learn_site`.
-2. `learn_site {page URL template, args, args2, args3, intent}` (MCP; CLI `learn`) runs the page with the
-   user's own args, picks the request and the fields from the outline (the agent can override), runs
-   it again with a second example, and returns the data of the user's own request with the op saved.
+2. `learn_site {page URL template, args, args2, args3, intent}` (MCP; CLI `learn`) first looks for the
+   op among what is shared: words never find a site with only candidates, so a newcomer would learn it
+   again, and since the version hash covers the op's name, description, examples and checks, two
+   independent learns never hash the same and neither collects confirmations. So when the registry
+   serves a site for the trigger's domain (`sharedName`) and one of its reads has the same trigger page
+   (placeholders at the same places, any names), the client pulls it as an agent pulls (reads only, the
+   shared rules, a candidate called with no cookies), calls it with the user's args, and on data answers
+   with it and `reused`: no browser, no upload. That call's report counts toward the op's promotion.
+   Otherwise, or when the call fails, it runs the page with the user's own args, picks the request and
+   the fields from the outline (the agent can override), runs it again with a second example, and
+   returns the data of the user's own request with the op saved.
 3. The client proves it before sharing (`learnsite.ts`):
    - the two-run diff and run 2's data (add's existing rules);
    - a holdout call, with args used as neither example, answers with data;
