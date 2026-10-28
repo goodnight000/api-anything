@@ -1046,10 +1046,14 @@ matches, expecting `empty`, so a param the server ignores shows up as a failing 
 each read's stored example (expecting `result`) and its checks through `call`, healing as any call
 does, and judges every case: `pass`, `fail`, or `inconclusive` when the answer is `blocked`, `auth`,
 `rate` or a server that failed or could not be reached (`CallResult.server`), which says nothing
-about the op. Its outcomes are kept per op in `~/.api-anything/checks/<site>.json`, with a hash of
-the op as it was after the run (a heal during verify included; `learnedAt`, `unproven` and `version` aside),
-so an op changed since has no record. When two passing cases whose args differ only in an op's
-`unproven` params answer differently, verify clears the mark. A read with `paging` gets one more
+about the op. Each case's answer comes from one version of the op: the one its call resolved, or the
+one a heal or the registry put in its place. Its outcomes are kept per op in
+`~/.api-anything/checks/<site>.json`, with a hash of the op as saved when verify ends (in schema
+order; `learnedAt`, `unproven` and `version` aside), and only when every case answered from that
+version: cases that answered from different ones (a heal part way, or another process saving the op)
+run once more, and if they are still mixed the op gets no record. So an op changed since, or saved
+meanwhile by something else, has none. When two passing cases whose args differ only in an op's
+`unproven` params answer differently, and the same holds, verify clears the mark. A read with `paging` gets one more
 case after its example, `next page`: the call again with the paging param set to the example's
 `nextPage` (or, for numbered pages, the example's page number plus one). It fails when the answer
 has rows and every one of them was on page 1 (`got: "page 1 again"`), the sign of a server that

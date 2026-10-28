@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { asText } from "./codec.js";
 import { type CallOptions, type CallResult, call } from "./execute.js";
 import { home, readJson, safeName, writePrivate } from "./session.js";
-import type { Check, Operation, Site } from "./spec.js";
+import { type Check, type Operation, OperationSchema, type Site } from "./spec.js";
 import { loadSite, updateSite } from "./store.js";
 
 export type Outcome = "pass" | "fail" | "inconclusive";
@@ -42,9 +42,13 @@ const recordFile = (site: string) => join(home(), "checks", `${safeName(site)}.j
 export const loadRecord = (site: string): Record<string, OpRecord> =>
   readJson<Record<string, OpRecord>>(recordFile(site), {});
 
-/** The op's identity for its record: everything but when it was learned, the mark a verify clears and its registry version. */
+/**
+ * The op's identity for its record: everything but when it was learned, the mark a verify clears and
+ * its registry version. In schema order, as an op read from disk is: a heal's candidate is built in
+ * another, and is the same op once saved.
+ */
 export function opHash(op: Operation): string {
-  const { learnedAt: _at, unproven: _u, version: _v, ...rest } = op;
+  const { learnedAt: _at, unproven: _u, version: _v, ...rest } = OperationSchema.parse(op);
   return createHash("sha256").update(JSON.stringify(rest)).digest("hex").slice(0, 16);
 }
 
@@ -158,85 +162,109 @@ export interface Verified {
   proven: string[];
 }
 
-/** Run every read's example and checks, record the outcomes, and clear `unproven` where the answers differ. */
+/** One run of an op's cases. `from`: per call, the hash of the op its answer came from, as the call last reported it. */
+type Run = { results: CaseResult[]; from: (string | undefined)[]; proven: boolean } | { skipped: string };
+
+async function runCases(name: string, op: Operation, opts: CallOptions): Promise<Run> {
+  const example = exampleArgs(op);
+  const cases: [string, Record<string, unknown>, Check["expect"], Check?][] = [
+    ...(example ? [["example", example, "result"] as [string, Record<string, unknown>, Check["expect"]]] : []),
+    ...(op.checks ?? []).map((c, i): [string, Record<string, unknown>, Check["expect"], Check] => [
+      `check ${i + 1}`,
+      c.args,
+      c.expect,
+      c,
+    ]),
+  ];
+  if (!cases.length) {
+    const missing = op.params.filter((p) => p.required && p.example === undefined && p.default === undefined);
+    return { skipped: `no example for ${missing.map((p) => p.name).join(", ")}, and no checks` };
+  }
+  const answers: { args: Record<string, unknown>; data: string }[] = [];
+  const results: CaseResult[] = [];
+  const from: (string | undefined)[] = [];
+  const send = async (args: Record<string, unknown>) => {
+    let last: string | undefined;
+    const r = await call(name, op.name, args, {
+      ...opts,
+      onAnswered: (o) => {
+        last = opHash(o);
+      },
+    });
+    from.push(last);
+    return r;
+  };
+  for (const [label, args, expect, check] of cases) {
+    const r = await send(args);
+    const j = judgeCase(expect, r);
+    if (j.outcome === "pass" && (j.got === "result" || j.got === "empty"))
+      answers.push({ args, data: JSON.stringify(r.data ?? null) });
+    results.push({
+      op: op.name,
+      case: label,
+      expect,
+      ...j,
+      ...(check ? { args: check.args, ...(check.purpose ? { purpose: check.purpose } : {}) } : {}),
+      ...(r.tier ? { tier: r.tier } : {}),
+      ...(r.healed ? { healed: true } : {}),
+      ...(j.outcome !== "pass" ? { reason: r.reason ?? `answered ${j.got}, expected ${expect}`, next: r.next } : {}),
+      ms: r.ms,
+    });
+    if (op.paging && label === "example") results.push(await nextPageCase(op, args, r, send));
+  }
+  return { results, from, proven: !!op.unproven && answersDiffer(op, op.unproven.params, answers) };
+}
+
+/** Whether every case of `run` answered from `op` as it is saved now. */
+const allFrom = (op: Operation | undefined, run: Run | undefined) =>
+  !!op && !!run && "from" in run && run.from.every((h) => h === opHash(op));
+
+/**
+ * Run every read's example and checks, record the outcomes, and clear `unproven` where the answers
+ * differ. Both only for an op whose every case answered from the version saved when verify ends: an
+ * op saved meanwhile by anything else (an `add` in another process) gets neither.
+ */
 export async function verifySite(name: string, opts: CallOptions = {}): Promise<Verified> {
   const site = loadSite(name)?.site;
   if (!site) throw new Error(`no site "${name}"`);
-  const results: Verified["results"] = [];
-  const proven: string[] = [];
-  const ran: Record<string, CaseResult[]> = {};
-  // The versions each op's cases were sent with, as the calls report them: one saved meanwhile by
-  // anything else (an `add` in another process), even one put back as verify read it, is none of them.
-  const versions = new Map(site.operations.map((o) => [o.name, new Set<string>()]));
-  for (const op of site.operations) {
-    if (!op.readOnly) continue;
-    const example = exampleArgs(op);
-    const cases: [string, Record<string, unknown>, Check["expect"], Check?][] = [
-      ...(example ? [["example", example, "result"] as [string, Record<string, unknown>, Check["expect"]]] : []),
-      ...(op.checks ?? []).map((c, i): [string, Record<string, unknown>, Check["expect"], Check] => [
-        `check ${i + 1}`,
-        c.args,
-        c.expect,
-        c,
-      ]),
-    ];
-    if (!cases.length) {
-      const missing = op.params.filter((p) => p.required && p.example === undefined && p.default === undefined);
-      results.push({ op: op.name, skipped: `no example for ${missing.map((p) => p.name).join(", ")}, and no checks` });
-      continue;
-    }
-    const answers: { args: Record<string, unknown>; data: string }[] = [];
-    ran[op.name] = [];
-    const sent = versions.get(op.name)!;
-    const send = (args: Record<string, unknown>) =>
-      call(name, op.name, args, { ...opts, onSent: (o) => sent.add(opHash(o)) });
-    for (const [label, args, expect, check] of cases) {
-      const r = await send(args);
-      const j = judgeCase(expect, r);
-      if (j.outcome === "pass" && (j.got === "result" || j.got === "empty"))
-        answers.push({ args, data: JSON.stringify(r.data ?? null) });
-      const one: CaseResult = {
-        op: op.name,
-        case: label,
-        expect,
-        ...j,
-        ...(check ? { args: check.args, ...(check.purpose ? { purpose: check.purpose } : {}) } : {}),
-        ...(r.tier ? { tier: r.tier } : {}),
-        ...(r.healed ? { healed: true } : {}),
-        ...(j.outcome !== "pass" ? { reason: r.reason ?? `answered ${j.got}, expected ${expect}`, next: r.next } : {}),
-        ms: r.ms,
-      };
-      results.push(one);
-      ran[op.name]!.push(one);
-      if (op.paging && label === "example") {
-        const page = await nextPageCase(op, args, r, send);
-        results.push(page);
-        ran[op.name]!.push(page);
-      }
-    }
-    if (op.unproven && answersDiffer(op, op.unproven.params, answers)) proven.push(op.name);
+  const runs = new Map<string, Run>();
+  for (const op of site.operations) if (op.readOnly) runs.set(op.name, await runCases(name, op, opts));
+  // Cases that answered from different versions (a heal part way through them, or a save between
+  // them) prove no one version: they all run once more, on the op as it is now.
+  const then = loadSite(name)?.site ?? site;
+  for (const [n, run] of runs) {
+    const op = then.operations.find((o) => o.name === n);
+    if (op?.readOnly && "from" in run && !allFrom(op, run) && new Set(run.from).size > 1)
+      runs.set(n, await runCases(name, op, opts));
   }
-  const answered = (o: Operation) => !!versions.get(o.name)?.has(opHash(o));
-  if (proven.length)
+  const proven: string[] = [];
+  if ([...runs.values()].some((r) => "proven" in r && r.proven))
     updateSite(name, (cur) => {
       if (!cur) throw new Error(`site "${name}" disappeared during verify`);
       return {
         ...cur,
         operations: cur.operations.map((o) => {
-          if (!proven.includes(o.name) || !answered(o)) return o;
+          const run = runs.get(o.name);
+          if (!o.unproven || !run || !("proven" in run) || !run.proven || !allFrom(o, run)) return o;
+          proven.push(o.name);
           const { unproven: _, ...rest } = o;
           return rest;
         }),
       };
     });
-  // Hashed as the ops are now: a call may have healed one, and that is the version its answers came from.
   const now = loadSite(name)?.site ?? site;
   const record = loadRecord(name);
   const at = new Date().toISOString();
-  for (const op of now.operations)
-    if (ran[op.name] && answered(op)) record[op.name] = { hash: opHash(op), at, results: ran[op.name]! };
+  for (const op of now.operations) {
+    const run = runs.get(op.name);
+    if (run && "results" in run && allFrom(op, run)) record[op.name] = { hash: opHash(op), at, results: run.results };
+  }
   for (const k of Object.keys(record)) if (!now.operations.some((o) => o.name === k)) delete record[k];
   writePrivate(recordFile(name), JSON.stringify(record, null, 1));
+  const results = site.operations.flatMap((o): Verified["results"] => {
+    const run = runs.get(o.name);
+    return !run ? [] : "skipped" in run ? [{ op: o.name, skipped: run.skipped }] : run.results;
+  });
   return { results, proven };
 }
 

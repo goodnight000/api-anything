@@ -96,10 +96,11 @@ export interface CallOptions {
   minIntervalMs?: number;
   timeoutMs?: number;
   /**
-   * @internal `verify`'s, no option of the CLI or MCP: told of the version each attempt of the call
-   * sent (a heal's candidate, a registry replacement), so a record names only versions that answered it
+   * @internal `verify`'s, no option of the CLI or MCP: told of the op the call's answer comes from, the
+   * one it resolved (before its args are checked) and then a heal's or a registry version that answered
+   * in its place, so a record names only the version that answered
    */
-  onSent?: (op: Operation) => void;
+  onAnswered?: (op: Operation) => void;
 }
 
 export type { WriteStatus };
@@ -441,7 +442,6 @@ async function attempt(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
   const before = sessionOrNone(ctx.site);
   const a = await tryTier(ctx, op, tier);
   ctx.log.push(a);
-  if (!a.unsent) ctx.opts.onSent?.(op);
   const seen = { cookies: ctx.seen ?? [], values: {} };
   return { ...a, reason: hide(a.reason, [before, sessionOrNone(ctx.site), seen], true) };
 }
@@ -694,6 +694,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       const b = await attempt(ctx, next, tier);
       if (b.class === "ok") {
         adopt(ctx.site, op, next);
+        ctx.opts.onAnswered?.(next);
         queueOk(next.version.hash, b);
         return success(b, {
           healed: true,
@@ -739,7 +740,10 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
       browser: ctx.maxTier > 1 && !ctx.unconfirmed,
     }),
   );
-  if (h.outcome === "healed") return success(h.attempt, { healed: true });
+  if (h.outcome === "healed") {
+    ctx.opts.onAnswered?.(h.operation);
+    return success(h.attempt, { healed: true });
+  }
   // Throttled, challenged, logged out, or no browser: nothing was learned about the op, so it is not stale.
   if (h.outcome === "failed" && h.transient) {
     // the replay that would have saved a candidate got no answer, but the site's own request did: that is the tier-3 read
@@ -844,7 +848,7 @@ async function readBack(
     allowWrites: false,
     again: undefined,
     idempotencyKey: undefined,
-    onSent: undefined,
+    onAnswered: undefined,
   };
   const read =
     "op" in rb
@@ -923,6 +927,7 @@ export async function call(
   const t0 = Date.now();
   const found = resolve(siteName, opName);
   if ("ok" in found) return { ...finish(found, undefined, undefined, []), ms: Date.now() - t0 };
+  opts.onAnswered?.(found.op);
   return run(found.site, found.op, args, opts, { theirs: found.theirs, source: found.source }, t0);
 }
 

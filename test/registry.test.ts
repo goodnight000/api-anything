@@ -19,7 +19,7 @@ import { type OpPlan, plan } from "../src/publish.js";
 import { pull, search, summarize } from "../src/registry.js";
 import type { SearchMatch } from "../src/registry-api.js";
 import { loadSession, mergeCapture, saveSession, siteOf } from "../src/session.js";
-import { parseSite, type Site } from "../src/spec.js";
+import { type Operation, OperationSchema, parseSite, type Site } from "../src/spec.js";
 import { loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
 import { LIMITS, readbackProblems, uploadProblems, vetShared } from "../src/vet.js";
 import { type FakeRegistry, hashOf, served, startRegistry } from "./fixture/registry.js";
@@ -1066,6 +1066,104 @@ test("verify records nothing for a version put back as it read it while its case
   assert.ok(!paths.includes("/broken"), paths.join(" "));
   assert.equal(loadRecord("aba").target, undefined, "no case sent A");
   assert.match(plan("aba").errors.join("\n"), /target: its checks have not run on this version/);
+});
+
+test("verify records nothing when an op's cases answered from different versions, twice", async () => {
+  // A ignores q and always answers a row, so its check fails; B filters
+  const read = (path: string) =>
+    spec(
+      { name: "mixed" },
+      {
+        request: { method: "GET", url: `https://news.example.com${path}?q=example`, headers: {} },
+        match: { path },
+        response: { format: "json" },
+        params: [{ name: "q", required: true, example: "example" }],
+        checks: [{ args: { q: "absent" }, expect: "empty" }],
+      },
+    );
+  const a = read("/a");
+  const b = read("/b");
+  saveSite(a);
+  const urls: string[] = [];
+  let flips = Infinity;
+  const fetchImpl = (async (raw: string | URL | Request) => {
+    const u = new URL(String(raw));
+    urls.push(u.pathname + u.search);
+    // another process saves B during each example request, and puts A back during each check's
+    if (urls.length <= flips) saveSite(u.searchParams.get("q") === "example" ? b : a);
+    return json(u.pathname === "/b" && u.searchParams.get("q") === "absent" ? [] : [{ title: "example" }]);
+  }) as typeof fetch;
+  const opts = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl };
+  const v = await verifySite("mixed", opts);
+  assert.deepEqual(urls, ["/a?q=example", "/b?q=absent", "/a?q=example", "/b?q=absent"], "mixed: run once more");
+  assert.equal(v.results.length, 2, "the last run's results");
+  assert.equal(loadRecord("mixed").search, undefined, "mixed again: no version answered every case");
+  assert.match(plan("mixed").errors.join("\n"), /search: its checks have not run on this version/);
+
+  // the same save and restore only once: the second run is all A, and A's check fails
+  urls.length = 0;
+  flips = 2;
+  await verifySite("mixed", opts);
+  assert.deepEqual(urls, ["/a?q=example", "/b?q=absent", "/a?q=example", "/a?q=absent"]);
+  assert.equal(loadRecord("mixed").search?.hash, opHash(a.operations[0]!));
+  assert.match(plan("mixed").errors.join("\n"), /search: check 1 \(q=absent\) expects empty, and answered result/);
+});
+
+test("a check that passes as input, refused before anything is sent, is recorded", async () => {
+  saveSite(
+    spec(
+      {},
+      {
+        params: [{ name: "q", required: true, pattern: "[a-z]+" }],
+        checks: [{ args: { q: "123" }, expect: "input" }],
+      },
+    ),
+  );
+  const fetchImpl = (async () => {
+    throw new Error("must not send");
+  }) as typeof fetch;
+  const v = await verifySite("demo", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  assert.deepEqual(
+    v.results.map((r) => ("outcome" in r ? [r.case, r.outcome, r.got] : r)),
+    [["check 1", "pass", "input"]],
+  );
+  assert.equal(loadRecord("demo").search?.hash, opHash(loadSite("demo")!.site.operations[0]!));
+  assert.deepEqual(plan("demo").errors, []);
+});
+
+test("opHash reads an op in schema order: a recapture's candidate hashes as the op it saves", () => {
+  const op = spec(
+    {},
+    {
+      description: "Search stories",
+      request: { method: "GET", url: "https://news.example.com/api/search?q=kittens", headers: { "x-client": "web" } },
+      public: ["x-client"],
+      checks: [{ args: { q: "zzzz" }, expect: "empty" }],
+    },
+  ).operations[0]!;
+  const { description: _d, public: _p, checks: _c, ...learned } = op;
+  const fresh = OperationSchema.parse({
+    ...learned,
+    request: { ...op.request, url: op.request.url.replace("/api", "/v2") },
+  });
+  // as heal.ts builds a recapture's candidate: the interface's keys after the fresh template's
+  const candidate: Operation = {
+    ...fresh,
+    description: op.description,
+    params: op.params,
+    trigger: op.trigger,
+    match: op.match,
+    readOnly: op.readOnly,
+    ...(op.public ? { public: op.public } : {}),
+    ...(op.checks ? { checks: op.checks } : {}),
+    minTier: op.minTier,
+    response: { ...fresh.response, format: op.response.format, extract: op.response.extract },
+  };
+  const parsed = OperationSchema.parse(candidate);
+  assert.notEqual(JSON.stringify(candidate), JSON.stringify(parsed), "its keys are out of schema order");
+  assert.equal(opHash(candidate), opHash(parsed));
+  saveSite({ ...spec(), operations: [candidate] });
+  assert.equal(opHash(candidate), opHash(loadSite("demo")!.site.operations[0]!));
 });
 
 test("publish takes an op named like an Object.prototype key", () => {
