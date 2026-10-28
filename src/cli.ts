@@ -170,7 +170,8 @@ const HELP: Record<string, string> = {
   credentials redacted.
   --again           send a write refused as a duplicate (the same args within 10 minutes, and the
                     first may have gone through): only when the user checked the site
-  --idempotency-key <k>  a repeat of a write with the same key returns the first call's record`,
+  --idempotency-key <k>  on the first call: a repeat of the write with the same key returns that
+                    call's record (added only to a retry, the retry is still a duplicate)`,
   verify: `api-anything verify [site]
   Calls every read operation with its stored example args and its checks, healing as needed, and
   judges each case: pass, fail, or inconclusive (a challenge, a sign-in page, a rate limit, or a server

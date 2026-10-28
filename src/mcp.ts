@@ -546,7 +546,9 @@ export function createServer({
           idempotencyKey: z
             .string()
             .optional()
-            .describe("a key of your choosing for this write: a repeat with it returns the first call's record"),
+            .describe(
+              "a key of your choosing for this write, passed on its first call: a repeat with it returns that call's record",
+            ),
         },
         annotations: WRITE_HINTS,
       },

@@ -1,4 +1,5 @@
 /** Tier 1: fill the stored template and send it with Node fetch. */
+import { createHash, randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIPv4, isIPv6 } from "node:net";
 import * as zlib from "node:zlib";
@@ -36,6 +37,8 @@ export interface SendOptions {
    * not reach.
    */
   publicOnly?: boolean;
+  /** the call's seed for its gen slots (`buildRequest`) */
+  gen?: string;
 }
 
 /** How a public-only send resolves a host before connecting; tests replace it, since they stay off the network. */
@@ -189,6 +192,22 @@ function transform(v: string, t: "strip-quotes" | "url-decode" | undefined): str
 export const holdsRef = (s: Operation["slots"][number]) =>
   !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0);
 
+/**
+ * A gen slot's value: a UUID v4 drawn from `seed` and the slot's place, so every request one call
+ * builds carries the same one. With no seed, a fresh one.
+ */
+function generated(seed: string | undefined, at: string[]): string {
+  if (seed === undefined) return randomUUID();
+  const b = createHash("sha256")
+    .update(JSON.stringify([seed, at]))
+    .digest()
+    .subarray(0, 16);
+  b[6] = (b[6]! & 0x0f) | 0x40;
+  b[8] = (b[8]! & 0x3f) | 0x80;
+  const h = b.toString("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
 /** The args a call runs with at every tier: a param the caller left out takes its default. */
 export function withDefaults(op: Operation, args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -215,8 +234,11 @@ export function refusal(p: Pick<Param, "pattern" | "hint" | "enum" | "min" | "ma
   return undefined;
 }
 
-/** The fully materialized request: params, cookie/session refs, and the jar's Cookie header. */
-export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session): Request {
+/**
+ * The fully materialized request: params, cookie/session refs, gen slots from `gen` (the call's
+ * seed; without one each build makes new values), and the jar's Cookie header.
+ */
+export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session, gen?: string): Request {
   const given = withDefaults(op, args);
   const vals: Record<string, unknown> = {};
   for (const p of op.params) {
@@ -238,6 +260,10 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
   };
   delete req.headers.cookie;
   for (const slot of op.slots) {
+    if (slot.gen) {
+      req = setAt(req, slot.at, generated(gen, slot.at));
+      continue;
+    }
     const name = slot.param ?? slot.ref!;
     let v: unknown = slot.param !== undefined ? vals[slot.param] : resolveRef(slot.ref!, session, op.request.url);
     // No cursor is the first page. An op learned from the request that loads page 2 holds page 2's
@@ -438,7 +464,7 @@ export async function send(
   session: Session,
   opts: SendOptions,
 ): Promise<Sent> {
-  const req = buildRequest(op, args, session);
+  const req = buildRequest(op, args, session, opts.gen);
   if (opts.publicOnly) await refusePrivate(op, req.url);
   await pace(opts.site, opts.minIntervalMs ?? 1000);
   const timeoutMs = opts.timeoutMs ?? 30_000;

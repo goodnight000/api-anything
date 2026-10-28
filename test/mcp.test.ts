@@ -213,8 +213,11 @@ test("MCP call_write_operation: a write's status, a duplicate refused with its n
     const again = await vote({ again: true });
     assert.equal(again.ok, true);
     assert.equal(site.hits(), 2);
-    await vote({ idempotencyKey: "k1" });
-    const replay = await vote({ idempotencyKey: "k1" });
+    // a key added to a repeat of the keyless write is still that write
+    const keyed = await vote({ idempotencyKey: "k0" });
+    assert.deepEqual([keyed.class, site.hits()], ["duplicate", 2]);
+    await vote({ args: { id: "10" }, idempotencyKey: "k1" });
+    const replay = await vote({ args: { id: "10" }, idempotencyKey: "k1" });
     assert.equal(site.hits(), 3);
     assert.match(replay.reason, /that call's record/);
   } finally {

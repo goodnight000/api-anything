@@ -3,6 +3,7 @@
  * the heal-loop guards, and the write rules. Always sends the stored template first; healing is
  * reactive only.
  */
+import { randomBytes } from "node:crypto";
 import {
   browserAvailable,
   type PageFetchResult,
@@ -17,6 +18,7 @@ import { capOutput, getPath } from "./extract.js";
 import {
   type Attempt,
   challengePage,
+  fillTrigger,
   firedNothing,
   type HealResult,
   healOperation,
@@ -196,6 +198,8 @@ interface Ctx {
   shared?: Site["shared"];
   /** `unconfirmed`: no browser run in the user's profile for it (tier 3, a recapture, a cookie refresh) */
   unconfirmed?: boolean;
+  /** the seed of the op's gen slots: one per call, so the call's own retries send the same values */
+  gen: string;
 }
 
 /**
@@ -473,6 +477,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         minIntervalMs: ctx.opts.minIntervalMs,
         // someone else's spec sends only to public addresses; tiers 2 and 3 are the browser's, out of this guard's reach
         publicOnly: !!ctx.shared,
+        gen: ctx.gen,
       });
       // A rotating cookie (a rolling session, __cf_bm) must ride on the next call.
       if (sent.setCookies) {
@@ -484,7 +489,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       }
       r = sent;
     } else {
-      const req = buildRequest(op, ctx.args, session);
+      const req = buildRequest(op, ctx.args, session, ctx.gen);
       // someone else's spec: the page's fetch goes only to public addresses, as tier 1 does (tier 3 is not covered)
       if (ctx.shared) await refusePrivate(op, req.url);
       const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
@@ -584,7 +589,7 @@ async function refreshCookies(ctx: Ctx, op: Operation, tier: Tier): Promise<bool
     const s = loadSession(ctx.site);
     const sent = (cookies: StoredCookie[]) => {
       try {
-        const req = buildRequest(op, ctx.args, { ...s, cookies });
+        const req = buildRequest(op, ctx.args, { ...s, cookies }, ctx.gen);
         if (tier > 1) delete req.headers.cookie;
         return JSON.stringify(req);
       } catch {
@@ -840,6 +845,14 @@ async function readBack(
   return { ...kept, ok: true, class: "ok", write: "applied", reason: r.reason ? `${r.reason}; ${note}` : note };
 }
 
+/** Where to check a write that may have gone through: the page it is made on, with the call's args, and its readback. */
+function whereToLook(op: Operation, args: Record<string, unknown>): string {
+  const rb = op.readback;
+  const readArgs = rb && Object.fromEntries(Object.entries(rb.args).map(([k, v]) => [k, fillTemplate(v, args)]));
+  const read = rb ? `, or with its readback: the read ${rb.op} with args ${JSON.stringify(readArgs)}` : "";
+  return `. Look on ${fillTrigger(op.trigger, args).url}${read}`;
+}
+
 /** The answer to a write the ledger held back: nothing is sent. */
 function heldBack(g: Exclude<WriteGate, { send: true }>, op: Operation): Result {
   const when = new Date(g.earlier.at).toISOString();
@@ -897,6 +910,8 @@ export async function call(
     // log: something was sent this call (a ledger hold-back sends nothing, and reads nothing back)
     if (resolved?.readback && log.length && (f.write === "accepted" || f.write === "may_have_applied"))
       f = await readBack(siteName, resolved, args, f, opts);
+    if (resolved && !resolved.readOnly && f.nextCall?.action === "check_site")
+      f.next = `${f.next ?? "check the site before any retry"}${whereToLook(resolved, args)}`;
     const sessions = [jar, resolved ? sessionOrNone(siteName) : undefined];
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
@@ -989,6 +1004,8 @@ export async function call(
         ...(signIn ? { nextCall: signIn.step } : {}),
       });
   }
+  /** the gen slots' seed; a write's is its ledger record's, so one idempotency key sends the same values each time */
+  let gen = randomBytes(8).toString("hex");
   if (write) {
     let gate: WriteGate | undefined;
     try {
@@ -1007,6 +1024,7 @@ export async function call(
     }
     if (gate && !gate.send) return done(heldBack(gate, op));
     ledger = gate?.id;
+    if (gate) gen = gate.seed;
   }
 
   // No login on record for this site: the session has no source (a login records one, logout clears it),
@@ -1030,6 +1048,7 @@ export async function call(
     log,
     shared: site.shared,
     unconfirmed: capped,
+    gen,
   };
   const remembered = rememberedTier(siteName, op.name);
   // A remembered escalation is a speed hint, not a requirement: under a lower cap, start at the op's own tier.
@@ -1217,6 +1236,7 @@ export async function heal(
     log,
     shared: site.shared,
     unconfirmed: capped,
+    gen: randomBytes(8).toString("hex"),
   };
   const tier = Math.min(Math.max(op.minTier, rememberedTier(siteName, op.name) ?? 1), 2) as Tier;
   const h = await safeHeal(

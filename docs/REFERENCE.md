@@ -257,8 +257,11 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
   `may_have_applied`), and `retry` says whether to send it again (`no` for one accepted or that may
   have gone through). The same write with the same args within 10 minutes of one that was accepted
   or may have gone through is refused (`class: "duplicate"`), unless the caller passes `--again`
-  (MCP `again`, library `again`). `--idempotency-key <k>` makes a repeat return the first call's
-  record instead of sending. The record (`~/.api-anything/writes.json`, kept 24 hours) holds the
+  (MCP `again`, library `again`). `--idempotency-key <k>`, passed on the first call, makes a repeat
+  return that call's record instead of sending; a key added only to a retry of a keyless call is
+  still that call's `duplicate`. A UUID the site's page makes for each request (an idempotency key)
+  is learned as a `gen` slot: each call sends a new one, the same on its own retries, and the same
+  for every call with one `--idempotency-key`. A result that says to check the site names the page. The record (`~/.api-anything/writes.json`, kept 24 hours) holds the
   site, the op, the time, the outcome and an HMAC of the args under a random local key, never the args.
 - A failure's `reason` quotes the site's answer, and `next` can name values too: both have every
   live cookie and session value replaced by `[redacted]` (as stored, URL-encoded, JSON- or

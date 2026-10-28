@@ -156,6 +156,8 @@ export async function startFixture(): Promise<Fixture> {
   let limitedHits = 0;
   const calendarFails: number[] = [];
   const todos: { id: string; title: string }[] = [];
+  /** order id by Idempotency-Key */
+  const orders = new Map<string, string>();
 
   const send = (
     res: ServerResponse,
@@ -206,6 +208,13 @@ export async function startFixture(): Promise<Fixture> {
         '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
       );
     if (/^\/follow\/[^/]+$/.test(p)) return html(200, page(state.build, '<button id="follow">Follow</button>'));
+    // A checkout whose page makes an Idempotency-Key per order (crypto.randomUUID()); the server answers
+    // a key it has seen with that earlier order, as Stripe-style APIs do.
+    if (p.startsWith("/checkout/"))
+      return html(
+        200,
+        `<!doctype html><html><body><button id="buy">Buy</button><script>document.getElementById("buy").onclick=()=>fetch("/api/checkout",{method:"POST",headers:{"content-type":"application/json","idempotency-key":crypto.randomUUID()},body:JSON.stringify({item:${JSON.stringify(decodeURIComponent(p.slice(10)))}})}).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)})</script></body></html>`,
+      );
     // Native dialogs. A delete behind the browser's own confirm(), which sends only once it is
     // accepted; ?wording=new is the same page after the site reworded its question.
     if (/^\/delete\/[^/]+$/.test(p)) {
@@ -550,6 +559,13 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       return json(res, 200, { ok: true });
     }
     if (p === "/api/todos") return json(res, 200, { todos });
+    if (p === "/api/checkout" && req.method === "POST") {
+      const key = String(req.headers["idempotency-key"] ?? "");
+      const item = String((JSON.parse(body || "{}") as { item?: unknown }).item ?? "");
+      if (!key || orders.has(key)) return json(res, 200, { orderId: orders.get(key) ?? null, replayed: true });
+      orders.set(key, `o${orders.size + 1}`);
+      return json(res, 201, { orderId: orders.get(key), item });
+    }
     if (p === "/api/spa/user") return json(res, 200, { name: u.searchParams.get("name") });
 
     if (p === "/api/limited") {

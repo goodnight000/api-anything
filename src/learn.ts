@@ -1627,6 +1627,7 @@ function diffRuns(
   warnings: string[],
   disproved: Disproved,
   shortParams: Set<string>,
+  generated: Set<string>,
 ): string[] {
   const bySlot = new Map(slots.map((s) => [key(s.at), s]));
   const second = new Map(walk(req2).map((l) => [key(l.at), l]));
@@ -1640,7 +1641,7 @@ function diffRuns(
     const k = key(leaf.at);
     const slot = bySlot.get(k);
     const other = second.get(k);
-    if (slot?.ref) continue;
+    if (slot?.ref || generated.has(k)) continue;
     const header = headerName(leaf.at);
     if (header && BROWSER_HEADER.test(header)) continue;
     // A short example is placed only where run 2 proves it: a whole leaf holding example 2's value.
@@ -1711,9 +1712,73 @@ function diffRuns(
   return nonces;
 }
 
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Step 3, the places the page fills with a UUID it makes for each request (an idempotency key from
+ * crypto.randomUUID()): a different one in each run, and in neither run in a cookie, in storage, or
+ * in anything loaded before the request (an address, an answer's body or headers), so the site did
+ * not hand it out. Kept as captured, run 1's would go with every call, and a site that dedupes by it
+ * answers a new order with the old one. A param's place, and one inside a value sent whole from the
+ * session, is not one.
+ */
+function generatedPlaces(input: LearnInput, first: Exchange, second: Exchange, slots: Slot[]): Step[][] {
+  const known = (pool: Exchange[], e: Exchange, held: string[]) => {
+    const texts = [
+      ...held,
+      ...sentCookies(e).map((c) => c.value),
+      ...pool.flatMap((x) =>
+        x.id < e.id ? [x.request.url, x.response?.body ?? "", JSON.stringify(x.response?.headers ?? {})] : [],
+      ),
+    ].map((t) => t.toLowerCase());
+    return (v: string) => texts.some((t) => t.includes(v.toLowerCase()));
+  };
+  const seen1 = known(input.exchanges, first, [
+    ...input.cookies.map((c) => c.value),
+    ...Object.values(input.storage ?? {}),
+  ]);
+  const seen2 = known(input.exchanges2 ?? [], second, []);
+  const run2 = new Map(walk(templateOf(second)).map((l) => [key(l.at), l.value]));
+  return walk(templateOf(first)).flatMap((leaf) => {
+    const other = run2.get(key(leaf.at));
+    if (leaf.container || leaf.type !== "string" || other === undefined || other === leaf.value) return [];
+    if (leaf.at[0] === "header:cookie" || !UUID.test(leaf.value) || !UUID.test(other)) return [];
+    const taken = slots.some((s) =>
+      s.ref !== undefined && s.template === undefined
+        ? covers(s.at, leaf.at)
+        : key(s.at) === key(leaf.at) || covers(s.at, leaf.at),
+    );
+    return taken || seen1(leaf.value) || seen2(other) ? [] : [leaf.at];
+  });
+}
+
+/**
+ * `places` made gen slots. A ref there (a credential-named idempotency key) gives way, and
+ * `sessionValues` loses what no slot uses any more; the leaf is blanked.
+ */
+export function asGenerated(
+  t: Pick<Operation, "request" | "slots" | "volatile">,
+  places: Step[][],
+  sessionValues: Record<string, string>,
+): Pick<Operation, "request" | "slots" | "volatile"> {
+  const gens = new Set(places.map(key));
+  const slots: Slot[] = [
+    ...t.slots.filter((s) => !gens.has(key(s.at))),
+    ...places.map((at) => ({ gen: "uuid" as const, at })),
+  ];
+  const used = new Set(slots.flatMap((s) => [s.ref, ...templateRefs(s.template ?? "")]));
+  for (const name of Object.keys(sessionValues)) if (!used.has(`session:${name}`)) delete sessionValues[name];
+  return {
+    request: places.reduce((r, at) => setAt(r, at, ""), t.request),
+    slots,
+    volatile: t.volatile.filter((v) => !gens.has(key(v.at))),
+  };
+}
+
 /**
  * Step 3: the tier a nonce forces. 3 when a position changes between the runs without an arg
- * change (a nonce or signature), else 1. `request` and `slots` are run 1's, refs included.
+ * change (a nonce or signature), else 1; a UUID the page makes per request is no nonce but a gen
+ * slot's place (`generated`). `request` and `slots` are run 1's, refs included.
  */
 function twoRunDiff(
   input: LearnInput,
@@ -1724,11 +1789,11 @@ function twoRunDiff(
   warnings: string[],
   disproved: Disproved,
   short: Set<string>,
-): { minTier: 1 | 3; exchange2?: Exchange } {
+): { minTier: 1 | 3; exchange2?: Exchange; generated: Step[][] } {
   const [args1, args2] = input.examples;
   if (!input.exchanges2 || !args2) {
     warnings.push("learned from one example; a second example set separates params from nonces");
-    return { minTier: 1 };
+    return { minTier: 1, generated: [] };
   }
   const pool = input.exchanges2.filter((e) => matches(match, e.request));
   const byId = (c: Candidate) => pool.find((e) => e.id === c.id)!;
@@ -1754,7 +1819,7 @@ function twoRunDiff(
   if (!top) {
     unproven(`run 2 produced no request matching ${JSON.stringify(match)}`);
     warnings.push("run 2 produced no matching request; skipped the two-run diff");
-    return { minTier: 1 };
+    return { minTier: 1, generated: [] };
   }
   if (!answers.length) {
     unproven("run 2's matching request does not answer like run 1's");
@@ -1766,10 +1831,12 @@ function twoRunDiff(
   const req2 = { ...exchange2.request, headers: headersOf(exchange2) };
   // a request that is not run 1's counterpart still shows nonces, but is no evidence against a slot
   const proof = answers.length ? disproved : new Map();
-  const nonces = diffRuns(request, req2, slots, [args1, args2], warnings, proof, short);
-  if (!nonces.length) return { minTier: 1, exchange2 };
+  const generated = generatedPlaces(input, first, exchange2, slots);
+  const gens = new Set(generated.map(key));
+  const nonces = diffRuns(request, req2, slots, [args1, args2], warnings, proof, short, gens);
+  if (!nonces.length) return { minTier: 1, exchange2, generated };
   warnings.push(`changes between runs without an arg change (nonce/signature), so minTier 3: ${nonces.join("; ")}`);
-  return { minTier: 3, exchange2 };
+  return { minTier: 3, exchange2, generated };
 }
 
 export function learnOperation(input: LearnInput): Learned {
@@ -1816,7 +1883,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   );
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
-  const { request, slots, sessionValues, publicNames, settings } = sessionRefs(
+  let { request, slots, sessionValues, publicNames, settings } = sessionRefs(
     input,
     exchange,
     captured,
@@ -1825,7 +1892,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   );
 
   // 5. volatile anchors
-  const volatile = volatileAnchors(request, leaves, slots);
+  let volatile = volatileAnchors(request, leaves, slots);
   refuseRepeatedKeys(leaves, volatile);
 
   // match: stable identity, with param and hash-like path segments wildcarded
@@ -1833,8 +1900,12 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
 
   // 3. two-run diff. A place run 2 disproved was never the param's: learn again without it.
   const found: Disproved = new Map(disproved);
-  const { minTier, exchange2 } = twoRunDiff(input, exchange, request, slots, match, warnings, found, short);
+  const { minTier, exchange2, generated } = twoRunDiff(input, exchange, request, slots, match, warnings, found, short);
   if (found.size > disproved.size) return learn(input, found);
+  if (generated.length) {
+    ({ request, slots, volatile } = asGenerated({ request, slots, volatile }, generated, sessionValues));
+    settings = settings.filter((n) => n in sessionValues);
+  }
 
   // 8. response
   const response = learnResponse(
