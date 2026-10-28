@@ -159,8 +159,8 @@ const ReadbackFind = z.object({ field: z.string().min(1), equals: z.string() }).
 /**
  * How a write's call proves it landed: one read of the same site, run once after the write was sent.
  * Every value may hold `{writeParam}`, filled from the write's args. A local spec names the read
- * (`op`); a shared one carries its request (`read`), since an upload holds one op. Strict, so neither
- * shape passes for the other.
+ * (`op`); a shared one carries its request (`read`), since an upload holds one op. The outer objects
+ * are strict, so neither shape passes for the other.
  */
 export const ReadbackSchema = z.union([
   z.strictObject({
@@ -171,7 +171,8 @@ export const ReadbackSchema = z.union([
   }),
   z.strictObject({
     /** the read as it was published: `name` is a label, no op the site has to hold */
-    read: z.strictObject({
+    // not strict: a field a later client adds to the read is dropped, not a parse failure of the whole site
+    read: z.object({
       name: z.string().min(1),
       request: RequestSchema,
       slots: z.array(SlotSchema).default([]),

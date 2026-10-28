@@ -302,6 +302,21 @@ test("publish refuses a readback that does not fit the read it names on this mac
   assert.match(plan("demo", { ops: ["post"] }).errors.join("\n"), /post: readback op gone is no operation of demo/);
 });
 
+test("a carried read drops a field it does not know; the outer shapes stay apart", () => {
+  const s = withReadback();
+  const sent = embedReadback(s, s.operations[1]!);
+  assert.ok(sent.readback && "read" in sent.readback);
+  const later = { ...sent.readback, read: { ...sent.readback.read, futureField: 1 } };
+  const parsed = parseSite({ ...s, operations: [{ ...sent, readback: later }] }).operations[0]!.readback!;
+  assert.ok("read" in parsed && !("futureField" in parsed.read), JSON.stringify(parsed));
+  const ref = parseSite(s).operations[1]!.readback!;
+  assert.ok("op" in ref && !("read" in ref), JSON.stringify(ref));
+  // a ref with a carried read beside it, or a carried read with an op name, is neither shape
+  assert.throws(() =>
+    parseSite({ ...s, operations: [s.operations[0], { ...s.operations[1], readback: { ...later, op: "lookup" } }] }),
+  );
+});
+
 test("shareOps with sharing off sends nothing on its own; consent still sends", async () => {
   saveSite(site());
   const [off] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } });
