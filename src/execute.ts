@@ -64,6 +64,7 @@ import type { Operation, Site } from "./spec.js";
 import {
   BLOCKED_COOL_MS,
   beginWrite,
+  clearCoolDown,
   type CoolDown,
   coolDown,
   cooling,
@@ -103,7 +104,7 @@ export interface CallOptions {
   /** per-site gap between requests, ±30%, at every tier (default 1000) */
   minIntervalMs?: number;
   timeoutMs?: number;
-  /** send even while the site cools down after a rate limit or a block (CLI --force); only when the user asks */
+  /** send even while the site cools down after a rate limit or a block (CLI --force); only when the user asks. Succeeding ends it */
   ignoreCoolDown?: boolean;
 }
 
@@ -911,9 +912,11 @@ function cooled(c: CoolDown, site: string, now = Date.now()): Result {
 /**
  * Leave a site alone once it said stop: a rate limit (for its Retry-After, capped, or a few minutes),
  * a block at every tier the op climbs to, or a 451. Another call now would only meet it again.
+ * A `forced` call (sent through the cool-down) that succeeds ends it: the site answered.
  */
-function coolAfter(site: string, op: Operation, r: Result, log: Attempt[]): void {
+function coolAfter(site: string, op: Operation, r: Result, log: Attempt[], forced?: boolean): void {
   const last = log.at(-1);
+  if (r.ok && forced && last) clearCoolDown(site);
   if (r.ok || !last || last.class !== r.class) return;
   if (r.class === "rate") {
     const ms = r.retryAfterMs ?? RATE_COOL_MS;
@@ -992,7 +995,7 @@ export async function call(
     if (f.next) f.next = hide(f.next, sessions);
     if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
     if (ledger) settleWrite(ledger, f.write ?? "may_have_applied", f);
-    if (resolved) coolAfter(siteName, resolved, f, log);
+    if (resolved) coolAfter(siteName, resolved, f, log, opts.ignoreCoolDown);
     const out = { ...f, ms: Date.now() - t0 };
     if (resolved && "source" in found && !held)
       afterCall(siteName, resolved, found.source, out, {

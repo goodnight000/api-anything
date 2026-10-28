@@ -681,9 +681,10 @@ answers `rate` or `blocked` without sending anything, a write before its ledger 
 (`write: "not_sent"`), with `retryAfterMs` counting down to its end and a `reason` naming what the site
 answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
 asks for `api-anything login <site> --window`. Any login for the site (an import, a cookies file, the
-window whether or not it saw a sign-in, since a challenge cleared there counts) ends it, and so does
-the call option `ignoreCoolDown` (CLI `call --force`), which only a user asks for: MCP has no way to
-skip it. The idle MCP server's verification of candidates skips a cooling site too.
+window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. The call
+option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends that one call through
+it: one that succeeds ends it, since the site answered; one the site limits or blocks again sets it
+anew from that answer, as any call does. MCP has no way to skip it. The idle MCP server's verification of candidates skips a cooling site too.
 
 | tier | transport | when |
 |---|---|---|
@@ -1360,7 +1361,7 @@ independent alternative.
     and `alternatives` URLs are shown the same way, and so are the request URLs and bodies `inspect`
     shows (keeping its `--example` values). None is `data`, which stays the site's answer
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--paging ...] [--write]`
-  - `call <site> <op> [k=v ...] [--allow-writes] [--again] [--idempotency-key <k>] [--force]` (`--force`: send while the site cools down)
+  - `call <site> <op> [k=v ...] [--allow-writes] [--again] [--idempotency-key <k>] [--force]` (`--force`: send while the site cools down; a success ends the cool-down)
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
     flags (`--extract`, `--pick`, `--html`, `--embedded`): what the recipe would return, or a failure
     when a path or selector finds nothing (an empty list at a path is a result, and so is an `--html`

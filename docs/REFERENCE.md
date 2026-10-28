@@ -271,7 +271,9 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 - When a site answers a rate limit, api-anything leaves it alone for its Retry-After (at most 30
   minutes), or 3 minutes without one; after a block at every tier, or a 451, for 10 minutes. Calls
   meanwhile answer `rate` or `blocked` at once with nothing sent, and `retryAfterMs` counts down.
-  `api-anything login <site>` ends the wait, and so does `api-anything call ... --force`.
+  `api-anything login <site>` ends the wait. `api-anything call ... --force` sends that one call
+  anyway: when it succeeds the wait ends; when the site limits or blocks it again, the wait starts
+  over from that answer.
 - **Writes** (posting, sending, buying) are learned by intercepting the request and aborting it
   in the browser, so learning never performs them. Without `--write`, `add` and `capture` stop a
   POST, PUT, PATCH or DELETE the steps send (a GraphQL query, or the request `--match` pins, passes):

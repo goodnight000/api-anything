@@ -178,8 +178,9 @@ const HELP: Record<string, string> = {
   --idempotency-key <k>  on the first call: a repeat of the write with the same key returns that
                     call's record (added only to a retry, the retry is still a duplicate)
   --force           send even while the site cools down: after a rate limit (its Retry-After, or
-                    3 minutes) or a block at every tier (10 minutes) calls answer without sending;
-                    a login for the site also ends the wait`,
+                    3 minutes) or a block at every tier (10 minutes) calls answer without sending.
+                    A forced call that succeeds ends the wait; one limited or blocked again starts
+                    it over. A login for the site also ends the wait`,
   verify: `api-anything verify [site]
   Calls every read operation with its stored example args and its checks, healing as needed, and
   judges each case: pass, fail, or inconclusive (a challenge, a sign-in page, a rate limit, or a server
