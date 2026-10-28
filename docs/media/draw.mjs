@@ -226,11 +226,16 @@ function hero(t) {
     `<radialGradient id="glow"><stop offset="0" stop-color="${t.api}" stop-opacity=".9"/><stop offset="1" stop-color="${t.api}" stop-opacity="0"/></radialGradient></defs>` +
     `<rect x="1" y="1" width="${W - 2}" height="${H - 2}" rx="15" fill="url(#dots)" mask="url(#fadeMask)"/>` +
     // left: type
-    text(72, 106, "MCP server · CLI · TypeScript library", { size: 14, fill: t.muted, mono: true, ls: 0.3 }) +
+    text(72, 106, "the agent internet · built by the agents that use it", {
+      size: 14,
+      fill: t.muted,
+      mono: true,
+      ls: 0.3,
+    }) +
     text(68, 182, "API Anything", { size: 74, weight: 700, fill: t.text, ls: -2.6 }) +
-    text(72, 234, "Teach your agent a website once.", { size: 28, weight: 600, fill: t.text, ls: -0.4 }) +
-    text(72, 272, "After that, it calls the site like an API", { size: 21, fill: t.text2 }) +
-    text(72, 300, "instead of driving a browser.", { size: 21, fill: t.text2 }) +
+    text(72, 234, "The web, as an API for agents.", { size: 28, weight: 600, fill: t.text, ls: -0.4 }) +
+    text(72, 272, "One agent learns a site's API.", { size: 21, fill: t.text2 }) +
+    text(72, 300, "Every other agent gets it for free.", { size: 21, fill: t.text2 }) +
     `<rect x="72" y="330" width="306" height="32" rx="8" fill="${t.code}"/>` +
     text(
       86,
@@ -277,7 +282,116 @@ function hero(t) {
   return doc(
     W,
     H,
-    "API Anything. Teach your agent a website once. After that, it calls the site like an API instead of driving a browser.",
+    "API Anything. The web, as an API for agents. One agent learns a site's API; every other agent gets it for free.",
+    t,
+    body,
+    css,
+  );
+}
+
+/** The loop the shared catalog grows by, beside the reCAPTCHA idea it borrows. */
+function flywheel(t) {
+  const W = 1280,
+    H = 560,
+    cx = 640,
+    cy = 290,
+    rx = 262,
+    ry = 186,
+    bw = 248,
+    bh = 76;
+  const steps = [
+    ["Ask", "an agent needs a website", t.text2],
+    ["Find", "search the shared catalog", t.api],
+    ["Learn", "from the site's own requests", t.browser],
+    ["Share", "cookies and tokens stripped", t.ok],
+    ["Verify", "other installs' calls vote", t.api],
+    ["Repair", "one fix reaches everyone", t.browser],
+  ];
+  const at = (deg) => [cx + rx * Math.cos((deg * Math.PI) / 180), cy + ry * Math.sin((deg * Math.PI) / 180)];
+  const angles = steps.map((_, i) => -90 + i * 60);
+  const inBox = ([x, y], [bx, by]) => Math.abs(x - bx) < bw / 2 + 10 && Math.abs(y - by) < bh / 2 + 10;
+
+  let arcs = "";
+  for (let i = 0; i < steps.length; i++) {
+    const a = at(angles[i]),
+      b = at(angles[i] + 60);
+    let from = angles[i],
+      to = angles[i] + 60;
+    while (inBox(at(from), a)) from += 0.5;
+    while (inBox(at(to), b)) to -= 0.5;
+    const [x1, y1] = at(from),
+      [x2, y2] = at(to);
+    arcs += `<path d="M${r1(x1)},${r1(y1)}A${rx},${ry} 0 0 1 ${r1(x2)},${r1(y2)}" fill="none" stroke="${t.api}" stroke-width="2" stroke-linecap="round" class="march" marker-end="url(#arrowApi)"/>`;
+  }
+  const loop = `M${cx},${cy - ry}A${rx},${ry} 0 0 1 ${cx},${cy + ry}A${rx},${ry} 0 0 1 ${cx},${cy - ry}`;
+
+  let nodes = "";
+  steps.forEach(([title, sub, accent], i) => {
+    const [x, y] = at(angles[i]);
+    const bx = x - bw / 2,
+      by = y - bh / 2;
+    nodes +=
+      `<rect x="${r1(bx)}" y="${r1(by)}" width="${bw}" height="${bh}" rx="14" fill="${t.panel}" stroke="${accent}" stroke-width="1.75"/>` +
+      `<circle cx="${r1(bx + 28)}" cy="${r1(y)}" r="13" fill="${accent}"/>` +
+      text(bx + 28, y + 5, String(i + 1), { size: 14, weight: 700, fill: t.panel, anchor: "middle" }) +
+      text(bx + 52, y - 4, title, { size: 19, weight: 700, fill: t.text, ls: -0.2 }) +
+      text(bx + 52, y + 19, sub, { size: 13.5, fill: t.text2 });
+  });
+
+  const side = (x, kicker, title, lines, accent) =>
+    text(x, 150, kicker, { size: 13, fill: t.muted, mono: true, ls: 0.3 }) +
+    text(x, 184, title, { size: 22, weight: 700, fill: accent, ls: -0.3 }) +
+    lines.map((l, k) => text(x, 220 + k * 25, l, { size: 16, fill: t.text2 })).join("");
+
+  const css = `.march{stroke-dasharray:2 7;animation:march 1.4s linear infinite}@keyframes march{to{stroke-dashoffset:-9}}`;
+  const body =
+    `<defs>${markers(t)}<radialGradient id="dot"><stop offset="0" stop-color="${t.api}"/><stop offset=".5" stop-color="${t.api}" stop-opacity=".5"/><stop offset="1" stop-color="${t.api}" stop-opacity="0"/></radialGradient>` +
+    `<pattern id="dots" width="16" height="16" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.1" fill="${t.dots}"/></pattern></defs>` +
+    `<rect x="1" y="1" width="${W - 2}" height="${H - 2}" rx="15" fill="url(#dots)" opacity=".7"/>` +
+    side(
+      48,
+      "2007",
+      "reCAPTCHA",
+      [
+        "People typed two words to",
+        "prove they were human.",
+        "One word came from a",
+        "scanned book. Millions of",
+        "books got digitized.",
+      ],
+      t.text,
+    ) +
+    side(
+      1012,
+      "now",
+      "API Anything",
+      [
+        "Agents call websites to get",
+        "their work done. Each call",
+        "learns, checks or repairs",
+        "an API that every other",
+        "agent can use.",
+      ],
+      t.apiText,
+    ) +
+    arcs +
+    `<circle r="16" fill="url(#dot)"><animateMotion dur="9s" repeatCount="indefinite" path="${loop}"/></circle>` +
+    `<circle cx="${cx}" cy="${cy}" r="86" fill="${t.apiSoft}" stroke="${t.api}" stroke-width="1.5"/>` +
+    text(cx, cy - 22, "{ }", { size: 22, weight: 600, fill: t.api, mono: true, anchor: "middle" }) +
+    text(cx, cy + 8, "shared catalog", { size: 17, weight: 700, fill: t.text, anchor: "middle" }) +
+    text(cx, cy + 30, "stores specs and", { size: 12.5, fill: t.text2, anchor: "middle" }) +
+    text(cx, cy + 46, "counts reports", { size: 12.5, fill: t.text2, anchor: "middle" }) +
+    nodes +
+    text(
+      cx,
+      H - 22,
+      "Every call runs on the user's own machine, browser and network. Only specs and outcomes reach the catalog.",
+      { size: 13.5, fill: t.muted, anchor: "middle" },
+    );
+  return doc(
+    W,
+    H,
+    "The agent internet loop. 1 Ask: an agent needs a website. 2 Find: search the shared catalog. 3 Learn: from the site's own requests, if nobody shared it. 4 Share: cookies and tokens stripped. 5 Verify: other installs' calls vote. 6 Repair: one fix reaches everyone. Like reCAPTCHA, which digitized books from words people typed anyway, API Anything turns the web into APIs from calls agents make anyway.",
     t,
     body,
     css,
@@ -661,6 +775,7 @@ function icon(draw) {
 
 const ASSETS = {
   hero,
+  flywheel,
   "how-it-works": howItWorks,
   benchmark,
   ...Object.fromEntries(Object.entries(ICONS).map(([k, d]) => [`feature-${k}`, icon(d)])),
