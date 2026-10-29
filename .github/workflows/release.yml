@@ -41,4 +41,5 @@ jobs:
             exit 1
           fi
       # prepublishOnly runs check and lint; CI ran the tests on this commit before it was tagged
-      - run: npm publish ${{ github.event_name == 'push' && '' || '--dry-run' }}
+      # a dry run unless a tag push started it (an empty string is false in an expression, so test the inverse)
+      - run: npm publish ${{ github.event_name != 'push' && '--dry-run' || '' }}
