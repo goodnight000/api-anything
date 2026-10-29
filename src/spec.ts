@@ -165,18 +165,45 @@ export const PagingSchema = z.object({
   next: z.string().min(1).optional(),
 });
 
+/** the read's args */
+const ReadbackArgs = z.record(z.string(), z.string()).default({});
+/** an item of the read's answer (or the answer itself) whose `field` equals `equals`; without it, any data counts */
+const ReadbackFind = z.object({ field: z.string().min(1), equals: z.string() }).optional();
+
 /**
  * How a write's call proves it landed: one read of the same site, run once after the write was sent.
- * Every value may hold `{writeParam}`, filled from the write's args.
+ * Every value may hold `{writeParam}`, filled from the write's args. A local spec names the read
+ * (`op`); a shared one carries its request (`read`), since an upload holds one op. The outer objects
+ * are strict, so neither shape passes for the other.
  */
-export const ReadbackSchema = z.object({
-  /** a read op of the same site */
-  op: z.string().min(1),
-  /** the read's args */
-  args: z.record(z.string(), z.string()).default({}),
-  /** an item of the read's answer (or the answer itself) whose `field` equals `equals`; without it, any data counts */
-  find: z.object({ field: z.string().min(1), equals: z.string() }).optional(),
-});
+export const ReadbackSchema = z.union([
+  z.strictObject({
+    /** a read op of the same site */
+    op: z.string().min(1),
+    args: ReadbackArgs,
+    find: ReadbackFind,
+  }),
+  z.strictObject({
+    /** the read as it was published: `name` is a label, no op the site has to hold */
+    // not strict: a field a later client adds to the read is dropped, not a parse failure of the whole site
+    read: z.object({
+      name: z.string().min(1),
+      request: RequestSchema,
+      slots: z.array(SlotSchema).default([]),
+      volatile: z.array(VolatileSchema).default([]),
+      trigger: TriggerSchema,
+      match: MatchSchema.default({}),
+      response: ResponseSchema.default({ format: "json" }),
+      params: z.array(ParamSchema).default([]),
+      public: z.array(z.string()).optional(),
+      minTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
+      learnedLoggedIn: z.boolean().default(false),
+      paging: PagingSchema.optional(),
+    }),
+    args: ReadbackArgs,
+    find: ReadbackFind,
+  }),
+]);
 
 export const OperationSchema = z.object({
   name: z.string().min(1),
@@ -243,8 +270,13 @@ export type Param = z.infer<typeof ParamSchema>;
 export type Check = z.infer<typeof CheckSchema>;
 export type Paging = z.infer<typeof PagingSchema>;
 export type Readback = z.infer<typeof ReadbackSchema>;
+export type ReadbackRef = Extract<Readback, { op: string }>;
+export type ReadbackRead = Extract<Readback, { read: unknown }>["read"];
 export type Operation = z.infer<typeof OperationSchema>;
 export type Site = z.infer<typeof SiteSchema>;
+
+/** The name a readback's read goes by: the op it names, or the label of the one it carries. */
+export const readbackName = (rb: Readback) => ("op" in rb ? rb.op : rb.read.name);
 
 export function parseSite(input: unknown): Site {
   const r = SiteSchema.safeParse(input);

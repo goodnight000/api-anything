@@ -778,10 +778,11 @@ describe("browser", { skip: noChrome }, () => {
         }, 700);
         return;
       }
-      // the origin page navigates itself once, shortly after load (an interstitial's redirect)
+      // the origin page navigates itself once (an interstitial's redirect) while the fetch is in
+      // flight: timed from the fetch, since a timer from load can fire before a busy machine sends it
       html(
         res,
-        `<script>if(!sessionStorage.getItem("n")){sessionStorage.setItem("n","1");setTimeout(()=>location.href="/?again=1",150)}</script>`,
+        `<script>const f=fetch;fetch=(...a)=>{if(!sessionStorage.getItem("n")){sessionStorage.setItem("n","1");setTimeout(()=>location.href="/?again=1",150)}return f(...a)}</script>`,
       );
     });
     try {

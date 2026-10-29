@@ -265,6 +265,19 @@ export async function startFixture(): Promise<Fixture> {
         return /Chrome\//.test(req.headers["user-agent"] ?? "")
           ? json(res, { items: [{ picky: "ok" }] })
           : json(res, { message: "CSRF token mismatch." }, Number(u.searchParams.get("status")) || 419);
+      // the inverse wall (Hacker News's /from): 419 "Sorry" to a client claiming to be Chrome (its UA,
+      // client hints or fetch metadata), or ?wall=<status>; a bare request gets the data, or ?bare=<status>.
+      // Node's fetch sends its own sec-fetch-mode, so that one is no sign.
+      case "/api/sorry":
+        return /Chrome\//.test(req.headers["user-agent"] ?? "") ||
+          Object.keys(req.headers).some((h) => /^sec-(ch-ua|fetch-(site|dest|user))/.test(h))
+          ? void res.writeHead(Number(u.searchParams.get("wall")) || 419, { "content-type": "text/plain" }).end("Sorry")
+          : u.searchParams.has("bare")
+            ? // a Retry-After makes any 4xx a rate limit: only the 429 says it
+              json(res, { error: "refused" }, Number(u.searchParams.get("bare")), {
+                ...(u.searchParams.get("bare") === "429" ? { "retry-after": "120" } : {}),
+              })
+            : json(res, { items: [{ sorry: "ok" }] });
       // double-submit CSRF: the header must repeat the ct cookie
       case "/api/csrf": {
         const ct = /(?:^|; )ct=([^;]+)/.exec(cookie)?.[1];

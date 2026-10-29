@@ -246,6 +246,51 @@ describe("uploads", () => {
     }
   });
 
+  test("a write's readback goes up as the read it runs, held to the read rules; one naming a read is refused", async () => {
+    const { readOnly: _r, description: _d, params: _p, ...read } = op();
+    const write = (readback: Record<string, unknown>) =>
+      upload({
+        operation: op({
+          name: "addBook",
+          readOnly: false,
+          request: { method: "POST", url: "https://www.example.com/api/shelf", headers: {}, body: "title=dune" },
+          slots: [{ param: "title", at: ["body", "form:title"] }],
+          params: [{ name: "title" }],
+          trigger: { url: "https://www.example.com/shelf" },
+          match: { host: "www.example.com", path: "/api/shelf" },
+          readback,
+        }),
+      });
+    const carried = { read: { ...read, params: [{ name: "q" }] }, args: { q: "{title}" } };
+    const { env } = registry();
+    const ok = await send(env, "POST", "/v1/versions", { as: install(), body: write(carried) });
+    assert.equal(ok.status, 201, ok.text);
+    assert.equal(ok.body.status, "review");
+
+    const named = await send(env, "POST", "/v1/versions", {
+      as: install(),
+      body: write({ op: "searchBooks", args: { q: "{title}" } }),
+    });
+    assert.equal(named.status, 422, named.text);
+    assert.match(named.body.reasons.join("\n"), /readback names searchBooks/);
+
+    const http = {
+      ...carried,
+      read: { ...carried.read, request: { ...read.request, url: "http://www.example.com/x" } },
+    };
+    const insecure = await send(env, "POST", "/v1/versions", { as: install(), body: write(http) });
+    assert.equal(insecure.status, 422, insecure.text);
+    assert.match(insecure.body.reasons.join("\n"), /readback searchBooks: request .* is not https/);
+
+    const away = { ...carried, read: { ...carried.read, trigger: { url: "https://cdn.example.net/s?q={q}" } } };
+    const off = await send(env, "POST", "/v1/versions", { as: install(), body: write(away) });
+    assert.equal(off.status, 201, off.text);
+    assert.ok(
+      off.body.reasons.some((x: string) => /cdn\.example\.net, off its site/.test(x)),
+      off.text,
+    );
+  });
+
   test("a clean replay a bot wall answered counts as public: the data is behind the wall, not behind a login", async () => {
     const { env } = registry();
     const r = await send(env, "POST", "/v1/versions", {
@@ -741,6 +786,30 @@ describe("admin", () => {
     assert.equal((await send(env, "POST", "/v1/admin/seed", { body: { site, operations: [op()] } })).status, 403);
     const bad = await seed(env, { site: { ...site, domain: "example.org" }, operations: [op()] });
     assert.equal(bad.status, 422);
+  });
+
+  test("a seeded write is held to an upload's rule: its readback carries the read, never names one", async () => {
+    const { readOnly: _r, description: _d, params: _p, ...read } = op();
+    const write = (readback: Record<string, unknown>) =>
+      op({
+        name: "addBook",
+        readOnly: false,
+        request: { method: "POST", url: "https://www.example.com/api/shelf", headers: {}, body: "title=dune" },
+        slots: [{ param: "title", at: ["body", "form:title"] }],
+        params: [{ name: "title" }],
+        trigger: { url: "https://www.example.com/shelf" },
+        match: { host: "www.example.com", path: "/api/shelf" },
+        readback,
+      });
+    const { env } = registry();
+    for (const name of ["searchBooks", "nope"]) {
+      const named = await seed(env, { site, operations: [op(), write({ op: name, args: { q: "{title}" } })] });
+      assert.equal(named.status, 422, named.text);
+      assert.match(named.body.reasons.join("\n"), new RegExp(`readback names ${name}`));
+    }
+    const carried = write({ read: { ...read, params: [{ name: "q" }] }, args: { q: "{title}" } });
+    const ok = await seed(env, { site, operations: [op(), carried] });
+    assert.equal(ok.status, 200, ok.text);
   });
 });
 

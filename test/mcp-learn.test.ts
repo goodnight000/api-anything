@@ -91,8 +91,11 @@ process.env.API_ANYTHING_BROWSER = "/nonexistent/chromium";
 
 type Exchange = { method: string; path: string; body?: string; answer: unknown };
 
-/** A local site that answers each request with the JSON its path and `q` say, and records what reached it. */
-async function site() {
+/**
+ * A local site that answers each request with the JSON its path and `q` say, and records what reached it.
+ * `slow`: the q values it answers only after `ms`.
+ */
+async function site(slow: { q: string[]; ms: number } = { q: [], ms: 0 }) {
   const hits: string[] = [];
   const server = createHttpServer((req, res) => {
     let body = "";
@@ -100,8 +103,13 @@ async function site() {
     req.on("end", () => {
       hits.push(`${req.method} ${req.url}${body ? ` ${body}` : ""}`);
       const q = new URL(req.url ?? "/", "http://x").searchParams.get("q") ?? /"q":"(\w+)"/.exec(body)?.[1] ?? "x";
-      res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ items: [{ name: `${q} one` }, { name: `${q} two` }] }));
+      setTimeout(
+        () => {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ items: [{ name: `${q} one` }, { name: `${q} two` }] }));
+        },
+        slow.q.includes(q) ? slow.ms : 0,
+      );
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -437,6 +445,109 @@ async function names(
   await learn("http://127.0.0.1:1/s?q={q}");
   assert.equal(reg.received.length, asked);
 }
+
+test("a learn_site still running at the deadline answers with a job, and its result comes with structuredContent", async () => {
+  const home = mkdtempSync(join(tmpdir(), "aa-learn-job-"));
+  process.env.API_ANYTHING_HOME = home;
+  // the holdout call (args3) takes longer than the server's deadline
+  const s = await site({ q: ["carol"], ms: 600 });
+  hooks.share = async () => [];
+  learnTool.publicOnly = false;
+  const client = new Client({ name: "probe", version: "0" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await createServer({ waitMs: 150 }).connect(a);
+  await client.connect(b);
+  try {
+    const read = { method: "GET", path: "/api/search?q={q}", answer: items };
+    const first = await client.callTool({
+      name: "learn_site",
+      arguments: {
+        site: "shop",
+        op: "lookup",
+        trigger: `${s.base}/shop?q={q}`,
+        args: { q: "alice" },
+        args2: { q: "bobby" },
+        args3: { q: "carol" },
+        captures: [capture(home, "ja", s.base, "alice", [read]), capture(home, "jb", s.base, "bobby", [read])],
+        pickRequest: 2,
+        extract: "items",
+      },
+    });
+    const pending = first.structuredContent as { class: string; job: string };
+    assert.equal(pending.class, "pending", JSON.stringify(first));
+    let done = pending as { class: string; job: string; ok?: boolean };
+    while (done.class === "pending")
+      done = (await client.callTool({ name: "get_job", arguments: { job: pending.job } }))
+        .structuredContent as typeof done;
+    assert.equal(done.ok, true, JSON.stringify(done));
+    assert.ok(loadSite("shop")?.site.operations.some((o) => o.name === "lookup"));
+  } finally {
+    learnTool.publicOnly = true;
+    await client.close();
+    await s.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("learn_site asks its consent question after it answered with a job, and the job's result says the op was shared", async () => {
+  const home = mkdtempSync(join(tmpdir(), "aa-learn-job-consent-"));
+  process.env.API_ANYTHING_HOME = home;
+  // setup's question answered already: the op's own consent is the one asked
+  saveSettings({ share: true, askedAt: "2026-10-25T00:00:00.000Z" });
+  // the holdout call (args3) takes longer than the server's deadline
+  const s = await site({ q: ["carol"], ms: 600 });
+  const shares: (boolean | undefined)[] = [];
+  hooks.share = async (site, ops, o) => {
+    shares.push(o?.consent);
+    return o?.consent
+      ? [{ site, op: ops[0]!, shared: true }]
+      : [{ site, op: ops[0]!, shared: false, needsConsent: true, reason: "it was learned signed in" }];
+  };
+  learnTool.publicOnly = false;
+  const client = new Client({ name: "probe", version: "0" }, { capabilities: { elicitation: {} } });
+  const asked: string[] = [];
+  client.setRequestHandler(ElicitRequestSchema, async (req) => {
+    asked.push(req.params.message);
+    return { action: "accept", content: { share: true } };
+  });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await createServer({ waitMs: 150 }).connect(a);
+  await client.connect(b);
+  try {
+    const read = { method: "GET", path: "/api/search?q={q}", answer: items };
+    const first = await client.callTool({
+      name: "learn_site",
+      arguments: {
+        site: "shop",
+        op: "lookup",
+        trigger: `${s.base}/shop?q={q}`,
+        args: { q: "alice" },
+        args2: { q: "bobby" },
+        args3: { q: "carol" },
+        captures: [capture(home, "ca", s.base, "alice", [read]), capture(home, "cb", s.base, "bobby", [read])],
+        pickRequest: 2,
+        extract: "items",
+      },
+    });
+    const pending = first.structuredContent as { class: string; job: string };
+    assert.equal(pending.class, "pending", JSON.stringify(first));
+    assert.deepEqual(asked, [], "not asked before the deadline");
+    let done = pending as { class: string; job: string; ok?: boolean; shared?: { shared: boolean } };
+    while (done.class === "pending")
+      done = (await client.callTool({ name: "get_job", arguments: { job: pending.job } }))
+        .structuredContent as typeof done;
+    assert.equal(done.ok, true, JSON.stringify(done));
+    assert.equal(asked.length, 1);
+    assert.match(asked[0]!, /shop lookup .*works\. Share it/);
+    assert.deepEqual(shares, [undefined, true], "shared again only with the user's yes");
+    assert.equal(done.shared?.shared, true, JSON.stringify(done));
+  } finally {
+    learnTool.publicOnly = true;
+    await client.close();
+    await s.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 /* ------------------------------- setup's question, asked by learn_site, and publish after it */
 

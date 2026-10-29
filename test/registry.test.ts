@@ -10,7 +10,7 @@ import { after, before, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { verifySite } from "../src/checks.js";
+import { loadRecord, opHash, verifySite } from "../src/checks.js";
 import { call, heal } from "../src/execute.js";
 import { healOperation } from "../src/heal.js";
 import { resolver } from "../src/http.js";
@@ -19,9 +19,9 @@ import { type OpPlan, plan } from "../src/publish.js";
 import { pull, search, summarize } from "../src/registry.js";
 import type { SearchMatch } from "../src/registry-api.js";
 import { loadSession, mergeCapture, saveSession, siteOf } from "../src/session.js";
-import { parseSite, type Site } from "../src/spec.js";
-import { clearCoolDown, loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
-import { LIMITS, vetShared } from "../src/vet.js";
+import { type Operation, OperationSchema, parseSite, type Site } from "../src/spec.js";
+import { clearCoolDown, coolDown, loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
+import { LIMITS, readbackProblems, uploadProblems, vetShared } from "../src/vet.js";
 import { type FakeRegistry, hashOf, served, startRegistry } from "./fixture/registry.js";
 
 const BUNDLED = new URL("../sites/", import.meta.url);
@@ -53,7 +53,10 @@ test("every bundled spec passes the shared rules: CI runs this on every pull req
     const md = new URL(f.replace(/\.json$/, ".md"), BUNDLED);
     const text = readFileSync(new URL(f, BUNDLED), "utf8");
     assert.ok(Buffer.byteLength(text) <= LIMITS.file, `${f} is over the ${LIMITS.file} bytes pull takes`);
-    assert.deepEqual(errors(parseSite(JSON.parse(text)), existsSync(md) ? readFileSync(md, "utf8") : undefined), [], f);
+    const site = parseSite(JSON.parse(text));
+    assert.deepEqual(errors(site, existsSync(md) ? readFileSync(md, "utf8") : undefined), [], f);
+    // vetShared takes a readback by its shape; here the whole site is at hand
+    for (const op of site.operations) assert.deepEqual(readbackProblems(site, op), [], `${f} ${op.name}`);
   }
 });
 
@@ -127,6 +130,21 @@ test("the shared rules refuse what a hostile or careless spec could do with some
             method: "GET",
             url: "https://news.example.com/api",
             headers: { authorization: "Bearer Zx9Qw8vLm7Kj6HgF5dS4aP3oI2uY1tRe" },
+          },
+        },
+      ),
+      /literal credential/,
+    ],
+    [
+      // learning makes a JSON authorization header one session ref: judged whole, not leaf by leaf
+      "a literal JSON authorization header",
+      spec(
+        {},
+        {
+          request: {
+            method: "GET",
+            url: "https://news.example.com/api",
+            headers: { authorization: '{"user":"alice","pin":"751903"}' },
           },
         },
       ),
@@ -691,46 +709,34 @@ test("the shared rules check paging: a param of the read that goes in a slot, an
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
 });
 
-test("the shared rules check a write's readback: a read of the same site, given the write's values", () => {
+const postOp = (readback: Record<string, unknown>) => ({
+  name: "post",
+  readOnly: false,
+  request: { method: "POST", url: "https://news.example.com/api/post", headers: {}, body: '{"title":"x"}' },
+  slots: [{ param: "title", at: ["body", "json:/title"] }],
+  params: [{ name: "title" }],
+  trigger: { url: "https://news.example.com/submit" },
+  match: { host: "news.example.com", path: "/api/post" },
+  readback,
+});
+
+test("a write's readback: its shape is a shared rule, its fit to the site's read is checked where the site is whole", () => {
   const read = spec().operations[0]!;
   const withWrite = (readback: Record<string, unknown>, onRead?: Record<string, unknown>) =>
-    spec({
-      operations: [
-        { ...read, ...(onRead ? { readback: onRead } : {}) },
-        {
-          name: "post",
-          readOnly: false,
-          request: { method: "POST", url: "https://news.example.com/api/post", headers: {}, body: '{"title":"x"}' },
-          slots: [{ param: "title", at: ["body", "json:/title"] }],
-          params: [{ name: "title" }],
-          trigger: { url: "https://news.example.com/submit" },
-          match: { host: "news.example.com", path: "/api/post" },
-          readback,
-        },
-      ],
-    });
-  assert.deepEqual(errors(withWrite({ op: "search", args: { q: "{title}" } })), []);
-  assert.deepEqual(
-    errors(withWrite({ op: "search", args: { q: "new" }, find: { field: "title", equals: "{title}" } })),
-    [],
-  );
-  const refused: [string, Site, RegExp][] = [
-    ["no such op", withWrite({ op: "nope", args: { q: "{title}" } }), /post: readback op nope is no operation of demo/],
-    ["a write", withWrite({ op: "post", args: { title: "{title}" } }), /readback op post is a write/],
+    spec({ operations: [{ ...read, ...(onRead ? { readback: onRead } : {}) }, postOp(readback)] });
+  const problems = (s: Site) => readbackProblems(s, s.operations.at(-1)!);
+  for (const ok of [
+    withWrite({ op: "search", args: { q: "{title}" } }),
+    withWrite({ op: "search", args: { q: "new" }, find: { field: "title", equals: "{title}" } }),
+  ]) {
+    assert.deepEqual(errors(ok), []);
+    assert.deepEqual(problems(ok), []);
+  }
+  const shape: [string, Site, RegExp][] = [
     [
       "on a read",
       withWrite({ op: "search", args: { q: "{title}" } }, { op: "search", args: { q: "{q}" } }),
       /search: a read has no readback/,
-    ],
-    [
-      "an arg no param takes",
-      withWrite({ op: "search", args: { q: "{title}", page: "2" } }),
-      /readback sets page, which is no param of search/,
-    ],
-    [
-      "a required param unset",
-      withWrite({ op: "search", find: { field: "title", equals: "{title}" } }),
-      /readback leaves search's required q unset/,
     ],
     [
       "a hole no write param fills",
@@ -744,7 +750,121 @@ test("the shared rules check a write's readback: a read of the same site, given 
     ],
     ["long", withWrite({ op: "search", args: { q: `{title}${"x".repeat(500)}` } }), /readback arg q is 507 characters/],
   ];
+  for (const [what, s, re] of shape) {
+    assert.match(errors(s).join("\n"), re, what);
+    if (what !== "on a read") assert.match(problems(s).join("\n"), re, what);
+  }
+  // A pulled site may hold another read than the one the write was written against (an upgrade, a
+  // review version), so loading it never fails on these: the readback command, a re-learn and publish do.
+  const fit: [string, Site, RegExp][] = [
+    ["no such op", withWrite({ op: "nope", args: { q: "{title}" } }), /readback op nope is no operation of demo/],
+    ["a write", withWrite({ op: "post", args: { title: "{title}" } }), /readback op post is a write/],
+    [
+      "an arg no param takes",
+      withWrite({ op: "search", args: { q: "{title}", page: "2" } }),
+      /readback sets page, which is no param of search/,
+    ],
+    [
+      "a required param unset",
+      withWrite({ op: "search", find: { field: "title", equals: "{title}" } }),
+      /readback leaves search's required q unset/,
+    ],
+  ];
+  for (const [what, s, re] of fit) {
+    assert.deepEqual(errors(s), [], what);
+    assert.match(problems(s).join("\n"), re, what);
+  }
+  // a ref vetted alone, as an upload or a one-op upgrade is
+  assert.deepEqual(errors(spec({ operations: [postOp({ op: "search", args: { q: "{title}" } })] })), []);
+});
+
+test("a shared spec whose write's readback no longer fits its read still loads", () => {
+  const read = spec().operations[0]!;
+  // the registry renamed the read's param after the user wrote their readback against it
+  const site = spec({
+    shared: { from: "https://registry.example/v1/sites/demo", sha256: "0".repeat(64) },
+    operations: [
+      { ...read, params: [{ name: "query" }], slots: [{ param: "query", at: ["query:q"] }] },
+      postOp({ op: "search", args: { q: "{title}" } }),
+    ],
+  });
+  saveSite(site);
+  const loaded = loadSite("demo");
+  assert.equal(loaded?.site.operations.length, 2);
+  assert.match(readbackProblems(loaded!.site, loaded!.site.operations[1]!).join("\n"), /readback sets q/);
+});
+
+test("a write's carried read meets the rules of any read: addresses, credentials, mutations; off its site warns", () => {
+  const read = spec().operations[0]!;
+  const { readOnly: _r, response: _x, ...snapshot } = read;
+  const carrying = (over: Record<string, unknown> = {}, rb: Record<string, unknown> = {}) =>
+    spec({
+      operations: [
+        postOp({ read: { ...snapshot, response: { extract: "hits" }, ...over }, args: { q: "{title}" }, ...rb }),
+      ],
+    });
+  const ok = carrying();
+  assert.ok("read" in ok.operations[0]!.readback!, "parsed as a carried read");
+  assert.deepEqual(errors(ok), []);
+  assert.deepEqual(uploadProblems(ok.operations[0]!), []);
+  assert.match(
+    uploadProblems(spec({ operations: [postOp({ op: "search", args: { q: "{title}" } })] }).operations[0]!).join(),
+    /names search/,
+  );
+  const refused: [string, Site, RegExp][] = [
+    [
+      "http",
+      carrying({ request: { method: "GET", url: "http://news.example.com/api/search?q={q}" } }),
+      /post: readback search: request http:\/\/news.example.com\/api\/search\?q=\{q\} is not https/,
+    ],
+    [
+      "a private host",
+      carrying({ request: { method: "GET", url: "https://192.168.1.4/api?q={q}" } }),
+      /readback search: request .* has no public host/,
+    ],
+    [
+      "a literal credential",
+      carrying({
+        request: {
+          method: "GET",
+          url: "https://news.example.com/api/search?q={q}",
+          headers: { authorization: "Bearer abcdefghijklmnopqrstuvwxyz0123456789" },
+        },
+      }),
+      /readback search: request header:authorization holds a literal credential/,
+    ],
+    [
+      "a GraphQL mutation",
+      carrying({
+        request: {
+          method: "POST",
+          url: "https://news.example.com/graphql",
+          headers: { "content-type": "application/json" },
+          body: '{"query":"mutation { deleteAll }"}',
+        },
+      }),
+      /readback search: a GraphQL mutation cannot be a read/,
+    ],
+    [
+      "a write method",
+      carrying({ request: { method: "DELETE", url: "https://news.example.com/api/x?q={q}" } }),
+      /readback search: a DELETE request cannot be a read/,
+    ],
+    [
+      "an arg it does not take",
+      carrying({}, { args: { q: "{title}", page: "1" } }),
+      /post: readback sets page, which is no param of search/,
+    ],
+    [
+      "its required param unset",
+      carrying({}, { args: {}, find: { field: "t", equals: "{title}" } }),
+      /readback leaves search's required q unset/,
+    ],
+  ];
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
+  const off = vetShared(carrying({ trigger: { url: "https://elsewhere.example.net/search" } }));
+  assert.deepEqual(off.errors, []);
+  assert.match(off.warnings.join("\n"), /readback search: sends to or opens elsewhere.example.net/);
 });
 
 test("publish runs on verify's record: every counted check passes, and inconclusive ones are shown", async () => {
@@ -814,6 +934,507 @@ test("publish runs on verify's record: every counted check passes, and inconclus
   t.operations[0]!.checks = t.operations[0]!.checks!.slice(0, 1);
   saveSite(t);
   assert.match(plan("demo").errors.join("\n"), /its checks have not run on this version/);
+});
+
+test("verify records nothing for an op saved meanwhile by something else: its answers came from the old version", async () => {
+  let n = 0;
+  const fetchImpl = (async (u: string | URL | Request) => {
+    // while verify runs, another process saves the op with a request none of its cases sent, and
+    // again while they run once more from that version
+    if (++n % 2 === 0) {
+      const s = loadSite("demo")!.site;
+      saveSite({
+        ...s,
+        operations: [
+          { ...s.operations[0]!, request: { ...s.operations[0]!.request, url: `https://news.example.com/v${n}?q=x` } },
+        ],
+      });
+    }
+    return json({ hits: new URL(String(u)).searchParams.get("q") === "zzzz" ? [] : [{ t: "a" }] });
+  }) as typeof fetch;
+  saveSite(
+    spec(
+      {},
+      {
+        params: [{ name: "q", example: "kittens" }],
+        unproven: { params: ["q"], reason: "example 2 (q=cats) was answered with example 1's data" },
+        checks: [{ args: { q: "zzzz" }, expect: "empty" }],
+      },
+    ),
+  );
+  await verifySite("demo", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  const now = loadSite("demo")!.site;
+  assert.equal(n, 4, "once more, from the version saved meanwhile");
+  assert.match(plan("demo").errors.join("\n"), /its checks have not run on this version/);
+  assert.ok(now.operations[0]!.unproven, "no case ran on the saved version: its mark stays");
+});
+
+/** A read with a hex token in its query that the search page reissues: a 404 to the old token heals it. */
+const reissuable = (name: string, op: Record<string, unknown>) =>
+  parseSite({
+    name,
+    baseUrl: "https://news.example.com",
+    operations: [
+      {
+        name: "search",
+        readOnly: true,
+        volatile: [{ at: ["query:t"], shape: { charset: "hex", length: 32 }, anchor: "apiToken" }],
+        trigger: { url: "https://news.example.com/search" },
+        match: { path: "/api" },
+        response: { format: "json", extract: "hits" },
+        ...op,
+      },
+    ],
+  });
+const OLD = "a1".repeat(16);
+const FRESH = "b2".repeat(16);
+const reissued = () => new Response(`apiToken:"${FRESH}"`, { headers: { "content-type": "text/html" } });
+
+test("a heal vouches only for the version it saved: one saved meanwhile by something else gets no record", async () => {
+  saveSite(
+    reissuable("heal-race", {
+      request: { method: "GET", url: `https://news.example.com/api?q=kittens&t=${OLD}`, headers: {} },
+      params: [{ name: "q", example: "kittens" }],
+      slots: [{ param: "q", at: ["query:q"] }],
+      checks: [{ args: { q: "zzzz" }, expect: "empty" }],
+      unproven: { params: ["q"], reason: "same examples" },
+    }),
+  );
+  let saves = 0;
+  const fetchImpl = (async (raw: string | URL | Request) => {
+    const u = new URL(String(raw));
+    if (u.pathname === "/search") return reissued();
+    if (u.searchParams.get("t") === OLD) return new Response("old route", { status: 404 });
+    if (u.searchParams.get("q") === "zzzz") {
+      // the example healed the op; now another process saves a version no case sends, each time
+      const s = loadSite("heal-race")!.site;
+      saves++;
+      saveSite({
+        ...s,
+        operations: s.operations.map((o) => ({
+          ...o,
+          request: { ...o.request, url: o.request.url.replace(/\/[\w-]+\?/, `/never-tested-${saves}?`) },
+        })),
+      });
+      return json({ hits: [] });
+    }
+    return json({ hits: [{ id: 1 }] });
+  }) as typeof fetch;
+  await verifySite("heal-race", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  const now = loadSite("heal-race")!.site.operations[0]!;
+  assert.ok(now.request.url.includes(FRESH), "the example healed it");
+  assert.equal(saves, 2, "once more, from the version saved meanwhile");
+  assert.notEqual(loadRecord("heal-race").search?.hash, opHash(now));
+  assert.ok(now.unproven, "its unproven mark stays");
+});
+
+test("verify credits an op that answers only once plain HTTP drops the browser's identity headers", async () => {
+  const chrome = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/156.0.0.0 Safari/537.36";
+  saveSite(
+    spec(
+      {},
+      {
+        request: {
+          method: "GET",
+          url: "https://news.example.com/api/search?q=kittens",
+          headers: { "user-agent": chrome },
+        },
+        params: [{ name: "q", example: "kittens" }],
+        checks: [{ args: { q: "zzzz" }, expect: "empty" }],
+      },
+    ),
+  );
+  // the site refuses what claims to be Chrome over plain HTTP, as Hacker News's /from does
+  const fetchImpl = (async (u: string | URL | Request, init?: RequestInit) =>
+    /Chrome/.test(new Headers(init?.headers).get("user-agent") ?? "")
+      ? new Response("Sorry", { status: 419, headers: { "content-type": "text/plain" } })
+      : json({ hits: new URL(String(u)).searchParams.get("q") === "zzzz" ? [] : [{ t: "a" }] })) as typeof fetch;
+  const v = await verifySite("demo", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  assert.ok(
+    v.results.every((r) => "outcome" in r && r.outcome === "pass"),
+    JSON.stringify(v),
+  );
+  assert.equal(loadRecord("demo").search?.hash, opHash(loadSite("demo")!.site.operations[0]!));
+  assert.deepEqual(plan("demo").errors, []);
+});
+
+test("a heal by the next-page case keeps the record, on the healed version", async () => {
+  saveSite(
+    reissuable("page-heal", {
+      request: { method: "GET", url: `https://news.example.com/api?page=1&t=${OLD}`, headers: {} },
+      params: [{ name: "page", example: "1" }],
+      slots: [{ param: "page", at: ["query:page"] }],
+      paging: { param: "page" },
+      checks: [{ args: { page: "3" }, expect: "empty" }],
+    }),
+  );
+  const fetchImpl = (async (raw: string | URL | Request) => {
+    const u = new URL(String(raw));
+    if (u.pathname === "/search") return reissued();
+    const page = u.searchParams.get("page");
+    if (page === "2" && u.searchParams.get("t") === OLD)
+      return json({ errors: [{ message: "PersistedQueryNotFound" }] });
+    return json({ hits: page === "3" ? [] : [{ id: page }] });
+  }) as typeof fetch;
+  await verifySite("page-heal", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  const now = loadSite("page-heal")!.site.operations[0]!;
+  assert.ok(now.request.url.includes(FRESH), "the next-page case healed it");
+  assert.equal(loadRecord("page-heal").search?.hash, opHash(now));
+});
+
+test("verify runs once more a version put back as it read it while its cases sent another, and records that run", async () => {
+  const read = (name: string, path: string, more: Record<string, unknown> = {}) => ({
+    name,
+    readOnly: true,
+    request: { method: "GET", url: `https://news.example.com${path}`, headers: {} },
+    trigger: { url: "https://news.example.com/" },
+    match: { path },
+    ...more,
+  });
+  const a = parseSite({
+    name: "aba",
+    baseUrl: "https://news.example.com",
+    operations: [read("first", "/first"), read("target", "/broken", { checks: [{ args: {}, expect: "result" }] })],
+  });
+  saveSite(a);
+  const b = {
+    ...a,
+    operations: a.operations.map((o) =>
+      o.name === "target" ? { ...o, request: { ...o.request, url: "https://news.example.com/working" } } : o,
+    ),
+  };
+  const paths: string[] = [];
+  const fetchImpl = (async (raw: string | URL | Request) => {
+    const path = new URL(String(raw)).pathname;
+    paths.push(path);
+    // another process saves version B before verify reaches target, then puts A back during B's last request
+    if (path === "/first") saveSite(b);
+    if (path === "/working" && paths.filter((p) => p === path).length === 2) saveSite(a);
+    return json(path === "/broken" ? {} : [{ title: "ok" }]);
+  }) as typeof fetch;
+  await verifySite("aba", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  // B answered A's cases: they run once more, on A, and A's answers are its record
+  assert.deepEqual(paths, ["/first", "/working", "/working", "/broken", "/broken"]);
+  assert.equal(loadRecord("aba").target?.hash, opHash(a.operations[1]!));
+  assert.match(plan("aba").errors.join("\n"), /target: example expects result, and answered empty/);
+});
+
+test("verify records nothing when an op's cases answered from different versions, twice", async () => {
+  // A ignores q and always answers a row, so its check fails; B filters
+  const read = (path: string) =>
+    spec(
+      { name: "mixed" },
+      {
+        request: { method: "GET", url: `https://news.example.com${path}?q=example`, headers: {} },
+        match: { path },
+        response: { format: "json" },
+        params: [{ name: "q", required: true, example: "example" }],
+        checks: [{ args: { q: "absent" }, expect: "empty" }],
+      },
+    );
+  const a = read("/a");
+  const b = read("/b");
+  saveSite(a);
+  const urls: string[] = [];
+  let flips = Infinity;
+  const fetchImpl = (async (raw: string | URL | Request) => {
+    const u = new URL(String(raw));
+    urls.push(u.pathname + u.search);
+    // another process saves B during each example request, and puts A back during each check's
+    if (urls.length <= flips) saveSite(u.searchParams.get("q") === "example" ? b : a);
+    return json(u.pathname === "/b" && u.searchParams.get("q") === "absent" ? [] : [{ title: "example" }]);
+  }) as typeof fetch;
+  const opts = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl };
+  const v = await verifySite("mixed", opts);
+  assert.deepEqual(urls, ["/a?q=example", "/b?q=absent", "/a?q=example", "/b?q=absent"], "mixed: run once more");
+  assert.equal(v.results.length, 2, "the last run's results");
+  assert.equal(loadRecord("mixed").search, undefined, "mixed again: no version answered every case");
+  assert.match(plan("mixed").errors.join("\n"), /search: its checks have not run on this version/);
+
+  // the same save and restore only once: the second run is all A, and A's check fails
+  urls.length = 0;
+  flips = 2;
+  await verifySite("mixed", opts);
+  assert.deepEqual(urls, ["/a?q=example", "/b?q=absent", "/a?q=example", "/a?q=absent"]);
+  assert.equal(loadRecord("mixed").search?.hash, opHash(a.operations[0]!));
+  assert.match(plan("mixed").errors.join("\n"), /search: check 1 \(q=absent\) expects empty, and answered result/);
+});
+
+test("verify runs the cases of the version it records: a check another process saved meanwhile is run", async () => {
+  const read = (name: string, path: string, more: Record<string, unknown> = {}) => ({
+    name,
+    readOnly: true,
+    request: { method: "GET", url: `https://news.example.com${path}`, headers: {} },
+    trigger: { url: "https://news.example.com/" },
+    match: { path },
+    ...more,
+  });
+  // search ignores q: A has only its example, B also a check that expects nothing for q=absent
+  const search = {
+    slots: [{ param: "q", at: ["query:q"] }],
+    params: [{ name: "q", required: true, example: "example" }],
+  };
+  const a = parseSite({
+    name: "plan",
+    baseUrl: "https://news.example.com",
+    operations: [read("first", "/first"), read("search", "/search?q=example", search)],
+  });
+  const b = parseSite({
+    ...a,
+    operations: [a.operations[0]!, { ...a.operations[1]!, checks: [{ args: { q: "absent" }, expect: "empty" }] }],
+  });
+  saveSite(a);
+  const urls: string[] = [];
+  const fetchImpl = (async (raw: string | URL | Request) => {
+    const u = new URL(String(raw));
+    urls.push(u.pathname + u.search);
+    if (u.pathname === "/first") saveSite(b);
+    return json([{ title: "example" }]);
+  }) as typeof fetch;
+  await verifySite("plan", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  // every answer came from B, but the cases were A's: once more, from B
+  assert.deepEqual(urls, ["/first", "/search?q=example", "/search?q=example", "/search?q=absent"]);
+  assert.equal(loadRecord("plan").search?.hash, opHash(b.operations[1]!));
+  assert.match(plan("plan").errors.join("\n"), /search: check 1 \(q=absent\) expects empty, and answered result/);
+});
+
+test("a verify the site's cool-down answers sends nothing and leaves the record as it was", async () => {
+  saveSite(
+    spec({}, { params: [{ name: "q", example: "kittens" }], checks: [{ args: { q: "zzzz" }, expect: "empty" }] }),
+  );
+  let sent = 0;
+  const fetchImpl = (async () => {
+    sent++;
+    return json({ hits: [{ title: "a row" }] });
+  }) as typeof fetch;
+  const opts = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl };
+  await verifySite("demo", opts);
+  const failing = /search: check 1 \(q=zzzz\) expects empty, and answered result/;
+  assert.match(plan("demo").errors.join("\n"), failing);
+  const before = loadRecord("demo").search;
+  coolDown("demo", { class: "rate", reason: "HTTP 429" }, 60_000);
+  sent = 0;
+  await verifySite("demo", opts);
+  assert.equal(sent, 0);
+  assert.deepEqual(loadRecord("demo").search, before);
+  assert.match(plan("demo").errors.join("\n"), failing);
+  // a session value that spells the cool-down's words is redacted out of its reason: still nothing was sent
+  saveSession("demo", { cookies: [], values: { setting: "not sent" }, kinds: { setting: "setting" } });
+  await verifySite("demo", opts);
+  assert.equal(sent, 0);
+  assert.deepEqual(loadRecord("demo").search, before);
+  assert.match(plan("demo").errors.join("\n"), failing);
+});
+
+test("a run that answered from two versions loses the record even when its rerun is all cooled down", async () => {
+  saveSite(
+    spec({}, { params: [{ name: "q", example: "kittens" }], checks: [{ args: { q: "zzzz" }, expect: "empty" }] }),
+  );
+  const a = loadSite("demo")!.site;
+  const b: Site = {
+    ...a,
+    operations: [
+      { ...a.operations[0]!, request: { ...a.operations[0]!.request, url: "https://news.example.com/v2?q=x" } },
+    ],
+  };
+  let flip = false;
+  const fetchImpl = (async (u: string | URL | Request) => {
+    const q = new URL(String(u)).searchParams.get("q");
+    if (flip && q === "kittens") saveSite(b); // the example answers from A, then B is saved
+    if (flip && q === "zzzz") {
+      saveSite(a); // the check answered from B; A is back, and the site says stop
+      return new Response("slow down", { status: 429, headers: { "retry-after": "60" } });
+    }
+    return json({ hits: q === "zzzz" ? [] : [{ t: q }] });
+  }) as typeof fetch;
+  const opts = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl };
+  await verifySite("demo", opts);
+  assert.deepEqual(plan("demo").errors, [], "A has a passing record");
+  flip = true;
+  await verifySite("demo", opts);
+  assert.equal(loadRecord("demo").search, undefined, "an unproved run leaves no record, not the older one");
+  assert.match(plan("demo").errors.join("\n"), /its checks have not run on this version/);
+});
+
+test("a rate limit part way through verify keeps the failure its earlier cases saw", async () => {
+  saveSite(
+    spec(
+      {},
+      {
+        params: [{ name: "q", example: "kittens" }],
+        checks: [
+          { args: { q: "zzzz" }, expect: "empty" },
+          { args: { q: "dogs" }, expect: "result" },
+          { args: { q: "cats" }, expect: "result" },
+        ],
+      },
+    ),
+  );
+  const slow = () => new Response("slow down", { status: 429, headers: { "retry-after": "60" } });
+  const filters = (q: string) => json({ hits: q === "zzzz" ? [] : [{ t: q }] });
+  let answer = filters;
+  const sent: string[] = [];
+  const opts = {
+    maxTier: 1 as const,
+    minIntervalMs: 0,
+    fetchImpl: (async (raw: string | URL | Request) => {
+      const q = new URL(String(raw)).searchParams.get("q")!;
+      sent.push(q);
+      return answer(q);
+    }) as typeof fetch,
+  };
+  await verifySite("demo", opts);
+  assert.deepEqual(plan("demo").errors, []);
+
+  // the site stops filtering (check 1 fails), then rate-limits check 2: check 3 is not sent
+  answer = (q) => (q === "dogs" ? slow() : json({ hits: [{ t: q }] }));
+  sent.length = 0;
+  const v = await verifySite("demo", opts);
+  assert.deepEqual(sent, ["kittens", "zzzz", "dogs"]);
+  const rows = [
+    ["example", "pass"],
+    ["check 1", "fail"],
+    ["check 2", "inconclusive"],
+    ["check 3", "inconclusive"],
+  ];
+  assert.deepEqual(
+    v.results.map((r) => ("outcome" in r ? [r.case, r.outcome] : r)),
+    rows,
+  );
+  assert.deepEqual(
+    loadRecord("demo").search?.results.map((r) => [r.case, r.outcome]),
+    rows,
+  );
+  assert.match(plan("demo").errors.join("\n"), /search: check 1 \(q=zzzz\) expects empty, and answered result/);
+
+  // the same when the example fails and the very next case meets the limit
+  clearCoolDown("demo");
+  answer = filters;
+  await verifySite("demo", opts);
+  assert.deepEqual(plan("demo").errors, []);
+  answer = (q) => (q === "kittens" ? json({ hits: [] }) : slow());
+  sent.length = 0;
+  await verifySite("demo", opts);
+  assert.deepEqual(sent, ["kittens", "zzzz"]);
+  assert.match(plan("demo").errors.join("\n"), /search: example expects result, and answered empty/);
+});
+
+test("a verify that stays mixed takes away the record the op had", async () => {
+  const read = (path: string) =>
+    spec(
+      { name: "flip" },
+      {
+        request: { method: "GET", url: `https://news.example.com${path}?q=example`, headers: {} },
+        match: { path },
+        response: { format: "json" },
+        params: [{ name: "q", required: true, example: "example" }],
+        checks: [{ args: { q: "absent" }, expect: "empty" }],
+      },
+    );
+  const a = read("/a");
+  const b = read("/b");
+  saveSite(a);
+  // A filters at first: its check passes and it has a record
+  await verifySite("flip", {
+    maxTier: 1,
+    minIntervalMs: 0,
+    fetchImpl: (async (raw: string | URL | Request) =>
+      json(new URL(String(raw)).searchParams.get("q") === "absent" ? [] : [{ title: "example" }])) as typeof fetch,
+  });
+  assert.deepEqual(plan("flip").errors, []);
+  // then it stops filtering, while another process swaps A and B on every request, the rerun's too
+  const urls: string[] = [];
+  await verifySite("flip", {
+    maxTier: 1,
+    minIntervalMs: 0,
+    fetchImpl: (async (raw: string | URL | Request) => {
+      const u = new URL(String(raw));
+      urls.push(u.pathname + u.search);
+      saveSite(u.searchParams.get("q") === "example" ? b : a);
+      return json(u.pathname === "/b" && u.searchParams.get("q") === "absent" ? [] : [{ title: "example" }]);
+    }) as typeof fetch,
+  });
+  assert.deepEqual(urls, ["/a?q=example", "/b?q=absent", "/a?q=example", "/b?q=absent"]);
+  assert.equal(loadSite("flip")!.site.operations[0]!.request.url, a.operations[0]!.request.url);
+  assert.equal(loadRecord("flip").search, undefined);
+  assert.match(plan("flip").errors.join("\n"), /search: its checks have not run on this version/);
+});
+
+test("a check that passes as input, refused before anything is sent, is recorded", async () => {
+  saveSite(
+    spec(
+      {},
+      {
+        params: [{ name: "q", required: true, pattern: "[a-z]+" }],
+        checks: [{ args: { q: "123" }, expect: "input" }],
+      },
+    ),
+  );
+  const fetchImpl = (async () => {
+    throw new Error("must not send");
+  }) as typeof fetch;
+  const v = await verifySite("demo", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  assert.deepEqual(
+    v.results.map((r) => ("outcome" in r ? [r.case, r.outcome, r.got] : r)),
+    [["check 1", "pass", "input"]],
+  );
+  assert.equal(loadRecord("demo").search?.hash, opHash(loadSite("demo")!.site.operations[0]!));
+  assert.deepEqual(plan("demo").errors, []);
+});
+
+test("opHash reads an op in schema order: a recapture's candidate hashes as the op it saves", () => {
+  const op = spec(
+    {},
+    {
+      description: "Search stories",
+      request: { method: "GET", url: "https://news.example.com/api/search?q=kittens", headers: { "x-client": "web" } },
+      public: ["x-client"],
+      checks: [{ args: { q: "zzzz" }, expect: "empty" }],
+    },
+  ).operations[0]!;
+  const { description: _d, public: _p, checks: _c, ...learned } = op;
+  const fresh = OperationSchema.parse({
+    ...learned,
+    request: { ...op.request, url: op.request.url.replace("/api", "/v2") },
+  });
+  // as heal.ts builds a recapture's candidate: the interface's keys after the fresh template's
+  const candidate: Operation = {
+    ...fresh,
+    description: op.description,
+    params: op.params,
+    trigger: op.trigger,
+    match: op.match,
+    readOnly: op.readOnly,
+    ...(op.public ? { public: op.public } : {}),
+    ...(op.checks ? { checks: op.checks } : {}),
+    minTier: op.minTier,
+    response: { ...fresh.response, format: op.response.format, extract: op.response.extract },
+  };
+  const parsed = OperationSchema.parse(candidate);
+  assert.notEqual(JSON.stringify(candidate), JSON.stringify(parsed), "its keys are out of schema order");
+  assert.equal(opHash(candidate), opHash(parsed));
+  saveSite({ ...spec(), operations: [candidate] });
+  assert.equal(opHash(candidate), opHash(loadSite("demo")!.site.operations[0]!));
+});
+
+test("publish takes an op named like an Object.prototype key", () => {
+  saveSite(
+    parseSite({
+      name: "demo",
+      baseUrl: "https://news.example.com",
+      operations: [
+        {
+          name: "constructor",
+          readOnly: true,
+          request: { method: "GET", url: "https://news.example.com/api", headers: {} },
+          trigger: { url: "https://news.example.com/" },
+          match: { path: "/api" },
+          response: { format: "json" },
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(plan("demo").errors, []);
 });
 
 test("verify asks a paged read for its next page: page 1 again fails and holds publish back", async () => {

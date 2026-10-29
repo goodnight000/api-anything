@@ -6,7 +6,7 @@
 import { parse } from "tldts";
 import { siteOf } from "./domain.js";
 import { literalCredentials, providerKeys, scanSecrets, signInFills } from "./secrets.js";
-import type { Operation, Request, Site } from "./spec.js";
+import type { Operation, Readback, ReadbackRead, Request, Site } from "./spec.js";
 
 export const LIMITS = {
   operations: 50,
@@ -248,24 +248,27 @@ export function pagingProblems(op: Operation): string[] {
   return out;
 }
 
-/**
- * What is wrong with a write's readback: a read of the same site, every arg one of its params and
- * every required one given, filled from this write's params, which it must use somewhere, or any
- * answer at all would count as proof of this write.
- */
-export function readbackProblems(site: Site, op: Operation): string[] {
-  const rb = op.readback;
-  if (!rb) return [];
-  if (op.readOnly) return ["a read has no readback: it proves a write landed"];
-  const read = site.operations.find((o) => o.name === rb.op);
-  if (!read) return [`readback op ${rb.op} is no operation of ${site.name}`];
-  if (!read.readOnly) return [`readback op ${rb.op} is a write: a readback is a read, never a second send`];
+/** Where a readback's args and find fit `read`: every arg one of its params, and every required one given. */
+function readbackFit(read: Pick<Operation, "name" | "params">, rb: Readback): string[] {
   const out: string[] = [];
   for (const k of Object.keys(rb.args))
     if (!read.params.some((p) => p.name === k)) out.push(`readback sets ${k}, which is no param of ${read.name}`);
   for (const p of read.params)
     if (p.required && p.default === undefined && rb.args[p.name] === undefined)
       out.push(`readback leaves ${read.name}'s required ${p.name} unset`);
+  return out;
+}
+
+/**
+ * What is wrong with a write's readback by what the op holds: filled from this write's params, which
+ * it must use somewhere, or any answer at all would count as proof of this write; a read it carries
+ * takes these args. A readback naming a read is checked against the site by `readbackProblems`.
+ */
+export function readbackShape(op: Operation): string[] {
+  const rb = op.readback;
+  if (!rb) return [];
+  if (op.readOnly) return ["a read has no readback: it proves a write landed"];
+  const out = "read" in rb ? readbackFit(rb.read, rb) : [];
   const texts: [string, string][] = [
     ...Object.entries(rb.args).map(([k, v]): [string, string] => [`arg ${k}`, v]),
     ...(rb.find
@@ -287,6 +290,30 @@ export function readbackProblems(site: Site, op: Operation): string[] {
   return out;
 }
 
+/**
+ * What is wrong with a write's readback on `site`, where its author holds every op: `readbackShape`,
+ * and the read it names is a read of the site that takes these args. Checked when a readback is set,
+ * kept by a re-learn, or published; never on load, where a pulled site may hold another read.
+ */
+export function readbackProblems(site: Site, op: Operation): string[] {
+  const rb = op.readback;
+  if (!rb || op.readOnly || "read" in rb) return readbackShape(op);
+  const read = site.operations.find((o) => o.name === rb.op);
+  if (!read) return [`readback op ${rb.op} is no operation of ${site.name}`];
+  if (!read.readOnly) return [`readback op ${rb.op} is a write: a readback is a read, never a second send`];
+  return [...readbackFit(read, rb), ...readbackShape(op)];
+}
+
+/** The read an inline readback carries, as an op: what the per-op rules vet and a call's proof runs. */
+export const proofOp = (read: ReadbackRead): Operation => ({ ...read, readOnly: true });
+
+/** An upload's own rule: a shared write carries the read its readback runs, since an upload holds one op. */
+export function uploadProblems(op: Operation): string[] {
+  return op.readback && "op" in op.readback
+    ? [`${op.name}: its readback names ${op.readback.op}, and an upload carries the read itself (publish embeds it)`]
+    : [];
+}
+
 export function vetShared(site: Site, notes?: string): Vetted {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -302,10 +329,14 @@ export function vetShared(site: Site, notes?: string): Vetted {
   };
   long("description", site.description);
   const allowed = new Set<string>();
-  for (const [i, op] of site.operations.entries()) {
-    const at = (what: string) => `${op.name}: ${what}`;
+  // `at` says whose problem it is; `path` is where the op sits in the spec, for the secret scan
+  const vetOp = (op: Operation, at: (what: string) => string, path: string) => {
     if (!NAME.test(op.name))
-      errors.push(`operation name ${JSON.stringify(op.name)} is not a letter, then letters, digits, _ . -`);
+      errors.push(
+        path.endsWith(".read")
+          ? at(`name ${JSON.stringify(op.name)} is not a letter, then letters, digits, _ . -`)
+          : `operation name ${JSON.stringify(op.name)} is not a letter, then letters, digits, _ . -`,
+      );
     for (const p of op.params)
       if (!NAME.test(p.name))
         errors.push(at(`param name ${JSON.stringify(p.name)} is not a letter, then letters, digits, _ . -`));
@@ -327,7 +358,11 @@ export function vetShared(site: Site, notes?: string): Vetted {
           `${op.unproven.reason}, so nothing shows the server reads ${op.unproven.params.join(", ")}: add it again with an example 2 that excludes something example 1 returned, or record a check that changes only ${op.unproven.params.join(", ")} and answers differently, then run verify`,
         ),
       );
-    for (const problem of [...pagingProblems(op), ...readbackProblems(site, op)]) errors.push(at(problem));
+    for (const problem of [...pagingProblems(op), ...readbackShape(op)]) errors.push(at(problem));
+    // the read a shared write's readback carries is sent with the caller's session like any read
+    const rb = op.readback;
+    if (rb && "read" in rb && !op.readOnly)
+      vetOp(proofOp(rb.read), (what) => at(`readback ${rb.read.name}: ${what}`), `${path}.readback.read`);
     const checks = op.checks ?? [];
     if (checks.length && !op.readOnly) errors.push(at("a write has checks, which would send it"));
     if (checks.length > LIMITS.checks) errors.push(at(`${checks.length} checks; at most ${LIMITS.checks}`));
@@ -385,7 +420,7 @@ export function vetShared(site: Site, notes?: string): Vetted {
     for (const name of pub)
       if (op.request.headers[name] !== undefined) {
         warnings.push(at(`sends the literal ${name} it lists as public: every caller sends that same value`));
-        allowed.add(`$.operations[${i}].request.headers.${name}`);
+        allowed.add(`${path}.request.headers.${name}`);
       }
     for (const [where, re] of regexes(op)) {
       if (re.length > LIMITS.regex)
@@ -393,7 +428,8 @@ export function vetShared(site: Site, notes?: string): Vetted {
       else if (NESTED_QUANTIFIER.test(re))
         errors.push(at(`${where} regex /${re}/ nests a quantifier in a quantified group`));
     }
-  }
+  };
+  for (const [i, op] of site.operations.entries()) vetOp(op, (what) => `${op.name}: ${what}`, `$.operations[${i}]`);
   // `shared` and each op's `version` are this machine's records (hashes), not the spec's content
   const content = { ...site, shared: undefined, operations: site.operations.map(({ version: _v, ...op }) => op) };
   warnings.push(...scanSecrets(content, { cookies: [], values: {} }, allowed).warnings);

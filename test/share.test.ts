@@ -11,18 +11,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { readUpload } from "../registry/src/upload.js";
 import { DAILY_JOBS, verifyCandidates } from "../src/background.js";
+import { verifySite } from "../src/checks.js";
 import { cleanCall } from "../src/clean.js";
 import { call } from "../src/execute.js";
 import { resolver } from "../src/http.js";
 import { ensureKey, saveSettings, signedHeaders } from "../src/identity.js";
-import { registryName } from "../src/publish.js";
+import { embedReadback, plan, registryName } from "../src/publish.js";
 import { anonymous, fingerprintText } from "../src/registry-api.js";
 import { settle } from "../src/report.js";
 import { mergeCapture, saveSession } from "../src/session.js";
 import { answerClaims, HOLDOUT_PURPOSE, shareOps } from "../src/share.js";
 import { parseSite, type Site } from "../src/spec.js";
 import { loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
+import { vetShared } from "../src/vet.js";
 import { type FakeRegistry, hashOf, served, startRegistry } from "./fixture/registry.js";
 
 let fake: FakeRegistry;
@@ -112,6 +115,17 @@ test("shareOps: a public read goes automatically, signed, and the local op recor
   assert.equal(u!.operation.response.shape, undefined);
   assert.deepEqual(loadSite("demo")!.site.operations[0]!.version, { hash: out!.hash, status: "candidate" });
   assert.equal(uploads()[0]!.verified, true, "signed, and the signature verifies");
+});
+
+test("shareOps: an op whose recorded check fails on this version is refused, as publish refuses it", async () => {
+  shareOn();
+  saveSite(site({ checks: [{ args: { q: "zzzz" }, expect: "empty" }] }));
+  const fetchImpl = (async () => json({ hits: [{ title: "something" }] })) as typeof fetch;
+  await verifySite("demo", { maxTier: 1, minIntervalMs: 0, fetchImpl });
+  const [out] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" } });
+  assert.equal(out!.shared, false, JSON.stringify(out));
+  assert.match(out!.reason!, /refused: .*check 1 \(q=zzzz\) expects empty, and answered result/);
+  assert.equal(uploads().length, 0);
 });
 
 test("shareOps: a read whose clean replay met a bot wall is public too, and goes automatically", async () => {
@@ -210,6 +224,149 @@ test("shareOps: anything that is not a public read waits for the user's yes", as
   const [yes] = await shareOps("demo", ["search"], { evidence: { cleanReplay: "ok" }, consent: true });
   assert.deepEqual([yes!.shared, yes!.status], [true, "review"]);
   assert.equal(fake.uploads()[0]!.evidence.learnedLoggedIn, true);
+});
+
+/** A read whose example is in its request, and a write whose readback names it. */
+const withReadback = (readback: Record<string, unknown> = { op: "lookup", args: { title: "{title}" } }): Site =>
+  parseSite({
+    name: "demo",
+    baseUrl: "https://www.example.com",
+    operations: [
+      {
+        name: "lookup",
+        request: { method: "GET", url: "https://www.example.com/posts?title=kittens", headers: {} },
+        slots: [{ param: "title", at: ["query:title"] }],
+        params: [{ name: "title", example: "kittens", description: "words of the title" }],
+        trigger: { url: "https://www.example.com/search" },
+        match: { host: "www.example.com", path: "/posts" },
+        readOnly: true,
+      },
+      {
+        name: "post",
+        request: {
+          method: "POST",
+          url: "https://www.example.com/posts",
+          headers: { "content-type": "application/json" },
+          body: '{"title":"kittens"}',
+        },
+        slots: [{ param: "title", at: ["body", "json:/title"] }],
+        params: [{ name: "title", example: "kittens" }],
+        trigger: { url: "https://www.example.com/new" },
+        match: { host: "www.example.com", path: "/posts" },
+        readOnly: false,
+        readback: { ...readback, find: { field: "title", equals: "{title}" } },
+      },
+    ],
+  });
+
+test("a shared write carries the read its readback runs, never the read's examples; the local spec keeps the name", async () => {
+  saveSite(withReadback());
+  const p = plan("demo", { ops: ["post"], consent: true });
+  assert.deepEqual(p.errors, []);
+  const sent = p.ops[0]!.upload.operation;
+  const rb = sent.readback!;
+  assert.ok("read" in rb && !("op" in rb), JSON.stringify(rb));
+  assert.equal(rb.read.name, "lookup");
+  assert.equal(decodeURI(rb.read.request.url), "https://www.example.com/posts?title={title}");
+  assert.doesNotMatch(JSON.stringify(rb), /kittens|words of the title/);
+  assert.deepEqual(rb.args, { title: "{title}" });
+  assert.deepEqual(
+    vetShared(parseSite({ name: "demo", baseUrl: "https://www.example.com", operations: [sent] })).errors,
+    [],
+  );
+  // the registry takes it as it is sent, and refuses one that names the read
+  const read = await readUpload(JSON.parse(JSON.stringify(p.ops[0]!.upload)));
+  assert.ok(!("errors" in read), JSON.stringify(read));
+  const named = await readUpload({ ...p.ops[0]!.upload, operation: withReadback().operations[1] });
+  assert.match(("errors" in named ? named.errors : []).join("\n"), /readback names lookup/);
+
+  const [out] = await shareOps("demo", ["post"], { evidence: {}, consent: true });
+  assert.equal(out!.shared, true, JSON.stringify(out));
+  assert.ok("read" in fake.uploads()[0]!.operation.readback!);
+  const local = loadSite("demo")!.site.operations[1]!;
+  assert.deepEqual(local.readback, {
+    op: "lookup",
+    args: { title: "{title}" },
+    find: { field: "title", equals: "{title}" },
+  });
+  assert.equal(local.version?.hash, out!.hash);
+});
+
+test("publish refuses a readback that does not fit the read it names on this machine", () => {
+  saveSite(withReadback({ op: "lookup", args: { title: "{title}", page: "2" } }));
+  assert.match(
+    plan("demo", { ops: ["post"] }).errors.join("\n"),
+    /post: readback sets page, which is no param of lookup/,
+  );
+  saveSite(withReadback({ op: "gone", args: { title: "{title}" } }));
+  assert.match(plan("demo", { ops: ["post"] }).errors.join("\n"), /post: readback op gone is no operation of demo/);
+});
+
+test("a carried read keeps its paging: an omitted cursor asks for page one, as the named read does", async () => {
+  // learned from page 2's request, so its template holds that page's cursor
+  const s = withReadback({ op: "lookup", args: {} });
+  const lookup = s.operations[0]!;
+  const paged = parseSite({
+    ...s,
+    operations: [
+      {
+        ...lookup,
+        request: { ...lookup.request, url: "https://www.example.com/posts?cursor=second-page" },
+        slots: [{ param: "cursor", at: ["query:cursor"] }],
+        params: [{ name: "cursor", required: false }],
+        response: { extract: "items" },
+        paging: { param: "cursor", next: "next" },
+      },
+      s.operations[1]!,
+    ],
+  });
+  saveSite(paged);
+  let urls: string[] = [];
+  const fetchImpl = async (u: string | URL | Request, i?: RequestInit) => {
+    urls.push(String(u));
+    if (i?.method === "POST") return json({ ok: true });
+    return new URL(String(u)).searchParams.get("cursor")
+      ? json({ error: "invalid cursor" }, 400)
+      : json({ items: [{ title: "milk" }], next: null });
+  };
+  const o = { maxTier: 1 as const, minIntervalMs: 0, fetchImpl, allowWrites: true, again: true };
+  const named = await call("demo", "post", { title: "milk" }, o);
+  assert.equal(named.write, "applied", JSON.stringify(named));
+
+  const p = plan("demo", { ops: ["post"], consent: true });
+  assert.deepEqual(p.errors, []);
+  const sent = p.ops[0]!.upload.operation;
+  assert.ok(sent.readback && "read" in sent.readback);
+  assert.deepEqual(sent.readback.read.paging, { param: "cursor", next: "next" });
+  saveSite({ ...paged, operations: [sent] });
+  urls = [];
+  const carried = await call("demo", "post", { title: "milk" }, o);
+  assert.equal(carried.write, "applied", JSON.stringify(carried));
+  assert.ok(!urls.some((u) => decodeURIComponent(u).includes("{cursor}")), urls.join("\n"));
+
+  // the carried read is vetted as a read: a required paging param is refused there too
+  const bad = structuredClone(sent);
+  if (bad.readback && "read" in bad.readback)
+    bad.readback.read.params = [{ name: "cursor", type: "string", required: true }];
+  assert.match(
+    vetShared(parseSite({ name: "demo", baseUrl: "https://www.example.com", operations: [bad] })).errors.join("\n"),
+    /readback lookup: paging param cursor is required/,
+  );
+});
+
+test("a carried read drops a field it does not know; the outer shapes stay apart", () => {
+  const s = withReadback();
+  const sent = embedReadback(s, s.operations[1]!);
+  assert.ok(sent.readback && "read" in sent.readback);
+  const later = { ...sent.readback, read: { ...sent.readback.read, futureField: 1 } };
+  const parsed = parseSite({ ...s, operations: [{ ...sent, readback: later }] }).operations[0]!.readback!;
+  assert.ok("read" in parsed && !("futureField" in parsed.read), JSON.stringify(parsed));
+  const ref = parseSite(s).operations[1]!.readback!;
+  assert.ok("op" in ref && !("read" in ref), JSON.stringify(ref));
+  // a ref with a carried read beside it, or a carried read with an op name, is neither shape
+  assert.throws(() =>
+    parseSite({ ...s, operations: [s.operations[0], { ...s.operations[1], readback: { ...later, op: "lookup" } }] }),
+  );
 });
 
 test("shareOps with sharing never asked or off sends nothing on its own, and says which; consent still sends", async () => {
@@ -392,6 +549,27 @@ test("a call of a registry version is reported after it returns, with its outcom
   assert.ok(sent.every((r) => typeof r.ms === "number"));
   assert.equal(reportRequests().length, 1, "one batch");
   assert.ok(reportRequests().every((r) => r.verified));
+});
+
+test("a write's carried read is its proof, not a call of its own: only the write is reported", async () => {
+  shareOn();
+  const s = withReadback();
+  const write = { ...embedReadback(s, s.operations[1]!), version: { hash: "c".repeat(64), status: "review" } };
+  saveSite({ ...s, operations: [write] });
+  const answer = async (_u: string | URL | Request, i?: RequestInit) =>
+    i?.method === "POST" ? json({ ok: true }) : json({ unexpected: true });
+  const r = await call(
+    "demo",
+    "post",
+    { title: "milk" },
+    { maxTier: 1, minIntervalMs: 0, fetchImpl: answer, allowWrites: true },
+  );
+  assert.deepEqual([r.ok, r.write], [true, "accepted"], JSON.stringify(r));
+  await settle(5000);
+  assert.deepEqual(
+    fake.reports().map((x) => [x.hash, x.outcome]),
+    [["c".repeat(64), "ok"]],
+  );
 });
 
 test("reports are never sent with sharing off, and never hold a call or the exit up", async () => {

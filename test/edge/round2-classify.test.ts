@@ -111,6 +111,11 @@ describe("classifier", () => {
       assert.equal(classify(write, obs(403, body, "text/plain")).class, "auth", body);
     }
     assert.equal(classify(write, obs(419, "Page Expired", html)).class, "auth");
+    assert.match(classify(write, obs(419, "Page Expired", html)).reason, /CSRF check failed/);
+    // Hacker News's wall for a non-browser claiming Chrome: still auth (the ladder tries a page), but no CSRF claim
+    const wall = classify(write, obs(419, "Sorry", "text/plain"));
+    assert.equal(wall.class, "auth");
+    assert.equal(wall.reason, "HTTP 419: Sorry");
   });
 
   test("a vendor's script on an ordinary page is not a bot wall; its interstitial is", () => {

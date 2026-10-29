@@ -1,7 +1,7 @@
 /** The ladder's rules with an injected fetch and maxTier 1 (no browser): writes, heal guards, rate. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -11,9 +11,10 @@ import { type CallResult, call, finish, stepOf } from "../src/execute.js";
 import { type Attempt, PROFILE_HINT } from "../src/heal.js";
 import { buildRequest } from "../src/http.js";
 import { importSession } from "../src/login.js";
+import { OMITTED } from "../src/secrets.js";
 import { saveSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
-import { saveSite, staleMark } from "../src/store.js";
+import { coolDown, cooling, saveSite, staleMark } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 import { makeChromiumDb } from "./fixture/cookie-db.js";
 
@@ -561,6 +562,44 @@ test("a response that echoes a live credential never puts it in reason, whole or
       );
       assert.ok(!(r.reason ?? "").includes(LIVE.slice(0, 4)), `${cut}: ${r.reason}`);
     }
+    // the body spells the value in JSON escapes, and the snippet ends inside it
+    const escaped = `${"x".repeat(160 - 15 - 9)}session: \\u${LIVE.charCodeAt(0).toString(16).padStart(4, "0")}${LIVE.slice(1)}`;
+    const r = await call(
+      "t",
+      "user",
+      { name: "bob" },
+      opts(() => new Response(escaped, { status: 401 })),
+    );
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.ok(!(r.reason ?? "").includes(LIVE.slice(1, 5)), r.reason ?? "");
+    assert.match(r.reason ?? "", /session: \[redacted\]$/);
+  } finally {
+    rmSync(join(HOME, "sessions"), { recursive: true, force: true });
+  }
+});
+
+test("a reason cut inside a value spelled in escapes, then another value's prefix, keeps neither", async () => {
+  const cookie = (name: string, value: string) => ({
+    name,
+    value,
+    domain: "t.test",
+    path: "/",
+    expires: -1,
+    httpOnly: true,
+    secure: true,
+  });
+  saveSession("t", { cookies: [cookie("a", "session"), cookie("b", "kettlesessionMore")], values: {} });
+  try {
+    const u = (c: string) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+    const body = `{"e":"${[..."kettle"].map(u).join("")}sessio`;
+    const r = await call(
+      "t",
+      "user",
+      { name: "bob" },
+      opts(() => new Response(body, { status: 401 })),
+    );
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.equal(r.reason, `HTTP 401: {"e":"[redacted]`);
   } finally {
     rmSync(join(HOME, "sessions"), { recursive: true, force: true });
   }
@@ -1086,6 +1125,157 @@ test("readback: with no find, any data counts; read args take the write's values
   assert.equal(empty.write, "accepted");
 });
 
+test("a value of the jar before the send that redacting the rotated one would expose never reaches the reason", async () => {
+  // Redacting each snapshot on its own checks the first before the second's replacement spells it.
+  const rotated = "RotatedSid4Kq9Lm2";
+  const old = `Old[redacted]Tail7Xw`;
+  saveSession("t", {
+    cookies: [{ name: "sid", value: old, domain: "t.test", path: "/", expires: -1, httpOnly: true, secure: true }],
+    values: {},
+  });
+  const r = await call(
+    "t",
+    "user",
+    { name: "bob" },
+    opts(
+      () =>
+        new Response(`bad session Old${rotated}Tail7Xw`, {
+          status: 401,
+          headers: { "content-type": "text/plain", "set-cookie": `sid=${rotated}; Path=/` },
+        }),
+    ),
+  );
+  assert.equal(r.class, "auth", JSON.stringify(r));
+  assert.ok(!r.reason!.includes(old) && !r.reason!.includes(rotated), r.reason!);
+  assert.ok(r.reason!.includes(OMITTED), r.reason!);
+});
+
+/** The to-do write alone, carrying the read its readback runs, as a shared spec holds it. */
+const carrying = () => {
+  const s = pagedAndTodos({ param: "after" });
+  const { readOnly: _r, ...read } = s.operations[1]!;
+  return parseSite({
+    ...s,
+    operations: [{ ...s.operations[2]!, readback: { read, find: { field: "title", equals: "{title}" } } }],
+  });
+};
+
+test("readback: a carried read proves the write as a named one does, and leaves no trace on the spec or its state", async () => {
+  saveSite(carrying());
+  const file = join(HOME, "sites", "t.json");
+  const bytes = readFileSync(file, "utf8");
+  const list: { title: string }[] = [];
+  const w = (h: Handler) => ({ ...opts(h), allowWrites: true, again: true });
+  const r = await call(
+    "t",
+    "add",
+    { title: "milk" },
+    w((_u, i) => {
+      if (i?.method === "POST") list.push(JSON.parse(String(i.body)));
+      return i?.method === "POST" ? json({ ok: true }) : json({ todos: list });
+    }),
+  );
+  assert.deepEqual([r.ok, r.class, r.write], [true, "ok", "applied"], JSON.stringify(r));
+  assert.match(r.reason ?? "", /read back with todos: found it/);
+  assert.deepEqual(
+    seen.map((x) => [x.method, new URL(x.url).pathname]),
+    [
+      ["POST", "/api/todos"],
+      ["GET", "/api/todos"],
+    ],
+  );
+
+  // the read drifted: no answer, so the write stays accepted, and nothing heals, marks or remembers it
+  seen = [];
+  const drift = await call(
+    "t",
+    "add",
+    { title: "eggs" },
+    w((_u, i) => (i?.method === "POST" ? json({ ok: true }) : json({ items: [] }))),
+  );
+  assert.deepEqual([drift.ok, drift.write], [true, "accepted"], JSON.stringify(drift));
+  assert.match(drift.reason ?? "", /could not read it back with todos \(drift/);
+  assert.deepEqual(
+    seen.map((x) => x.method),
+    ["POST", "GET"],
+  );
+  const missed = await call(
+    "t",
+    "add",
+    { title: "jam" },
+    w((_u, i) => (i?.method === "POST" ? json({ ok: true }) : json({ todos: [] }))),
+  );
+  assert.deepEqual([missed.ok, missed.write], [true, "accepted"]);
+  assert.match(missed.reason ?? "", /read back with todos: not found/);
+  assert.equal(readFileSync(file, "utf8"), bytes, "the spec is as it was");
+  assert.deepEqual(heals(), []);
+  assert.ok(!existsSync(join(HOME, "state.json")), "no tier remembered, nothing marked stale");
+});
+
+test("readback: a read the site limits cools it down, carried or named, after a forced write too", async () => {
+  const limited: Handler = (_u, i) =>
+    i?.method === "POST"
+      ? json({ ok: true })
+      : new Response("slow down", { status: 429, headers: { "retry-after": "30" } });
+  const named = pagedAndTodos({ param: "after" }, { op: "todos", find: { field: "title", equals: "{title}" } });
+  for (const [shape, s] of [
+    ["carried", carrying()],
+    ["named", named],
+  ] as const)
+    for (const force of [false, true]) {
+      saveSite(s);
+      rmSync(join(HOME, "state.json"), { force: true });
+      // forced through a cool-down: the write's success ends it, and the read's 429 starts one again
+      if (force) coolDown("t", { class: "rate", reason: "HTTP 429" }, 600_000);
+      seen = [];
+      const r = await call(
+        "t",
+        "add",
+        { title: "milk" },
+        { ...opts(limited), allowWrites: true, again: true, ...(force ? { ignoreCoolDown: true } : {}) },
+      );
+      const what = `${shape}${force ? ", forced" : ""}`;
+      assert.deepEqual([r.ok, r.write, seen.map((x) => x.method)], [true, "accepted", ["POST", "GET"]], what);
+      assert.match(r.reason ?? "", /could not read it back with todos \(rate/, what);
+      const c = cooling("t");
+      assert.equal(c?.class, "rate", what);
+      assert.ok(c!.until - Date.now() <= 30_000, `${what}: the read's Retry-After, not the old wait`);
+    }
+});
+
+test("a cookie a redirect set, sent on the next hop and rotated again, is redacted from the reason", async () => {
+  const middle = "MiddleSecretABC987";
+  saveSite(
+    parseSite({
+      name: "hops",
+      baseUrl: "https://hops.test",
+      operations: [
+        {
+          name: "read",
+          readOnly: true,
+          request: { method: "GET", url: "https://hops.test/start", headers: {} },
+          trigger: { url: "https://hops.test/" },
+        },
+      ],
+    }),
+  );
+  const r = await call(
+    "hops",
+    "read",
+    {},
+    opts((url) =>
+      url.endsWith("/start")
+        ? new Response(null, { status: 302, headers: { location: "/answer", "set-cookie": `sid=${middle}; Path=/` } })
+        : new Response(`backend failed for session ${middle}`, {
+            status: 500,
+            headers: { "content-type": "text/plain", "set-cookie": "sid=FinalSecretXYZ654; Path=/" },
+          }),
+    ),
+  );
+  assert.equal(r.ok, false);
+  assert.ok(!r.reason!.includes(middle), r.reason!);
+  assert.match(r.reason!, /\[redacted\]/);
+});
 const shop = parseSite({
   name: "g",
   baseUrl: "https://g.test",

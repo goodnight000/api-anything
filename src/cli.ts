@@ -6,7 +6,7 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { verifySite } from "./checks.js";
-import { botWall, emptyResults, loginPath, signInForm } from "./classify.js";
+import { botWall, emptyResults, htmlFinds, loginPath, signInForm } from "./classify.js";
 import { launchOf, printConfig } from "./clients.js";
 import { type CallResult, call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
@@ -23,7 +23,7 @@ import {
   stoppedIn,
   unplaced,
 } from "./heal.js";
-import { buildRequest } from "./http.js";
+import { buildRequest, unknownArgs } from "./http.js";
 import { answerShare } from "./identity.js";
 import { AmbiguousProfile } from "./import.js";
 import { type Candidate, capturePages, pageUrls, rankCandidates } from "./learn.js";
@@ -40,7 +40,7 @@ import {
 } from "./login.js";
 import { type Outline, outline } from "./outline.js";
 import { plan, uploadName } from "./publish.js";
-import { pull, reportInterface, search } from "./registry.js";
+import { pull, RegistryError, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
 import { captureLive, redact } from "./secrets.js";
 import { loadSession } from "./session.js";
@@ -54,6 +54,7 @@ import {
   type Paging,
   type Param,
   type Readback,
+  readbackName,
   TriggerStepSchema,
 } from "./spec.js";
 import { exportSite, listSites, loadHeals, loadSite, siteNotes, updateSite } from "./store.js";
@@ -712,6 +713,11 @@ function cmdInspect({ v, pos }: Parsed): number {
       // a results page with no results is an answer, as a call would give it; a selector that is not there is not
       if (!emptyResults(body, html.items)) throw nothing(`the --html items selector "${html.items}" matched nothing`);
       note = `no items: the container of "${html.items}" is on the page and empty, so this is a page with no results`;
+    } else if (!htmlFinds(html, data as Parameters<typeof htmlFinds>[1])) {
+      const fields = Object.keys(html.fields).join(", ");
+      throw nothing(
+        `the --html items selector "${html.items}" matched ${(data as unknown[]).length} items but none of their fields (${fields})`,
+      );
     }
   } else if (v.embedded) {
     data = extract({ format: "embedded", embedded: { regex: v.embedded } }, body);
@@ -728,7 +734,14 @@ function cmdInspect({ v, pos }: Parsed): number {
     // an empty list at the path is a result; a path that is not there is not
     if (data === undefined) throw nothing(`nothing at "${path}"`);
   }
-  if (v.pick) data = pick(data, splitPick(v.pick));
+  if (v.pick) {
+    const fields = splitPick(v.pick);
+    const before = data;
+    data = pick(data, fields);
+    // pick drops an item with none of the fields, so a misspelled field empties the list: not "no results"
+    if (Array.isArray(before) && before.length && !(data as unknown[]).length)
+      throw nothing(`none of the ${before.length} items has a picked field (${fields.join(", ")})`);
+  }
   const sent = e.request.body === undefined ? undefined : shown(e.request.body);
   const form =
     sent !== undefined &&
@@ -907,6 +920,8 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     const { site: s } = requireSite(site);
     const op = s.operations.find((o) => o.name === name);
     if (!op) throw new Fail(`no operation "${name}" on ${site}`, `api-anything ops ${site}`);
+    const unknown = unknownArgs(op, args);
+    if (unknown) throw new Fail(unknown, `api-anything ops ${site}`);
     const real = loadSession(site);
     // Placeholders in place of every credential, so --dry output is safe to paste anywhere.
     const redacted = {
@@ -1141,7 +1156,7 @@ function cmdOps({ pos }: Parsed): number {
       ...(o.paging
         ? { pages: o.paging.next ? `by ${o.paging.param}: pass the result's nextPage` : `by ${o.paging.param}` }
         : {}),
-      ...(o.readback ? { readback: o.readback.op } : {}),
+      ...(o.readback ? { readback: readbackName(o.readback) } : {}),
       ...(o.unproven ? { unproven: o.unproven.reason } : {}),
       trigger: o.trigger.url,
     })),
@@ -1221,7 +1236,9 @@ async function cmdPull({ pos }: Parsed): Promise<number> {
       (e as Error).message,
       missing
         ? `nobody shared ${pos[0]} yet: learn it with api-anything capture and add, then share it with api-anything publish`
-        : "do not edit the pulled spec to get past this; learn the site with capture and add instead",
+        : e instanceof RegistryError
+          ? "the registry request failed, not the spec: check the network (and API_ANYTHING_REGISTRY if it is set), then retry"
+          : "do not edit the pulled spec to get past this; learn the site with capture and add instead",
     );
   }
   out({

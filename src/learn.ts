@@ -683,17 +683,29 @@ function escapeOf(leaf: Leaf, hits: Hit[]): Escape | undefined {
   // A URL leaf takes the arg percent-encoded, unless the example sits there raw in a form encoding
   // would change: "/facebook/react" in a route resolver's path keeps its slash.
   if (URL_SHAPED.test(leaf.value) && hits.every((h) => encodeURIComponent(h.text) === h.text)) return "url";
-  const i = leaf.value.toLowerCase().indexOf(hits[0]!.text);
+  const i = fold(leaf.value).indexOf(hits[0]!.text);
   const quotes = leaf.value.slice(0, Math.max(0, i)).match(/(?<!\\)"/g)?.length ?? 0;
   return quotes % 2 ? "json" : undefined;
 }
+
+// Lower case that keeps the text's length: "İ" lowers to two code points, and a template cut from the
+// original text by a case-insensitive match of the lowered text would then miss it. Whole-string
+// lower case where the length holds, since it reads context (a final Σ is ς); else char by char.
+const fold = (s: string) => {
+  const l = s.toLowerCase();
+  if (l.length === s.length) return l;
+  return s.replace(/./gsu, (c) => {
+    const one = c.toLowerCase();
+    return one.length === c.length ? one : c;
+  });
+};
 
 /**
  * Where a scalar example sits: the leaves equal to it, and the string leaves holding it (raw or
  * percent-encoded) inside other text.
  */
 function scalarHits(name: string, raw: unknown, leaves: Leaf[], whole: boolean): { exact: Leaf[]; part: Hit[] } {
-  const v = asText(raw).toLowerCase();
+  const v = fold(asText(raw));
   const literal = /^(true|false|null)$/.test(v);
   const digits = /^\d+$/.test(v);
   const enc = encodeURIComponent(asText(raw)).toLowerCase();
@@ -706,7 +718,7 @@ function scalarHits(name: string, raw: unknown, leaves: Leaf[], whole: boolean):
   for (const leaf of leaves) {
     const header = headerName(leaf.at);
     if (header === "cookie" || (header && BROWSER_HEADER.test(header))) continue;
-    const text = leaf.value.toLowerCase();
+    const text = fold(leaf.value);
     if (text === v) {
       exact.push(leaf);
       continue;
@@ -750,7 +762,7 @@ function templatedSlot(hits: Hit[]): Slot {
     .map((t) => (/^\d+$/.test(t) ? `(?<!\\d)${t}(?!\\d)` : escapeRe(escapeTemplate(t))));
   const template = escapeTemplate(leaf.value).replace(
     new RegExp(alts.join("|"), "gi"),
-    (m) => `{${byText.get(m.toLowerCase())}}`,
+    (m) => `{${byText.get(fold(m))}}`,
   );
   const plain = hits.map((h) => ({ ...h, text: h.text.slice(h.text.indexOf("\0") + 1) }));
   const escape = escapeOf(leaf, plain);

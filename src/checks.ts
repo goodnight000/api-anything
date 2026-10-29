@@ -9,7 +9,7 @@ import { asText } from "./codec.js";
 import { type CallOptions, type CallResult, call } from "./execute.js";
 import type { Evidence } from "./registry-api.js";
 import { home, readJson, safeName, writePrivate } from "./session.js";
-import type { Check, Operation, Site } from "./spec.js";
+import { type Check, type Operation, OperationSchema, type Site } from "./spec.js";
 import { loadSite, updateSite } from "./store.js";
 
 export type Outcome = "pass" | "fail" | "inconclusive";
@@ -48,9 +48,13 @@ const recordFile = (site: string) => join(home(), "checks", `${safeName(site)}.j
 export const loadRecord = (site: string): Record<string, OpRecord> =>
   readJson<Record<string, OpRecord>>(recordFile(site), {});
 
-/** The op's identity for its record: everything but when it was learned, the mark a verify clears and its registry version. */
+/**
+ * The op's identity for its record: everything but when it was learned, the mark a verify clears and
+ * its registry version. In schema order, as an op read from disk is: a heal's candidate is built in
+ * another, and is the same op once saved.
+ */
 export function opHash(op: Operation): string {
-  const { learnedAt: _at, unproven: _u, version: _v, ...rest } = op;
+  const { learnedAt: _at, unproven: _u, version: _v, ...rest } = OperationSchema.parse(op);
   return createHash("sha256").update(JSON.stringify(rest)).digest("hex").slice(0, 16);
 }
 
@@ -110,11 +114,10 @@ function repeats(first: unknown, second: unknown): boolean {
 
 /** A paged read's page after its example's: it must answer, and not with page 1 again. */
 async function nextPageCase(
-  site: string,
   op: Operation,
   args: Record<string, unknown>,
   first: CallResult,
-  opts: CallOptions,
+  send: (args: Record<string, unknown>) => Promise<CallResult>,
 ): Promise<CaseResult> {
   const p = op.paging!;
   const base = { op: op.name, case: "next page", expect: "result" as const };
@@ -137,9 +140,15 @@ async function nextPageCase(
             ? `page 1 answered no next page at ${p.next}: give ${op.name} an example with more than one page, or fix paging.next`
             : `the example sets no page number in ${p.param} to add one to`,
     };
-  const r = await call(site, op.name, { ...args, [p.param]: next }, opts);
+  const r = await send({ ...args, [p.param]: next });
   const j = judgeCase("result", r);
-  const one: CaseResult = { ...base, ...j, ...(r.tier ? { tier: r.tier } : {}), ms: r.ms };
+  const one: CaseResult = {
+    ...base,
+    ...j,
+    ...(r.tier ? { tier: r.tier } : {}),
+    ...(r.healed ? { healed: true } : {}),
+    ms: r.ms,
+  };
   // a cursor to an empty page is how some lists end: it shows nothing about the param
   if (j.got === "empty") return { ...one, outcome: "inconclusive", reason: "the next page is empty" };
   if (j.outcome !== "pass") return { ...one, reason: r.reason ?? `answered ${j.got}`, next: r.next };
@@ -159,77 +168,132 @@ export interface Verified {
   proven: string[];
 }
 
-/** Run every read's example and checks, record the outcomes, and clear `unproven` where the answers differ. */
+/**
+ * One run of an op's cases. `plan`: the hash of the op the cases were chosen from. `from`: per call,
+ * the hash of the op its answer came from, as the call last reported it; none for a call that sent
+ * nothing because the site cools down.
+ */
+type Ran = { results: CaseResult[]; plan: string; from: (string | undefined)[]; proven: boolean };
+type Run = Ran | { skipped: string };
+
+async function runCases(name: string, op: Operation, opts: CallOptions): Promise<Run> {
+  const example = exampleArgs(op);
+  const cases: [string, Record<string, unknown>, Check["expect"], Check?][] = [
+    ...(example ? [["example", example, "result"] as [string, Record<string, unknown>, Check["expect"]]] : []),
+    ...(op.checks ?? []).map((c, i): [string, Record<string, unknown>, Check["expect"], Check] => [
+      `check ${i + 1}`,
+      c.args,
+      c.expect,
+      c,
+    ]),
+  ];
+  if (!cases.length) {
+    const missing = op.params.filter((p) => p.required && p.example === undefined && p.default === undefined);
+    return { skipped: `no example for ${missing.map((p) => p.name).join(", ")}, and no checks` };
+  }
+  const answers: { args: Record<string, unknown>; data: string }[] = [];
+  const results: CaseResult[] = [];
+  const from: (string | undefined)[] = [];
+  const send = async (args: Record<string, unknown>) => {
+    let last: string | undefined;
+    const r = await call(name, op.name, args, {
+      ...opts,
+      onAnswered: (o) => {
+        last = opHash(o);
+      },
+    });
+    from.push(r.cooling ? undefined : last);
+    return r;
+  };
+  for (const [label, args, expect, check] of cases) {
+    const r = await send(args);
+    const j = judgeCase(expect, r);
+    if (j.outcome === "pass" && (j.got === "result" || j.got === "empty"))
+      answers.push({ args, data: JSON.stringify(r.data ?? null) });
+    results.push({
+      op: op.name,
+      case: label,
+      expect,
+      ...j,
+      ...(check ? { args: check.args, ...(check.purpose ? { purpose: check.purpose } : {}) } : {}),
+      ...(r.tier ? { tier: r.tier } : {}),
+      ...(r.healed ? { healed: true } : {}),
+      ...(j.outcome !== "pass" ? { reason: r.reason ?? `answered ${j.got}, expected ${expect}`, next: r.next } : {}),
+      ms: r.ms,
+    });
+    if (op.paging && label === "example") results.push(await nextPageCase(op, args, r, send));
+  }
+  return { results, plan: opHash(op), from, proven: !!op.unproven && answersDiffer(op, op.unproven.params, answers) };
+}
+
+/**
+ * Whether `run`'s cases were chosen from `op` as it is saved now, and every one that was sent answered
+ * from it. A case the cool-down refused is no version, so it mixes nothing.
+ */
+const clean = (op: Operation, run: Run): run is Ran =>
+  "from" in run && run.plan === opHash(op) && run.from.every((h) => h === undefined || h === opHash(op));
+
+/** Whether any of `run`'s cases was sent: one the cool-down refused was not. */
+const sent = (run: Run | undefined): run is Ran => !!run && "from" in run && run.from.some((h) => h !== undefined);
+
+/**
+ * Run every read's example and checks, record the outcomes, and clear `unproven` where the answers
+ * differ. Both only for an op whose cases were chosen from the version saved when verify ends and
+ * whose every case that was sent answered from it: an op saved meanwhile by anything else (an `add`
+ * in another process) gets neither, and loses the record it had. An op none of whose cases was sent
+ * (the site cools down) keeps its record as it was, unless an earlier run of them answered unproved.
+ */
 export async function verifySite(name: string, opts: CallOptions = {}): Promise<Verified> {
   const site = loadSite(name)?.site;
   if (!site) throw new Error(`no site "${name}"`);
-  const results: Verified["results"] = [];
-  const proven: string[] = [];
-  const ran: Record<string, CaseResult[]> = {};
-  for (const op of site.operations) {
-    if (!op.readOnly) continue;
-    const example = exampleArgs(op);
-    const cases: [string, Record<string, unknown>, Check["expect"], Check?][] = [
-      ...(example ? [["example", example, "result"] as [string, Record<string, unknown>, Check["expect"]]] : []),
-      ...(op.checks ?? []).map((c, i): [string, Record<string, unknown>, Check["expect"], Check] => [
-        `check ${i + 1}`,
-        c.args,
-        c.expect,
-        c,
-      ]),
-    ];
-    if (!cases.length) {
-      const missing = op.params.filter((p) => p.required && p.example === undefined && p.default === undefined);
-      results.push({ op: op.name, skipped: `no example for ${missing.map((p) => p.name).join(", ")}, and no checks` });
-      continue;
-    }
-    const answers: { args: Record<string, unknown>; data: string }[] = [];
-    ran[op.name] = [];
-    for (const [label, args, expect, check] of cases) {
-      const r = await call(name, op.name, args, opts);
-      const j = judgeCase(expect, r);
-      if (j.outcome === "pass" && (j.got === "result" || j.got === "empty"))
-        answers.push({ args, data: JSON.stringify(r.data ?? null) });
-      const one: CaseResult = {
-        op: op.name,
-        case: label,
-        expect,
-        ...j,
-        ...(check ? { args: check.args, ...(check.purpose ? { purpose: check.purpose } : {}) } : {}),
-        ...(r.tier ? { tier: r.tier } : {}),
-        ...(r.healed ? { healed: true } : {}),
-        ...(j.outcome !== "pass" ? { reason: r.reason ?? `answered ${j.got}, expected ${expect}`, next: r.next } : {}),
-        ms: r.ms,
-      };
-      results.push(one);
-      ran[op.name]!.push(one);
-      if (op.paging && label === "example") {
-        const page = await nextPageCase(name, op, args, r, opts);
-        results.push(page);
-        ran[op.name]!.push(page);
-      }
-    }
-    if (op.unproven && answersDiffer(op, op.unproven.params, answers)) proven.push(op.name);
+  const runs = new Map<string, Run>();
+  for (const op of site.operations) if (op.readOnly) runs.set(op.name, await runCases(name, op, opts));
+  // Cases that answered from another version than the one saved now (a heal part way through them,
+  // or a save between them), or that were chosen from another (whose own checks may differ), prove no
+  // one version: they all run once more, on the op as it is now, and that run is the one judged.
+  const then = loadSite(name)?.site ?? site;
+  /** ops whose first run answered and proved no one version: a rerun the cool-down refuses keeps no record for them */
+  const unproved = new Set<string>();
+  for (const [n, run] of runs) {
+    const op = then.operations.find((o) => o.name === n);
+    if (!op?.readOnly || !("from" in run) || clean(op, run)) continue;
+    if (sent(run)) unproved.add(n);
+    runs.set(n, await runCases(name, op, opts));
   }
-  if (proven.length)
+  const proven: string[] = [];
+  if ([...runs.values()].some((r) => "proven" in r && r.proven))
     updateSite(name, (cur) => {
       if (!cur) throw new Error(`site "${name}" disappeared during verify`);
       return {
         ...cur,
         operations: cur.operations.map((o) => {
-          if (!proven.includes(o.name)) return o;
+          const run = runs.get(o.name);
+          if (!o.unproven || !sent(run) || !clean(o, run) || !run.proven) return o;
+          proven.push(o.name);
           const { unproven: _, ...rest } = o;
           return rest;
         }),
       };
     });
-  // Hashed as the ops are now: a call may have healed one, and that is the version its answers came from.
   const now = loadSite(name)?.site ?? site;
   const record = loadRecord(name);
   const at = new Date().toISOString();
-  for (const op of now.operations) if (ran[op.name]) record[op.name] = { hash: opHash(op), at, results: ran[op.name]! };
+  for (const op of now.operations) {
+    const run = runs.get(op.name);
+    if (!sent(run)) {
+      if (unproved.has(op.name)) delete record[op.name];
+      continue;
+    }
+    if (clean(op, run)) record[op.name] = { hash: opHash(op), at, results: run.results };
+    // a run that answered and proved no one version leaves no record, not an older one standing
+    else delete record[op.name];
+  }
   for (const k of Object.keys(record)) if (!now.operations.some((o) => o.name === k)) delete record[k];
   writePrivate(recordFile(name), JSON.stringify(record, null, 1));
+  const results = site.operations.flatMap((o): Verified["results"] => {
+    const run = runs.get(o.name);
+    return !run ? [] : "skipped" in run ? [{ op: o.name, skipped: run.skipped }] : run.results;
+  });
   return { results, proven };
 }
 
@@ -251,6 +315,8 @@ export function proofOf(site: string, op: Operation): Proof | undefined {
 
 export interface Gate {
   errors: string[];
+  /** each op's failing cases on its current version: what refuses even a share that needs no `verify` (shareOps) */
+  failed: Map<string, string[]>;
   /** the record's cases for every op, current ones only, for the publish preview */
   rows: { op: string; verified?: string; results: CaseResult[] }[];
 }
@@ -272,15 +338,19 @@ const label = (r: CaseResult) =>
 export function gate(site: Site): Gate {
   const record = loadRecord(site.name);
   const errors: string[] = [];
+  const failed: Gate["failed"] = new Map();
   const rows: Gate["rows"] = [];
   for (const op of site.operations) {
     const rec = record[op.name];
     const current = rec && rec.hash === opHash(op) ? rec : undefined;
     if (op.checks?.length && !current)
       errors.push(`${op.name}: its checks have not run on this version of it: api-anything verify ${site.name}`);
-    for (const r of current?.results ?? [])
-      if (r.outcome === "fail") errors.push(`${op.name}: ${label(r)} expects ${r.expect}, and answered ${r.got}`);
+    const fails = (current?.results ?? [])
+      .filter((r) => r.outcome === "fail")
+      .map((r) => `${op.name}: ${label(r)} expects ${r.expect}, and answered ${r.got}`);
+    if (fails.length) failed.set(op.name, fails);
+    errors.push(...fails);
     rows.push({ op: op.name, ...(current ? { verified: current.at } : {}), results: current?.results ?? [] });
   }
-  return { errors, rows };
+  return { errors, failed, rows };
 }

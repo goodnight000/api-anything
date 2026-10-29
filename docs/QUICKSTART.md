@@ -183,8 +183,9 @@ From the clone, with a Chromium browser (default Chrome; any works) and `jq` ins
 
 The script learns `hn-demo.links` from the Hacker News pages for `github.com` and `github.io`.
 It prints the saved slot, then calls the operation with `arxiv.org` over plain HTTP
-(`--max-tier 1`). It exits nonzero unless every returned URL is on the requested domain. The
-commands it runs:
+(`--max-tier 1`). Hacker News's `/from` page refuses plain HTTP carrying the browser's headers the op
+learned, so the call is sent once more without them, still over plain HTTP. It exits nonzero unless
+every returned URL is on the requested domain. The commands it runs:
 
 ```sh
 api-anything add hn-demo links --trigger 'https://news.ycombinator.com/from?site={domain}' \
