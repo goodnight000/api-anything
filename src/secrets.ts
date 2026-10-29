@@ -387,35 +387,47 @@ export function redact(
     }
   }
   if (!forms.size || !text) return text;
+  const closed = (out: string) => failClosed(out, session);
   const longest = [...forms.keys()].sort((a, b) => b.length - a.length);
-  let out = text;
-  for (const f of longest) if (out.includes(f)) out = out.split(f).join(forms.get(f));
-  if (o.cut) {
-    let drop = 0;
-    let as = REDACTED;
+  const whole = (t: string) => {
+    for (const f of longest) if (t.includes(f)) t = t.split(f).join(forms.get(f));
+    return t;
+  };
+  if (!o.cut) return closed(whole(text));
+  // A cut text can end in the first characters of a value, raw or spelled in escapes no form holds
+  // (\u0053, \/), and one value can end it right after another's start. Read the text as it came, before
+  // any value is replaced, and take such tails off its end one at a time; then replace whole values in
+  // what is left. The escapes are decoded for this test alone: the text keeps the ones it has.
+  const max = Math.max(...stored.map(([f]) => f.length));
+  /** where a value's start that ends `t` begins, and what stands in for it */
+  const tail = (t: string): [number, string] | undefined => {
+    let best: [number, string] | undefined;
     for (const f of longest)
-      for (let n = Math.min(f.length - 1, out.length); n >= PARTIAL && n > drop; n--)
-        if (out.endsWith(f.slice(0, n))) [drop, as] = [n, forms.get(f)!];
-    let from = out.length - drop;
-    // A value spelled in escapes no form holds (\u0053, \/) shows its first characters only decoded.
-    // Read so for this test alone: the text keeps the escapes it has. Read even when a raw tail matched:
-    // that can be another value's prefix with this one's escapes before it, and the earlier start is cut.
-    const max = Math.max(...stored.map(([f]) => f.length));
-    for (
-      let k = Math.max(0, out.length - 6 * max);
-      k < from && k <= out.length - PARTIAL && out.includes("\\", k);
-      k++
-    ) {
+      for (let n = Math.min(f.length, t.length); n >= PARTIAL; n--)
+        if (t.endsWith(f.slice(0, n))) {
+          if (!best || t.length - n < best[0]) best = [t.length - n, forms.get(f)!];
+          break;
+        }
+    for (let k = Math.max(0, t.length - 6 * max); k <= t.length - PARTIAL && k < (best?.[0] ?? t.length); k++) {
+      if (!t.includes("\\", k)) break;
       // a cut inside an escape leaves its start, which reads as nothing yet
-      const d = jsonUnescape(out.slice(k).replace(/\\(?:u[0-9a-fA-F]{0,3})?$/, ""));
+      const d = jsonUnescape(t.slice(k).replace(/\\(?:u[0-9a-fA-F]{0,3})?$/, ""));
       const hit = d.length >= PARTIAL && stored.find(([f]) => f.startsWith(d));
-      if (hit) {
-        [from, as] = [k, hit[1]];
-        break;
-      }
+      if (hit) return [k, hit[1]];
     }
-    if (from < out.length) out = `${out.slice(0, from)}${as}`;
+    return best;
+  };
+  let head = text;
+  const instead: string[] = [];
+  for (let t = tail(head); t; t = tail(head)) {
+    head = head.slice(0, t[0]);
+    if (instead[0] !== t[1]) instead.unshift(t[1]);
   }
+  return closed(whole(head) + instead.join(""));
+}
+
+/** `redact`'s last step: a text that still holds a live value is left out, by a note that spells none. */
+function failClosed(out: string, session: Pick<Session, "cookies" | "values">): string {
   const leaks = liveTest(session);
   if (!leaks(out)) return out;
   const i = out.indexOf(": ");

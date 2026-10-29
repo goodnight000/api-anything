@@ -794,7 +794,9 @@ rotated cookie), and the result's `reason` and `next` again when the call return
 marks and the heal log when they are written. Every stored form of a live value (as stored,
 unquoted, URL-decoded) is replaced as it is, percent- and form-encoded, JSON- and HTML-escaped, and
 base64-encoded at any byte offset; a quote that ends in the first 4 or more characters of a value
-(as they are, or spelled in JSON escapes: `\u0053`, `\/`) was cut inside it, and those go too.
+(as they are, or spelled in JSON escapes: `\u0053`, `\/`) was cut inside it, and those go too. The
+cut end is read on the quote as it came, before any whole value is replaced, and one such start at a
+time comes off it (a value's start right after another's).
 The classifier cuts the quote without the session; redacting after the cut and dropping a cut
 value's prefix gives the same result without passing the session to it. A value that is an origin
 is left. `data` is the answer the user asked for and is not redacted. The jar, `state.json` and a

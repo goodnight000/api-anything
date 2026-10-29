@@ -98,6 +98,14 @@ test("redact: a cut value's escaped start goes even when its raw rest is another
   assert.equal(redact(text, both, { cut: true, named: true }), `HTTP 401: {"e":"[cookie:b]`);
   // a raw tail with no escapes before it is cut where it starts, as before
   assert.equal(redact(`HTTP 401: {"e":"plain sessio`, both, { cut: true }), `HTTP 401: {"e":"plain ${REDACTED}`);
+  // the other value whole after it, which a replacement would rewrite before the cut is read
+  const whole = `HTTP 401: {"e":"${[..."kettle"].map(u).join("")}session`;
+  assert.equal(redact(whole, both, { cut: true }), `HTTP 401: {"e":"${REDACTED}`);
+  // a raw tail that does not go on with the escaped value: each start is taken off the end in turn
+  const apart = { cookies: [cookie("a", "session"), cookie("b", "mK7pQ2ZZZZZZ")], values: {} };
+  const two = `HTTP 401: {"e":"${[..."mK7pQ2"].map(u).join("")}sessio`;
+  assert.equal(redact(two, apart, { cut: true }), `HTTP 401: {"e":"${REDACTED}`);
+  assert.equal(redact(two, apart, { cut: true, named: true }), `HTTP 401: {"e":"[cookie:b][cookie:a]`);
 });
 
 test("redact: the sentence left in a text's place never spells the value it hides", () => {
