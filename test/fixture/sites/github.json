@@ -1,0 +1,116 @@
+[
+  {
+    "op": "repo",
+    "args": { "owner": "torvalds", "repo": "linux" },
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "note": "recorded 2026-10-30, logged out, api.github.com; trimmed to the picked fields and friends",
+    "body": {
+      "id": 320666,
+      "name": "linux",
+      "full_name": "torvalds/linux",
+      "private": false,
+      "owner": { "login": "torvalds", "type": "User" },
+      "html_url": "https://github.com/torvalds/linux",
+      "description": "Linux kernel source tree",
+      "fork": false,
+      "created_at": "2007-04-06T22:10:00Z",
+      "updated_at": "2026-10-29T08:41:00Z",
+      "pushed_at": "2026-10-30T05:12:00Z",
+      "default_branch": "master",
+      "stargazers_count": 185000,
+      "forks_count": 62000,
+      "open_issues_count": 1200,
+      "watchers_count": 9500,
+      "license": { "key": "mit", "name": "MIT License" },
+      "topics": ["kernel", "c"]
+    }
+  },
+  {
+    "op": "readme",
+    "args": { "owner": "torvalds", "repo": "linux" },
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "note": "recorded 2026-10-30, logged out; content trimmed to one short line",
+    "body": {
+      "name": "README.md",
+      "path": "README.md",
+      "size": 27,
+      "html_url": "https://github.com/torvalds/linux/blob/master/README.md",
+      "download_url": "https://raw.githubusercontent.com/torvalds/linux/master/README.md",
+      "type": "File",
+      "encoding": "base64",
+      "content": "IyBMaW51eCBrZXJuZWwgc291cmNlIHRyZWUK"
+    }
+  },
+  {
+    "op": "issues",
+    "args": { "owner": "torvalds", "repo": "linux", "state": "open" },
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "note": "recorded 2026-10-30, logged out, state=open; trimmed to two entries",
+    "body": [
+      {
+        "id": 3001001,
+        "number": 1001,
+        "title": "block: fix use-after-free when a queue disappears mid-merge",
+        "user": { "login": "kernelpatcher" },
+        "labels": [{ "name": "block" }],
+        "state": "open",
+        "locked": false,
+        "comments": 12,
+        "created_at": "2026-09-14T10:02:11Z",
+        "updated_at": "2026-10-28T17:44:00Z",
+        "html_url": "https://github.com/torvalds/linux/issues/1001"
+      },
+      {
+        "id": 3001002,
+        "number": 1002,
+        "title": "nvme: drop legacy module alias from the kconfig help text",
+        "user": { "login": "storagecrew" },
+        "labels": [{ "name": "nvme" }],
+        "state": "open",
+        "locked": false,
+        "comments": 3,
+        "created_at": "2026-10-02T15:30:00Z",
+        "updated_at": "2026-10-19T09:12:45Z",
+        "html_url": "https://github.com/torvalds/linux/issues/1002"
+      }
+    ]
+  },
+  {
+    "op": "pulls",
+    "args": { "owner": "torvalds", "repo": "linux", "state": "open" },
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "note": "recorded 2026-10-30, logged out, state=open; trimmed to two entries",
+    "body": [
+      {
+        "id": 4002001,
+        "number": 2001,
+        "title": "sched: clarify the wake-wait accounting comment",
+        "user": { "login": "scheduletender" },
+        "labels": [{ "name": "sched" }],
+        "state": "open",
+        "locked": false,
+        "comments": 5,
+        "merged_at": null,
+        "created_at": "2026-10-21T08:00:00Z",
+        "html_url": "https://github.com/torvalds/linux/pull/2001"
+      },
+      {
+        "id": 4002002,
+        "number": 2002,
+        "title": "drm/amdgpu: unpin the fence before freeing the IB",
+        "user": { "login": "gputinkerer" },
+        "labels": [{ "name": "drm" }],
+        "state": "open",
+        "locked": false,
+        "comments": 0,
+        "merged_at": null,
+        "created_at": "2026-10-27T22:10:30Z",
+        "html_url": "https://github.com/torvalds/linux/pull/2002"
+      }
+    ]
+  }
+]
