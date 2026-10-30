@@ -589,8 +589,18 @@ Pomerado saves again when its read-back does not match (`typescript/authoring/wr
 that is a second send, so here a miss only leaves the status as it was. The readback has to find
 something only this write makes (a title the caller chose, an id it returns elsewhere), or an older
 item with the same value passes for it. `api-anything readback <site> <write> <read> [k=v ...]
-[--find field=value]` sets it, checked by the shared rules below. An op learned again keeps its
-readback while those rules still pass.
+[--find field=value]` sets it, checked against the read it names and by the shared rules below. An
+op learned again keeps its readback while those checks still pass.
+
+A local readback names a read of the same site. An upload holds one op, so a shared write carries
+that read inline instead: `readback: {read, args, find?}`, where `read` is the read's request, slots,
+trigger, match, response and params (no examples) as `publish` exports them, and `read.name` is a
+label. Publish embeds it, and checks the named read fits first; the local spec keeps the name. A
+carried read runs as the write's proof: through the same tiers, with the trust its spec has, but it
+remembers no tier, heals nothing and reports nothing, so a drift or a miss leaves the write
+`accepted` or `may_have_applied`; its `rate` or `blocked` answer cools the site down as any call's
+does. A later repair of that read on the site does not change a published proof; a new version of
+the write does.
 
 An agent that skims an unclear answer sends the write again, so a write is recorded before it is
 sent (`writes.json` in `~/.api-anything`, under its lock, written atomically): site, op, time, a
@@ -708,13 +718,13 @@ sets it for the site's Retry-After, capped at 30 minutes, or 3 minutes without o
 at every tier the op climbs to (3 for a read, 2 for a write), or a 451 at any tier, sets 10 minutes. A
 local `blocked` (a tier cap, no browser, an unconfirmed op) sets none. While it lasts, `call()`
 answers `rate` or `blocked` without sending anything, a write before its ledger records it
-(`write: "not_sent"`), with `retryAfterMs` counting down to its end and a `reason` naming what the site
-answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
+(`write: "not_sent"`), with `cooling: true`, `retryAfterMs` counting down to its end and a `reason`
+naming what the site answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
 asks for `api-anything login <site> --window`. Any login for the site (an import, a cookies file, the
 window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. The call
 option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends that one call through
-it: one that succeeds ends it, since the site answered; one the site limits or blocks again sets it
-anew from that answer, as any call does. MCP has no way to skip it. The idle MCP server's verification of candidates skips a cooling site too.
+it: one that succeeds ends it, since the site answered (before a write's readback, which may set it
+again); one the site limits or blocks again sets it anew from that answer, as any call does. MCP has no way to skip it. The idle MCP server's verification of candidates skips a cooling site too.
 
 | tier | transport | when |
 |---|---|---|
@@ -814,10 +824,12 @@ rotated cookie), and the result's `reason` and `next` again when the call return
 marks and the heal log when they are written. Every stored form of a live value (as stored,
 unquoted, URL-decoded) is replaced as it is, percent- and form-encoded, JSON- and HTML-escaped, and
 base64-encoded at any byte offset; a quote that ends in the first 4 or more characters of a value
-was cut inside it, and those go too. The classifier cuts the quote without the session; redacting
-after the cut and dropping a cut value's prefix gives the same result without passing the session
-to it. A value that is an origin is left. `data` is the answer the user asked for and is not
-redacted. The jar, `state.json` and a
+(as they are, or spelled in JSON escapes: `\u0053`, `\/`) was cut inside it, and those go too. The
+cut end is read on the quote as it came, before any whole value is replaced, and one such start at a
+time comes off it (a value's start right after another's).
+The classifier cuts the quote without the session; redacting after the cut and dropping a cut
+value's prefix gives the same result without passing the session to it. A value that is an origin
+is left. `data` is the answer the user asked for and is not redacted. The jar, `state.json` and a
 spec (every add and heal, re-read under the lock) are read-modify-written under a lock file, so
 concurrent processes and calls lose nothing.
 At tier 2 `timeoutMs` is one deadline for the whole call, counted from the moment Chrome is up
@@ -840,6 +852,15 @@ call. The tier-3 answer is the matching request whose declared parameter positio
 materialized call, including short and structured values, and whose response judges ok (a `softFrom` page fires its own; a WAF interstitial precedes the page).
 A param's default is filled into the args once, before the first tier, so every tier runs with the
 same values: the tier-3 trigger opens `?count=20`, never a literal `{count}`.
+Before any recovery or browser, a read that tier 1 answers `auth` or `blocked`, from a site with no
+login on record (as below), whose request carries browser identity headers (`user-agent`,
+`sec-ch-ua*`, `sec-fetch-*`) that no slot fills, is sent once more at tier 1 without them, all else
+unchanged. Some walls refuse a client that claims to be Chrome without Chrome's TLS (Hacker News's
+`/from` answers 419 "Sorry"), and which headers trip one differs by site, so all of them go. An ok
+answer is the call's, at tier 1, and nothing is kept: the next call sends the stored template first
+and pays the one extra fast request again. A 429 is the call's answer; any other leaves the call
+with tier 1's first answer. It runs under `--max-tier 1` and with no browser, once per call, never
+for a write.
 An `auth` answer starts recovery at whichever tier got it (an op with `minTier: 2` or `3`, or one a
 remembered escalation starts there), at most once per call. At tier 3 only the re-import applies,
 and only to a read: the page just ran with the profile's own cookies and session values, so there is
@@ -1092,10 +1113,12 @@ provider issues each to one account and no site ships one to every visitor, so `
 the error names the key by its first 8 characters only; `paging` only
 on a read, its param one of the op's that goes into a slot (and optional when `next` names a cursor,
 since the first page leaves it out), its `next` a path to one value (no `[*]`, at most 200
-characters) on a JSON or embedded answer; a `readback` only on a write, naming a read of the same
-spec, setting only that read's params and every required one, filling `{name}` only from the
+characters) on a JSON or embedded answer; a `readback` only on a write, filling `{name}` only from the
 write's params and from at least one of them (otherwise any answer would pass for this write), each
-value at most 500 characters. Warnings, shown to the human: reads sent as POST, writes, ops learned logged in, literal `public` values
+value at most 500 characters; a read it carries takes these args (only its params, every required
+one) and meets every rule of a read here. A readback that names a read is checked against it where
+the whole site is at hand (`readback`, a re-learn, `publish`), not on load: a pulled site may hold
+another version of that read. An upload's readback must carry its read. Warnings, shown to the human: reads sent as POST, writes, ops learned logged in, literal `public` values
 (a shared bearer makes every user's calls that account's), requests or triggers off the spec's own
 site (Algolia behind Hacker News, AppSync behind Goodreads), the export scan's shape heuristics over
 the spec and the notes (skipping pull's `shared` record and each op's `version`), and a Google API key (`AIza` and 35 more), which a site's own pages often
@@ -1196,10 +1219,20 @@ matches, expecting `empty`, so a param the server ignores shows up as a failing 
 each read's stored example (expecting `result`) and its checks through `call`, healing as any call
 does, and judges every case: `pass`, `fail`, or `inconclusive` when the answer is `blocked`, `auth`,
 `rate` or a server that failed or could not be reached (`CallResult.server`), which says nothing
-about the op. Its outcomes are kept per op in `~/.api-anything/checks/<site>.json`, with a hash of
-the op as it was after the run (a heal during verify included; `learnedAt`, `unproven` and `version` aside),
-so an op changed since has no record. When two passing cases whose args differ only in an op's
-`unproven` params answer differently, verify clears the mark. A read with `paging` gets one more
+about the op. Each case's answer comes from one version of the op: the one its call resolved, or the
+one a heal or the registry put in its place. Its outcomes are kept per op in
+`~/.api-anything/checks/<site>.json`, with a hash of the op as saved when verify ends (in schema
+order; `learnedAt`, `unproven` and `version` aside). Each case is tagged with the hash of the version
+that answered it, or with none when the site's cool-down answered it (`CallResult.cooling`): nothing
+was sent, so that case is no version and mixes nothing. A run is clean when its cases were chosen
+from the op saved now and every tagged case answered from it. A run that is not clean (a heal part
+way, another process saving the op, cases chosen from an earlier version) runs once more from the op
+saved now, and that second run is the one judged. A judged run that sent nothing leaves the op's
+record as it was, unless the first run sent something and was not clean: then the record goes; a
+clean one becomes the record, inconclusive cases and all; any other takes the
+record away. So an op changed since, or saved by something else while its last cases ran, has none,
+and a rate limit part way through keeps the failures the cases before it saw. When two passing cases whose args differ only in an op's
+`unproven` params answer differently, in a run that becomes the record, verify clears the mark. A read with `paging` gets one more
 case after its example, `next page`: the call again with the paging param set to the example's
 `nextPage` (or, for numbered pages, the example's page number plus one). It fails when the answer
 has rows and every one of them was on page 1 (`got: "page 1 again"`), the sign of a server that

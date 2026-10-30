@@ -952,6 +952,48 @@ test("heal keeps a place the page filled with the site's own origin, beside a co
   }
 });
 
+test("an example whose lower case is longer (İstanbul) still leaves a hole in its template", () => {
+  const request = { method: "GET", url: `http://localhost/api?q=${encodeURIComponent("from:İstanbul")}`, headers: {} };
+  const { operation } = learnOperation({
+    name: "search",
+    readOnly: true,
+    cookies: [],
+    examples: [{ city: "İstanbul" }],
+    trigger: { url: "http://localhost/search" },
+    id: 1,
+    exchanges: [
+      {
+        id: 1,
+        resourceType: "xhr",
+        request,
+        response: { status: 200, contentType: "application/json", headers: {}, body: '[{"id":1}]' },
+      },
+    ],
+  });
+  assert.equal(operation.slots[0]!.template, "from:{city}");
+  const url = buildRequest(operation, { city: "Ankara" }, { cookies: [], values: {} }).url;
+  assert.equal(new URL(url).searchParams.get("q"), "from:Ankara");
+
+  // lower case still reads context where the length holds: the frontend's "σερρες" is the example "ΣΕΡΡΕΣ"
+  const greek = learnOperation({
+    name: "search",
+    readOnly: true,
+    cookies: [],
+    examples: [{ city: "ΣΕΡΡΕΣ" }],
+    trigger: { url: "http://localhost/search" },
+    id: 1,
+    exchanges: [
+      {
+        id: 1,
+        resourceType: "xhr",
+        request: { ...request, url: `http://localhost/api?q=${encodeURIComponent("σερρες")}` },
+        response: { status: 200, contentType: "application/json", headers: {}, body: '[{"id":1}]' },
+      },
+    ],
+  }).operation;
+  assert.deepEqual(greek.slots[0]?.at, ["query:q"]);
+});
+
 test("a UUID the page makes for each request is a gen slot: no session ref, no nonce, nothing kept", () => {
   const page = (item: string, id: number, body = `<h1>${item}</h1>`): Exchange => ({
     id,

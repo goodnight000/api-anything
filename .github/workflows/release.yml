@@ -1,0 +1,45 @@
+name: Release
+
+# Publishes to npm when a v* tag is pushed, through npm trusted publishing: npm checks this workflow's
+# OIDC identity against the trusted publisher set on the package, so no token is stored anywhere and
+# the release carries provenance. Run it by hand (workflow_dispatch) for a dry run that publishes nothing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # the OIDC token npm exchanges for a one-time publish credential
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # trusted publishing accepts GitHub-hosted runners only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # trusted publishing needs npm 11.5.1 or newer
+      - run: npm install -g npm@11
+      - run: npm ci
+      - name: The tag names the version in package.json
+        if: github.event_name == 'push'
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+      # prepublishOnly runs check and lint; CI ran the tests on this commit before it was tagged
+      # a dry run unless a tag push started it (an empty string is false in an expression, so test the inverse)
+      - run: npm publish ${{ github.event_name != 'push' && '--dry-run' || '' }}

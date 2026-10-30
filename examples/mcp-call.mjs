@@ -17,8 +17,14 @@ try {
   const { tools } = await client.listTools();
   console.log("tools:", tools.map((t) => t.name).join(", "));
   console.log("call_operation", JSON.stringify({ site, op, args }));
-  const res = await client.callTool({ name: "call_operation", arguments: { site, op, args } });
-  const r = JSON.parse(res.content[0].text);
+  let r = JSON.parse(
+    (await client.callTool({ name: "call_operation", arguments: { site, op, args } })).content[0].text,
+  );
+  // A call still running after about 25 s answers with a job; get_job waits for it and never sends it again.
+  while (r.class === "pending") {
+    console.log("pending:", r.reason);
+    r = JSON.parse((await client.callTool({ name: "get_job", arguments: { job: r.job } })).content[0].text);
+  }
   // Economical tables arrive as {columns, rows}; turn them back into records to print.
   const items = r.data?.columns
     ? r.data.rows.map((row) => Object.fromEntries(r.data.columns.map((c, i) => [c, row[i]])))

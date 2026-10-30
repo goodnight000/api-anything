@@ -16,6 +16,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { browserAvailable } from "../src/browser.js";
 import { printConfig } from "../src/clients.js";
 import { addOperation } from "../src/heal.js";
+import { embedReadback } from "../src/publish.js";
+import { parseSite } from "../src/spec.js";
 import type { TriggerStep } from "../src/types.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
 
@@ -327,6 +329,17 @@ describe("inspect", () => {
     const empty = await inspect(3, "--extract", "data.user.posts");
     assert.equal(empty.code, 0, empty.stdout);
     assert.deepEqual(empty.out.data, []);
+
+    // a picked field no item has empties the list: that is a wrong field, not "no results"
+    const pick = await inspect(2, "--extract", "data.user.posts", "--pick", "txet");
+    assert.equal(pick.code, 1, pick.stdout);
+    assert.match(pick.out.error, /none of the 1 items has a picked field \(txet\)/);
+    assert.equal((await inspect(3, "--extract", "data.user.posts", "--pick", "txet")).code, 0, "[] stays a result");
+
+    // items found, but none of the recipe's fields in any of them
+    const fields = await inspect(1, "--html", '{"items":"li.user","fields":{"name":"a.nope"}}');
+    assert.equal(fields.code, 1, fields.stdout);
+    assert.match(fields.out.error, /matched 3 items but none of their fields \(name\)/);
   });
 
   test("an --html recipe on a page with no results answers [] when the items' container is there, empty", async () => {
@@ -1281,6 +1294,28 @@ describe("paging and readback: a list an agent can walk, and a write it can see 
     assert.deepEqual([dup.out.class, dup.out.write], ["duplicate", "not_sent"]);
     assert.equal(posts() - before, 2, "each write sent once, the readback only read");
     assert.equal((await run("ops", "todo")).out.operations[1].readback, "list");
+
+    // as a pulled spec holds it, the readback carries the read: a re-learn of the write keeps it while it fits
+    const file = join(HOME, "sites", "todo.json");
+    const spec = parseSite(JSON.parse(readFileSync(file, "utf8")));
+    const carried = embedReadback(spec, spec.operations[1]!);
+    writeFileSync(file, JSON.stringify({ ...spec, operations: [spec.operations[0], carried] }));
+    const again = await run(
+      "add",
+      "todo",
+      "add",
+      "--from",
+      "caddtodo",
+      "--pick-request",
+      "2",
+      "--example",
+      "title=buy milk",
+      "--write",
+    );
+    assert.equal(again.code, 0, again.stdout);
+    const kept = parseSite(JSON.parse(readFileSync(file, "utf8"))).operations.find((o) => o.name === "add")!;
+    assert.deepEqual(kept.readback, carried.readback);
+    assert.equal((await run("ops", "todo")).out.operations[1].readback, "list");
   });
 });
 
@@ -1434,6 +1469,32 @@ test("call fetches a shared site this machine lacks, marked as an agent's pull, 
     assert.equal(saved.shared.by, "agent");
   } finally {
     await reg.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("call --dry refuses an unknown arg as the call itself does, instead of dropping it", async () => {
+  const r = await cli("call", "hacker-news", "search", "query=sqlite", "typo=bad", "--dry");
+  assert.equal(r.code, 1, r.stdout);
+  assert.match(JSON.parse(r.stdout).error, /unknown arg typo; search takes query/);
+});
+
+test("pull from a registry that can't be reached says to retry, not to re-learn the site", async () => {
+  const home = mkdtempSync(join(tmpdir(), "api-anything-cli-pull-"));
+  try {
+    const r = await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) =>
+      execFile(
+        process.execPath,
+        ["--import", "tsx", CLI, "pull", "goodreads"],
+        { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: home, API_ANYTHING_REGISTRY: "http://127.0.0.1:9" } },
+        (err, stdout, stderr) => resolve({ code: err ? Number(err.code ?? 1) : 0, stdout, stderr }),
+      ),
+    );
+    assert.equal(r.code, 1, r.stdout);
+    assert.match(JSON.parse(r.stdout).error, /could not be reached/);
+    assert.match(r.stderr, /check the network/);
+    assert.doesNotMatch(r.stderr, /capture and add/);
+  } finally {
     rmSync(home, { recursive: true, force: true });
   }
 });

@@ -249,6 +249,8 @@ test("MCP names the tool for a next step one of its tools takes, with the call's
     /^ask the user to run in a terminal: api-anything login x \(it imports/,
   );
   assert.equal(mcpNextCall({ action: "fix_args", site: "x" }).tool, "list_operations");
+  // with no site (learn_site's own args) there is no list_operations call to make: one without its site is invalid
+  assert.deepEqual(mcpNextCall({ action: "fix_args" }), { action: "fix_args" });
   assert.deepEqual(mcpNextCall({ action: "retry", site: "x", op: "get" }).args, { site: "x", op: "get" });
   const again = { tool: "x__get", args: { q: "a" } };
   assert.deepEqual(mcpNextCall({ action: "retry", site: "x", op: "get" }, again), {
@@ -705,4 +707,19 @@ test("MCP keeps small records when the table envelope would grow the answer", ()
     [{ a: 1 }, { b: 2 }],
   ])
     assert.equal(asTable(data), data);
+});
+
+test("MCP call_operation of an op the site lacks points at list_operations for that site, a call that runs as given", async () => {
+  const s = await connect();
+  try {
+    await s.start();
+    const r = await s.tool("call_operation", { site: "hacker-news", op: "nope" });
+    assert.equal(r.class, "input");
+    assert.deepEqual([r.nextCall.tool, r.nextCall.args], ["list_operations", { site: "hacker-news" }]);
+    const listed = await s.tool(r.nextCall.tool, r.nextCall.args);
+    assert.equal(listed.isError, false);
+    assert.equal(listed.site, "hacker-news");
+  } finally {
+    await s.done();
+  }
 });

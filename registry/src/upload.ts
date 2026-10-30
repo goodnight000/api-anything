@@ -3,7 +3,7 @@ import { z } from "zod";
 import { siteOf } from "../../src/domain.js";
 import { type Evidence, type SiteContext, versionHashText } from "../../src/registry-api.js";
 import { type Operation, OperationSchema, SiteSchema } from "../../src/spec.js";
-import { vetShared, writesGraphql } from "../../src/vet.js";
+import { uploadProblems, vetShared, writesGraphql } from "../../src/vet.js";
 import { sha256Hex } from "./auth.js";
 
 export const HASH = z.string().regex(/^[0-9a-f]{64}$/);
@@ -78,14 +78,15 @@ export function refusals(site: SiteContext, ops: Operation[]): string[] {
   return vetShared(spec.data, site.notes).errors;
 }
 
-/** Hosts an op sends to or opens off its site. */
+/** Hosts an op sends to or opens off its site, a write's readback included: its proof is sent too. */
 function offSite(op: Operation, domain: string): string[] {
-  const urls = [
-    op.request?.url,
-    op.trigger?.url,
-    op.trigger?.softFrom,
-    ...(op.trigger?.steps ?? []).map((s) => (s.action === "goto" ? (s.value ?? s.selector) : undefined)),
-  ];
+  const rb = op.readback && "read" in op.readback ? op.readback.read : undefined;
+  const urls = [op, ...(rb ? [rb] : [])].flatMap((o) => [
+    o.request?.url,
+    o.trigger?.url,
+    o.trigger?.softFrom,
+    ...(o.trigger?.steps ?? []).map((s) => (s.action === "goto" ? (s.value ?? s.selector) : undefined)),
+  ]);
   const hosts = urls.flatMap((u) => {
     try {
       return u ? [new URL(u).hostname.toLowerCase()] : [];
@@ -196,7 +197,7 @@ export async function readUpload(body: unknown): Promise<Upload | { errors: stri
   const parsed = parseOperation(r.data.operation);
   if ("errors" in parsed) return parsed;
   const site = r.data.site as SiteContext;
-  const errors = refusals(site, [parsed.op]);
+  const errors = [...uploadProblems(parsed.op), ...refusals(site, [parsed.op])];
   if (errors.length) return { errors };
   // the holdout's args are examples, but the registry keeps no args at all
   const { holdout, ...rest } = r.data.evidence;

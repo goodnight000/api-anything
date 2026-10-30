@@ -14,7 +14,7 @@ import { besideOrigins, credentialsOf, ipIn, opUrls, scanSecrets } from "./secre
 import { loadSession, safeName, siteOf } from "./session.js";
 import type { Operation, Site } from "./spec.js";
 import { BUNDLED_DIR, exportSite, loadSite, siteNotes } from "./store.js";
-import { LIMITS, vetShared } from "./vet.js";
+import { LIMITS, readbackProblems, uploadProblems, vetShared } from "./vet.js";
 
 export const CLIENT_VERSION = (
   JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }
@@ -80,6 +80,43 @@ export function personal(u: VersionUpload): string[] {
     );
   if (notes) found.push(...personalIn(notes, "the notes"));
   return found;
+}
+
+/**
+ * The op as an upload carries it: a readback that names a read of the export carries that read
+ * instead, since an upload holds one op. From the export, so the read's request holds `{param}`, not
+ * the learner's example values; its params go without examples, descriptions and hints. A name that
+ * is no read of it is left as it is: `readbackProblems` says why.
+ */
+export function embedReadback(spec: Site, op: Operation): Operation {
+  const rb = op.readback;
+  if (!rb || !("op" in rb)) return op;
+  const read = spec.operations.find((o) => o.name === rb.op);
+  // a readback read is where to look: it needs its request and the page it reads on
+  if (!read?.readOnly || !read.request || !read.trigger) return op;
+  const { name, request, slots, volatile, trigger, match, response, params, minTier, learnedLoggedIn, paging } = read;
+  return {
+    ...op,
+    readback: {
+      read: {
+        name,
+        request,
+        slots,
+        volatile,
+        trigger,
+        match,
+        response,
+        params: params.map(({ example: _e, description: _d, hint: _h, ...p }) => p),
+        ...(read.public ? { public: read.public } : {}),
+        minTier,
+        learnedLoggedIn,
+        // an omitted cursor is cleared for page one only when the read knows it pages
+        ...(paging ? { paging } : {}),
+      },
+      args: rb.args,
+      ...(rb.find ? { find: rb.find } : {}),
+    },
+  };
 }
 
 /** Every host an op sends to or opens, `goto` steps included. */
@@ -192,10 +229,14 @@ export function plan(
     ...(notes ? { notes } : {}),
   };
   const warnings = new Set(ex.warnings);
+  const checked = gate({ ...r.site, operations: r.site.operations.filter((op) => wanted.includes(op.name)) });
   const ops = wanted.map((n): OpPlan => {
     const i = ex.spec.operations.findIndex((op) => op.name === n);
-    const operation = ex.spec.operations[i]!;
+    const operation = embedReadback(ex.spec, ex.spec.operations[i]!);
     const mine = r.site.operations.find((op) => op.name === n)!;
+    // where the export's scan found something in the read the upload carries
+    const rb = mine.readback && "op" in mine.readback ? mine.readback.op : undefined;
+    const j = rb === undefined ? -1 : ex.spec.operations.findIndex((op) => op.name === rb);
     const evidence: Evidence = {
       clientVersion: CLIENT_VERSION,
       learnedLoggedIn: mine.learnedLoggedIn,
@@ -207,18 +248,25 @@ export function plan(
     const upload: VersionUpload = { site: context, operation, ...(o.parent ? { parent: o.parent } : {}), evidence };
     const vet = vetShared({ ...ex.spec, operations: [operation] }, notes);
     for (const w of vet.warnings) warnings.add(w);
+    const fit = readbackProblems(r.site, mine).map((m) => `${n}: ${m}`);
     const bytes = JSON.stringify(upload);
     // `public` keeps a shared bearer out of the shape heuristics, never out of this: a value this
     // machine holds is refused wherever it sits in what is sent, keys included
     const strict = scanSecrets([bytes], live).secrets.map((m) => m.replace(/^\$\[0\]/, `the upload of ${n}`));
-    const theirs = ex.secrets.filter((m) => !/^\$\.operations\[\d+\]/.test(m) || m.startsWith(`$.operations[${i}]`));
+    const theirs = ex.secrets.filter(
+      (m) =>
+        !/^\$\.operations\[\d+\]/.test(m) || m.startsWith(`$.operations[${i}]`) || m.startsWith(`$.operations[${j}]`),
+    );
     return {
       op: n,
       upload,
       public: isPublic(r.site, mine, evidence),
       errors: [
         ...new Set([...theirs, ...strict]),
-        ...vet.errors,
+        // the read a readback names fits it where the author wrote it: the upload carries a copy
+        ...new Set([...vet.errors, ...fit]),
+        ...(fit.length ? [] : uploadProblems(operation)),
+        ...(checked.failed.get(n) ?? []),
         ...(Buffer.byteLength(bytes) > LIMITS.file
           ? [`the upload of ${n} is ${Buffer.byteLength(bytes)} bytes; at most ${LIMITS.file}`]
           : []),
@@ -226,7 +274,6 @@ export function plan(
       personal: personal(upload),
     };
   });
-  const checked = gate({ ...r.site, operations: r.site.operations.filter((op) => wanted.includes(op.name)) });
   return {
     site: name,
     ...(as !== name ? { as } : {}),

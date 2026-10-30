@@ -73,10 +73,13 @@ verbatim, plus these fields:
 
 ```sh
 npm install
+npm run cli -- <command>  # the CLI from source, e.g. npm run cli -- ops hacker-news
 npm run format  # Biome: format and apply safe lint fixes
 npm run lint    # what CI runs: formatting and lint, no changes
 npm run check   # typecheck src and test
 npm test        # unit + offline e2e (the browser parts skip when no Chromium browser is installed)
+npm run build   # compile src to dist/ (npm install runs it too, through prepare)
+npm run demo -- 'agent memory'  # examples/research.mjs against Hacker News (live site)
 npm run smoke:pack  # pack, install the tarball in a temp dir, run its CLI and library (needs the npm registry)
 ```
 
@@ -86,6 +89,12 @@ working tree and the full history on every pull request, a fork's included. The 
 `.gitleaks.toml`: gitleaks' default rules, with a few fake test values allowed by exact value. A
 test that needs a provider-key shape should build it at run time rather than add an exception.
 The `CI` job passes only when every other job did, so it is the one to require.
+
+To release, a maintainer bumps `version` in `package.json` in a pull request, merges it once CI is
+green, then tags that commit and pushes the tag (`git tag -a v0.4.0 -m "api-anything 0.4.0" &&
+git push origin v0.4.0`). `.github/workflows/release.yml` publishes it to npm through trusted
+publishing: no npm token exists, and the package carries provenance. Running that workflow by hand
+is a dry run.
 
 Tests never touch real websites. `test/fixture/server.ts` imitates the patterns that matter:
 rotating GraphQL ids, layered form encoding, login walls, rate limits, signatures, and HTML

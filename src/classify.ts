@@ -159,7 +159,7 @@ export function botWall(r: Observed, wantsJson = false, hasData?: () => boolean)
 
 type HtmlRecipe = NonNullable<Operation["response"]["html"]>;
 /** Items with a field found: a selector renamed under every field leaves items holding nothing. */
-function htmlFinds(recipe: HtmlRecipe, items: ReturnType<typeof extractHtml>): boolean {
+export function htmlFinds(recipe: HtmlRecipe, items: ReturnType<typeof extractHtml>): boolean {
   if (!Object.keys(recipe.fields).length) return items.length > 0;
   return items.some((item) => Object.values(item).some((v) => (Array.isArray(v) ? v.length > 0 : !!v)));
 }
@@ -620,9 +620,12 @@ function classifyResponse(
   if (r.status >= 400 && waitMs !== undefined) return rate(`HTTP ${r.status}${wait}: ${snippet(body)}`);
   if (r.status >= 400 && REQUIRE_LOGIN.test(body)) return is("auth", `HTTP ${r.status}: ${snippet(body)}`);
   if (r.status >= 400 && RATE.test(body)) return rate(`HTTP ${r.status}${wait}: ${snippet(body)}`);
-  // Laravel answers a stale CSRF token with 419, Rails with 422 InvalidAuthenticityToken.
-  if (r.status === 419 || ((r.status === 400 || r.status === 422) && CSRF_FAILED.test(body))) {
-    return is("auth", `HTTP ${r.status}: CSRF check failed: ${snippet(body)}`);
+  // Laravel answers a stale CSRF token with 419, Rails with 422 InvalidAuthenticityToken. A bot
+  // wall answers 419 too (Hacker News: "Sorry" to a non-browser claiming Chrome), so the reason
+  // names CSRF only when the body does.
+  const csrf = CSRF_FAILED.test(body) || (r.status === 419 && /page expired/i.test(body));
+  if (r.status === 419 || ((r.status === 400 || r.status === 422) && csrf)) {
+    return is("auth", `HTTP ${r.status}: ${csrf ? "CSRF check failed: " : ""}${snippet(body)}`);
   }
   if (r.status === 401) return is("auth", `HTTP 401: ${snippet(body)}`);
   if (r.status === 403) {

@@ -20,7 +20,7 @@ import { profileDir } from "../../src/heal.js";
 import { importSession } from "../../src/login.js";
 import { cookieHeaderFor, cookieValue, loadSession, saveSession } from "../../src/session.js";
 import { type Operation, OperationSchema, parseSite } from "../../src/spec.js";
-import { rememberTier, saveSite } from "../../src/store.js";
+import { rememberedTier, rememberTier, saveSite } from "../../src/store.js";
 import type { StoredCookie } from "../../src/types.js";
 import { makeChromiumDb } from "../fixture/cookie-db.js";
 import { type Fixture, startFixture } from "./execute-classify.fixture.js";
@@ -1416,6 +1416,31 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
     }
   });
 
+  test("a tier-2 page still busy at the deadline is reported as the deadline, not as a stalled page", async () => {
+    // the root page's renderer is busy for 1.5 s right after load, so its fetch can't start before a 1 s deadline
+    const busy = createHttpServer((req, res) => {
+      if (req.url !== "/") return;
+      res
+        .writeHead(200, { "content-type": "text/html" })
+        .end("<!doctype html><script>setTimeout(()=>{for(const e=Date.now()+1500;Date.now()<e;);})</script>");
+    });
+    await new Promise<void>((r) => busy.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(busy.address() as AddressInfo).port}`;
+    try {
+      site("t2up", rd("up", "/plain", { minTier: 2 }));
+      assert.equal((await call("t2up", "up", {}, { maxTier: 2, minIntervalMs: 0 })).ok, true, "Chrome is up");
+      const request = { method: "GET", url: `${base}/api`, headers: {} };
+      saveSite(parseSite({ name: "t2busy", baseUrl: base, operations: [rd("n", "/api", { minTier: 2, request })] }));
+      const r = await call("t2busy", "n", {}, { maxTier: 2, minIntervalMs: 0, timeoutMs: 1000 });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.match(r.reason ?? "", /no response within 1000 ms/);
+      assert.doesNotMatch(r.reason ?? "", /within 2000 ms/);
+    } finally {
+      busy.closeAllConnections();
+      busy.close();
+    }
+  });
+
   test("a cached page that never sends the fetch is replaced, the write goes once, and what the page sends when it wakes never leaves", async () => {
     site("t2stall", rd("up", "/plain", { minTier: 2 }), {
       ...rd("save", "/api/stalled", { minTier: 2 }),
@@ -1494,6 +1519,130 @@ test("two processes merging browser cookies into one jar lose nothing", async ()
   assert.deepEqual(codes, [0, 0]);
   const n = loadSession("race").cookies.length;
   assert.equal(n, 300, `jar kept ${n} of 300 cookies`);
+});
+
+describe("a read refused for the browser's identity headers", () => {
+  const UA =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+  /** what a learned op copies from Chrome, identity and all */
+  const chrome = () => ({
+    "user-agent": UA,
+    "sec-ch-ua": '"Chromium";v="130", "Google Chrome";v="130"',
+    "sec-ch-ua-platform": '"macOS"',
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-dest": "empty",
+    accept: "application/json",
+    referer: `${fx.base}/`,
+  });
+  const at = (path: string, over: Record<string, unknown> = {}) =>
+    rd("from", path, { request: { method: "GET", url: `${fx.base}${path}`, headers: chrome() }, ...over });
+  const sent = (path: string) => fx.hits.filter((h) => h.url.startsWith(path));
+
+  test("plain HTTP answers without them at tier 1, under max tier 1, and nothing is kept", async () => {
+    site("sorry", at("/api/sorry?site=arxiv.org"));
+    const r = await call("sorry", "from", {}, t1);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.deepEqual(r.data, [{ sorry: "ok" }]);
+    assert.match(r.reason ?? "", /^tier 1 said auth \(HTTP 419: Sorry\); plain HTTP answered without the browser's/);
+    const [first, second] = sent("/api/sorry");
+    assert.equal(sent("/api/sorry").length, 2);
+    assert.match(String(first!.headers["user-agent"]), /Chrome\//);
+    assert.equal(second!.url, first!.url);
+    assert.doesNotMatch(String(second!.headers["user-agent"]), /Chrome\//);
+    for (const h of ["sec-ch-ua", "sec-ch-ua-platform", "sec-fetch-site", "sec-fetch-dest"])
+      assert.equal(second!.headers[h], undefined, h);
+    assert.equal(second!.headers.accept, "application/json");
+    assert.equal(second!.headers.referer, `${fx.base}/`);
+    assert.equal(rememberedTier("sorry", "from"), undefined);
+    fx.hits.length = 0;
+    assert.equal((await call("sorry", "from", {}, t1)).ok, true);
+    assert.equal(sent("/api/sorry").length, 2, "the next call sends the stored template first again");
+  });
+
+  test("a wall that answers 403 (blocked) gets the same retry instead of a browser", async () => {
+    site("sorry403", at("/api/sorry?wall=403"));
+    const r = await call("sorry403", "from", {}, t1);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.match(r.reason ?? "", /^tier 1 said blocked/);
+    assert.equal(sent("/api/sorry").length, 2);
+  });
+
+  test("a site that wants the Chrome user-agent answers the first request: no retry", async () => {
+    site("wantsua", at("/api/picky"));
+    const r = await call("wantsua", "from", {}, t1);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.reason, undefined);
+    assert.equal(sent("/api/picky").length, 1);
+  });
+
+  test("a write is sent once, even after a 401 a write may be retried after", async () => {
+    site(
+      "sorrywrite",
+      at("/api/sorry", {
+        readOnly: false,
+        request: { method: "POST", url: `${fx.base}/api/sorry?wall=401`, headers: chrome(), body: "x=1" },
+      }),
+    );
+    const r = await call("sorrywrite", "from", {}, { ...t1, allowWrites: true });
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.equal(sent("/api/sorry").length, 1);
+  });
+
+  test("no retry for an op without them, a login on record, or a slot that fills the user-agent", async () => {
+    site("bare419", rd("from", "/api/picky"));
+    assert.equal((await call("bare419", "from", {}, t1)).class, "auth");
+    assert.equal(sent("/api/picky").length, 1, "nothing to remove");
+
+    fx.hits.length = 0;
+    site("signedin", at("/api/sorry", { learnedLoggedIn: true }));
+    assert.equal((await call("signedin", "from", {}, t1)).class, "auth");
+    assert.equal(sent("/api/sorry").length, 1, "learned signed in");
+
+    fx.hits.length = 0;
+    site("withref", at("/api/sorry", { slots: [{ ref: "cookie:ct0", at: ["header:x-csrf-token"] }] }));
+    saveSession("withref", { cookies: [cookie("ct0", "c", "127.0.0.1")], values: {} });
+    assert.equal((await call("withref", "from", {}, t1)).class, "auth");
+    assert.equal(sent("/api/sorry").length, 1, "takes a cookie");
+
+    fx.hits.length = 0;
+    saveSite(parseSite({ name: "jarlogin", baseUrl: fx.base, loginCookies: ["sid"], operations: [at("/api/sorry")] }));
+    saveSession("jarlogin", { cookies: [cookie("sid", "s", "127.0.0.1")], values: {} });
+    assert.equal((await call("jarlogin", "from", {}, t1)).class, "auth");
+    assert.equal(sent("/api/sorry").length, 1, "a live login cookie in the jar");
+
+    fx.hits.length = 0;
+    site(
+      "uaslot",
+      at("/api/sorry", {
+        params: [{ name: "ua", required: true }],
+        slots: [{ param: "ua", at: ["header:user-agent"] }],
+      }),
+    );
+    assert.equal((await call("uaslot", "from", { ua: UA }, t1)).class, "auth");
+    assert.equal(sent("/api/sorry").length, 1, "the caller fills the user-agent");
+  });
+
+  test("a retry answering 429 is the call's answer: no browser", async () => {
+    site("sorryrate", at("/api/sorry?bare=429"));
+    const r = await call("sorryrate", "from", {}, { minIntervalMs: 0, timeoutMs: 3000 });
+    assert.equal(r.class, "rate", JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.match(r.reason ?? "", /^tier 1 said auth .*without the browser's identity headers: /);
+    assert.equal(sent("/api/sorry").length, 2);
+    assert.equal(rememberedTier("sorryrate", "from"), undefined);
+  });
+
+  test("a retry refused again leaves the ladder as it was: tier 1's auth and the login hint", async () => {
+    site("sorryagain", at("/api/sorry?bare=419"));
+    const r = await call("sorryagain", "from", {}, t1);
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.equal(r.reason, "HTTP 419: Sorry");
+    assert.match(r.next ?? "", /api-anything login sorryagain/);
+    assert.equal(sent("/api/sorry").length, 2);
+  });
 });
 
 test("two processes writing state.json (tier memory, stale marks) lose nothing", async () => {
