@@ -319,6 +319,28 @@ test("youtube search with the ad layout (VISITOR_INFO1_LIVE set) still returns e
   assert.deepEqual(got[0], { id: "a", title: "ta", channel: "c", views: "1 view" });
 });
 
+test("youtube captions: the local command carries the args, and its WebVTT comes back as text", () => {
+  const o = op("youtube", "captions");
+  const cmd = fillTemplate(o.local!.command, preparedValues(o, { id: "jNQXAC9IVRw" }));
+  assert.ok(o.local!.command.includes("yt-dlp"), "captions is a local op");
+  assert.ok(cmd.includes("'{id}'") === false && cmd.includes("'jNQXAC9IVRw'"), "the id fills the command");
+  assert.ok(cmd.includes("'en'"), "the default language is en");
+  // the response comes back as its whole body: a VTT text, not a JSON read
+  const j = judge(o, { status: 200, headers: { "content-type": "text/plain" }, body: fixture("youtube", "captions") });
+  assert.equal(j.class, "ok", j.reason);
+  assert.match(j.data as string, /^WEBVTT\nKind: captions\nLanguage: en/);
+  // the id accepts a bare id, a watch URL and a youtu.be link, and rejects the rest
+  for (const v of [
+    "jNQXAC9IVRw",
+    "https://youtu.be/jNQXAC9IVRw",
+    "https://www.youtube.com/watch?v=jNQXAC9IVRw&list=PL",
+  ])
+    assert.ok(accepts(o.params.find((p) => p.name === "id")!, v), v);
+  for (const v of ["jNQXAC9IVRwx", "https://example.com/watch?v=jNQXAC9IVRw", "x y"])
+    assert.ok(!accepts(o.params.find((p) => p.name === "id")!, v), v);
+  assert.ok(!accepts(o.params.find((p) => p.name === "lang")!, "en,de"), "one language per call");
+});
+
 // ---------------------------------------------------------------- linkedin
 
 const entity = (title: string, url: string) => ({

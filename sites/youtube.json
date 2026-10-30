@@ -83,6 +83,41 @@
       "learnedLoggedIn": false,
       "learnedAt": "2026-09-27T17:41:32.693Z",
       "description": "Search YouTube videos (the Type: Video filter, so every item is a video): id, title, channel, view count"
+    },
+    {
+      "name": "captions",
+      "local": {
+        "command": "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; yt-dlp -q --no-warnings --skip-download --write-subs --write-auto-subs --sub-langs '{lang}' --sub-format vtt -o \"$tmp/%(id)s\" '{id}' && ls \"$tmp\"/*.vtt >/dev/null 2>&1 || { echo \"no captions in '{lang}' for video '{id}': the video has none, or not in that language\" >&2; exit 1; }; cat \"$tmp\"/*.vtt"
+      },
+      "slots": [],
+      "volatile": [],
+      "match": {},
+      "response": {
+        "format": "text"
+      },
+      "params": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "pattern": "^(?:https?://(?:www\\.)?youtube\\.com/watch\\?v=[A-Za-z0-9_-]{11}(?:\\S*)?|https?://youtu\\.be/[A-Za-z0-9_-]{11}|[A-Za-z0-9_-]{11})$",
+          "hint": "a video id (jNQXAC9IVRw), a youtu.be link, or a watch URL",
+          "example": "jNQXAC9IVRw"
+        },
+        {
+          "name": "lang",
+          "type": "string",
+          "required": true,
+          "default": "en",
+          "pattern": "^[\\w-]+$",
+          "hint": "one of the video's caption languages (en, de, en-US); a video's available languages are not listed by this op",
+          "example": "en"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "description": "A video's captions as WebVTT, author subs first, then its auto-generated ones. When the video has no captions in the language, the command fails and says so."
     }
   ]
 }
