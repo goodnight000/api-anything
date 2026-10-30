@@ -14,7 +14,12 @@ import { detect, guiServer, paths, SERVER, setup } from "../src/setup.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SKILL = readFileSync(join(ROOT, "skills", "api-anything", "SKILL.md"), "utf8");
-const saved = { HOME: process.env.HOME, PATH: process.env.PATH, AA: process.env.API_ANYTHING_HOME };
+const saved = {
+  HOME: process.env.HOME,
+  PATH: process.env.PATH,
+  AA: process.env.API_ANYTHING_HOME,
+  HERMES_HOME: process.env.HERMES_HOME,
+};
 let home: string;
 let bin: string;
 
@@ -26,6 +31,7 @@ beforeEach(() => {
   process.env.PATH = bin;
   process.env.API_ANYTHING_HOME = join(home, ".api-anything");
   delete process.env.CODEX_HOME;
+  delete process.env.HERMES_HOME;
   delete process.env.APPDATA;
   delete process.env.XDG_CONFIG_HOME;
 });
@@ -33,6 +39,7 @@ afterEach(() => {
   process.env.HOME = saved.HOME;
   process.env.PATH = saved.PATH;
   process.env.API_ANYTHING_HOME = saved.AA;
+  process.env.HERMES_HOME = saved.HERMES_HOME;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -49,15 +56,20 @@ function seed() {
   write(paths.cursorJson(), JSON.stringify({ mcpServers: { cursorThing: { command: "x", args: ["y"] } } }, null, 2));
   write(paths.desktopJson(), JSON.stringify({ mcpServers: { fs: { command: "fs-mcp" } }, theme: "dark" }));
   write(paths.codexToml(), 'model = "o3"\n\n[mcp_servers.context7]\ncommand = "npx"\nargs = ["-y", "context7"]\n');
+  write(
+    paths.hermesYaml(),
+    'model: "other"\nmcp_servers:\n  filesystem:\n    command: npx\n    args: ["-y", "fs", "/home"]\n',
+  );
   return {
     claude: read(paths.claudeJson()),
     cursor: read(paths.cursorJson()),
     desktop: read(paths.desktopJson()),
     codex: read(paths.codexToml()),
+    hermes: read(paths.hermesYaml()),
   };
 }
 
-const ALL = ["claude-code", "codex", "cursor", "claude-desktop"] as const;
+const ALL = ["claude-code", "codex", "cursor", "claude-desktop", "hermes"] as const;
 
 /** An executable named `name` in the test's PATH. */
 function fakeExe(name: string) {
@@ -110,17 +122,27 @@ test("setup adds the server to each agent's config, keeps every other entry, and
   const toml = read(paths.codexToml());
   assert.ok(toml.startsWith(before.codex), "the old config.toml is kept as it was");
   assert.match(toml, /\[mcp_servers\.api-anything\]\ncommand = "npx"\nargs = \["-y", "api-anything", "mcp"\]\n$/);
+  const yaml = read(paths.hermesYaml());
+  assert.ok(yaml.startsWith(before.hermes), "the old config.yaml is kept as it was");
+  assert.ok(
+    yaml.endsWith(
+      `  api-anything:\n    enabled: true\n    command: "${join(bin, "npx")}"\n    args: ${JSON.stringify(SERVER.args)}\n    env:\n      PATH: "${bin}:/usr/bin:/bin"\n`,
+    ),
+    yaml,
+  );
 
   assert.equal(read(`${paths.claudeJson()}.bak-api-anything`), before.claude);
   assert.equal(read(`${paths.cursorJson()}.bak-api-anything`), before.cursor);
   assert.equal(read(`${paths.desktopJson()}.bak-api-anything`), before.desktop);
   assert.equal(read(`${paths.codexToml()}.bak-api-anything`), before.codex);
+  assert.equal(read(`${paths.hermesYaml()}.bak-api-anything`), before.hermes);
 
   assert.equal(read(paths.claudeSkill()), SKILL);
   assert.equal(read(paths.codexSkill()), SKILL);
+  assert.equal(read(paths.hermesSkill()), SKILL);
   assert.deepEqual(
     r.agents.map((a) => a.skill),
-    ["installed", "installed", undefined, undefined],
+    ["installed", "installed", undefined, undefined, "installed"],
   );
   assert.equal(loadSettings().share, true);
   assert.ok(existsSync(join(home, ".api-anything", "key.json")));
@@ -130,17 +152,25 @@ test("setup adds the server to each agent's config, keeps every other entry, and
 test("setup run again changes nothing", async () => {
   seed();
   await setup({ agents: [...ALL], share: true });
-  const files = [paths.claudeJson(), paths.cursorJson(), paths.desktopJson(), paths.codexToml(), paths.claudeSkill()];
+  const files = [
+    paths.claudeJson(),
+    paths.cursorJson(),
+    paths.desktopJson(),
+    paths.codexToml(),
+    paths.hermesYaml(),
+    paths.claudeSkill(),
+    paths.hermesSkill(),
+  ];
   const after1 = files.map(read);
   const askedAt = loadSettings().askedAt;
   const r = await setup({ agents: [...ALL] });
   assert.deepEqual(
     r.agents.map((a) => a.mcp),
-    ["unchanged", "unchanged", "unchanged", "unchanged"],
+    ["unchanged", "unchanged", "unchanged", "unchanged", "unchanged"],
   );
   assert.deepEqual(
     r.agents.map((a) => a.skill),
-    ["unchanged", "unchanged", undefined, undefined],
+    ["unchanged", "unchanged", undefined, undefined, "unchanged"],
   );
   assert.deepEqual(files.map(read), after1);
   assert.equal("created" in r.key && r.key.created, false);
@@ -151,18 +181,24 @@ test("an api-anything entry that is already there, set up another way, is left a
   const mine = { command: "api-anything", args: ["mcp", "--allow-writes"] };
   write(paths.cursorJson(), JSON.stringify({ mcpServers: { "api-anything": mine } }));
   write(paths.codexToml(), '[mcp_servers."api-anything"]\ncommand = "api-anything"\nargs = ["mcp"]\n');
-  const before = [read(paths.cursorJson()), read(paths.codexToml())];
-  const r = await setup({ agents: ["cursor", "codex"], share: false });
+  write(
+    paths.hermesYaml(),
+    'mcp_servers:\n  api-anything:\n    enabled: true\n    command: "api-anything"\n    args: ["mcp", "--allow-writes"]\n',
+  );
+  const before = [read(paths.cursorJson()), read(paths.codexToml()), read(paths.hermesYaml())];
+  const r = await setup({ agents: ["cursor", "codex", "hermes"], share: false });
   assert.deepEqual(
     r.agents.map((a) => [a.agent, a.mcp]),
     [
       ["cursor", "kept"],
       ["codex", "kept"],
+      ["hermes", "kept"],
     ],
   );
   assert.deepEqual(r.agents[0]!.entry, mine);
-  assert.deepEqual([read(paths.cursorJson()), read(paths.codexToml())], before);
+  assert.deepEqual([read(paths.cursorJson()), read(paths.codexToml()), read(paths.hermesYaml())], before);
   assert.equal(existsSync(`${paths.cursorJson()}.bak-api-anything`), false);
+  assert.equal(existsSync(`${paths.hermesYaml()}.bak-api-anything`), false);
 });
 
 test("an old copy of the skill is backed up, then replaced", async () => {
@@ -185,13 +221,26 @@ test("--dry-run says what would change and changes nothing", async () => {
       ["would add", "would install"],
       ["would add", undefined],
       ["would add", undefined],
+      ["would add", "would install"],
     ],
   );
   assert.deepEqual(
-    [read(paths.claudeJson()), read(paths.cursorJson()), read(paths.desktopJson()), read(paths.codexToml())],
-    [before.claude, before.cursor, before.desktop, before.codex],
+    [
+      read(paths.claudeJson()),
+      read(paths.cursorJson()),
+      read(paths.desktopJson()),
+      read(paths.codexToml()),
+      read(paths.hermesYaml()),
+    ],
+    [before.claude, before.cursor, before.desktop, before.codex, before.hermes],
   );
-  for (const f of [paths.claudeSkill(), paths.codexSkill(), `${paths.claudeJson()}.bak-api-anything`])
+  for (const f of [
+    paths.claudeSkill(),
+    paths.codexSkill(),
+    paths.hermesSkill(),
+    `${paths.claudeJson()}.bak-api-anything`,
+    `${paths.hermesYaml()}.bak-api-anything`,
+  ])
     assert.equal(existsSync(f), false, f);
   assert.equal(existsSync(join(home, ".api-anything")), false, "no key, no settings");
   assert.deepEqual(r.key, { file: join(home, ".api-anything", "key.json"), wouldCreate: true });
@@ -247,6 +296,8 @@ test("the agents' own CLIs add the server when they are installed, and are not r
 test("detect finds an agent by its config directory", () => {
   mkdirSync(dirname(paths.cursorJson()), { recursive: true });
   assert.deepEqual(detect(), ["cursor"]);
+  mkdirSync(paths.hermesHome(), { recursive: true });
+  assert.deepEqual(detect(), ["cursor", "hermes"]);
 });
 
 function cli(...args: string[]): Promise<{ code: number; out: Record<string, unknown>; stderr: string }> {

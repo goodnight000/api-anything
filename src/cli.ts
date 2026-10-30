@@ -262,7 +262,7 @@ const HELP: Record<string, string> = {
                   Gemini CLI, VS Code, Cursor and Claude Desktop, with absolute paths and the other
                   flags given, instead of serving
   --no-learn      hide learn_site`,
-  setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop] [--dry-run]
+  setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop,hermes] [--dry-run]
   Connects the MCP server (npx -y api-anything mcp) to each agent found on this machine: Claude Code,
   Codex, Cursor, Claude Desktop. Installs the skill for Claude Code (~/.claude/skills) and Codex
   (~/.agents/skills). Checks for a Chromium browser, makes this install's key, and asks whether to help
