@@ -386,6 +386,105 @@ test("linkedin search keywords are percent-encoded once inside the Rest.li query
   }
 });
 
+// ---------------------------------------------------------------- reddit
+
+test("reddit search encodes the query in q= and hot puts the subreddit in the path segment", () => {
+  const s = new URL(buildRequest(op("reddit", "search"), { query: "what is rust" }, noSession).url);
+  assert.equal(s.pathname, "/search.json");
+  assert.equal(s.searchParams.get("q"), "what is rust");
+  const u = new URL(buildRequest(op("reddit", "hot"), { sub: "programming" }, noSession).url);
+  assert.equal(u.pathname, "/r/programming/hot.json");
+});
+
+test("reddit recipes read the .json listing the site answers", () => {
+  const got = ok(op("reddit", "search"), fixture("reddit", "search"));
+  assert.deepEqual(
+    got.map((p) => p.subreddit),
+    ["r/linux", "r/linux"],
+  );
+  assert.deepEqual(got[0], {
+    title: "Linux 6.15 is stable",
+    url: "https://lwn.net/Articles/100001/",
+    subreddit: "r/linux",
+    author: "kernelwatcher",
+    score: 1234,
+    comments: 56,
+    permalink: "/r/linux/comments/9k2q1f/linux_615_is_stable/",
+    selftext: "",
+    created_utc: 1761890000,
+  });
+  assert.equal(
+    typeof got[1]!.selftext === "string" && (got[1]!.selftext as string).length > 0,
+    true,
+    "the self post carries its text",
+  );
+  const hot = ok(op("reddit", "hot"), fixture("reddit", "hot"));
+  assert.deepEqual(
+    hot.map((p) => [p.score, p.comments]),
+    [
+      [2400, 311],
+      [640, 95],
+    ],
+  );
+  assert.equal("subreddit" in hot[0]!, false, "the hot feed names no subreddit: it is in the path");
+});
+
+// ---------------------------------------------------------------- github
+
+test("github ops put owner and repo in the api path; state defaults to open", () => {
+  for (const [name, path] of [
+    ["repo", "/repos/torvalds/linux"],
+    ["readme", "/repos/torvalds/linux/readme"],
+  ] as const) {
+    const u = new URL(buildRequest(op("github", name), { owner: "torvalds", repo: "linux" }, noSession).url);
+    assert.equal(u.origin, "https://api.github.com");
+    assert.equal(u.pathname, path);
+  }
+  const issues = new URL(buildRequest(op("github", "issues"), { owner: "o", repo: "r" }, noSession).url);
+  assert.equal(issues.pathname, "/repos/o/r/issues");
+  assert.equal(issues.searchParams.get("state"), "open");
+  const pulls = new URL(buildRequest(op("github", "pulls"), { owner: "o", repo: "r", state: "all" }, noSession).url);
+  assert.equal(pulls.pathname, "/repos/o/r/pulls");
+  assert.equal(pulls.searchParams.get("state"), "all");
+});
+
+test("github recipes read the api.github.com answers", () => {
+  const repo = judge(op("github", "repo"), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: fixture("github", "repo"),
+  });
+  assert.equal(repo.class, "ok", repo.reason);
+  const repoData = repo.data as Record<string, unknown>;
+  assert.equal(repoData.full_name, "torvalds/linux");
+  assert.equal(repoData.license_name, "MIT License");
+  const readme = judge(op("github", "readme"), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: fixture("github", "readme"),
+  });
+  assert.equal(readme.class, "ok", readme.reason);
+  assert.equal(
+    Buffer.from((readme.data as Record<string, unknown>).content as string, "base64")
+      .toString("utf8")
+      .trim(),
+    "# Linux kernel source tree",
+  );
+  const issues = ok(op("github", "issues"), fixture("github", "issues"));
+  assert.deepEqual(
+    issues.map((i) => [i.number, i.state, i.author]),
+    [
+      [1001, "open", "kernelpatcher"],
+      [1002, "open", "storagecrew"],
+    ],
+  );
+  const pulls = ok(op("github", "pulls"), fixture("github", "pulls"));
+  assert.deepEqual(
+    pulls.map((p) => p.merged_at),
+    [null, null],
+  );
+});
+
 // ---------------------------------------------------------------- notes
 
 test("bundled notes: what every ops and list_operations call sends for a site stays short", () => {

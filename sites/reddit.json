@@ -1,0 +1,109 @@
+{
+  "name": "reddit",
+  "displayName": "Reddit",
+  "baseUrl": "https://www.reddit.com",
+  "description": "Site-wide search and a subreddit's hot feed, from Reddit's own .json data endpoints. Public, logged out; anonymous calls are rate-limited.",
+  "operations": [
+    {
+      "name": "search",
+      "description": "Search Reddit site-wide (www.reddit.com/search): the posts ranked for the query, with subreddit, author, score and comments.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.reddit.com/search.json?q={query}",
+        "headers": {
+          "accept": "application/json",
+          "user-agent": "api-anything (public .json data endpoint)"
+        }
+      },
+      "slots": [{ "param": "query", "at": ["query:q"] }],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.reddit.com/search?q={query}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.reddit.com",
+        "path": "/search.json"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "data.children",
+        "pick": [
+          "title=data.title",
+          "url=data.url",
+          "subreddit=data.subreddit_name_prefixed",
+          "author=data.author",
+          "score=data.score",
+          "comments=data.num_comments",
+          "permalink=data.permalink",
+          "selftext=data.selftext",
+          "created_utc=data.created_utc"
+        ]
+      },
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "example": "linux kernel",
+          "description": "Search text, site-wide, as typed into reddit.com/search."
+        }
+      ],
+      "readOnly": true,
+      "checks": [{ "args": { "query": "rust" }, "expect": "result" }],
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "hot",
+      "description": "The hot feed of one subreddit: its current top posts, with author, score and comments.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.reddit.com/r/{sub}/hot.json",
+        "headers": {
+          "accept": "application/json",
+          "user-agent": "api-anything (public .json data endpoint)"
+        }
+      },
+      "slots": [{ "param": "sub", "at": ["path:1"] }],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.reddit.com/r/{sub}/hot/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.reddit.com",
+        "path": "/r/*/hot.json"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "data.children",
+        "pick": [
+          "title=data.title",
+          "url=data.url",
+          "author=data.author",
+          "score=data.score",
+          "comments=data.num_comments",
+          "permalink=data.permalink",
+          "selftext=data.selftext",
+          "created_utc=data.created_utc"
+        ]
+      },
+      "params": [
+        {
+          "name": "sub",
+          "type": "string",
+          "required": true,
+          "example": "programming",
+          "description": "Subreddit name without the r/ prefix."
+        }
+      ],
+      "readOnly": true,
+      "checks": [{ "args": { "sub": "programming" }, "expect": "result" }],
+      "minTier": 1,
+      "learnedLoggedIn": false
+    }
+  ]
+}
