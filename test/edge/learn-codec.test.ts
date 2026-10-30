@@ -205,7 +205,7 @@ test("Laravel/Angular XSRF: header mirrors the URL-decoded cookie -> cookie ref 
     op.slots.find((s) => s.ref),
     { ref: "cookie:XSRF-TOKEN", transform: "url-decode", at: ["header:x-xsrf-token"] },
   );
-  assert.equal(op.request.headers["x-xsrf-token"], "");
+  assert.equal(op.request!.headers["x-xsrf-token"], "");
 });
 
 test("--match picks the right one among near-duplicate requests (autocomplete vs search)", () => {
@@ -215,7 +215,7 @@ test("--match picks the right one among near-duplicate requests (autocomplete vs
   );
   const search = xhr({ url: "https://site.test/api/search?q=nasa" }, { r: [{ id: 1 }] });
   const { operation: op } = learn([suggest, search], [{ q: "nasa" }], { match: { path: "/api/search" } });
-  assert.equal(new URL(op.request.url).pathname, "/api/search");
+  assert.equal(new URL(op.request!.url).pathname, "/api/search");
 });
 
 test("a trigger URL template percent-encodes every arg, including / & # ? and emoji", () => {
@@ -412,7 +412,7 @@ test("add --from templatizes a capture URL written with + for spaces", async () 
     from: { capture: captureFile(url, [ex]) },
   });
   // A literal trigger makes every tier-3 run and recapture load the example's page, whatever the args.
-  assert.equal(fillTrigger(r.operation.trigger, { q: "boston" }).url, "https://site.test/search?q=boston");
+  assert.equal(fillTrigger(r.operation.trigger!, { q: "boston" }).url, "https://site.test/search?q=boston");
 });
 
 test("add --from templatizes only the arg's own position, not an equal path segment or host", async () => {
@@ -424,7 +424,7 @@ test("add --from templatizes only the arg's own position, not an equal path segm
     examples: [{ q: "python" }],
     from: { capture: captureFile(url, [ex]) },
   });
-  assert.equal(fillTrigger(r.operation.trigger, { q: "rust" }).url, "https://www.reddit.test/r/python/search?q=rust");
+  assert.equal(fillTrigger(r.operation.trigger!, { q: "rust" }).url, "https://www.reddit.test/r/python/search?q=rust");
 });
 
 test("add --from templatizes a %20-encoded capture URL (passes)", async () => {
@@ -436,7 +436,7 @@ test("add --from templatizes a %20-encoded capture URL (passes)", async () => {
     examples: [{ q: "new york" }],
     from: { capture: captureFile(url, [ex]) },
   });
-  assert.equal(r.operation.trigger.url, "https://site.test/search?q={q}");
+  assert.equal(r.operation.trigger!.url, "https://site.test/search?q={q}");
 });
 
 /* ------------------------------------------------------------ codec basics */
@@ -486,7 +486,7 @@ test("a JSON API whose path ends in .js (GitHub vercel/next.js, npm chart.js) is
     { full_name: "vercel/next.js", stargazers_count: 1 },
   );
   const { operation: op } = learn([ex], [{ repo: "next.js" }], { match: { path: "/repos/vercel/*" } });
-  assert.equal(op.request.url, "https://api.github.test/repos/vercel/next.js");
+  assert.equal(op.request!.url, "https://api.github.test/repos/vercel/next.js");
 });
 
 test("a path segment that carries the arg as a substring (@handle) is wildcarded in match (passes)", () => {
@@ -591,7 +591,7 @@ test("a URL-valued example (link preview / archive lookup) locates its request",
     resourceType: "document",
   };
   const { operation: op } = learn([doc, ex], [{ url: "https://example.com/page" }]);
-  assert.equal(new URL(op.request.url).pathname, "/api/preview");
+  assert.equal(new URL(op.request!.url).pathname, "/api/preview");
 });
 
 test("empty-string and very long args at call time (passes)", () => {
@@ -618,7 +618,7 @@ test("add --from templatizes a capture URL whose arg differs only in case from t
     examples: [{ q: "nasa" }],
     from: { capture: captureFile(url, [ex]) },
   });
-  assert.equal(r.operation.trigger.url, "https://site.test/search?q={q}");
+  assert.equal(r.operation.trigger!.url, "https://site.test/search?q={q}");
 });
 
 test("a hand-written spec with mixed-case header names does not send duplicated/joined headers", async () => {

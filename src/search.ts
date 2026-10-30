@@ -11,7 +11,7 @@ import type { Operation, Site } from "./spec.js";
 import { LIMITS } from "./vet.js";
 
 export const hostsOf = (op: Operation) => {
-  const urls = [op.request.url, op.trigger.url, op.trigger.softFrom];
+  const urls = [op.request?.url, op.trigger?.url, op.trigger?.softFrom];
   return [...new Set(urls.flatMap((u) => (u ? [new URL(u).hostname] : [])))];
 };
 
@@ -20,7 +20,7 @@ export function summarize(op: Operation) {
   const fields = returnedFields(op.response);
   return {
     op: `${op.name}(${op.params.map((p) => `${p.name}${p.required ? "" : "?"}`).join(", ")})${fields ? ` -> ${fields.join(", ")}` : ""}`,
-    method: op.request.method.toUpperCase(),
+    method: op.request ? op.request.method.toUpperCase() : "LOCAL",
     hosts: hostsOf(op),
     ...(op.readOnly ? {} : { write: true as const }),
     ...(op.learnedLoggedIn ? { login: true as const } : {}),

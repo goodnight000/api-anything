@@ -250,15 +250,15 @@ describe("dialogs in browser runs", { skip: !browserAvailable() && "no Chromium 
     });
     assert.deepEqual(deletes(), [], "learning sent the delete");
     // told no, the page sent nothing and the learner took the page's own GET for the write
-    assert.equal(r.operation.request.method, "POST", JSON.stringify(r.operation.request));
-    assert.match(r.operation.request.url, /\/api\/delete\?id=48213$/);
+    assert.equal(r.operation.request!.method, "POST", JSON.stringify(r.operation.request!));
+    assert.match(r.operation.request!.url, /\/api\/delete\?id=48213$/);
     assert.deepEqual(
       r.warnings.filter((w) => /confirm/.test(w)),
       [],
       "both runs asked the same question",
     );
-    assert.equal(r.operation.trigger.confirms?.length, 1);
-    assert.equal(r.operation.trigger.confirms?.[0]?.step, 0);
+    assert.equal(r.operation.trigger!.confirms?.length, 1);
+    assert.equal(r.operation.trigger!.confirms?.[0]?.step, 0);
     // the spec keeps a digest, no page text
     assert.doesNotMatch(readFileSync(r.path, "utf8"), /Delete post|undone/);
 
@@ -298,7 +298,7 @@ describe("dialogs in browser runs", { skip: !browserAvailable() && "no Chromium 
       ...s!,
       operations: s!.operations.map((o) => ({
         ...o,
-        trigger: { url: `${fx.url}/delete/{id}`, steps: o.trigger.steps },
+        trigger: { url: `${fx.url}/delete/{id}`, steps: o.trigger!.steps },
       })),
     }));
     const unrecorded = await call("dlg", "deletePost", { id: "80808" }, { minIntervalMs: 0, allowWrites: true });
@@ -327,9 +327,9 @@ describe("dialogs in browser runs", { skip: !browserAvailable() && "no Chromium 
       write: true,
       from: { capture: cap },
     });
-    assert.equal(r.operation.request.method, "POST");
+    assert.equal(r.operation.request!.method, "POST");
     const asked = { message: "Delete post 1? This can't be undone.", origin: fx.url, step: 0 };
-    assert.deepEqual(r.operation.trigger.confirms, [{ step: 0, digest: confirmDigest(asked, { id: "1" }) }]);
+    assert.deepEqual(r.operation.trigger!.confirms, [{ step: 0, digest: confirmDigest(asked, { id: "1" }) }]);
   });
 
   test("a read add on a page whose request waits on a confirm says the confirm was told no", async () => {

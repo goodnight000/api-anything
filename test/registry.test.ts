@@ -582,7 +582,7 @@ test("publish previews what may be the publisher's own, and strips their history
   assert.equal(JSON.stringify(upload).includes("learnedAt"), false);
   assert.equal(upload.operation.version, undefined, "the local version record is not uploaded");
   assert.equal(upload.operation.params[0]!.example, "kittens", "the chosen examples are shared");
-  assert.equal(upload.operation.request.url, "https://news.example.com/api/users/4815162/search?q=%7Bq%7D");
+  assert.equal(upload.operation.request!.url, "https://news.example.com/api/users/4815162/search?q=%7Bq%7D");
   assert.equal(upload.site.notes, "Ask jo@example.org about 123e4567-e89b-12d3-a456-426614174000.");
   assert.deepEqual(
     { name: upload.site.name, domain: upload.site.domain, baseUrl: upload.site.baseUrl },

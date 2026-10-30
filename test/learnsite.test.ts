@@ -115,7 +115,7 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
     );
     assert.deepEqual(op.checks, [{ args: { q: "carol" }, expect: "result", purpose: HOLDOUT_PURPOSE }]);
     assert.equal(op.description, "search the scoped results");
-    assert.match(op.request.url, /q=bobby/);
+    assert.match(op.request!.url, /q=bobby/);
     assert.ok(!JSON.stringify(op).includes("alice"), "the spec does not say what the user asked");
     assert.deepEqual(scoped.proof?.holdout, { args: { q: "carol" }, ok: true, class: "ok", tier: 1 });
   });

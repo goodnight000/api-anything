@@ -114,7 +114,7 @@ describe("heal without a browser (maxTier 1)", () => {
     assert.equal(r.healed, true);
     assert.deepEqual(r.data, { name: "bob" });
     assert.ok(seen[0]!.url.includes(`/api/${OLD}/User`), "healing is reactive: the stored template goes first");
-    assert.equal(loadSite("rot1")!.site.operations[0]!.request.url.includes(NEW), true);
+    assert.equal(loadSite("rot1")!.site.operations[0]!.request!.url.includes(NEW), true);
   });
 
   test("repeated rotation: a second rotation more than 10 min after the first heal heals again", async () => {
@@ -205,7 +205,7 @@ describe("heal without a browser (maxTier 1)", () => {
     const r = await call("both", "user", { name: "bob" }, tier1(h));
     assert.equal(r.ok, true, JSON.stringify(r));
     const op = loadSite("both")!.site.operations[0]!;
-    assert.equal(op.request.body, `{"queryId":"${NEW}","variables":{"name":"alice"}}`);
+    assert.equal(op.request!.body, `{"queryId":"${NEW}","variables":{"name":"alice"}}`);
   });
 
   test("a numeric doc_id in a JSON body is swapped as a JSON number, not a string", async () => {
@@ -245,7 +245,7 @@ describe("heal without a browser (maxTier 1)", () => {
     const r = await call("numdoc", "q", { name: "bob" }, tier1(h));
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(
-      loadSite("numdoc")!.site.operations[0]!.request.body,
+      loadSite("numdoc")!.site.operations[0]!.request!.body,
       `{"doc_id":${NEW_DOC},"variables":{"name":"alice"}}`,
     );
   });
@@ -770,7 +770,7 @@ describe("heal without a browser (maxTier 1)", () => {
     const before = createHash("sha256").update(readFileSync(bundled)).digest("hex");
     const op = loadSite("x")!.site.operations.find((o) => o.name === "getUser")!;
     assert.equal(loadSite("x")!.source, "bundled");
-    const OLDX = new URL(op.request.url).pathname.split("/")[2]!;
+    const OLDX = new URL(op.request!.url).pathname.split("/")[2]!;
     const NEWX = "Nn1Ee2Ww3Xx4Qq5Uu6Ee7R";
     // a body with every learned key path, so the shape check sees a healthy answer
     const body: Record<string, unknown> = {};
@@ -811,7 +811,7 @@ describe("heal without a browser (maxTier 1)", () => {
     assert.equal(r.healed, true);
     const after = loadSite("x")!;
     assert.equal(after.source, "user");
-    assert.ok(after.site.operations.find((o) => o.name === "getUser")!.request.url.includes(NEWX));
+    assert.ok(after.site.operations.find((o) => o.name === "getUser")!.request!.url.includes(NEWX));
     assert.equal(
       after.site.operations.length,
       loadSite("x", join(HOME, "no-such-dir"))!.site.operations.length,
@@ -829,7 +829,7 @@ describe("heal without a browser (maxTier 1)", () => {
     ]);
     assert.deepEqual([a.ok, b.ok], [true, true], JSON.stringify([a, b]));
     assert.deepEqual([a.data, b.data], [{ name: "bob" }, { name: "carol" }]);
-    assert.ok(loadSite("conc")!.site.operations[0]!.request.url.includes(NEW));
+    assert.ok(loadSite("conc")!.site.operations[0]!.request!.url.includes(NEW));
     assert.ok(heals().length >= 1);
   });
 
@@ -884,14 +884,14 @@ describe("heal without a browser (maxTier 1)", () => {
     const r = await call("healset", "user", { name: "bob" }, tier1(rotatingHandler(() => NEW)));
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.healed, true);
-    assert.ok(loadSite("healset")!.site.operations[0]!.request.url.includes(NEW));
+    assert.ok(loadSite("healset")!.site.operations[0]!.request!.url.includes(NEW));
     // the same value recorded as no setting is a credential the heal refuses to save
     saveSite(themed("healcred"));
     saveSession("healcred", { cookies: [], values: { "user/theme": "solarized-dark" } });
     const refused = await call("healcred", "user", { name: "bob" }, tier1(rotatingHandler(() => NEW)));
     assert.equal(refused.ok, false, JSON.stringify(refused));
     assert.match(refused.reason ?? "", /refusing to save a healed spec containing a credential/);
-    assert.ok(loadSite("healcred")!.site.operations[0]!.request.url.includes(OLD), "nothing was saved");
+    assert.ok(loadSite("healcred")!.site.operations[0]!.request!.url.includes(OLD), "nothing was saved");
   });
 });
 
@@ -1004,7 +1004,7 @@ describe("heal with the browser (recapture)", { skip: !browserAvailable() && "no
       heals().map((h) => h.strategy),
       ["recapture"],
     );
-    assert.ok(!loadSite("moved")!.site.operations[0]!.request.url.includes(DECOY));
+    assert.ok(!loadSite("moved")!.site.operations[0]!.request!.url.includes(DECOY));
   });
 
   // Was a bug: recapture learns the new template's session refs but throws away their values

@@ -1760,7 +1760,7 @@ export function asGenerated(
   t: Pick<Operation, "request" | "slots" | "volatile">,
   places: Step[][],
   sessionValues: Record<string, string>,
-): Pick<Operation, "request" | "slots" | "volatile"> {
+): { request: Request; slots: Slot[]; volatile: Volatile[] } {
   const gens = new Set(places.map(key));
   const slots: Slot[] = [
     ...t.slots.filter((s) => !gens.has(key(s.at))),
@@ -1769,7 +1769,7 @@ export function asGenerated(
   const used = new Set(slots.flatMap((s) => [s.ref, ...templateRefs(s.template ?? "")]));
   for (const name of Object.keys(sessionValues)) if (!used.has(`session:${name}`)) delete sessionValues[name];
   return {
-    request: places.reduce((r, at) => setAt(r, at, ""), t.request),
+    request: places.reduce((r, at) => setAt(r, at, ""), t.request!),
     slots,
     volatile: t.volatile.filter((v) => !gens.has(key(v.at))),
   };
@@ -1903,7 +1903,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   const { minTier, exchange2, generated } = twoRunDiff(input, exchange, request, slots, match, warnings, found, short);
   if (found.size > disproved.size) return learn(input, found);
   if (generated.length) {
-    ({ request, slots, volatile } = asGenerated({ request, slots, volatile }, generated, sessionValues));
+    ({ request, slots, volatile } = asGenerated({ request: request!, slots, volatile }, generated, sessionValues));
     settings = settings.filter((n) => n in sessionValues);
   }
 

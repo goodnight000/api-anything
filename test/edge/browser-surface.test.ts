@@ -384,7 +384,7 @@ describe("tier-3 calls, login walls, and add", { skip: noChrome }, () => {
     }
     assert.ok(
       r.warnings.some((w) => /log ?in|sign ?in/i.test(w)),
-      `learned ${r.operation.request.url} with no login warning; preview: ${JSON.stringify(r.preview).slice(0, 120)}`,
+      `learned ${r.operation.request!.url} with no login warning; preview: ${JSON.stringify(r.preview).slice(0, 120)}`,
     );
   });
 
@@ -1228,7 +1228,7 @@ describe("export secret scan", () => {
       assert.ok(!text.includes("alice") && !text.includes("bobby"), "examples stripped");
       assert.ok(
         !text.includes(encodeURIComponent(TOKEN)) || ex.secrets.length > 0,
-        `exported the live cookie (${ex.spec.operations[0]!.request.url}) with secrets=${JSON.stringify(ex.secrets)} warnings=${JSON.stringify(ex.warnings)}; add warnings=${JSON.stringify(r.warnings)}`,
+        `exported the live cookie (${ex.spec.operations[0]!.request!.url}) with secrets=${JSON.stringify(ex.secrets)} warnings=${JSON.stringify(ex.warnings)}; add warnings=${JSON.stringify(r.warnings)}`,
       );
     });
   });

@@ -104,7 +104,7 @@ function validRegex(p: string): boolean {
 export const HtmlRecipeSchema = z.object({ items: z.string(), fields: z.record(z.string(), z.string()) });
 
 export const ResponseSchema = z.object({
-  format: z.enum(["json", "html", "embedded"]).default("json"),
+  format: z.enum(["json", "html", "embedded", "text"]).default("json"),
   contentType: z.string().optional(),
   xssiPrefix: z.string().optional(),
   extract: z.string().optional(),
@@ -178,43 +178,54 @@ export const ReadbackSchema = z.object({
   find: z.object({ field: z.string().min(1), equals: z.string() }).optional(),
 });
 
-export const OperationSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  request: RequestSchema,
-  slots: z.array(SlotSchema).default([]),
-  volatile: z.array(VolatileSchema).default([]),
-  trigger: TriggerSchema,
-  match: MatchSchema.default({}),
-  response: ResponseSchema.default({ format: "json" }),
-  params: z.array(ParamSchema).default([]),
-  readOnly: z.boolean(),
-  /**
-   * header or field names whose captured value is a public constant, kept literal: a human's call (a
-   * web app's shared bearer), or a credential-named value the site ships in its own JS (an API key)
-   */
-  public: z.array(z.string()).optional(),
-  minTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
-  learnedLoggedIn: z.boolean().default(false),
-  learnedAt: z.string().optional(),
-  /** run by `verify` beside the examples; `publish` refuses while one fails */
-  checks: z.array(CheckSchema).optional(),
-  /** a read's list pages: a call returns the next page's cursor (nextPage), and verify checks page 2 is not page 1 again */
-  paging: PagingSchema.optional(),
-  /** a write's proof: a read run once after it is sent; finding it makes the call's `write` "applied" */
-  readback: ReadbackSchema.optional(),
-  /**
-   * Learning could not show these params change the answer: example 2, which gave them other values,
-   * was answered with example 1's data. `publish` refuses while it is set; a `verify` clears it when
-   * two of its passing cases that differ only in these params answer differently.
-   */
-  unproven: z.object({ params: z.array(z.string()), reason: z.string() }).optional(),
-  /**
-   * The registry version this op is (its hash) and the status the registry gave it, set by `pull` and
-   * `shareOps`. This machine's record, like `learnedAt`: never uploaded, hashed or exported.
-   */
-  version: z.object({ hash: z.string(), status: z.string() }).optional(),
+/**
+ * A local op runs a command on the caller's machine instead of sending a request: one shell line,
+ * its `{param}` holes filled from the op's params, its stdout judged as a plain-text response body.
+ */
+export const LocalOpSchema = z.object({
+  command: z.string().min(1),
 });
+
+export const OperationSchema = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    request: RequestSchema.optional(),
+    local: LocalOpSchema.optional(),
+    slots: z.array(SlotSchema).default([]),
+    volatile: z.array(VolatileSchema).default([]),
+    trigger: TriggerSchema.optional(),
+    match: MatchSchema.default({}),
+    response: ResponseSchema.default({ format: "json" }),
+    params: z.array(ParamSchema).default([]),
+    readOnly: z.boolean(),
+    /**
+     * header or field names whose captured value is a public constant, kept literal: a human's call (a
+     * web app's shared bearer), or a credential-named value the site ships in its own JS (an API key)
+     */
+    public: z.array(z.string()).optional(),
+    minTier: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
+    learnedLoggedIn: z.boolean().default(false),
+    learnedAt: z.string().optional(),
+    /** run by `verify` beside the examples; `publish` refuses while one fails */
+    checks: z.array(CheckSchema).optional(),
+    /** a read's list pages: a call returns the next page's cursor (nextPage), and verify checks page 2 is not page 1 again */
+    paging: PagingSchema.optional(),
+    /** a write's proof: a read run once after it is sent; finding it makes the call's `write` "applied" */
+    readback: ReadbackSchema.optional(),
+    /**
+     * Learning could not show these params change the answer: example 2, which gave them other values,
+     * was answered with example 1's data. `publish` refuses while it is set; a `verify` clears it when
+     * two of its passing cases that differ only in these params answer differently.
+     */
+    unproven: z.object({ params: z.array(z.string()), reason: z.string() }).optional(),
+    /**
+     * The registry version this op is (its hash) and the status the registry gave it, set by `pull` and
+     * `shareOps`. This machine's record, like `learnedAt`: never uploaded, hashed or exported.
+     */
+    version: z.object({ hash: z.string(), status: z.string() }).optional(),
+  })
+  .refine((o) => (o.request ? 1 : 0) + (o.local ? 1 : 0) === 1, "an op has exactly one of request and local");
 
 export const SiteSchema = z.object({
   name: z.string().regex(/^[a-z0-9][a-z0-9._-]*$/i),
@@ -233,6 +244,7 @@ export const SiteSchema = z.object({
 });
 
 export type Request = z.infer<typeof RequestSchema>;
+export type LocalOp = z.infer<typeof LocalOpSchema>;
 export type Slot = z.infer<typeof SlotSchema>;
 export type Volatile = z.infer<typeof VolatileSchema>;
 export type Trigger = z.infer<typeof TriggerSchema>;

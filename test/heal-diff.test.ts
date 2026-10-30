@@ -92,7 +92,7 @@ test("a heal says what changed in the template; revert puts the op back as it wa
 
   const [logged] = loadHeals("fx");
   assert.deepEqual(logged!.changes, r.heal!.changes);
-  assert.equal(logged!.previous!.request.url, first.request.url, "the log keeps the op as it was");
+  assert.equal(logged!.previous!.request!.url, first.request!.url, "the log keeps the op as it was");
   assert.ok(!JSON.stringify(loadHeals()).includes(CT0), "no live cookie value in the heal log");
 
   const back = revertHeal("fx", "getUser");
@@ -114,9 +114,9 @@ test("a recapture-style change names each leaf: header, query and the slot that 
   const b: Operation = {
     ...a,
     request: {
-      ...a.request,
-      url: a.request.url.replace("UserByName?", "UserByName?lang=en&"),
-      headers: { ...a.request.headers, "x-app-version": "2026.10.01-ffffff", "x-client": "web" },
+      ...a.request!,
+      url: a.request!.url.replace("UserByName?", "UserByName?lang=en&"),
+      headers: { ...a.request!.headers, "x-app-version": "2026.10.01-ffffff", "x-client": "web" },
     },
   };
   const { templateChanges } = await import("../src/heal.js");
@@ -127,7 +127,7 @@ test("a recapture-style change names each leaf: header, query and the slot that 
   ]);
   const moved: Operation = {
     ...a,
-    request: { ...a.request, url: `${a.request.url}&user=alice` },
+    request: { ...a.request!, url: `${a.request!.url}&user=alice` },
     slots: [{ param: "name", at: ["query:user"] }, a.slots[1]!],
   };
   assert.deepEqual(templateChanges(a, moved), [
@@ -143,7 +143,7 @@ test("revert refuses an op changed after its heal, and one with no heal kept", a
   // learned again (or edited) after the heal: reverting would undo that
   saveSite({
     ...site,
-    operations: [{ ...site.operations[0]!, request: { ...site.operations[0]!.request, headers: {} } }],
+    operations: [{ ...site.operations[0]!, request: { ...site.operations[0]!.request!, headers: {} } }],
   });
   assert.throws(() => revertHeal("fx", "getUser"), /changed after its last heal/);
   assert.throws(() => revertHeal("fx", "nope"), /no operation "nope"/);
@@ -170,7 +170,10 @@ test("revert on a pulled spec's user copy keeps its shared record and gives the 
     ],
   });
   const was = pulled.operations[0]!;
-  const { version: _v, ...healed } = { ...was, request: { ...was.request, url: was.request.url.replace("v1", "v2") } };
+  const { version: _v, ...healed } = {
+    ...was,
+    request: { ...was.request!, url: was.request!.url.replace("v1", "v2") },
+  };
   saveSite({ ...pulled, operations: [healed] });
   appendHeal({ site: "news", op: "top", strategy: "recapture", diff: "", previous: was, saved: templateHash(healed) });
   const r = revertHeal("news", "top");

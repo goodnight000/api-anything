@@ -256,10 +256,10 @@ export function ipIn(v: string): string | undefined {
 }
 
 /** The addresses an operation sends to or opens. */
-export const opUrls = (op: { request: { url: string }; trigger: { url: string; softFrom?: string } }) => [
-  op.request.url,
-  op.trigger.url,
-  op.trigger.softFrom,
+export const opUrls = (op: { request?: { url: string }; trigger?: { url: string; softFrom?: string } }) => [
+  op.request?.url,
+  op.trigger?.url,
+  op.trigger?.softFrom,
 ];
 
 /** The origins of `urls` (`https://www.x.test`), the http(s) ones whose host is no template. */

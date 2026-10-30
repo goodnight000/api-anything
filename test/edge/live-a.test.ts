@@ -199,11 +199,11 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
       response: { html: { items: "li.r", fields: { title: "" } } },
     });
     assert.equal(
-      new URL(r.operation.request.url).pathname,
+      new URL(r.operation.request!.url).pathname,
       "/shop",
-      `learned ${r.operation.request.method} ${r.operation.request.url}`,
+      `learned ${r.operation.request!.method} ${r.operation.request!.url}`,
     );
-    assert.equal(r.operation.request.method, "GET");
+    assert.equal(r.operation.request!.method, "GET");
     const c = await call("shop", "search", { q: "blender" }, fast);
     assert.equal(c.ok, true, JSON.stringify(c));
     assert.deepEqual(c.data, [{ title: "blender result 1" }, { title: "blender result 2" }]);
@@ -218,7 +218,7 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
       match: { method: "GET", path: "/shop" },
       response: { html: { items: "li.r", fields: { title: "" } } },
     });
-    assert.equal(new URL(r.operation.request.url).pathname, "/shop");
+    assert.equal(new URL(r.operation.request!.url).pathname, "/shop");
     const c = await call("shop2", "search", { q: "blender" }, fast);
     assert.equal(c.ok, true, JSON.stringify(c));
     assert.equal(c.tier, 1);
@@ -302,7 +302,7 @@ describe("browser-backed live patterns", { skip: noChrome }, () => {
       [],
       "a bot challenge is not drift",
     );
-    assert.ok(!opOf("hotels2", "search").request.url.includes("chal_t"), opOf("hotels2", "search").request.url);
+    assert.ok(!opOf("hotels2", "search").request!.url.includes("chal_t"), opOf("hotels2", "search").request!.url);
   });
 
   test("when even the example args get no data, the verdict is not 'input' (the site is down, not the args)", async () => {

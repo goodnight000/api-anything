@@ -83,6 +83,33 @@ is, "a date as YYYY-MM-DD"): an arg that fails it is `input`, named with the hin
 A numeric string whose exact value is past the largest safe integer (2^53 − 1) is never rounded: plain digits are sent exactly, and any other form (an
 exponent, a decimal point: `9007199254740993e0`) is `input`, saying so, with nothing sent. `"false"` is false.
 
+## Local operations
+
+An op answers a call either by sending a request or by running a command. A local op stores no
+request: it stores one shell line whose `{param}` holes take the op's params,
+
+```jsonc
+{ "local": { "command": "yt-dlp --skip-download --write-subs ... '{id}' && cat ..." } }
+```
+
+and runs it in the caller's shell at call time: the stdout is the response body, judged by the same
+classifier with `format: "text"` (the body is the answer, no recipe). A local op has no request, no
+trigger and no slots; the schema requires exactly one of `request` and `local`.
+
+The rules follow from the mechanism:
+
+- The command runs **once** per call, with the site's pace. It has no tiers: there is no page to
+  load and no capture to make, so healing never applies — a non-zero exit (or a stop at the
+  timeout, whose stderr tail is quoted) is the final answer, class `error`.
+- Args are prepared exactly as a request's are (defaults, types, pattern/enum/bounds): a refused
+  arg keeps the command from running.
+- A shared local op is code the spec's author wrote, running on the caller's machine: `vetShared`
+  warns about each one, and nothing of the caller's session reaches it (only its params).
+- `verify` runs it beside the examples; `pull`, `publish` and the registry treat it as any other op.
+
+The bundled `youtube captions` is the first local op: it needs `yt-dlp` on the caller's machine and
+returns the video's subtitles as WebVTT.
+
 ## Learning (`learn.ts`)
 
 Input: the captured exchanges plus one or two example arg sets. Output: an Operation.
@@ -662,6 +689,9 @@ stale. A forced `api-anything heal` that re-learns the same template replays it 
 answer: the same template is no proof the op works.
 
 ## Execution ladder
+
+A local op climbs no ladder: it takes the site's pace slot, runs its command once and judges its
+stdout (Local operations). Everything below is the request path.
 
 Requests to one site are paced at every tier: tier 1's sends, tier 2's page fetches (the wait starts
 once Chrome is up, so its start overlaps it) and tier 3's trigger runs take the site's next send
@@ -1543,7 +1573,8 @@ independent alternative.
     and every one sends a tool's description; a note in every result would be paid for on every
     call, and the model already knows which tool a result came from.
   - `mcp --print-config` prints the command or config entry that adds the server to Claude Code,
-    Codex, Gemini CLI, VS Code, Cursor and Claude Desktop (`clients.ts`), with the absolute path of
+    Codex, Gemini CLI, VS Code, Cursor, Claude Desktop and Hermes (`clients.ts`), with the absolute
+    path of
     the node running it and of the CLI entry (from a checkout, through tsx's loader), the other
     flags given, and `API_ANYTHING_HOME`/`API_ANYTHING_BROWSER` when set: a client started from the
     Dock or a menu may not get the shell's PATH (an nvm node) or its variables. Gemini CLI reads the

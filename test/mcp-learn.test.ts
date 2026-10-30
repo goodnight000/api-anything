@@ -269,7 +269,7 @@ test("learn_site's automatic pick passes over a write for the read; the consent 
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.chosen?.method, "GET");
     assert.deepEqual(r.data, [{ name: "alice one" }, { name: "alice two" }]);
-    assert.equal(loadSite("shop")!.site.operations[0]!.request.method, "GET");
+    assert.equal(loadSite("shop")!.site.operations[0]!.request!.method, "GET");
     assert.ok(
       s.hits.every((h) => h.startsWith("GET /api/search")),
       `only the read reached the site: ${s.hits.join("; ")}`,

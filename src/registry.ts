@@ -215,7 +215,8 @@ function changes(before: Site, after: Site) {
 const SERVED_NOW_MS = 3_000;
 
 const sameMatch = (a: Operation, b: Operation) =>
-  (a.match.method ?? a.request.method).toUpperCase() === (b.match.method ?? b.request.method).toUpperCase() &&
+  (a.match.method ?? a.request?.method ?? "").toUpperCase() ===
+    (b.match.method ?? b.request?.method ?? "").toUpperCase() &&
   (a.match.host ?? "") === (b.match.host ?? "") &&
   (a.match.path ?? "") === (b.match.path ?? "") &&
   (a.match.operationName ?? "") === (b.match.operationName ?? "");

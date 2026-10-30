@@ -294,7 +294,7 @@ test("export: shapes and typed example values stripped, examples kept on request
   saveSession("demo", { cookies: [], values: { authorization: "Bearer PUBLICBEARERPUBLICBEARER" } });
   const r = exportSite("demo");
   const op = r.spec.operations[0]!;
-  assert.equal(op.request.body, '{"id":null,"q":"{q}"}');
+  assert.equal(op.request!.body, '{"id":null,"q":"{q}"}');
   assert.equal(op.response.shape, undefined);
   assert.equal(op.params[0]!.example, undefined);
   assert.deepEqual(r.secrets, [], "the public header is allowed");
@@ -310,7 +310,7 @@ test("export refuses a hand-written step that types a password, which no live se
   fresh();
   const op = site("x").operations[0]!;
   const steps = [{ action: "fill" as const, selector: "#pw", value: "Hunter2-RealPassw0rd!" }];
-  saveSite({ ...site("x"), operations: [{ ...op, trigger: { ...op.trigger, steps } }] });
+  saveSite({ ...site("x"), operations: [{ ...op, trigger: { ...op.trigger!, steps } }] });
   assert.deepEqual(exportSite("demo").secrets, [
     "$.operations[0].trigger steps[0] fills a password or one-time-code field (#pw): a sign-in is the user's: ask them to run api-anything login <site> (it imports the cookies of the browser they are signed in with, no password)",
   ]);

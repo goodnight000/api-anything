@@ -206,7 +206,7 @@ describe("a token an earlier response issued is a session: ref, whatever its nam
     );
     const shipped = learn([bundle, api()], [{ q: "kittens" }]).operation;
     assert.deepEqual(shipped.public, ["x-api-key"]);
-    assert.equal(shipped.request.headers["x-api-key"], key);
+    assert.equal(shipped.request!.headers["x-api-key"], key);
   });
 
   test("bearer and pwd name credentials", () => {

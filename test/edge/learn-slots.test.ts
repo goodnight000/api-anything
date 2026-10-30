@@ -358,7 +358,7 @@ test("under a public name a stored value is a reference, whatever it looks like"
     const { sessionValues } = learned;
     for (const { operation: op } of [learned, await add(`stored-${nextId}`, ex(), [], input.storage, input.public)]) {
       assert.deepEqual(op.slots.at(-1), { ref: `session:op/${ref}`, at: [`header:${name}`] }, cache);
-      assert.equal(op.request.headers[name], "");
+      assert.equal(op.request!.headers[name], "");
       assert.ok(!JSON.stringify(op).includes(headers[name]!.replace(/"/g, '\\"')), `${cache} is in the spec`);
       assert.equal(
         buildRequest(op, { q: "puppies" }, { cookies: [], values: sessionValues }).headers[name],
@@ -443,7 +443,7 @@ test("a container that is a session value with only refs inside is one ref, and 
     { param: "q", at: ["query:q"] },
     { ref: "session:op/x-csrf-token", at: ["header:x-csrf-token"] },
   ]);
-  assert.equal(header.operation.request.headers["x-csrf-token"], "");
+  assert.equal(header.operation.request!.headers["x-csrf-token"], "");
   assert.deepEqual(header.sessionValues, { "op/x-csrf-token": JSON.stringify(value) });
   absent(header.operation, [SID, OPAQUE, "leafValue42", "innerKey9", "stamp", "aB3dE"]);
   const session = { cookies, values: header.sessionValues };
@@ -462,7 +462,7 @@ test("a container that is a session value with only refs inside is one ref, and 
     { param: "q", at: ["query:q"] },
     { ref: "session:op/savedRequest", at: ["body"] },
   ]);
-  assert.equal(stored.operation.request.body, "");
+  assert.equal(stored.operation.request!.body, "");
   assert.deepEqual(stored.operation.volatile, []);
   assert.deepEqual(stored.sessionValues, { "op/savedRequest": body });
   absent(stored.operation, [SID, OPAQUE, "Ab3dEf9h", "doc_id", "123456789012"]);
@@ -520,7 +520,7 @@ test("a cookie or stored value is a reference under a persisted-query field name
     assert.ok(!JSON.stringify(inside.operation).includes(A), `${name}: the stored token stayed in the spec`);
     assert.deepEqual(inside.operation.slots.at(-1), { ref: "session:op/token", at, template: "v1:{session:op/token}" });
     assert.deepEqual(inside.sessionValues, { "op/token": A });
-    assert.equal(JSON.parse(inside.operation.request.body!)[name], "");
+    assert.equal(JSON.parse(inside.operation.request!.body!)[name], "");
 
     const whole = learn(body({ [name]: A }), [{ q: "kittens" }], { storage: { token: A } });
     assert.deepEqual(whole.operation.slots.at(-1), { ref: "session:op/token", at });
@@ -553,7 +553,7 @@ test("a cookie or stored value is a reference under a persisted-query field name
     plain.volatile.map((v) => v.at),
     [["body", "json:/extensions/persistedQuery/sha256Hash"]],
   );
-  assert.ok(plain.request.body!.includes(hash), "the hash stays in the template for the cheap heal to swap");
+  assert.ok(plain.request!.body!.includes(hash), "the hash stays in the template for the cheap heal to swap");
 });
 
 /* ------------------------------------------- the check behind every pass */
@@ -652,7 +652,7 @@ test("the scan reports a base64 copy only when the bytes there are the value's",
       cookies: [cookie("sid", "abcdef")],
     },
   );
-  assert.equal(JSON.parse(op.request.body!).cursor, "eHFiY2RlZg==");
+  assert.equal(JSON.parse(op.request!.body!).cursor, "eHFiY2RlZg==");
 
   // every byte beside the value changed in turn: the value itself is found, a neighbour of it never
   const value = "aB3dE4-z";
@@ -693,10 +693,10 @@ test("the check knows a stored credential that no pass made a reference, and no 
   ];
   for (const storage of orders) {
     const kept = run({ state: b64("ordinary-value") }, { storage });
-    assert.equal(JSON.parse(kept.operation.request.body!).state, b64("ordinary-value"), JSON.stringify(storage));
+    assert.equal(JSON.parse(kept.operation.request!.body!).state, b64("ordinary-value"), JSON.stringify(storage));
   }
   const short = run({ ctx: "v1:Ab3dEf9h" }, { storage: { csrf: "Ab3dEf9h" } });
-  assert.equal(JSON.parse(short.operation.request.body!).ctx, "v1:Ab3dEf9h");
+  assert.equal(JSON.parse(short.operation.request!.body!).ctx, "v1:Ab3dEf9h");
   // ...and where the same value can be a reference it is one, as before
   const referenced = run(
     { ctx: "ordinary-value", state: b64("ordinary-value") },
@@ -715,7 +715,7 @@ test("the check knows a stored credential that no pass made a reference, and no 
     { param: "q", at: ["body", "json:/q"] },
     { ref: "session:op/locale", at: ["body", "json:/locale"] },
   ]);
-  assert.equal(JSON.parse(sent.operation.request.body!).state, b64(locale));
+  assert.equal(JSON.parse(sent.operation.request!.body!).state, b64(locale));
   // but under a credential's name in the request the same stored text is one
   assert.throws(
     () => run({ token: locale, state: b64(locale) }, { storage: { locale } }),
@@ -730,7 +730,7 @@ test("the check knows a stored credential that no pass made a reference, and no 
   // ...and no stored setting from being a ref, but the name it is sent under no longer makes it a credential
   const waived = run({ token: locale, state: b64(locale) }, { storage: { locale }, public: ["token"] });
   assert.deepEqual(waived.operation.slots.at(-1), { ref: "session:op/locale", at: ["body", "json:/token"] });
-  assert.equal(JSON.parse(waived.operation.request.body!).state, b64(locale));
+  assert.equal(JSON.parse(waived.operation.request!.body!).state, b64(locale));
   // exempt by position: the caller's own example
   const ID = "550e8400-e29b-41d4-a716-446655440000";
   const viewed = learn([xhr({ url: `https://api.site.test/v1/items/${ID}` })], [{ id: ID }], {
@@ -1156,7 +1156,7 @@ test("a stored setting spelled in a query key saves, and a ref's name keeps no c
   ]);
   assert.ok(!JSON.stringify(op).includes(ORG), "no part of the cookie is in the saved spec");
   // the setting the request spells in a query key is no credential, here or on export
-  assert.equal(new URL(op.request.url).searchParams.get("include_trigger_sessions"), "true");
+  assert.equal(new URL(op.request!.url).searchParams.get("include_trigger_sessions"), "true");
   assert.deepEqual(exportSite("issue25").secrets, []);
   // the ref still resolves, so a replay fills the path from the session
   assert.deepEqual(loadSession("issue25").values, { [ref.slice(8)]: "sessions" });
@@ -1291,7 +1291,7 @@ test("a session a refused add left with the setting unclassified still adds", as
   });
   // this learn classifies the name it was already holding, so the query key spelling it is no credential
   assert.deepEqual(loadSession("issue25-stale").kinds, { [ref]: "setting" });
-  assert.equal(new URL(op.request.url).searchParams.get("include_trigger_sessions"), "true");
+  assert.equal(new URL(op.request!.url).searchParams.get("include_trigger_sessions"), "true");
   assert.deepEqual(exportSite("issue25-stale").secrets, []);
 });
 

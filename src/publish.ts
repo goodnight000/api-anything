@@ -58,10 +58,11 @@ export function personal(u: VersionUpload): string[] {
   const found = [...personalIn(site, "$.site"), ...personalIn(u.operation, "$.operation")];
   const op = u.operation;
   const at = `$.operation`;
-  for (const seg of new URL(op.request.url).pathname.split("/"))
-    if (/^\d{5,}$/.test(seg))
-      found.push(`${at}.request.url has ${seg} in its path, which no param fills: is it your account's?`);
-  for (const [j, s] of (op.trigger.steps ?? []).entries())
+  if (op.request)
+    for (const seg of new URL(op.request.url).pathname.split("/"))
+      if (/^\d{5,}$/.test(seg))
+        found.push(`${at}.request.url has ${seg} in its path, which no param fills: is it your account's?`);
+  for (const [j, s] of (op.trigger?.steps ?? []).entries())
     if (s.action === "fill" && s.value && !s.value.includes("{"))
       found.push(`${at}.trigger.steps[${j}] types the literal "${s.value}" into the page`);
   for (const p of op.params) {
@@ -84,7 +85,7 @@ export function personal(u: VersionUpload): string[] {
 /** Every host an op sends to or opens, `goto` steps included. */
 export const hostsOfOp = (op: Operation) => [
   ...hostsOf(op),
-  ...(op.trigger.steps ?? []).flatMap((s) => {
+  ...(op.trigger?.steps ?? []).flatMap((s) => {
     try {
       return s.action === "goto" && s.value ? [new URL(s.value).hostname] : [];
     } catch {

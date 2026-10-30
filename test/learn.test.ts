@@ -202,7 +202,7 @@ test("X-like GraphQL GET: params, cookie/session refs, volatile anchor, match, h
     readOnly: true,
   });
 
-  assert.ok(op.request.url.startsWith("https://x.com/i/api/graphql/Gb-d6r0vxPOADdG62OEBpQ/UserByScreenName?"));
+  assert.ok(op.request!.url.startsWith("https://x.com/i/api/graphql/Gb-d6r0vxPOADdG62OEBpQ/UserByScreenName?"));
   assert.deepEqual(
     op.slots.filter((s) => s.param),
     [
@@ -228,7 +228,7 @@ test("X-like GraphQL GET: params, cookie/session refs, volatile anchor, match, h
   });
 
   // header policy: verbatim minus pseudo/cookie/accept-encoding; per-op headers like x-twitter-auth-type stay
-  assert.deepEqual(Object.keys(op.request.headers).sort(), [
+  assert.deepEqual(Object.keys(op.request!.headers).sort(), [
     "accept",
     "authorization",
     "referer",
@@ -448,7 +448,7 @@ test("LinkedIn-style quoted JSESSIONID echoed without quotes -> strip-quotes coo
     at: ["query:variables"],
     template: "(start:0,query:(keywords:{keywords}))",
   });
-  assert.equal(operation.request.headers["csrf-token"], "");
+  assert.equal(operation.request!.headers["csrf-token"], "");
   const req = buildRequest(
     operation,
     { keywords: "zig" },
@@ -502,7 +502,7 @@ test("Instagram-style form POST: friendly name is the anchor and the match opera
   });
   const types = Object.fromEntries(operation.params.map((p) => [p.name, p.type]));
   assert.deepEqual(types, { username: "string", first: "number", id: "number" });
-  assert.equal(operation.request.headers["x-ig-app-id"], "936619743392459");
+  assert.equal(operation.request!.headers["x-ig-app-id"], "936619743392459");
   const req = buildRequest(
     operation,
     { username: "esa", first: "12", id: "1999999999999999999" },
@@ -577,7 +577,7 @@ test("example validation and pick errors", () => {
     /no captured request with id 99/,
   );
   const byId = learnOperation({ ...base, examples: [{ screen_name: "nasa" }], id: 1 });
-  assert.equal(byId.operation.request.url, "https://x.com/nasa");
+  assert.equal(byId.operation.request!.url, "https://x.com/nasa");
   assert.deepEqual(byId.operation.slots, [{ param: "screen_name", at: ["path:0"] }]);
   assert.deepEqual(byId.operation.match.path, "/*");
 });
@@ -612,13 +612,13 @@ test("per-session form tokens (Google at, Meta fb_dtsg) become session refs, and
   assert.ok(op.slots.some((s) => s.ref === "session:s/fb_dtsg"));
   assert.equal(sessionValues["s/at"], AT);
   assert.ok(
-    !op.request.body!.includes(encodeURIComponent(AT)) && !op.request.body!.includes(encodeURIComponent(DTSG)),
-    op.request.body!,
+    !op.request!.body!.includes(encodeURIComponent(AT)) && !op.request!.body!.includes(encodeURIComponent(DTSG)),
+    op.request!.body!,
   );
-  assert.equal(op.request.headers.authorization, "", "authorization is a session ref by default");
+  assert.equal(op.request!.headers.authorization, "", "authorization is a session ref by default");
 
   const pub = learnOperation({ ...base, public: ["Authorization"] }).operation;
-  assert.equal(pub.request.headers.authorization, BEARER);
+  assert.equal(pub.request!.headers.authorization, BEARER);
   assert.deepEqual(pub.public, ["authorization"]);
   assert.ok(!pub.slots.some((s) => s.ref === "session:s/authorization"));
 });

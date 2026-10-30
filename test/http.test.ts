@@ -224,7 +224,7 @@ test("send against a local server: GET has no body, per-site pacing, timeout", a
     assert.ok(calls[1]! - calls[0]! >= 104, `paced ${calls[1]! - calls[0]!} ms apart`);
     assert.equal(a.url, `${base}/items?id=123`);
 
-    const slow = { ...get, request: { ...get.request, url: `${base}/slow?id=1` } };
+    const slow = { ...get, request: { ...get.request!, url: `${base}/slow?id=1` } };
     await assert.rejects(
       send(slow, { id: "1" }, local, { site: "slow", minIntervalMs: 0, timeoutMs: 50 }),
       /no response within 50 ms/,

@@ -308,7 +308,7 @@ function parts(url: string): [string, string][] | undefined {
  * the args leave a required param unset or name one the op lacks.
  */
 export function sameTrigger(op: Operation, trigger: string, args: Args): Args | undefined {
-  const a = parts(op.trigger.url);
+  const a = parts(op.trigger!.url);
   const b = parts(trigger);
   if (!a || !b || a.length !== b.length) return undefined;
   const names: Record<string, string> = {};
@@ -406,7 +406,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   const existing = loadSite(site)?.site;
   let op = input.op ?? opName(input.trigger, input.args);
   if (!input.op)
-    for (let n = 2; existing?.operations.some((x) => x.name === op && x.trigger.url !== input.trigger); n++)
+    for (let n = 2; existing?.operations.some((x) => x.name === op && x.trigger?.url !== input.trigger); n++)
       op = `${opName(input.trigger, input.args)}${n}`;
   const fail = (error: string, next: string, extra: Partial<LearnSiteResult> = {}): LearnSiteResult => ({
     ok: false,

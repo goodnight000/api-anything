@@ -175,7 +175,7 @@ describe("request picking", () => {
       response: { html: { items: "#hdr", fields: { name: "a" } } },
       from: { capture: capture(url, [htmlDoc(url, `<div id="hdr"><a>next.js</a></div>`)]) },
     });
-    assert.equal(r.operation.request.url, url);
+    assert.equal(r.operation.request!.url, url);
   });
 
   test("regression: a plain document path still ranks", () => {
@@ -211,8 +211,8 @@ describe("request picking", () => {
       },
       from: { capture: capture(url, [doc, sponsor]) },
     });
-    assert.equal(r.operation.request.method, "GET", r.warnings.join(" | "));
-    assert.equal(r.operation.request.url, url);
+    assert.equal(r.operation.request!.method, "GET", r.warnings.join(" | "));
+    assert.equal(r.operation.request!.url, url);
     assert.ok(r.preview, `preview resolves: ${r.warnings.join(" | ")}`);
   });
 });
@@ -235,8 +235,8 @@ describe("conditional request headers", () => {
       trigger: { url: "https://github.com/search?q={q}&type=repositories" },
       readOnly: true,
     }).operation;
-    assert.equal(op.request.headers["if-none-match"], undefined);
-    assert.equal(op.request.headers["if-modified-since"], undefined);
+    assert.equal(op.request!.headers["if-none-match"], undefined);
+    assert.equal(op.request!.headers["if-modified-since"], undefined);
   });
 
   describe("capture then add (the SKILL flow) on a site with stable ETags", {
@@ -259,7 +259,7 @@ describe("conditional request headers", () => {
       assert.equal(
         res.ok,
         true,
-        `${JSON.stringify(res)}; stored if-none-match=${r.operation.request.headers["if-none-match"]}; server saw ${JSON.stringify(fx.conditional)}`,
+        `${JSON.stringify(res)}; stored if-none-match=${r.operation.request!.headers["if-none-match"]}; server saw ${JSON.stringify(fx.conditional)}`,
       );
     });
   });

@@ -89,7 +89,7 @@ describe("unsafe requests in browser runs", { skip: !browserAvailable() && "no C
     await sleep(300);
     assert.deepEqual([...sent("/api/cart"), ...sent("/api/order")], [], "learning sent the order or the cart");
     // the item in the cart's path is the example's: a wildcard, like a param's segment in a match
-    assert.deepEqual(r.operation.trigger.companions, [{ method: "PUT", host: "127.0.0.1", path: "/api/cart/*" }]);
+    assert.deepEqual(r.operation.trigger!.companions, [{ method: "PUT", host: "127.0.0.1", path: "/api/cart/*" }]);
 
     updateSite("shop", (s) => ({ ...s!, operations: s!.operations.map((o) => ({ ...o, minTier: 3 as const })) }));
     const res = await call("shop", "order", { item: "kettle" }, { minIntervalMs: 0, allowWrites: true });
@@ -122,7 +122,11 @@ describe("unsafe requests in browser runs", { skip: !browserAvailable() && "no C
   test("a write learned before companions were recorded still lets them out, and names each", async () => {
     updateSite("shop", (s) => ({
       ...s!,
-      operations: s!.operations.map(({ trigger: { companions: _c, ...t }, ...o }) => ({ ...o, trigger: t })),
+      operations: s!.operations.map((o) => {
+        const { trigger, ...rest } = o;
+        const { companions: _c, ...t } = trigger!;
+        return { ...rest, trigger: t };
+      }),
     }));
     const res = await call("shop", "order", { item: "fridge-old" }, { minIntervalMs: 0, allowWrites: true });
     await sleep(300);
@@ -191,7 +195,7 @@ describe("unsafe requests in browser runs", { skip: !browserAvailable() && "no C
       examples: [{ q: "lamp" }, { q: "chair" }],
     });
     assert.equal(gql.operation.readOnly, true);
-    assert.match(gql.operation.request.url, /\/api\/gql$/);
+    assert.match(gql.operation.request!.url, /\/api\/gql$/);
 
     await assert.rejects(
       addOperation({
@@ -211,7 +215,7 @@ describe("unsafe requests in browser runs", { skip: !browserAvailable() && "no C
       match: { method: "POST", path: "/api/find" },
     });
     assert.equal(pinned.operation.readOnly, true);
-    assert.match(pinned.operation.request.url, /\/api\/find$/);
+    assert.match(pinned.operation.request!.url, /\/api\/find$/);
     assert.ok(
       pinned.warnings.some((w) =>
         /the steps also sent POST \/api\/track, stopped in the browser \(nothing was sent\)/.test(w),

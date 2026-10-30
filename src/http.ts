@@ -235,11 +235,8 @@ export function refusal(p: Pick<Param, "pattern" | "hint" | "enum" | "min" | "ma
   return undefined;
 }
 
-/**
- * The fully materialized request: params, cookie/session refs, gen slots from `gen` (the call's
- * seed; without one each build makes new values), and the jar's Cookie header.
- */
-export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session, gen?: string): Request {
+/** The op's params as this call runs them: defaults applied, types coerced, pattern/enum/bounds checked. */
+export function preparedValues(op: Operation, args: Record<string, unknown>): Record<string, unknown> {
   const given = withDefaults(op, args);
   const vals: Record<string, unknown> = {};
   for (const p of op.params) {
@@ -252,11 +249,20 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
     const wrong = refusal(p, asText(vals[p.name]));
     if (wrong) throw new Error(`param "${p.name}" must be ${wrong}, got ${JSON.stringify(v)}`);
   }
+  return vals;
+}
 
-  let req: Request = { ...op.request, method: op.request.method.toUpperCase(), headers: { ...op.request.headers } };
+/**
+ * The fully materialized request: params, cookie/session refs, gen slots from `gen` (the call's
+ * seed; without one each build makes new values), and the jar's Cookie header.
+ */
+export function buildRequest(op: Operation, args: Record<string, unknown>, session: Session, gen?: string): Request {
+  const vals = preparedValues(op, args);
+  const request = op.request!; // a request op: this is never called for a local op
+  let req: Request = { ...request, method: request.method.toUpperCase(), headers: { ...request.headers } };
   let leafTypes: Map<string, string> | undefined;
   const stringLeaf = (at: string[]) => {
-    leafTypes ??= new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]));
+    leafTypes ??= new Map(walk(request).map((l) => [JSON.stringify(l.at), l.type]));
     return leafTypes.get(JSON.stringify(at)) === "string";
   };
   delete req.headers.cookie;
@@ -266,7 +272,7 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
       continue;
     }
     const name = slot.param ?? slot.ref!;
-    let v: unknown = slot.param !== undefined ? vals[slot.param] : resolveRef(slot.ref!, session, op.request.url);
+    let v: unknown = slot.param !== undefined ? vals[slot.param] : resolveRef(slot.ref!, session, request.url);
     // No cursor is the first page. An op learned from the request that loads page 2 holds page 2's
     // cursor, which must not go: the slot is emptied (null in a JSON leaf).
     if (v === undefined && op.paging?.next && slot.param === op.paging.param)
@@ -282,7 +288,7 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
       // A Referer/Origin is a URL: specs learned before `escape` existed still get the arg percent-encoded.
       const escape = slot.escape ?? (slot.param && /^header:(referer|origin)$/i.test(slot.at[0]!) ? "url" : undefined);
       const refs = Object.fromEntries(
-        templateRefs(slot.template).map((r) => [r, resolveRef(r, session, op.request.url) ?? ""]),
+        templateRefs(slot.template).map((r) => [r, resolveRef(r, session, request.url) ?? ""]),
       );
       v = fillSlotTemplate(slot.template, { ...refs, ...vals, [name]: v }, escape);
     } else if (
@@ -357,7 +363,13 @@ export class RedirectRefused extends Error {
 export const ownMatch = (op: Operation): Match =>
   Object.keys(op.match).length
     ? op.match
-    : { method: op.request.method, host: new URL(op.request.url).hostname, path: new URL(op.request.url).pathname };
+    : op.request
+      ? {
+          method: op.request.method,
+          host: new URL(op.request.url).hostname,
+          path: new URL(op.request.url).pathname,
+        }
+      : {};
 
 /**
  * The redirect policy of tiers 1 and 2: the request a redirect asks for next, or a refusal.
@@ -415,7 +427,7 @@ export function nextHop(
     // every slot's, a header's too: the header is dropped, and the site may still have copied what it held
     const carried = held.flatMap(({ s, refs }) =>
       refs.flatMap((r) => {
-        const v = resolveRef(r, session, op.request.url);
+        const v = resolveRef(r, session, op.request!.url);
         return v && v.length >= 4 ? [s.ref === r ? transform(v, s.transform) : v] : [];
       }),
     );

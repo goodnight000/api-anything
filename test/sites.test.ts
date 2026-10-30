@@ -6,10 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { judge } from "../src/classify.js";
-import { asText, getAt } from "../src/codec.js";
+import { asText, fillTemplate, getAt } from "../src/codec.js";
 import { call } from "../src/execute.js";
 import { returnedFields } from "../src/extract.js";
-import { buildRequest, holdsRef } from "../src/http.js";
+import { buildRequest, holdsRef, preparedValues } from "../src/http.js";
 import { personalIn } from "../src/publish.js";
 import { providerKeys, scanSecrets } from "../src/secrets.js";
 import { type Operation, parseSite, type Site } from "../src/spec.js";
@@ -88,24 +88,31 @@ test("recorded answers: each fixture's args reach their slots, and its recipe fi
       const at = `${site.name}/${f.op}`;
       assert.deepEqual(fixtureProblems(site, f), [], at);
       const o = site.operations.find((x) => x.name === f.op)!;
-      const req = buildRequest(o, f.args, noSession);
-      for (const [k, v] of Object.entries(f.args)) {
-        // its own slot, or a hole in another slot's template (Google Flights spells the query in one)
-        const slots = o.slots.filter((s) => s.param === k || s.template?.includes(`{${k}}`));
-        assert.ok(slots.length, `${at}: ${k} has no slot`);
-        for (const s of slots) {
-          const leaf = asText(getAt(req, s.at));
-          assert.ok(
-            leaf.includes(asText(v)) || leaf.includes(encodeURIComponent(asText(v))),
-            `${at}: ${k} not in ${leaf}`,
-          );
+      const req = o.request ? buildRequest(o, f.args, noSession) : undefined;
+      if (req) {
+        for (const [k, v] of Object.entries(f.args)) {
+          // its own slot, or a hole in another slot's template (Google Flights spells the query in one)
+          const slots = o.slots.filter((s) => s.param === k || s.template?.includes(`{${k}}`));
+          assert.ok(slots.length, `${at}: ${k} has no slot`);
+          for (const s of slots) {
+            const leaf = asText(getAt(req, s.at));
+            assert.ok(
+              leaf.includes(asText(v)) || leaf.includes(encodeURIComponent(asText(v))),
+              `${at}: ${k} not in ${leaf}`,
+            );
+          }
         }
+      } else {
+        // a local op's args fill its command: fill it and find every one
+        const cmd = fillTemplate(o.local!.command, preparedValues(o, f.args));
+        for (const [k, v] of Object.entries(f.args))
+          assert.ok(cmd.includes(asText(v)), `${at}: ${k} not in its command`);
       }
       const j = judge(o, {
         status: f.status,
         headers: { "content-type": f.contentType },
         body: bodyOf(f),
-        url: req.url,
+        ...(req ? { url: req.url } : {}),
       });
       assert.equal(j.class, "ok", `${at}: ${j.reason}`);
       const items = (Array.isArray(j.data) ? j.data : [j.data]) as Record<string, unknown>[];
