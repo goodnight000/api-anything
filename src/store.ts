@@ -1,16 +1,20 @@
 /**
  * Site specs (user dir, then pulled, then bundled), heal log, stale marks, remembered tiers, cool-downs,
- * the per-site send slots, and the write ledger.
+ * the per-site send slots, the write ledger, and the call log.
  */
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
+  closeSync,
   existsSync,
   linkSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -272,13 +276,27 @@ export function staleMark(site: string, op: string, now = Date.now()): StaleMark
   return m && m.until > now ? m : undefined;
 }
 
+const unkey = (k: string) => {
+  const i = k.indexOf("/");
+  return { site: k.slice(0, i), op: k.slice(i + 1) };
+};
+
 export function staleList(now = Date.now()): { site: string; op: string; until: number; reason: string }[] {
   return Object.entries(loadState().stale)
     .filter(([, m]) => m.until > now)
-    .map(([k, m]) => {
-      const i = k.indexOf("/");
-      return { site: k.slice(0, i), op: k.slice(i + 1), ...m };
-    });
+    .map(([k, m]) => ({ ...unkey(k), ...m }));
+}
+
+/** Every remembered escalation. */
+export function tierList(): { site: string; op: string; tier: 1 | 2 | 3 }[] {
+  return Object.entries(loadState().tier).map(([k, tier]) => ({ ...unkey(k), tier }));
+}
+
+/** Every cool-down that has not run out. */
+export function coolList(now = Date.now()): (CoolDown & { site: string })[] {
+  return Object.entries(loadState().cool)
+    .filter(([, c]) => c.until > now)
+    .map(([site, c]) => ({ site, ...c }));
 }
 
 /** The tier an op escalated to; undefined forgets it (the op's own minTier applies again). */
@@ -497,6 +515,97 @@ export function settleWrite(id: string, status: WriteStatus, outcome: { ok: bool
   } catch {
     // ponytail: the record stays "sending", which a repeat treats as may_have_applied: the safe side
   }
+}
+
+/** The ledger's records since `since`, oldest first; an unreadable ledger has none. */
+export function loadWrites(since = 0): WriteRecord[] {
+  try {
+    const all = readJson<WriteRecord[]>(writesFile(), []);
+    return Array.isArray(all) ? all.filter((r) => r.at >= since) : [];
+  } catch {
+    return [];
+  }
+}
+
+/* --------------------------------------------------------------- call log */
+
+/**
+ * One finished call, in calls.jsonl, for `status`. Names, enums and numbers only: no args, data,
+ * reason or next, so nothing a site answered and nothing the caller typed is kept.
+ */
+export interface CallEntry {
+  site: string;
+  op: string;
+  class: string;
+  /** absent when nothing was sent (a cool-down's answer, refused input) */
+  tier?: 1 | 2 | 3;
+  ms: number;
+  healed?: true;
+  write?: WriteStatus;
+}
+export type CallRecord = CallEntry & { at: string };
+
+const KEEP_CALLS_MS = 7 * 24 * 60 * 60_000;
+// ~100 bytes a line: some 10,000 calls, a few a minute for a week
+const MAX_CALLS_BYTES = 1_000_000;
+const callsFile = () => join(home(), "calls.jsonl");
+
+const parseCalls = (text: string): CallRecord[] =>
+  text.split("\n").flatMap((l) => {
+    try {
+      const c = JSON.parse(l) as CallRecord;
+      return c && typeof c === "object" && typeof c.at === "string" ? [c] : [];
+    } catch {
+      return [];
+    }
+  });
+
+/** When the log's first line was written: a few bytes read, so each append can afford to ask. */
+function oldestCall(file: string): number | undefined {
+  const fd = openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(80);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    const at = /"at":"([^"]+)"/.exec(buf.toString("utf8", 0, n))?.[1];
+    return at ? Date.parse(at) : undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Append one call. The file is rewritten only when it outgrows its cap or its first line is a day past
+ * the week kept, so a call pays for one short append. Never throws: the log is a hint, never the answer.
+ */
+export function appendCall(entry: CallEntry, now = Date.now()): void {
+  const file = callsFile();
+  try {
+    withLock(file, () => {
+      appendFileSync(file, `${JSON.stringify({ at: new Date(now).toISOString(), ...entry })}\n`, { mode: 0o600 });
+      const oldest = oldestCall(file);
+      const old = oldest !== undefined && now - oldest > KEEP_CALLS_MS + 24 * 60 * 60_000;
+      if (!old && statSync(file).size <= MAX_CALLS_BYTES) return;
+      let kept = parseCalls(readFileSync(file, "utf8"))
+        .filter((c) => now - Date.parse(c.at) < KEEP_CALLS_MS)
+        .map((c) => `${JSON.stringify(c)}\n`);
+      // still over the cap within the week: the newest half stays, so the next rewrite is far off
+      if (kept.join("").length > MAX_CALLS_BYTES) kept = kept.slice(-Math.floor(kept.length / 2));
+      writePrivate(file, kept.join(""));
+    });
+  } catch {
+    // ponytail: a read-only home keeps no call log
+  }
+}
+
+/** The week's call log, oldest first; one site's or all. */
+export function loadCalls(site?: string, now = Date.now()): CallRecord[] {
+  let text: string;
+  try {
+    text = readFileSync(callsFile(), "utf8");
+  } catch {
+    return [];
+  }
+  return parseCalls(text).filter((c) => (!site || c.site === site) && now - Date.parse(c.at) < KEEP_CALLS_MS);
 }
 
 /* ----------------------------------------------------------------- export */
