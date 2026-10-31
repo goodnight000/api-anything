@@ -147,6 +147,16 @@ test("rate: any failure that names its wait in Retry-After; a 2xx with one is st
     [json(503, "down for maintenance"), "error", undefined],
     [json(429, {}, { "retry-after": "300" }), "rate", 300_000],
     [json(200, { data: { user: { id: 1 } } }, { "retry-after": "5" }), "ok", undefined],
+    // Retry-After: 0 names no wait (Reddit's network block page), so the 403 is a block the next tier may pass
+    [
+      {
+        ...html(403, "<p>blocked by network security.</p>"),
+        headers: { "content-type": "text/html", "retry-after": "0" },
+      },
+      "blocked",
+      undefined,
+    ],
+    [json(429, {}, { "retry-after": "0" }), "rate", 0],
   ];
   for (const [r, want, ms] of rows) {
     const c = classify(op(), r);
