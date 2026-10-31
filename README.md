@@ -495,28 +495,26 @@ either: a trigger step that would type into a password or one-time-code field fa
 
 ## Sites in the catalog
 
-30 read operations across 14 sites, bundled with the package and served by the catalog. They cover
-selected features, not whole sites. `api-anything ops <site>` lists each op's params and caveats.
+107 read operations across 55 sites, bundled with the package and served by the catalog. They cover
+selected features, not whole sites. On 2026-10-31, called from an empty home with their examples, 97
+of the 99 that need no account answered with data. `api-anything ops <site>` lists each op's params
+and caveats.
 
-| site | operations | account |
-|---|---|---|
-| `google-flights` | `search` · `top` · `priceCalendar` | no |
-| `goodreads` | `searchBooks` · `getBook` · `getReviews` · `getWorkId` · `authorBooks` | no |
-| `rottentomatoes` | `searchMovies` · `getMovie` | no |
-| `hacker-news` | `frontPage` · `search` | no |
-| `x` | `getUser` · `getProfile` | no |
-| `instagram` | `getProfile` · `getPosts` | no |
-| `youtube` | `search` | no |
-| `steam` | `search` | no |
-| `airbnb` | `search` | no |
-| `amazon` | `search` | no |
-| `rightmove` | `locations` | no |
-| `pinterest` | `searchSuggestions` | no |
-| `linkedin` | `getMe` · `getProfile` · `getCompany` · `searchPeople` · `searchCompanies` | yours |
-| `dominos-au` | `findStores` · `findDeliveryStore` · `getMenu` | 2 of 3 |
+| kind | sites |
+|---|---|
+| Search and social | `reddit` · `x` · `instagram` · `youtube` · `pinterest` · `hacker-news` · `bing` · `linkedin` (your account) |
+| Travel and places | `google-flights` · `airbnb` · `google-maps` · `trip` · `flixbus` · `megabus` · `jet2holidays` · `rightmove` |
+| Shopping | `amazon` · `ikea` · `nike` · `costco` · `apple` · `ulta` · `uniqlo` · `zalando` · `vinted` · `craigslist` · `gumtree` · `instacart` · `waitrose` · `aldi` · `auchan` |
+| Food | `mcdonalds` · `chownow` · `bbcgoodfood` · `dominos-au` (2 of 3 need an account) |
+| Books, film and games | `goodreads` · `rottentomatoes` · `netflix` · `disneyplus` · `justwatch` · `fandango` · `steam` · `google-play` |
+| Events and sport | `eventbrite` · `meetup` · `ticketmaster` · `flashscore` |
+| Learning and jobs | `coursera` · `edx` · `khan-academy` · `hays` · `workday` |
+| Markets and health | `nasdaq` · `tradingview` · `healthline` |
 
-`dominos-au` came in through `publish` from a contributor; its last two ops were learned signed in.
-`goodreads` was built by the explorer above. Everything agents share after this lands in the
+Known gaps: `google-flights.priceCalendar` answers an internal error since Google changed it, and
+`aldi.applianceDetails`'s example product is gone. `dominos-au` came in through `publish` from a
+contributor. `goodreads` was built by the explorer above. `reddit` was the site agents asked for
+most. Everything agents share after this lands in the
 [catalog](https://api-anything-registry.forth-site.workers.dev) first.
 
 ## Help build it
@@ -548,7 +546,7 @@ npm run smoke:pack         # pack, install the tarball in a temp dir, run its CL
 ## Limits
 
 - Calls run on your machine, your network and your sessions. The catalog is a directory of specs,
-  not a hosted API, and it's young: 14 sites today.
+  not a hosted API, and it's young: 55 sites today.
 - It knows only the operations someone taught it, not every feature of every site.
 - `learn_site` learns from one page load per value, from a URL template. A site whose data appears
   only after clicks or typing, or only on in-app navigation, needs the CLI's `capture` and `add`
