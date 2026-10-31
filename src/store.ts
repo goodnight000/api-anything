@@ -633,16 +633,26 @@ export function exportSite(
   const named: [string, string][] = [];
   const ips: string[] = [];
   spec.operations.forEach((op, i) => {
-    for (const slot of op.slots) {
-      const p = slot.param !== undefined ? op.params.find((x) => x.name === slot.param) : undefined;
-      if (!p) continue;
-      const typed = p.type !== "string" && slot.template === undefined && slot.at.at(-1)!.startsWith("json:");
-      try {
-        op.request = setAt(op.request, slot.at, typed ? null : (slot.template ?? `{${p.name}}`));
-      } catch {
-        /* position gone; leave it */
+    const strip = (request: Operation["request"], slots: Operation["slots"]) => {
+      const types = new Map(walk(request).map((l) => [JSON.stringify(l.at), l.type]));
+      for (const slot of slots) {
+        const p = slot.param !== undefined ? op.params.find((x) => x.name === slot.param) : undefined;
+        // a derived leaf holds what the example's lookup answered; every call looks it up again. It keeps
+        // its JSON type, which the value a call looks up is sent as.
+        const derived = () =>
+          types.get(JSON.stringify(slot.at)) === "number" ? 0 : slot.at[0]!.startsWith("path:") ? "0" : "";
+        if (!p && !slot.from) continue;
+        const typed = !!p && p.type !== "string" && slot.template === undefined && slot.at.at(-1)!.startsWith("json:");
+        try {
+          request = setAt(request, slot.at, p ? (typed ? null : (slot.template ?? `{${p.name}}`)) : derived());
+        } catch {
+          /* position gone; leave it */
+        }
       }
-    }
+      return request;
+    };
+    op.request = strip(op.request, op.slots);
+    for (const slot of op.slots) if (slot.from) slot.from.request = strip(slot.from.request, slot.from.slots);
     if (!o.keepExamples) for (const p of op.params) delete p.example;
     // a shape's keys can be user data; the picked fields' are in the pick already, and their types let
     // every caller of the copy tell a picked field that went
@@ -660,6 +670,14 @@ export function exportSite(
         `${where(leaf)} holds a literal credential (${n}); make it a session: ref, or list ${n} in the op's public names if the site ships it to everyone`,
       ]);
     }
+    op.slots.forEach((slot, j) => {
+      if (!slot.from) return;
+      for (const leaf of literalCredentials(slot.from.request, pub))
+        named.push([
+          `$.operations[${i}].slots[${j}].from.request`,
+          `$.operations[${i}].slots[${j}].from.request ${leaf.at.join(" > ")} holds a literal credential (${leafName(leaf.at)})`,
+        ]);
+    });
     for (const fill of signInFills(op.trigger.steps))
       named.push([`$.operations[${i}].trigger.steps`, `$.operations[${i}].trigger ${fill}`]);
     for (const leaf of walk(op.request)) {

@@ -32,6 +32,8 @@ export interface Fixture {
   revoke(token: string): void;
   /** mint a fresh valid session token, as /login would (stands in for a re-login in the browser) */
   mintSession(): string;
+  /** /api/resolve answers the id at item.id instead of product.id, as after a redesign of the lookup */
+  moveLookup(): void;
   close(): Promise<void>;
 }
 
@@ -114,6 +116,13 @@ const LOGIN_PAGE = `<!doctype html><html><head><title>Log in</title></head><body
 
 const LIST_USERS = ["alice", "bob", "carol"];
 
+/** Products by slug: the slug addresses a page, the numeric id the data behind it. */
+export const PRODUCTS: Record<string, { id: number; name: string }> = {
+  "blue-mug": { id: 4821, name: "Blue mug" },
+  "red-kettle": { id: 5170, name: "Red kettle" },
+  "green-plate": { id: 6033, name: "Green plate" },
+};
+
 const user = (name: string, extras: boolean) => ({
   data: {
     user: {
@@ -160,6 +169,8 @@ export async function startFixture(): Promise<Fixture> {
   const todos: { id: string; title: string }[] = [];
   /** order id by Idempotency-Key */
   const orders = new Map<string, string>();
+  let lookupMoved = false;
+  const likes: number[] = [];
 
   const send = (
     res: ServerResponse,
@@ -242,6 +253,13 @@ export async function startFixture(): Promise<Fixture> {
         '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
       );
     if (/^\/follow\/[^/]+$/.test(p)) return html(200, page(state.build, '<button id="follow">Follow</button>'));
+    // A product page addressed by a slug whose data is keyed by a numeric id: the page asks
+    // /api/resolve for the slug's id, then loads the reviews (or, on Like, posts the like) with it.
+    if (/^\/p\/[^/]+$/.test(p))
+      return html(
+        200,
+        `<!doctype html><html><body><button id="like">Like</button><script>const id=fetch("/api/resolve?slug="+location.pathname.slice(3)).then(r=>r.json()).then(v=>v.product.id);id.then(n=>fetch("/api/products/"+n+"/reviews")).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)});document.getElementById("like").onclick=()=>id.then(n=>fetch("/api/products/"+n+"/like",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({stars:5})}))</script></body></html>`,
+      );
     // A checkout whose page makes an Idempotency-Key per order (crypto.randomUUID()); the server answers
     // a key it has seen with that earlier order, as Stripe-style APIs do.
     if (p.startsWith("/checkout/"))
@@ -645,6 +663,28 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       return json(res, 201, { orderId: orders.get(key), item });
     }
     if (p === "/api/spa/user") return json(res, 200, { name: u.searchParams.get("name") });
+    if (p === "/api/resolve") {
+      const slug = u.searchParams.get("slug") ?? "";
+      const found = PRODUCTS[slug];
+      if (!found) return json(res, 404, { error: "no such product" });
+      const product = { id: found.id, name: found.name };
+      return json(res, 200, lookupMoved ? { item: product } : { product });
+    }
+    m = p.match(/^\/api\/products\/(\d+)\/(reviews|like)$/);
+    if (m) {
+      const found = Object.values(PRODUCTS).find((x) => x.id === Number(m![1]));
+      if (!found) return json(res, 404, { error: "no such product" });
+      if (m[2] === "like" && req.method === "POST") {
+        likes.push(found.id);
+        return json(res, 200, { liked: found.id, likes: likes.filter((x) => x === found.id).length });
+      }
+      return json(res, 200, {
+        reviews: [
+          { id: `${found.id}-1`, text: `${found.name}: holds up well` },
+          { id: `${found.id}-2`, text: `${found.name}: would buy again` },
+        ],
+      });
+    }
 
     if (p === "/api/limited") {
       limitedHits++;
@@ -678,6 +718,9 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       revoked.add(token);
     },
     mintSession: mint,
+    moveLookup() {
+      lookupMoved = true;
+    },
     close() {
       server.closeAllConnections();
       return new Promise((resolve) => server.close(() => resolve()));

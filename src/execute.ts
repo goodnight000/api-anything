@@ -42,12 +42,12 @@ import {
   refusePrivate,
   refusePrivateHop,
   type Sent,
-  send,
   unknownArgs,
   withDefaults,
 } from "./http.js";
 import { loadSettings } from "./identity.js";
 import { reimportIfBrowser } from "./login.js";
+import { derive, LookupFailed, sendDerived } from "./lookup.js";
 import { adopt, servedNow } from "./registry.js";
 import { afterCall, queueReport } from "./report.js";
 import { type ResultCursor, type ResultView, resultView, viewProblem } from "./results.js";
@@ -541,7 +541,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     const session = none ? NO_SESSION : loadSession(ctx.site);
     let r: Sent | PageFetchResult;
     if (tier === 1) {
-      const sent = await send(op, ctx.args, session, {
+      const sent = await sendDerived(op, ctx.args, session, {
         site: ctx.site,
         fetchImpl: ctx.opts.fetchImpl,
         timeoutMs: ctx.opts.timeoutMs,
@@ -561,29 +561,32 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       }
       r = sent;
     } else {
-      const req = buildRequest(op, ctx.args, session, ctx.gen);
-      // someone else's spec: the page's fetch goes only to public addresses, as tier 1 does (tier 3 is not covered)
-      if (ctx.shared) await refusePrivate(op, req.url);
-      const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
-      r = await pageFetch({
-        origin: new URL(req.url).origin,
-        url: req.url,
-        method: req.method,
-        headers,
-        body: req.body,
-        profileDir: profileDir(),
-        timeoutMs: ctx.opts.timeoutMs,
-        retryOnNavigation: op.readOnly,
-        // the page's own cookies, unless they may not go (`bare`)
-        ...(none ? { credentials: "omit" as const } : {}),
-        pace: () => pace(ctx.site, ctx.opts.minIntervalMs),
-        // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
-        redirect: async (from, status, location, taken) => {
-          const next = nextHop(op, session, from, status, location, taken);
-          if (ctx.shared) await refusePrivateHop(next, status);
-          return next;
-        },
-      });
+      const viaPage = async (o: Operation) => {
+        const req = buildRequest(o, ctx.args, session, ctx.gen);
+        // someone else's spec: the page's fetch goes only to public addresses, as tier 1 does (tier 3 is not covered)
+        if (ctx.shared) await refusePrivate(o, req.url);
+        const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
+        return pageFetch({
+          origin: new URL(req.url).origin,
+          url: req.url,
+          method: req.method,
+          headers,
+          body: req.body,
+          profileDir: profileDir(),
+          timeoutMs: ctx.opts.timeoutMs,
+          retryOnNavigation: o.readOnly,
+          // the page's own cookies, unless they may not go (`bare`)
+          ...(none ? { credentials: "omit" as const } : {}),
+          pace: () => pace(ctx.site, ctx.opts.minIntervalMs),
+          // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
+          redirect: async (from, status, location, taken) => {
+            const next = nextHop(o, session, from, status, location, taken);
+            if (ctx.shared) await refusePrivateHop(next, status);
+            return next;
+          },
+        });
+      };
+      r = await viaPage(await derive(op, viaPage));
     }
     const j = judge(op, r);
     const hint = j.unfinished
@@ -596,7 +599,10 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       ...j,
       ...(hint ? { hint, step: "login" as const } : {}),
     };
-  } catch (e) {
+  } catch (thrown) {
+    const e = thrown instanceof LookupFailed && thrown.cause instanceof ProfileInUse ? thrown.cause : thrown;
+    // a derived slot's lookup did not give its value: the op's own request never left
+    if (e instanceof LookupFailed) return { tier, ...e.judged, unsent: true };
     // nothing was sent when the browser could not start
     if (e instanceof ProfileInUse) return { tier, class: "error", reason: e.message, hint: PROFILE_HINT, unsent: true };
     // someone else's spec names an address on this machine or the local network: nothing was sent, and no tier sends it

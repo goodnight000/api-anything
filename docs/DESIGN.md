@@ -47,6 +47,9 @@ Store the captured request **verbatim** (method, url, headers, body string) plus
 { "ref": "cookie:JSESSIONID", "transform": "strip-quotes", "at": ["header:csrf-token"] }
 { "ref": "session:x-goog-batchexecute-bgr", "at": ["header:x-goog-batchexecute-bgr"] }
 { "gen": "uuid",          "at": ["header:idempotency-key"] }  // a value the page makes per request
+{ "from": { "request": { "method": "GET", "url": "https://shop.example/api/resolve?slug=blue-mug" },
+            "slots": [{ "param": "slug", "at": ["query:slug"] }] },
+  "path": "product.id",   "at": ["path:2"] }                  // a value an earlier request looks up
 ```
 
 A `gen` slot holds what the page makes for each request (an idempotency key from
@@ -56,6 +59,21 @@ ledger record's (see Writes): with the caller's `idempotencyKey` it is an HMAC o
 every call with the key sends the same value and the site dedupes the caller's repeats too.
 Learning makes one only from two runs (step 3 below); a recapture has one run, so it keeps the op's
 gen slots where the page still sends a UUID, and a ref it put there gives way.
+
+A *derived* slot (`from` and `path`) holds a value the page looked up with an earlier request of the
+same page load: a product page at `/p/{slug}` asks `/api/resolve?slug=` for the product's id, then
+loads `/api/products/{id}`; a crate's download needs the crate's `default_version`. `from` is that
+lookup's own template: a request plus slots that are params of the op (by name) or `cookie:` refs,
+never a `session:` value, a `gen` or a lookup of its own. `path` is where its JSON answer holds the
+value (getPath's form, one value: `crate.default_version`, `items[0].id`). The leaf keeps the value it had
+in the capture (the example's), as a param's place does; the slot fills a whole leaf, with no template.
+A call sends each distinct lookup first, at the same tier and with the same session as the op's own request,
+reads the path, sets the leaf, then sends the op's request (below, Execution ladder). A lookup is always a
+GET on the op's own host: a read, sent again on every try. A param may live only in the lookup (the slug
+above): the op's own request carries it nowhere the server reads (an echo such as the Referer still
+follows it), and its value reaches the request only as the id it looked up. `export` strips the leaf's
+example value as it strips a param's (a JSON number becomes `0`, a path segment `0`) and the lookup's
+own example values with it.
 
 Step kinds: `path:<i>` (URL path segment), `query:<key>`, `header:<name>`, `form:<key>`,
 `json:<RFC6901 pointer>` (the current string is parsed as JSON), `b64` (the current string is
@@ -97,6 +115,14 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    and does not carry an example value is refused (an analytics beacon's ack whose echo of the page
    went unrecognized), with a hint to `--pick-request` the data request or learn the document with
    `--html`/`--embedded`; a request picked by id or pinned by `match` is the agent's call.
+   A request that carries no example value but holds one an earlier request that carries them looked up
+   (step 3, *derived values*) is a candidate only where nothing else fits: with a recipe that resolves on no
+   carrying candidate, the best-ranked such request the recipe resolves on; for a write whose run
+   intercepted none that carries the values, the intercepted such request. When a param has no place and a
+   leaf looks looked up but is not proven (one run, or a lookup that needs more than a template), the
+   error says so, naming the leaf, the path and the request, instead of only a missing place; `learn_site`
+   answers so (with that request first among the alternatives) when no request of run 1 carries the
+   example values in an answer that could be read.
 2. **Decode and substitute.** Walk every decoded layer of URL path, query, form, and JSON (including JSON
    inside strings, base64 JSON, and every occurrence of a repeated key). A leaf equal to an example
    value → a slot. A string leaf containing it (or its percent-encoded form) → a slot with a
@@ -165,6 +191,22 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    (the reason names them). A read that did not answer ok proves nothing and marks nothing. A write is never sent to
    learn it: the check is for reads. Two answers that differ for another reason (a timestamp, a shuffled order) still
    hide an ignored param: the check finds a copy, no more.
+
+   *Derived values* come out of the same two runs, before the params are placed (step 2), so a param
+   the chosen request does not carry is no error when its lookup does. A whole leaf of the chosen request
+   (the URL path, the query, a form or a JSON body; never a header, which is where credentials go) is
+   derived when all of this holds: it holds no example value and no cookie or stored value; an earlier
+   GET of run 1 on the same host, which carries an example value and answered 2xx JSON, holds it at a
+   JSON path (the shortest such path, the latest such request); in run 2, the request at the same
+   method, host and path shape that carries example 2's values holds another value at that same path;
+   and run 2's counterpart of the chosen request holds that other value in the same leaf. The lookup's
+   own template is learned from its exchange like any read, with the examples of the params it carries:
+   when that template needs a `session:` value, a `gen` slot or a nonce (`minTier` above 1), the leaf is
+   no derived slot and is treated as before (a nonce, a counter, or the param's missing place).
+   A derived leaf is no nonce, no volatile anchor and no session ref; its path segment is a wildcard in
+   the match. One run (a recapture) keeps a derived slot only where the op had one, from an earlier GET
+   of the run that carries the args and holds the leaf's value. A leaf derived from something else (a
+   page's HTML, a value the page computes) is not found: the request needs tier 3, or its own op.
 4. **Session references.** A header, query or JSON leaf whose value equals a cookie value (raw,
    quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Capture also snapshots the
    final page origin's localStorage and sessionStorage; a leaf equal to a stored value (or to a
@@ -761,6 +803,17 @@ request. The origin page or another call may have sent the same request at the s
 method, address and body): if their redirects differ, this call's cannot be told apart and it fails
 saying so. Cookies a hop sets are in the profile for the next, as with a browser's own redirect.
 
+A derived slot's lookup goes first, at tiers 1 and 2, through the same tier with the same session
+(none for a candidate or an agent-pulled non-GET, as below), the same pacing, the same redirect policy
+and, for someone else's spec, the same public-address check; identical lookups of one call are sent
+once. Its answer is judged as a read with no recipe: anything but `ok` is the call's answer at that
+tier, with `unsent` (the op's own request never left, so a write's status is `not_sent`): `rate`,
+`auth` and `blocked` act as for the op, and a 404 or a 2xx without the path is missing data, which the
+example args tell from drift, as for any read. Drift heals as usual (the stored template, lookup
+included, is sent first; a recapture re-learns the lookup from the trigger run). A failed lookup's
+network error is `error` with `server`. A write sends its lookup on every try, the write itself once.
+Tier 3 runs the page, which does its own lookup.
+
 Heal strategies, cheapest first:
 - **rescan**: no browser. Fetch the trigger document and the JS bundles it references (resolved
   against the document's final URL), find a token of the recorded shape within ~300 chars of each
@@ -1162,10 +1215,10 @@ local rules below are defense in depth on top of that.
   instructions. Op and param names, which `next` hints spell in commands, are restricted.
 
 **The shared rules** (`vetShared`), run on pull, on every upload (here and by the service), on load,
-and by CI over the bundled `sites/`. Errors refuse: every URL an op sends to or opens (request, trigger, soft-from, `goto` value or
+and by CI over the bundled `sites/`. Errors refuse: every URL an op sends to or opens (request, a derived slot's lookup, trigger, soft-from, `goto` value or
 selector) is https on a host under a public suffix (no IP, `localhost`, single-label or
-`.local`/`.internal`-style name), and so is `baseUrl`; no literal credential in a request (the
-export rule) outside the op's `public` names; `readOnly` only on GET, HEAD and POST, never on a
+`.local`/`.internal`-style name), and so is `baseUrl`; no literal credential in a request or a lookup (the
+export rule) outside the op's `public` names; a lookup is a GET on the op's own host whose `path` names one value; `readOnly` only on GET, HEAD and POST, never on a
 GraphQL document defining a mutation or subscription (read from a JSON body, a batch, a form, the URL
 or a raw `application/graphql` body, by each definition's operation type, with comments, strings and
 block strings skipped: `query mutation { }` is a query), never with a param as the whole body (raw,

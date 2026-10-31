@@ -8,7 +8,7 @@ import { botWall, type Class, judge, type Observed, pickedShape } from "./classi
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { capOutput, extract } from "./extract.js";
-import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, refusal, send } from "./http.js";
+import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, refusal } from "./http.js";
 import {
   type Args,
   ASSET_EXT,
@@ -23,6 +23,7 @@ import {
   UUID,
   unplaced,
 } from "./learn.js";
+import { sendDerived } from "./lookup.js";
 
 export { unplaced };
 
@@ -381,6 +382,8 @@ function carriesArgs(op: Operation, e: Exchange, args: Args): boolean {
         (s.param === p.name || s.template?.includes(`{${p.name}}`)) &&
         !/^header:(referer|origin|cookie)$/i.test(s.at[0]!),
     );
+    // a param only a derived slot's lookup takes reaches this request as the value it looked up: not checkable here
+    if (!slots.length && op.slots.some((s) => s.from?.slots.some((l) => l.param === p.name))) return true;
     return (
       slots.length > 0 &&
       slots.every((s) => {
@@ -820,7 +823,7 @@ async function ignoredAlone(
   const ignored: string[] = [];
   for (const k of changed) {
     try {
-      const sent = await send(op, { ...ex1, [k]: ex2[k] }, session, opts);
+      const sent = await sendDerived(op, { ...ex1, [k]: ex2[k] }, session, opts);
       if (answerOf(op, sent) === one) ignored.push(k);
     } catch {
       /* a probe that failed proves nothing */
@@ -1165,7 +1168,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   // signatures. One replay of run 1's template with example 2's args tells them apart.
   if (operation.minTier === 3 && operation.readOnly && run2) {
     try {
-      const sent = await send(operation, ex2 ?? ex1, session, { site: i.site, fetchImpl: i.fetchImpl });
+      const sent = await sendDerived(operation, ex2 ?? ex1, session, { site: i.site, fetchImpl: i.fetchImpl });
       if (judge(operation, sent).class === "ok") {
         operation = { ...operation, minTier: 1 };
         warnings.push(
@@ -1383,7 +1386,7 @@ function placeholders(op: Operation): Operation["request"] {
   let req = op.request;
   for (const s of op.slots) {
     try {
-      req = setAt(req, s.at, s.template ?? `{${s.param ?? s.ref}}`);
+      req = setAt(req, s.at, s.template ?? `{${s.param ?? s.ref ?? (s.path ? `lookup:${s.path}` : s.gen)}}`);
     } catch {
       /* position gone; the leaf shows as it is */
     }
@@ -1696,6 +1699,7 @@ export async function healOperation(
       guestCookies: loadSession(site).guestCookies,
       public: op.public,
       established,
+      derived: op.slots.flatMap((s) => (s.from && s.path ? [{ at: s.at, path: s.path }] : [])),
     }));
   } catch (e) {
     return { outcome: "failed", attempt: last, fallback, reason: `re-learning failed: ${(e as Error).message}` };

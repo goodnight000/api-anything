@@ -17,7 +17,7 @@ import {
   templateRefs,
   walk,
 } from "./codec.js";
-import { inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
+import { getPath, inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
 import {
   besideOrigins,
   credentialName,
@@ -37,6 +37,7 @@ import {
 } from "./secrets.js";
 import { loggedIn, parseCookieHeader, type Session } from "./session.js";
 import {
+  type Lookup,
   type Match,
   type Operation,
   OperationSchema,
@@ -80,6 +81,11 @@ export interface LearnInput {
    * it still holds the same kind of value; see paramSlots.
    */
   established?: Established[];
+  /**
+   * heal: the op's derived slots. One run cannot show a value is looked up, so a recapture keeps a
+   * derived slot only at these places (derivedSlots).
+   */
+  derived?: { at: Step[]; path: string }[];
 }
 
 type Established = {
@@ -608,9 +614,21 @@ function pickExchange(
     );
   }
   const byId = (id: number) => exchanges.find((e) => e.id === id)!;
-  // A response recipe (--html/--embedded/--extract) names the answer: a beacon echoing the page URL doesn't resolve it.
-  const accepted = input.accepts && ranked.find((c) => input.accepts!(byId(c.id)));
+  // A request that carries no example value but a value one that carries them looked up (a slug's id).
+  const lookedUpOne = (fits: (e: Exchange) => boolean) =>
+    input.match
+      ? undefined
+      : rankCandidates(pool, args, { pages, second }).find(
+          (c) => !c.hits.length && fits(byId(c.id)) && lookedUp(exchanges, byId(c.id), args, pages).length,
+        );
+  // A response recipe (--html/--embedded/--extract) names the answer: a beacon echoing the page URL doesn't
+  // resolve it. The answer may be one only a looked-up value reaches.
+  const accepted = input.accepts && (ranked.find((c) => input.accepts!(byId(c.id))) ?? lookedUpOne(input.accepts));
   if (accepted) return byId(accepted.id);
+  // A write's run intercepts the write: one that carries only a looked-up value is still the write.
+  const write =
+    !input.readOnly && !ranked.some((c) => byId(c.id).aborted) ? lookedUpOne((e) => !!e.aborted) : undefined;
+  if (write) return byId(write.id);
   const [top, next] = ranked;
   if (next && next.score === top!.score) {
     warnings.push(
@@ -785,6 +803,7 @@ function paramSlots(
   established: Established[] = [],
   live: (v: string) => boolean = () => false,
   untriggered: Set<string> = new Set(),
+  lookupOnly: Set<string> = new Set(),
 ): { slots: Slot[]; types: Map<string, Param["type"]> } {
   const slots: Slot[] = [];
   const types = new Map<string, Param["type"]>();
@@ -847,7 +866,10 @@ function paramSlots(
     const own = established.filter(
       (e) => (e.slot.param === name || e.slot.template?.includes(`{${name}}`)) && !NOT_EVIDENCE.has(e.slot.at[0]!),
     );
-    if (!places.length) {
+    // a derived slot's lookup takes it: it reaches this request as the value looked up, and only its
+    // echoes (a Referer) are filled here
+    const viaLookup = lookupOnly.has(name) && !own.length;
+    if (!places.length && !viaLookup) {
       // only a param the page is never given (a picker's own range end); every place of it kept, or no evidence where it went
       const kept = untriggered.has(name) ? own.filter(keeps) : [];
       if (!own.length || kept.length < own.length)
@@ -1653,7 +1675,7 @@ function diffRuns(
     const k = key(leaf.at);
     const slot = bySlot.get(k);
     const other = second.get(k);
-    if (slot?.ref || generated.has(k)) continue;
+    if (slot?.ref || slot?.from || generated.has(k)) continue;
     const header = headerName(leaf.at);
     if (header && BROWSER_HEADER.test(header)) continue;
     // A short example is placed only where run 2 proves it: a whole leaf holding example 2's value.
@@ -1851,6 +1873,228 @@ function twoRunDiff(
   return { minTier: 3, exchange2, generated };
 }
 
+/* ---------------------------------------------------------- derived values */
+
+/** Every scalar of a JSON answer (no boolean or null) by its text, at its shortest path in getPath's form. */
+export function scalarPaths(root: unknown, budget = 50_000): Map<string, string> {
+  const out = new Map<string, string>();
+  let left = budget;
+  const step = (k: string) => (/^[A-Za-z_$][\w$-]*$/.test(k) ? `.${k}` : `[${JSON.stringify(k)}]`);
+  const visit = (v: unknown, path: string) => {
+    if (--left < 0) return;
+    if (v !== null && typeof v === "object") {
+      if (Array.isArray(v)) for (const [i, x] of v.entries()) visit(x, `${path}[${i}]`);
+      else for (const [k, x] of Object.entries(v)) visit(x, path + step(k));
+    } else if (typeof v === "string" || typeof v === "number") {
+      const p = path.replace(/^\./, "");
+      const was = out.get(String(v));
+      if (p && v !== "" && (was === undefined || p.length < was.length)) out.set(String(v), p);
+    }
+  };
+  visit(root, "");
+  return out;
+}
+
+const hostOf = (url: string) => (URL.canParse(url) ? new URL(url).hostname.toLowerCase() : "");
+const pathOf = (url: string) => (URL.canParse(url) ? new URL(url).pathname : url);
+// where a derived value may sit: the URL path, the query, a form or JSON body; never a header, where credentials go
+const DERIVABLE = /^((path|query|form)(\[\d+\])?:|body$)/;
+
+/** A leaf of a request whose value an earlier answer of the run held: maybe looked up, not a constant. */
+export interface LookedUp {
+  leaf: Leaf;
+  /** the earlier GET on the same host that carries example values and answered 2xx JSON */
+  lookup: Exchange;
+  /** where its answer holds the leaf's value (the shortest such path) */
+  path: string;
+  /** the params whose example it carries */
+  params: string[];
+}
+
+/**
+ * The leaves of `e` an earlier request of the run may have looked up: a whole leaf that holds no
+ * example value, no live session value and is not named like a credential, whose value an earlier
+ * GET on the same host that carries example values answered as JSON. Latest lookup first.
+ */
+export function lookedUp(
+  exchanges: Exchange[],
+  e: Exchange,
+  args: Args,
+  pages: string[],
+  live: (v: string) => boolean = () => false,
+): LookedUp[] {
+  const host = hostOf(e.request.url);
+  const earlier = exchanges.filter((x) => x.id < e.id);
+  const carried = new Map(rankCandidates(earlier, args, { pages }).map((c) => [c.id, c.hits]));
+  const lookups = earlier
+    .filter((x) => {
+      const status = x.response?.status ?? 0;
+      return (
+        x.request.method.toUpperCase() === "GET" &&
+        hostOf(x.request.url) === host &&
+        !!carried.get(x.id)?.length &&
+        status >= 200 &&
+        status < 300
+      );
+    })
+    .flatMap((x) => {
+      const data = tryParse(x.response?.body);
+      return data !== null && typeof data === "object" ? [{ x, paths: scalarPaths(data) }] : [];
+    })
+    .reverse();
+  if (!lookups.length) return [];
+  const values = exampleValues(args).map(([, v]) => v);
+  const out: LookedUp[] = [];
+  for (const leaf of walk(templateOf(e))) {
+    if (leaf.container || leaf.type === "boolean" || leaf.type === "null" || !leaf.value) continue;
+    if (!DERIVABLE.test(leaf.at[0]!)) continue;
+    const name = lastToken(leaf.at);
+    if (SESSION_FIELD.test(name) || credentialName(name) || live(leaf.value)) continue;
+    const lower = leaf.value.toLowerCase();
+    if (values.some((v) => (v.length < 3 ? lower === v : lower.includes(v)))) continue;
+    for (const { x, paths } of lookups) {
+      const path = paths.get(leaf.value);
+      if (path) out.push({ leaf, lookup: x, path, params: carried.get(x.id)! });
+    }
+  }
+  return out;
+}
+
+interface LearnedLookup {
+  from: Lookup;
+  /** run 2's counterpart of the lookup */
+  exchange2?: Exchange;
+  params: Param[];
+}
+
+/**
+ * A lookup's own template, learned from its exchange like any read with the examples of the params
+ * it carries; or why it cannot be one. A lookup is sent with the op's session as it is: a value the
+ * page makes, a stored session value or a nonce would need more than a template.
+ */
+function learnLookup(input: LearnInput, e: Exchange, params: string[]): LearnedLookup | string {
+  const only = (a: Args) => Object.fromEntries(params.flatMap((k) => (a[k] !== undefined ? [[k, a[k]]] : [])));
+  const [a1, a2] = input.examples;
+  let l: Learned;
+  try {
+    l = learn(
+      {
+        exchanges: input.exchanges,
+        examples: a2 && input.exchanges2 ? [only(a1), only(a2)] : [only(a1)],
+        ...(a2 && input.exchanges2 ? { exchanges2: input.exchanges2 } : {}),
+        cookies: input.cookies,
+        ...(input.storage ? { storage: input.storage } : {}),
+        ...(input.pages ? { pages: input.pages } : {}),
+        ...(input.public ? { public: input.public } : {}),
+        id: e.id,
+        name: input.name,
+        trigger: input.trigger,
+        readOnly: true,
+      },
+      new Map(),
+      false,
+    );
+  } catch (err) {
+    return `cannot be learned (${(err as Error).message.split(". ")[0]})`;
+  }
+  const op = l.operation;
+  if (op.minTier > 1) return "changes between the runs without an arg change (a nonce)";
+  const held = op.slots.find(
+    (s) =>
+      s.gen || s.ref?.startsWith("session:") || templateRefs(s.template ?? "").some((r) => r.startsWith("session:")),
+  );
+  if (held) return `needs ${held.gen ? "a value the page makes" : "a stored session value"} at ${held.at.join(" > ")}`;
+  return {
+    from: { request: op.request, slots: op.slots.map(({ gen: _g, from: _f, path: _p, ...s }) => s) },
+    ...(l.exchange2 ? { exchange2: l.exchange2 } : {}),
+    params: op.params,
+  };
+}
+
+interface Derived {
+  slots: Slot[];
+  /** the params a lookup takes */
+  params: Set<string>;
+  types: Map<string, Param["type"]>;
+  /** leaves that look looked up and are not derived slots, each with why: said when a param has no place */
+  unproven: string[];
+}
+
+/**
+ * Step 3, derived values (DESIGN.md "Learning"): the leaves of the chosen request the page looked
+ * up with an earlier request of the same load. Two runs prove one: run 2's lookup holds another
+ * value at the same path, and run 2's counterpart of the request holds that value in the same leaf.
+ * One run (a recapture) keeps one only where the op had it (`input.derived`).
+ */
+function derivedSlots(
+  input: LearnInput,
+  exchange: Exchange,
+  captured: Request,
+  args: Args,
+  pages: string[],
+  warnings: string[],
+): Derived {
+  const out: Derived = { slots: [], params: new Set(), types: new Map(), unproven: [] };
+  const two = !!input.exchanges2 && !!input.examples[1];
+  const kept = new Set((input.derived ?? []).map((d) => key(d.at)));
+  const own = ownSession(input, captured, sentCookies(exchange));
+  const live = liveValues(own.cookies, own.values);
+  const found = lookedUp(input.exchanges, exchange, args, pages, (v) => live.has(v));
+  if (!found.length) return out;
+  // run 2's counterpart: the same request, with example values and the candidate path segments as wildcards
+  const values = new Set(exampleValues(args).map(([, v]) => v));
+  const match = buildMatch(
+    captured,
+    found.map((f) => ({ at: f.leaf.at })),
+    (seg) => values.has(decodeLoose(seg).toLowerCase()),
+  );
+  const run2 = (input.exchanges2 ?? []).filter((x) => matches(match, x.request));
+  const lookups = new Map<number, LearnedLookup | string>();
+  const unproven = new Map<string, string>();
+  const done = new Set<string>();
+  for (const c of found) {
+    const k = key(c.leaf.at);
+    if (done.has(k)) continue;
+    const where = `${c.leaf.at.join(" > ")} (${JSON.stringify(c.leaf.value)}) is ${c.path} in the answer of request #${c.lookup.id} (GET ${pathOf(c.lookup.request.url)}), which carries ${c.params.join(", ")}`;
+    if (!two && !kept.has(k)) {
+      if (!input.derived) unproven.set(k, `${where}; a second example (--example2) would show whether it is looked up`);
+      continue;
+    }
+    let l = lookups.get(c.lookup.id);
+    if (l === undefined) {
+      l = learnLookup(input, c.lookup, c.params);
+      lookups.set(c.lookup.id, l);
+    }
+    if (typeof l === "string") {
+      unproven.set(k, `${where}, but that request ${l}`);
+      continue;
+    }
+    if (two) {
+      const v2 = l.exchange2 && getPath(tryParse(l.exchange2.response?.body), c.path);
+      if (v2 === undefined || v2 === null || typeof v2 === "object" || asText(v2) === c.leaf.value) {
+        unproven.set(k, `${where}, but run 2's lookup holds no other value there`);
+        continue;
+      }
+      if (!run2.some((x) => asText(tryGet(x.request, c.leaf.at) ?? "") === asText(v2))) {
+        unproven.set(k, `${where}, but run 2's request does not hold run 2's ${JSON.stringify(asText(v2))} there`);
+        continue;
+      }
+    }
+    done.add(k);
+    unproven.delete(k);
+    out.slots.push({ at: c.leaf.at, from: l.from, path: c.path });
+    for (const p of l.params) {
+      out.params.add(p.name);
+      if (p.type !== "string") out.types.set(p.name, p.type);
+    }
+    warnings.push(
+      `${c.leaf.at.join(" > ")} is looked up before each call: ${c.path} in the answer of GET ${pathOf(c.lookup.request.url)}`,
+    );
+  }
+  out.unproven = [...unproven.values()];
+  return out;
+}
+
 export function learnOperation(input: LearnInput): Learned {
   return learn(input, new Map());
 }
@@ -1860,9 +2104,10 @@ export function learnOperation(input: LearnInput): Learned {
  * allows. The two-run diff (3) comes after the session refs (4), because a session value that
  * differs between the runs is not a nonce, and after the match, which finds run 2's request and is
  * built from the template once its credentials are blanked. `disproved`: the places an earlier
- * pass over the same input saw run 2 disprove.
+ * pass over the same input saw run 2 disprove. `derive`: look for derived values (a lookup's own
+ * template is learned without).
  */
-function learn(input: LearnInput, disproved: Disproved): Learned {
+function learn(input: LearnInput, disproved: Disproved, derive = true): Learned {
   const { examples } = input;
   const [args1] = examples;
   // a short example is expected to equal leaves that are not its own: only the other disproofs are news
@@ -1877,31 +2122,43 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   const captured = templateOf(exchange);
   const leaves = walk(captured);
 
+  // 3, derived values: before the params, since a param only the lookup carries has no place here
+  const derived = derive
+    ? derivedSlots(input, exchange, captured, args1, pages, warnings)
+    : { slots: [], params: new Set<string>(), types: new Map<string, Param["type"]>(), unproven: [] };
+
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
   const locs = input.id !== undefined ? { abs: [], rel: [] } : locations(pages);
   const own = input.established && ownSession(input, captured);
   const live = own && liveValues(own.cookies, own.values);
-  const param = paramSlots(
-    leaves,
-    args1,
-    locs,
-    warnings,
-    disproved,
-    short,
-    input.established,
-    (v) => !!live?.has(v),
-    new Set(unplaced(input.trigger, args1)),
-  );
+  let param: ReturnType<typeof paramSlots>;
+  try {
+    param = paramSlots(
+      leaves,
+      args1,
+      locs,
+      warnings,
+      disproved,
+      short,
+      input.established,
+      (v) => !!live?.has(v),
+      new Set(unplaced(input.trigger, args1)),
+      derived.params,
+    );
+  } catch (e) {
+    if (!derived.unproven.length) throw e;
+    // the obstacle may be a value the page looked up, not a click or a login: say which
+    throw new Error(
+      `${(e as Error).message}. The request may take a value an earlier request looked up, which is learned only when proven: ${derived.unproven.slice(0, 2).join("; ")}`,
+    );
+  }
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
-  let { request, slots, sessionValues, publicNames, settings } = sessionRefs(
-    input,
-    exchange,
-    captured,
-    leaves,
-    param.slots,
-  );
+  let { request, slots, sessionValues, publicNames, settings } = sessionRefs(input, exchange, captured, leaves, [
+    ...param.slots,
+    ...derived.slots,
+  ]);
 
   // 5. volatile anchors
   let volatile = volatileAnchors(request, leaves, slots);
@@ -1913,7 +2170,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
   // 3. two-run diff. A place run 2 disproved was never the param's: learn again without it.
   const found: Disproved = new Map(disproved);
   const { minTier, exchange2, generated } = twoRunDiff(input, exchange, request, slots, match, warnings, found, short);
-  if (found.size > disproved.size) return learn(input, found);
+  if (found.size > disproved.size) return learn(input, found, derive);
   if (generated.length) {
     ({ request, slots, volatile } = asGenerated({ request, slots, volatile }, generated, sessionValues));
     settings = settings.filter((n) => n in sessionValues);
@@ -1928,7 +2185,7 @@ function learn(input: LearnInput, disproved: Disproved): Learned {
 
   const params: Param[] = Object.entries(args1).map(([name, example]) => ({
     name,
-    type: param.types.get(name) ?? "string",
+    type: param.types.get(name) ?? derived.types.get(name) ?? "string",
     required: true,
     example,
   }));

@@ -268,6 +268,8 @@ export function buildRequest(op: Operation, args: Record<string, unknown>, sessi
   };
   delete req.headers.cookie;
   for (const slot of op.slots) {
+    // a derived leaf keeps the value it holds: `derive` (lookup.ts) set it from this call's lookup
+    if (slot.from) continue;
     if (slot.gen) {
       req = setAt(req, slot.at, generated(gen, slot.at));
       continue;
