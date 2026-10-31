@@ -348,8 +348,13 @@ function registryEvidence(value?: unknown): RegistryEvidence {
 }
 
 function localEvidence(site: string, op: Operation): LocalEvidence {
-  const r = loadRecord(site)[op.name];
-  if (!r || r.hash !== opHash(op) || !r.results.length) return { status: "unknown" };
+  let r: ReturnType<typeof loadRecord>[string] | undefined;
+  try {
+    r = loadRecord(site)[op.name];
+  } catch {
+    // a corrupt record says nothing, and must not cost the search its answer
+  }
+  if (!r || r.hash !== opHash(op) || !r.results?.length) return { status: "unknown" };
   const outcomes = r.results.map((c) => c.outcome);
   return {
     status: outcomes.includes("fail") ? "fail" : outcomes.includes("inconclusive") ? "inconclusive" : "pass",
