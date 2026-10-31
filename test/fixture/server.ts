@@ -182,6 +182,19 @@ export async function startFixture(): Promise<Fixture> {
     if (p.startsWith("/api/"))
       calls.push({ method: req.method ?? "GET", path: u.pathname + u.search, headers: req.headers, body });
 
+    if (p === "/api/result-list") {
+      const start = u.searchParams.get("after") === "page2" ? 30 : 0;
+      return json(res, 200, {
+        items: Array.from({ length: 30 }, (_, i) => ({
+          id: start + i + 1,
+          title: `Item ${start + i + 1}`,
+          details: { label: `Label ${start + i + 1}` },
+          body: "Long fixture text. ".repeat(150),
+        })),
+        next: start ? null : "page2",
+      });
+    }
+
     // HTML pages hand out the CSRF cookie that page JS echoes in x-csrf-token (X's ct0 pattern).
     const html = (status: number, markup: string) =>
       send(
