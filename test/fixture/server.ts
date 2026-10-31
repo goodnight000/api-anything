@@ -204,6 +204,22 @@ export async function startFixture(): Promise<Fixture> {
       p.startsWith("/spa/")
     )
       return html(200, page(state.build));
+    // Two lists with a "Show more" button. A topic's posts page by an opaque cursor, as a GraphQL
+    // connection does: each edge has its cursor, and pageInfo.endCursor is the next page's `after`. A
+    // package search pages by number, and its answer gives the next page as a query string
+    // (meta.next_page "?page=2&per_page=3&q=..."), which the page appends to the endpoint.
+    if (/^\/topics\/[^/]+$/.test(p)) {
+      const topic = decodeURIComponent(p.slice("/topics/".length));
+      return html(
+        200,
+        `<!doctype html><html><body><ul id="posts"></ul><button id="more">Show more</button><script>let after="";const load=()=>fetch("/api/posts?topic="+encodeURIComponent(${JSON.stringify(topic)})+"&first=3&after="+encodeURIComponent(after)).then(r=>r.json()).then(v=>{for(const e of v.data.posts.edges){const li=document.createElement("li");li.textContent=e.node.title;document.getElementById("posts").append(li)}after=v.data.posts.pageInfo.endCursor||""});load();document.getElementById("more").onclick=load</script></body></html>`,
+      );
+    }
+    if (p === "/packages")
+      return html(
+        200,
+        `<!doctype html><html><body><ul id="found"></ul><button id="more">More</button><script>let next="?page=1&per_page=3&q="+encodeURIComponent(${JSON.stringify(u.searchParams.get("q") ?? "")});const load=()=>fetch("/api/packages"+next).then(r=>r.json()).then(v=>{for(const x of v.packages){const li=document.createElement("li");li.textContent=x.name;document.getElementById("found").append(li)}next=v.meta.next_page||next});load();document.getElementById("more").onclick=load</script></body></html>`,
+      );
     // A bot challenge that never solves, in a real browser too: the interstitial on every load.
     if (p === "/challenged")
       return send(
@@ -542,6 +558,28 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       const edges = all.slice(from, from + 3);
       const next = from + 3 < all.length ? Buffer.from(`offset:${from + 3}`).toString("base64url") : null;
       return json(res, 200, { data: { reviews: { edges, pageInfo: { nextPageToken: next } } } });
+    }
+    if (p === "/api/posts") {
+      const topic = u.searchParams.get("topic") ?? "";
+      const all = Array.from({ length: 7 }, (_, i) => ({ id: `${topic}-p${i + 1}`, title: `${topic} post ${i + 1}` }));
+      const cursor = (n: number) => Buffer.from(`${topic}:${n}`).toString("base64url");
+      const after = u.searchParams.get("after") ?? "";
+      const from = after ? Number(Buffer.from(after, "base64url").toString().split(":").at(-1)) : 0;
+      const n = Number(u.searchParams.get("first") ?? 3);
+      const edges = all.slice(from, from + n).map((node, i) => ({ cursor: cursor(from + i + 1), node }));
+      const end = from + n < all.length ? cursor(from + n) : null;
+      return json(res, 200, { data: { posts: { edges, pageInfo: { endCursor: end, hasNextPage: !!end } } } });
+    }
+    if (p === "/api/packages") {
+      const q = u.searchParams.get("q") ?? "";
+      const all = Array.from({ length: 7 }, (_, i) => ({ name: `${q}-${i + 1}` }));
+      const page = Number(u.searchParams.get("page")) || 1;
+      const per = Number(u.searchParams.get("per_page")) || 3;
+      const more = page * per < all.length;
+      return json(res, 200, {
+        packages: all.slice((page - 1) * per, page * per),
+        meta: { next_page: more ? `?page=${page + 1}&per_page=${per}&q=${encodeURIComponent(q)}` : null },
+      });
     }
     // An answer keyed by the visitor's session id ("guest" without one), as a per-session cache key
     // is: a recipe suggested from a signed-in visitor's answer would carry the cookie's value.

@@ -6,11 +6,13 @@ import {
   extractEmbedded,
   extractHtml,
   getPath,
+  getPathRegex,
   inferShape,
   parseBody,
   parseShown,
   pick,
   pickEntry,
+  splitRegex,
 } from "./extract.js";
 import { siteOf } from "./session.js";
 import type { Operation, ResponseSpec } from "./spec.js";
@@ -827,7 +829,9 @@ function pageOf(op: Operation, body: string, json: () => unknown): Pick<Judged, 
   if (!at || res.format === "html") return {};
   try {
     const whole = res.format === "embedded" ? res.embedded && extractEmbedded(body, res.embedded.regex) : json();
-    const v = getPath(whole, at);
+    // `path~regex` reads the cursor out of a string (a next-page URL); null, "" or false there is still the last page
+    const raw = getPath(whole, splitRegex(at).path);
+    const v = raw === null || raw === "" || raw === false ? raw : getPathRegex(whole, at);
     if ((typeof v === "string" && v !== "") || (typeof v === "number" && Number.isFinite(v)))
       return { nextPage: v, hasMore: true };
     return v === null || v === "" || v === false ? { hasMore: false } : {};

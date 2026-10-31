@@ -29,15 +29,16 @@ import { answerShare, loadSettings, QUESTION } from "./identity.js";
 import { type Args, capturePages, pageUrls, rankCandidates } from "./learn.js";
 import { resolveLoginTarget } from "./login.js";
 import { outline } from "./outline.js";
+import { pagingHints } from "./paging.js";
 import { pull, registryRequest, sharedName } from "./registry.js";
 import type { Evidence, ServedSite } from "./registry-api.js";
 import { summarize } from "./search.js";
 import { captureLive, redact } from "./secrets.js";
 import { safeName } from "./session.js";
 import { HOLDOUT_PURPOSE, type ShareOutcome, shareOps } from "./share.js";
-import { CheckSchema, type Operation } from "./spec.js";
+import { CheckSchema, type Operation, type Paging } from "./spec.js";
 import { loadSite, updateSite } from "./store.js";
-import type { Exchange } from "./types.js";
+import type { Exchange, TriggerStep } from "./types.js";
 import { badAddress, LIMITS, notARead } from "./vet.js";
 
 const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string })
@@ -72,6 +73,13 @@ export interface LearnSiteInput {
   fresh?: boolean;
   /** refused: a write is learned with the CLI's `add --write`, which intercepts it */
   write?: boolean;
+  /** UI steps after load, as `add --steps` takes them ({param} filled): a click on "Show more" loads page 2 */
+  steps?: TriggerStep[];
+  /**
+   * the list pages, as `add --paging` says it. Without it, a list both runs load two pages of is
+   * learned with the paging they show (`pagedOf`).
+   */
+  paging?: Paging;
 }
 
 export interface LearnSiteOptions {
@@ -102,6 +110,11 @@ export interface LearnSiteResult {
   data?: unknown;
   truncated?: string;
   chosen?: Choice & { recipe: Recipe; auto: boolean };
+  /** the op's paging; auto: found in both runs, not given */
+  paging?: Paging & { auto: boolean };
+  /** the page after `data`: pass it as the paging param (see CallResult.nextPage) */
+  nextPage?: string | number;
+  hasMore?: boolean;
   alternatives?: Choice[];
   proof?: {
     holdout: { args: Args; ok: boolean; class: string; tier?: 1 | 2 | 3; reason?: string };
@@ -335,6 +348,73 @@ const asRequest = (e: Exchange) => ({
   params: [],
 });
 
+const endpointOf = (e: Exchange) => {
+  const u = new URL(e.request.url);
+  return `${e.request.method.toUpperCase()} ${u.origin}${u.pathname}`;
+};
+
+interface Paged {
+  paging: Paging;
+  auto: boolean;
+  /** run 1's requests for page 1 (the user's answer) and page 2 (the op is learned from it); none for numbered pages */
+  page1?: number;
+  page2?: number;
+  examples: [Args, Args];
+}
+
+/**
+ * How the chosen request's list pages. The agent's `paging`, else the paging both runs show for that
+ * list (`pagingHints`, the same param, place and path in each): one run alone could be two unrelated
+ * requests that happen to look like pages. A cursor op is learned from page 2's request with its cursor
+ * as the example, as `add --paging` is. A string says why the agent's paging cannot be learned.
+ */
+export function pagedOf(
+  input: LearnSiteInput,
+  c1: CaptureFile,
+  c2: CaptureFile,
+  chosen: Exchange,
+): Paged | string | undefined {
+  const want = input.paging;
+  const examples: [Args, Args] = [input.args, input.args2];
+  if (want && !want.next)
+    return want.param in input.args
+      ? { paging: want, auto: false, examples }
+      : `numbered pages are asked for by an arg: put ${want.param} in args, args2 and args3 (the page each asks for)`;
+  const hints = pagingHints(c1.exchanges).filter(
+    (h) =>
+      h.paging.next &&
+      [h.previous, h.request].some((id) => {
+        const e = c1.exchanges.find((x) => x.id === id);
+        return e && endpointOf(e) === endpointOf(chosen);
+      }),
+  );
+  const h1 = (want && hints.find((h) => h.paging.param === want.param)) ?? (hints.length === 1 ? hints[0] : undefined);
+  const why = (s: string) => (want ? s : undefined);
+  if (!h1)
+    return why(
+      `run 1 loaded no second page of request ${chosen.id}'s list: give steps that load it (a click on its "Show more" or next-page button)`,
+    );
+  const paging = want ?? h1.paging;
+  if (paging.param in input.args)
+    return why(`paging param ${paging.param} is one of args: a cursor is the site's answer to page 1, never an arg`);
+  const h2 = pagingHints(c2.exchanges).find(
+    (h) =>
+      h.at.join() === h1.at.join() &&
+      (want || (h.paging.param === h1.paging.param && h.paging.next === h1.paging.next)),
+  );
+  if (!h2) return why(`run 2 loaded no second page of the list where run 1 did (${h1.at.join(" > ")})`);
+  return {
+    paging,
+    auto: !want,
+    page1: h1.previous,
+    page2: h1.request,
+    examples: [
+      { ...input.args, [paging.param]: h1.value },
+      { ...input.args2, [paging.param]: h2.value },
+    ],
+  };
+}
+
 function checkArgs(input: LearnSiteInput): string | undefined {
   const keys = (a: Args) => Object.keys(a).sort().join(",");
   if (!Object.keys(input.args ?? {}).length)
@@ -393,7 +473,9 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     input.extract ||
     input.pick?.length ||
     input.html ||
-    input.embedded;
+    input.embedded ||
+    input.steps?.length ||
+    input.paging;
   const reused = relearn ? undefined : await reuse(input, await registryName(), askOnce, o);
   if (reused) return reused;
 
@@ -431,8 +513,10 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
           "ask the user to install one, or to set API_ANYTHING_BROWSER to any Chromium executable",
           { nextCall: { action: "install_browser" } },
         );
-      const url1 = fillTrigger({ url: input.trigger }, input.args).url;
-      c1 = await capturePage({ url: url1 });
+      const trigger = { url: input.trigger, ...(input.steps?.length ? { steps: input.steps } : {}) };
+      const t1 = fillTrigger(trigger, input.args);
+      const url1 = t1.url;
+      c1 = await capturePage(t1);
       const wall = loginWall(c1, url1);
       if (wall)
         return fail(
@@ -440,7 +524,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
           `ask the user to run api-anything login ${site}; then learn again`,
           { nextCall: { action: "login", site }, captures: [c1.id] },
         );
-      c2 = await capturePage({ url: fillTrigger({ url: input.trigger }, input.args2).url });
+      c2 = await capturePage(fillTrigger(trigger, input.args2));
     }
   } catch (e) {
     if (e instanceof ProfileInUse) return fail(e.message, PROFILE_HINT, { nextCall: { action: "retry" } });
@@ -528,6 +612,19 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   if (early)
     return notRead(`request ${chosen.request} (${chosen.method} ${chosen.url.split("?")[0]}) is not a read: ${early}`);
 
+  const paged = pagedOf(input, c1, c2, exchange(chosen.request)!);
+  if (typeof paged === "string")
+    return fail(
+      paged,
+      "learn again with captures (no browser) and a fixed paging, or without captures and with steps that load page 2",
+      {
+        chosen: shown,
+        alternatives,
+        captures,
+        nextCall: { action: "relearn", site, op },
+      },
+    );
+
   // add, with the same functions, credential checks and refusals
   const warnings: string[] = [];
   const mentions =
@@ -539,12 +636,13 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     added = await addOperation({
       site,
       op,
-      trigger: { url: input.trigger },
-      examples: [input.args, input.args2],
+      trigger: { url: input.trigger, ...(input.steps?.length ? { steps: input.steps } : {}) },
+      examples: paged?.examples ?? [input.args, input.args2],
       ...(input.intent && !mentions ? { description: input.intent } : {}),
       response: recipe,
-      from: { capture: c1, id: chosen.request },
+      from: { capture: c1, id: paged?.page2 ?? chosen.request },
       from2: c2,
+      ...(paged ? { paging: paged.paging } : {}),
       readsOnly: true,
     });
   } catch (e) {
@@ -566,13 +664,14 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   }
   warnings.push(...added.warnings);
 
-  // the user's answer, from run 1
-  const res = exchange(chosen.request)!.response!;
+  // the user's answer, from run 1: page 1 of a list that pages
+  const answered = exchange(paged?.page1 ?? chosen.request)!;
+  const res = answered.response!;
   const j = judge(added.operation, {
     status: res.status,
     headers: res.headers,
     body: res.body ?? "",
-    url: exchange(chosen.request)!.request.url,
+    url: answered.request.url,
   });
   if (j.class !== "ok" || empty(j.data))
     return fail(
@@ -670,7 +769,8 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
 
   let shared: ShareOutcome;
   let next: string | undefined;
-  const reveals = revealed(now, input.args);
+  // run 1's cursor too: it can carry what the user asked (a cursor that encodes the query)
+  const reveals = revealed(now, paged ? paged.examples[0] : input.args);
   if (!held) {
     shared = { site, op, shared: false, reason: "the holdout call did not answer with data" };
     next = `it answered the user's request, but not args3: if args3 has results on the site, the op may be wrong; learn again with captures ${captures.join(" ")} and another pickRequest or recipe`;
@@ -724,6 +824,9 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     data: answer.data,
     ...(answer.truncated ? { truncated: answer.truncated } : {}),
     chosen: shown,
+    ...(paged ? { paging: { ...paged.paging, auto: paged.auto } } : {}),
+    ...(j.nextPage !== undefined ? { nextPage: j.nextPage } : {}),
+    ...(j.hasMore !== undefined ? { hasMore: j.hasMore } : {}),
     alternatives,
     proof,
     shared,

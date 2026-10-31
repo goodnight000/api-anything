@@ -27,6 +27,7 @@ import {
 export { unplaced };
 
 import type { NextAction } from "./execute.js";
+import { standIn } from "./paging.js";
 import { besideOrigins, credentialsOf, opUrls, scanSecrets, signInFills } from "./secrets.js";
 import {
   cookieHeaderFor,
@@ -901,7 +902,8 @@ function saveOperation(
 }
 
 export async function addOperation(input: AddInput): Promise<AddResult> {
-  const i = { ...input, site: safeName(input.site) };
+  const stood = standIn(input.paging, input.examples, input.from, input.from2);
+  const i = { ...input, site: safeName(input.site), ...stood };
   const existing = loadSite(i.site)?.site;
   const old = existing?.operations.find((o) => o.name === i.op);
   const ex2 = i.examples[1];
@@ -961,7 +963,8 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     if (!existing) throw new Error(`relative trigger ${trigger.url} needs an existing site; use a full URL`);
     trigger = { ...trigger, url: existing.baseUrl.replace(/\/$/, "") + trigger.url };
   }
-  const missing = unplaced(trigger, ex1);
+  // a cursor is no part of the page's address: it is the site's answer to an earlier page
+  const missing = unplaced(trigger, ex1).filter((k) => !(i.paging?.next && k === i.paging.param));
 
   let run1: CaptureResult;
   let run2: CaptureResult | undefined;
@@ -1122,6 +1125,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     params,
     ...(checks?.length && !i.write ? { checks } : {}),
   };
+  if (stood) operation = stood.restore(operation);
   // Paging and a readback are the caller's contract too: kept while they still fit the op learned again.
   const paging = i.paging ?? old?.paging;
   if (paging && !i.write) {

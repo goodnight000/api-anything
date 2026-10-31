@@ -127,6 +127,31 @@ path, marks numbered pages: the call says nothing about the next page, since a n
 also what the last one looks like. `verify` asks a paged op for the page after its example's and
 fails it when that page holds only page 1's items again.
 
+You rarely have to find the cursor yourself. Capture the page with steps that click "Show more"
+(`capture <url> --steps '[{"action":"click","selector":"#more"}]'`): when it loads two pages of one
+list, `capture` and `inspect <capture>` list them as `pages`, with the paging found and the `add`
+flags that learn the list from page 2:
+
+```json
+"pages": [{"requests": [5, 6], "paging": {"param": "after", "next": "data.reviews.pageInfo.endCursor"},
+  "flags": "--from c1 --pick-request 6 --example 'after=Y3Vy...' --paging 'after=data.reviews.pageInfo.endCursor'"}]
+```
+
+Add the list's other `--example` values to those flags. `add` from such a capture without `--paging`
+warns that the request is one of two pages. The suggestion is never applied silently: two unrelated
+requests can look like pages of a list.
+
+When the answer gives the next page as a URL rather than a value (crates.io's
+`meta.next_page: "?per_page=10&q=reqwest&page=2"`), read the value out of it with `path~regex`, as
+`--pick` does: `--paging 'page=meta.next_page~[?&]page=([^&#]*)'` returns `nextPage: "2"`. `capture`
+suggests this form when it finds the value inside such a string.
+
+`learn` (and MCP `learn_site`) takes `--steps` and `--paging` too (`steps` and `paging` over MCP).
+With steps that load page 2, a cursor-paged list that both of its runs page the same way is learned
+with that paging: the result has `paging` (`auto: true`), `data` (page 1), `nextPage` and
+`hasMore`. The cursor is the op's own param, never in `--args`. For numbered pages, put the page in
+`--args`, `--args2` and `--args3` and pass `--paging page`.
+
 A write can prove it landed. Name a read of the same site that shows it, filled from the write's
 args:
 

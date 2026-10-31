@@ -166,8 +166,17 @@ export const PagingSchema = z.object({
   /**
    * path in the whole answer (before `extract`; for `embedded`, the embedded JSON) to the next page's
    * cursor or number. Without it the pages are numbered and the answer says nothing about the next one.
+   * `path~regex` keeps what the regex's group 1 finds in the string there, as in `pick` (a next-page URL's
+   * `page`: `meta.next_page~[?&]page=([^&]*)`).
    */
-  next: z.string().min(1).optional(),
+  next: z
+    .string()
+    .min(1)
+    .refine(
+      (p) => !p.includes("~") || validRegex(p.slice(p.indexOf("~") + 1)),
+      "the regex after ~ in next must be valid",
+    )
+    .optional(),
 });
 
 /** the read's args */

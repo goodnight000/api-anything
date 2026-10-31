@@ -72,6 +72,9 @@ function regexes(op: Operation): [string, string][] {
       p.includes("~") ? [["pick", p.slice(p.indexOf("~") + 1)]] : [],
     ),
     ...(op.response.embedded ? ([["embedded", op.response.embedded.regex]] as [string, string][]) : []),
+    ...(op.paging?.next?.includes("~")
+      ? ([["paging next", op.paging.next.slice(op.paging.next.indexOf("~") + 1)]] as [string, string][])
+      : []),
     ...op.params.flatMap((p): [string, string][] => (p.pattern ? [[`param ${p.name} pattern`, p.pattern]] : [])),
   ];
 }
@@ -241,9 +244,17 @@ export function pagingProblems(op: Operation): string[] {
   if (p.next !== undefined) {
     if (op.response.format === "html")
       out.push("paging next reads JSON (the answer, or JSON the page embeds), not HTML");
-    if (p.next.length > LIMITS.regex) out.push(`paging next is ${p.next.length} characters; at most ${LIMITS.regex}`);
-    else if (p.next.includes("[*]")) out.push(`paging next ${JSON.stringify(p.next)} names many values, not one value`);
-    else if (!ONE_VALUE_PATH.test(p.next)) out.push(`paging next ${JSON.stringify(p.next)} is not a path`);
+    // `path~regex`: the path is checked here, the regex with every other regex of the op (`regexes`)
+    const path = p.next.split("~")[0]!;
+    if (path.length > LIMITS.regex) out.push(`paging next is ${path.length} characters; at most ${LIMITS.regex}`);
+    else if (path.includes("[*]")) out.push(`paging next ${JSON.stringify(path)} names many values, not one value`);
+    else if (!ONE_VALUE_PATH.test(path)) out.push(`paging next ${JSON.stringify(path)} is not a path`);
+    if (path !== p.next)
+      try {
+        new RegExp(p.next.slice(path.length + 1));
+      } catch {
+        out.push(`paging next's regex after ~ is not a valid regex`);
+      }
   }
   return out;
 }
