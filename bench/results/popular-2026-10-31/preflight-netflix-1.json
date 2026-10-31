@@ -1,0 +1,22 @@
+{
+  "startedAt": "2026-10-31T21:30:49.873Z",
+  "endedAt": "2026-10-31T21:30:51.908Z",
+  "source": "rendered Chrome DOM",
+  "rows": [
+    {
+      "title": "Chapter One: The Vanishing of Will Byers",
+      "minutes": 49,
+      "url": "https://www.netflix.com/title/80057281"
+    },
+    {
+      "title": "Chapter Two: The Weirdo on Maple Street",
+      "minutes": 56,
+      "url": "https://www.netflix.com/title/80057281"
+    },
+    {
+      "title": "Chapter Three: Holly, Jolly",
+      "minutes": 52,
+      "url": "https://www.netflix.com/title/80057281"
+    }
+  ]
+}

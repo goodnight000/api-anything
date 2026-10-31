@@ -3,7 +3,7 @@
 // Usage: node bench/run-agents.mjs [--tasks flights-1,flights-5] [--trials 5] [--arms browser,api] [--out bench/results] [--seed <spec.json>]
 // Prints one JSON line per trial; raw event logs go to <out>/raw (not committed).
 // Needs the `claude` CLI signed in, Google Chrome, and `npm run build` in this checkout.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
@@ -11,6 +11,14 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 export const TASKS = {
+  "netflix-1":
+    "I'm deciding whether to start Stranger Things. Check Netflix's public page at https://www.netflix.com/title/80057281 " +
+    "and give me the first 3 episodes shown by default, with their exact episode titles and runtimes. Do not change the season. " +
+    'Reply only with a JSON array of 3 objects with keys "title" and "minutes" (a number).',
+  "ikea-5":
+    "I'm planning IKEA visits in California. Look up the street address of each of these IKEA stores on IKEA's US website: " +
+    "Emeryville, East Palo Alto, West Sacramento, Costa Mesa, and San Diego. " +
+    'Reply only with a JSON array of 5 objects with keys "store" and "address". Include street, city, state and ZIP in each address.',
   "flights-1":
     "On Google Flights, find the cheapest nonstop one-way flight from SFO to JFK departing 2026-10-20. " +
     "Reply with one line: airline, departure time, price in USD.",
@@ -70,7 +78,18 @@ function mcpConfig(task, arm, dir, video, seed) {
 }
 
 // Runs one trial. Every stream-json event is written to <log> with `t`, ms since spawn.
-export function runTrial(task, arm, { log, video, onEvent, seed } = {}) {
+export function memoryFreePercent() {
+  if (process.platform !== "darwin") return null;
+  const output = execFileSync("memory_pressure", [], { encoding: "utf8", timeout: 10_000 });
+  const free = Number(output.match(/System-wide memory free percentage: (\d+)%/)?.[1]);
+  if (!Number.isFinite(free)) throw new Error("Cannot read memory_pressure's free percentage");
+  return free;
+}
+
+export function runTrial(task, arm, { log, video, onEvent, seed, budget, timeoutMs = 15 * 60_000 } = {}) {
+  if (!TASKS[task] || !["api", "browser"].includes(arm)) throw new Error("Unknown task or arm");
+  const memoryBefore = memoryFreePercent();
+  if (memoryBefore !== null && memoryBefore <= 10) throw new Error("Memory use is at least 90%; not starting a trial");
   const dir = mkdtempSync(join(tmpdir(), `aa-bench-${arm}-`));
   const servers = mcpConfig(task, arm, dir, video, seed);
   writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: servers }));
@@ -94,9 +113,36 @@ export function runTrial(task, arm, { log, video, onEvent, seed } = {}) {
     "--no-session-persistence",
   ];
   const start = Date.now();
+  if (budget !== undefined) args.push("--max-budget-usd", String(budget));
   return new Promise((done) => {
-    const child = spawn("claude", args, { cwd: dir, stdio: ["ignore", "pipe", "inherit"] });
-    const timer = setTimeout(() => child.kill("SIGTERM"), 15 * 60_000);
+    const child = spawn("claude", args, { cwd: dir, detached: true, stdio: ["ignore", "pipe", "inherit"] });
+    const stop = () => {
+      if (!child.pid) return;
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch (e) {
+        if (e.code !== "ESRCH") throw e;
+      }
+    };
+    let stopped,
+      memoryMin = memoryBefore;
+    const timer = setTimeout(() => {
+      stopped = "timeout";
+      stop();
+    }, timeoutMs);
+    const memoryTimer = setInterval(() => {
+      try {
+        const free = memoryFreePercent();
+        if (free !== null) memoryMin = Math.min(memoryMin, free);
+        if (free !== null && free <= 10) {
+          stopped = "memory";
+          stop();
+        }
+      } catch {
+        stopped = "memory-check-failed";
+        stop();
+      }
+    }, 5_000);
     let buf = "",
       result;
     child.stdout.on("data", (chunk) => {
@@ -113,7 +159,14 @@ export function runTrial(task, arm, { log, video, onEvent, seed } = {}) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      done({ arm, code, wallMs: Date.now() - start, result });
+      clearInterval(memoryTimer);
+      stop();
+      done({ arm, code, wallMs: Date.now() - start, result, stopped, memoryBefore, memoryMin });
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      clearInterval(memoryTimer);
+      done({ arm, code: 1, wallMs: Date.now() - start, error: String(error) });
     });
   });
 }
@@ -147,25 +200,48 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       arms: { type: "string", default: "browser,api" },
       out: { type: "string", default: join(repo, "bench/results") },
       seed: { type: "string" },
+      budget: { type: "string", default: "1" },
+      "total-budget": { type: "string", default: "25" },
+      "max-minutes": { type: "string", default: "120" },
     },
   });
   // what a person would see right after the trial: live fares, or each book's rendered page
-  const truthFor = (task) =>
-    task.startsWith("goodreads")
-      ? withPage(async (p) => {
-          const out = [];
-          for (const id of BOOKS[task]) out.push(await renderedBook(p, id));
-          return out;
-        })
-      : snapshot(task === "flights-1" ? DATES.slice(0, 1) : DATES);
+  const { popularSnapshot, gradePopular } = await import("./popular.mjs");
+  const truthFor = (task, evidence) =>
+    ["netflix-1", "ikea-5"].includes(task)
+      ? popularSnapshot(task, evidence)
+      : task.startsWith("goodreads")
+        ? withPage(async (p) => {
+            const out = [];
+            for (const id of BOOKS[task]) out.push(await renderedBook(p, id));
+            return out;
+          })
+        : snapshot(task === "flights-1" ? DATES.slice(0, 1) : DATES);
   const raw = join(v.out, "raw");
   mkdirSync(raw, { recursive: true });
+  const started = Date.now();
+  let spent = 0;
   for (let i = 1; i <= Number(v.trials); i++)
     for (const task of v.tasks.split(",")) {
       for (const arm of v.arms.split(",")) {
+        if (spent + Number(v.budget) > Number(v["total-budget"])) throw new Error("Model spend limit reached");
+        if (Date.now() - started > Number(v["max-minutes"]) * 60_000 - 6 * 60_000)
+          throw new Error("Time limit reached");
         const log = join(raw, `${task}-${arm}-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
-        const r = await runTrial(task, arm, { log, seed: v.seed && resolve(v.seed) });
-        const truth = await truthFor(task);
+        const r = await runTrial(task, arm, {
+          log,
+          seed: v.seed && resolve(v.seed),
+          budget: Number(v.budget),
+          timeoutMs: 4 * 60_000,
+        });
+        let truth, truthError;
+        if (!r.result?.api_error) {
+          try {
+            truth = await truthFor(task, log.replace(/\.jsonl$/, "-truth"));
+          } catch (e) {
+            truthError = String(e);
+          }
+        }
         const u = r.result?.usage ?? {};
         console.log(
           JSON.stringify({
@@ -174,17 +250,33 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             trial: i,
             at: new Date().toISOString(),
             code: r.code,
+            stopped: r.stopped,
+            memoryBefore: r.memoryBefore,
+            memoryMin: r.memoryMin,
+            isError: r.result?.is_error,
+            resultSubtype: r.result?.subtype,
+            apiError: r.result?.api_error,
+            apiErrorStatus: r.result?.api_error_status,
+            modelRan: Object.keys(r.result?.modelUsage ?? {}).length > 0,
             wallMs: r.wallMs,
             durationMs: r.result?.duration_ms,
             costUsd: r.result?.total_cost_usd,
             turns: r.result?.num_turns,
-            inTokens: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0),
+            inTokens: r.result?.usage
+              ? (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
+              : undefined,
             outTokens: u.output_tokens,
             answer: r.result?.result,
             truth,
+            truthError,
+            grade: ["netflix-1", "ikea-5"].includes(task) ? gradePopular(task, r.result?.result, truth) : undefined,
             log: relative(repo, log),
           }),
         );
+        spent += r.result?.total_cost_usd ?? 0;
+        if (!r.result || r.stopped || !Number.isFinite(r.result.total_cost_usd))
+          throw new Error("Trial interrupted or spend unknown; stopping with its record preserved");
+        if (r.result.api_error) throw new Error(`Provider failure: ${r.result.api_error}; stopping the batch`);
       }
     }
 }

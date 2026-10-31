@@ -49,6 +49,7 @@ test("benchmark summaries retain failed and ungraded trials and exclude absent m
     assert.deepEqual(api.seconds, { n: 3, median: 2, min: 1, max: 5 });
     assert.equal(api.costUsd.n, 2);
     assert.equal(api.tokens.n, 2);
+    assert.deepEqual(api.inputTokens, { n: 2, median: 15, min: 10, max: 20 });
     assert.deepEqual(summary.agents["flights-1/browser"].seconds, { n: 0, median: null, min: null, max: null });
     copyFileSync(join(results, "trials.jsonl"), join(dir, "bench/results/trials.jsonl"));
     execFileSync(process.execPath, [script]);

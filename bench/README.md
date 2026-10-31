@@ -12,7 +12,101 @@ hash and median batch latency; `p95BatchMeanMs` is not an individual-call tail p
 databases. Both scripts assert their results and use no real accounts or live websites. See
 [the audit](../docs/PERFORMANCE-AUDIT.md) for the before/after protocol and measured limits.
 
-## Live agent comparison
+## Popular-site results, 2026-10-31
+
+Median of five trials per task per arm; ranges are in parentheses. All 20 answers
+passed the frozen rendered-page graders. The model was `claude-opus-5-5` through
+Claude Code 2.1.316, authenticated through a local CLI proxy, with the same prompt
+and settings in both arms. The proxy did not change the requested model.
+
+| task | setup | correct | time | cost | tokens to the model |
+|---|---|---|---|---|---|
+| Netflix: 3 episode titles and runtimes, 1 lookup | browser | 5/5 | 22.3 s (15.7–31.5) | $0.0433 (0.0420–0.0761) | 43,800 (32,711–43,890) |
+| Netflix: 3 episode titles and runtimes, 1 lookup | API Anything | 5/5 | 9.6 s (7.7–12.4) | $0.0402 (0.0399–0.0697) | 31,132 (31,124–31,140) |
+| IKEA: addresses of 5 stores | browser | 5/5 | 31.4 s (29.1–32.4) | $0.0747 (0.0460–0.0811) | 52,521 (42,665–56,327) |
+| IKEA: addresses of 5 stores | API Anything | 5/5 | 18.1 s (14.8–34.1) | $0.0713 (0.0709–0.0713) | 49,861 (49,855–49,863) |
+
+API Anything had a lower median time on both tasks. Netflix's time ranges did not
+overlap. IKEA's did: API trial 4 took 34.1 s against the browser's 29.1 s, with
+19.2 s inside the five-read batch. IKEA browser trials 3 and 5 also cost less and
+used fewer input tokens than the corresponding API trials. Cost ranges overlap
+on both tasks; this does not establish a broad cost advantage.
+
+![Time and model cost on Netflix and IKEA](../docs/media/popular-benchmark-light.svg)
+
+The grading rules were written in [the frozen protocol](results/popular-2026-10-31/protocol.md)
+before the runs. Immediately after each trial, fresh signed-out headless Chrome
+read the rendered page's visible DOM text, independently of API Anything's extraction.
+
+- **Netflix:** check the first three episode cards displayed by default on the public
+  [Stranger Things page](https://www.netflix.com/title/80057281), without changing
+  season. All three titles and integer runtimes must match, in order. Only case,
+  punctuation, whitespace and leading episode numbers are ignored.
+- **IKEA:** check the Address sections for Emeryville, East Palo Alto, West Sacramento,
+  Costa Mesa and San Diego. All five complete street/city/state/ZIP addresses must
+  match the correct store. Store order, case, punctuation, whitespace, an optional
+  leading IKEA store name and the explicitly listed address abbreviations in the
+  protocol are ignored. A duplicate cannot replace a missing store.
+
+The runner alternated browser then API for each task, five times, sequentially.
+Every trial started in a fresh temporary directory; API Anything started with an
+empty home and the bundled specs, without a seed or imported session. Playwright
+MCP was pinned to 0.0.82, using headless Chrome 156 at 1280×800. The browser agent
+used scripts and in-page `fetch` for some IKEA lookups; it was not restricted to
+clicking or reading full-page snapshots. Every recorded run made real tool calls
+and reported the requested model. No website write operations were called.
+
+Time is Claude spawn to exit. Cost is `total_cost_usd` at API list prices, including
+prompt caching. This table's tokens are **input only**, including cache-read and
+cache-creation input. The historical chart script's `tokens` field includes output
+too; `inputTokens` is the new, separately named field used here. Raw trials retain both.
+
+The 20 trials cost **$1.1635208** in reported model usage. The lowest sampled
+`memory_pressure` free percentage was 14%, or 86% used. Checks ran every five seconds
+during trials. Other work shared this Mac, including video rendering, so this was
+not an idle-machine test. Each comparison is **one site, one model, a few runs**.
+These two tasks read public HTML; they do not establish performance on logged-in
+sites, personalized feeds, arbitrary shopping searches, or the web as a whole.
+
+YouTube was excluded in preflight because two fresh top-five rendered searches
+shared only three videos, below the proposed four-of-five rule. Reddit's independent
+headless truth browser showed a human challenge. Neither was scored with a weaker
+rule. The selected prompts and graders were not tuned between arms or trials.
+
+[Raw trial records](results/popular-2026-10-31/trials.jsonl),
+[summary](results/popular-2026-10-31/summary.json),
+[source hashes and environment](results/popular-2026-10-31/manifest.json), and
+[model/tool audit](results/popular-2026-10-31/audit.json) are committed.
+Full stream logs, rendered text and screenshots stay in the ignored
+`bench/results/popular-2026-10-31/raw/` directory.
+
+The single Netflix recording also passed both grades: browser **28.4 s / $0.0439586**,
+API Anything **11.3 s / $0.040809**. It cost $0.0847676, bringing total reported model
+spend to **$1.2482884**. Netflix was selected because its benchmark timing ranges did
+not overlap; the recording was not rerolled. It is a **sequential replay race**, not
+simultaneous execution, to respect the shared-machine limit. Those two extra runs
+are not included in the five-trial table.
+
+The unstyled 1280×800 VP8 WebM, full event logs, per-arm truth and timeline are kept
+in `bench/video/raw-popular-2026-10-31/`; [the recording receipt](results/popular-2026-10-31/recording.json)
+includes the filename, SHA-256 and probe. The 17.64-second WebM excludes some agent
+startup and answer-writing time. Use the event timestamps for the race clock, not
+clip length. The browser agent read DOM snapshots without scrolling to the episode
+cards, so the raw footage mainly shows the Netflix landing page; its exact tool
+results and episode answers are in the logs. A separate team can style the edit.
+
+To repeat the two tasks, authenticate `claude`, build this checkout, then use a new
+results directory. The runner stops on provider failures, unknown spend, time or
+memory limits; it does not change models.
+
+```sh
+mkdir -p bench/results/popular-rerun
+node bench/run-agents.mjs --tasks netflix-1,ikea-5 --trials 5 \
+  --out bench/results/popular-rerun > bench/results/popular-rerun/trials.jsonl
+node bench/charts.mjs popular-rerun
+```
+
+## Historical Google Flights comparison
 
 One Claude Code agent gets the same prompt twice. In one run it has only a browser (Playwright
 MCP on headless Chrome). In the other it has only API Anything's MCP server with the bundled

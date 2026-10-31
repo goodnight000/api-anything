@@ -1,0 +1,71 @@
+[
+  {
+    "slug": "east-palo-alto",
+    "title": "Local Furniture Store Near Palo Alto, CA - IKEA",
+    "address": "IKEA East Palo Alto\n1700 East Bayshore Road\nEast Palo Alto, CA 94303"
+  },
+  {
+    "slug": "sacramento",
+    "title": "Find a Furniture Store Near You! - IKEA"
+  },
+  {
+    "slug": "costa-mesa",
+    "title": "Local Furniture Store Near Costa Mesa, CA - IKEA",
+    "address": "IKEA Costa Mesa\n1475 South Coast Drive\nCosta Mesa, CA 92626"
+  },
+  {
+    "slug": "san-diego",
+    "title": "Local Furniture Store Near San Diego, CA - IKEA",
+    "address": "IKEA San Diego\n2149 Fenton Parkway\nSan Diego, CA 92108"
+  },
+  {
+    "youtube": 1,
+    "rows": [
+      {
+        "title": "iPhone 18 Pro Review: All About that Chip",
+        "channel": "Marques Brownlee"
+      },
+      {
+        "title": "iPhone 18 Pro Max Review But I Don't Waste Your Time",
+        "channel": "Mark Spurrell"
+      },
+      {
+        "title": "iPhone 18 Pro 1 Month Later - All The Issues",
+        "channel": "Surfshark Academy"
+      },
+      {
+        "title": "iPhone 18 Pro Review, but I Respect Your Time..",
+        "channel": "MinimalisTech"
+      },
+      {
+        "title": "iPhone 18 Pro: 30 Day HONEST Review.",
+        "channel": "Joshua Chang"
+      }
+    ]
+  },
+  {
+    "youtube": 2,
+    "rows": [
+      {
+        "title": "iPhone 18 Pro Review: All About that Chip",
+        "channel": "Marques Brownlee"
+      },
+      {
+        "title": "iPhone 18 Pro 1 Month Later - All The Issues",
+        "channel": "Surfshark Academy"
+      },
+      {
+        "title": "iPhone 18 Pro - 1 Month Later: An HONEST Review",
+        "channel": "Andrew Ethan Zeng"
+      },
+      {
+        "title": "iPhone Duo Review: Why I’m Keeping It Over My Pro Max",
+        "channel": "MacRumors"
+      },
+      {
+        "title": "iPhone 18 Pro Max Review But I Don't Waste Your Time",
+        "channel": "Mark Spurrell"
+      }
+    ]
+  }
+]

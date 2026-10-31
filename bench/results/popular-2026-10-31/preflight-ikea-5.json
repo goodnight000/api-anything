@@ -1,0 +1,37 @@
+{
+  "startedAt": "2026-10-31T21:31:01.221Z",
+  "endedAt": "2026-10-31T21:31:11.325Z",
+  "source": "rendered Chrome DOM",
+  "rows": [
+    {
+      "store": "emeryville",
+      "address": "4400 Shellmound Street Emeryville, CA 94608",
+      "url": "https://www.ikea.com/us/en/stores/emeryville/",
+      "at": "2026-10-31T21:31:03.190Z"
+    },
+    {
+      "store": "east palo alto",
+      "address": "1700 East Bayshore Road East Palo Alto, CA 94303",
+      "url": "https://www.ikea.com/us/en/stores/east-palo-alto/",
+      "at": "2026-10-31T21:31:05.072Z"
+    },
+    {
+      "store": "west sacramento",
+      "address": "700 IKEA Court West Sacramento, CA 95605",
+      "url": "https://www.ikea.com/us/en/stores/west-sacramento/",
+      "at": "2026-10-31T21:31:06.903Z"
+    },
+    {
+      "store": "costa mesa",
+      "address": "1475 South Coast Drive Costa Mesa, CA 92626",
+      "url": "https://www.ikea.com/us/en/stores/costa-mesa/",
+      "at": "2026-10-31T21:31:08.786Z"
+    },
+    {
+      "store": "san diego",
+      "address": "2149 Fenton Parkway San Diego, CA 92108",
+      "url": "https://www.ikea.com/us/en/stores/san-diego/",
+      "at": "2026-10-31T21:31:11.240Z"
+    }
+  ]
+}

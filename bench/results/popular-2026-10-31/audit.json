@@ -1,0 +1,908 @@
+{
+  "frozenHashesMatch": true,
+  "allTrialsMadeToolCalls": true,
+  "allTrialsUsedRequestedModel": true,
+  "all20Graded": true,
+  "lowestSampledMemoryFreePercent": 14,
+  "benchmarkSpendUsd": 1.1635208000000001,
+  "trials": [
+    {
+      "task": "netflix-1",
+      "arm": "browser",
+      "trial": 1,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "browser_navigate",
+          "startedMs": 3223,
+          "endedMs": 6102,
+          "resultChars": 414,
+          "isError": false
+        },
+        {
+          "tool": "browser_find",
+          "startedMs": 7671,
+          "endedMs": 7697,
+          "resultChars": 3233,
+          "isError": false
+        },
+        {
+          "tool": "browser_snapshot",
+          "startedMs": 9005,
+          "endedMs": 9035,
+          "resultChars": 2783,
+          "isError": false
+        }
+      ],
+      "toolWaitMs": 2935,
+      "wallMs": 15707
+    },
+    {
+      "task": "netflix-1",
+      "arm": "api",
+      "trial": 1,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "list_operations",
+          "startedMs": 2945,
+          "endedMs": 2958,
+          "resultChars": 3997,
+          "isError": false,
+          "input": {
+            "site": "netflix"
+          }
+        },
+        {
+          "tool": "call_operation",
+          "startedMs": 4979,
+          "endedMs": 6020,
+          "resultChars": 1674,
+          "isError": false,
+          "input": {
+            "site": "netflix",
+            "op": "getDisplayedEpisodeGuide",
+            "args": {
+              "titleId": "80057281"
+            }
+          }
+        }
+      ],
+      "toolWaitMs": 1054,
+      "wallMs": 9599
+    },
+    {
+      "task": "ikea-5",
+      "arm": "browser",
+      "trial": 1,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "browser_navigate",
+          "startedMs": 4713,
+          "endedMs": 8914,
+          "resultChars": 425,
+          "isError": false
+        },
+        {
+          "tool": "browser_find",
+          "startedMs": 11255,
+          "endedMs": 11301,
+          "resultChars": 16599,
+          "isError": false
+        },
+        {
+          "tool": "browser_evaluate",
+          "startedMs": 18578,
+          "endedMs": 24097,
+          "resultChars": 1215,
+          "isError": false
+        }
+      ],
+      "toolWaitMs": 9766,
+      "wallMs": 32440
+    },
+    {
+      "task": "ikea-5",
+      "arm": "api",
+      "trial": 1,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "list_operations",
+          "startedMs": 2110,
+          "endedMs": 2134,
+          "resultChars": 5548,
+          "isError": false,
+          "input": {
+            "site": "ikea"
+          }
+        },
+        {
+          "tool": "call_operation",
+          "startedMs": 3879,
+          "endedMs": 4419,
+          "resultChars": 4100,
+          "isError": false,
+          "input": {
+            "site": "ikea",
+            "op": "listStores"
+          }
+        },
+        {
+          "tool": "call_batch",
+          "startedMs": 7006,
+          "endedMs": 12415,
+          "resultChars": 4342,
+          "isError": false,
+          "input": {
+            "items": [
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "emeryville"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "east-palo-alto"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "west-sacramento"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "costa-mesa"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "san-diego"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "toolWaitMs": 5973,
+      "wallMs": 15546
+    },
+    {
+      "task": "netflix-1",
+      "arm": "browser",
+      "trial": 2,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "browser_navigate",
+          "startedMs": 4249,
+          "endedMs": 8840,
+          "resultChars": 414,
+          "isError": false
+        },
+        {
+          "tool": "browser_find",
+          "startedMs": 11629,
+          "endedMs": 11674,
+          "resultChars": 3233,
+          "isError": false
+        },
+        {
+          "tool": "browser_snapshot",
+          "startedMs": 14527,
+          "endedMs": 14570,
+          "resultChars": 2783,
+          "isError": false
+        }
+      ],
+      "toolWaitMs": 4679,
+      "wallMs": 22277
+    },
+    {
+      "task": "netflix-1",
+      "arm": "api",
+      "trial": 2,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "list_operations",
+          "startedMs": 3324,
+          "endedMs": 3343,
+          "resultChars": 3997,
+          "isError": false,
+          "input": {
+            "site": "netflix"
+          }
+        },
+        {
+          "tool": "call_operation",
+          "startedMs": 6033,
+          "endedMs": 6961,
+          "resultChars": 1673,
+          "isError": false,
+          "input": {
+            "site": "netflix",
+            "op": "getDisplayedEpisodeGuide",
+            "args": {
+              "titleId": "80057281"
+            }
+          }
+        }
+      ],
+      "toolWaitMs": 947,
+      "wallMs": 10778
+    },
+    {
+      "task": "ikea-5",
+      "arm": "browser",
+      "trial": 2,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "browser_navigate",
+          "startedMs": 4025,
+          "endedMs": 5405,
+          "resultChars": 400,
+          "isError": false
+        },
+        {
+          "tool": "browser_find",
+          "startedMs": 7124,
+          "endedMs": 7223,
+          "resultChars": 12340,
+          "isError": false
+        },
+        {
+          "tool": "browser_evaluate",
+          "startedMs": 10843,
+          "endedMs": 24001,
+          "resultChars": 3353,
+          "isError": false
+        }
+      ],
+      "toolWaitMs": 14637,
+      "wallMs": 31382
+    },
+    {
+      "task": "ikea-5",
+      "arm": "api",
+      "trial": 2,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "list_operations",
+          "startedMs": 3825,
+          "endedMs": 3838,
+          "resultChars": 5548,
+          "isError": false,
+          "input": {
+            "site": "ikea"
+          }
+        },
+        {
+          "tool": "call_operation",
+          "startedMs": 6177,
+          "endedMs": 6481,
+          "resultChars": 4100,
+          "isError": false,
+          "input": {
+            "site": "ikea",
+            "op": "listStores"
+          }
+        },
+        {
+          "tool": "call_batch",
+          "startedMs": 9427,
+          "endedMs": 14455,
+          "resultChars": 4341,
+          "isError": false,
+          "input": {
+            "items": [
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "emeryville"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "east-palo-alto"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "west-sacramento"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "costa-mesa"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "san-diego"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "toolWaitMs": 5345,
+      "wallMs": 18051
+    },
+    {
+      "task": "netflix-1",
+      "arm": "browser",
+      "trial": 3,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "browser_navigate",
+          "startedMs": 3723,
+          "endedMs": 11356,
+          "resultChars": 414,
+          "isError": false
+        },
+        {
+          "tool": "browser_find",
+          "startedMs": 13580,
+          "endedMs": 13629,
+          "resultChars": 3326,
+          "isError": false
+        },
+        {
+          "tool": "browser_snapshot",
+          "startedMs": 15528,
+          "endedMs": 15578,
+          "resultChars": 2783,
+          "isError": false
+        }
+      ],
+      "toolWaitMs": 7732,
+      "wallMs": 22410
+    },
+    {
+      "task": "netflix-1",
+      "arm": "api",
+      "trial": 3,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "list_operations",
+          "startedMs": 2032,
+          "endedMs": 2045,
+          "resultChars": 3997,
+          "isError": false,
+          "input": {
+            "site": "netflix"
+          }
+        },
+        {
+          "tool": "call_operation",
+          "startedMs": 3759,
+          "endedMs": 4889,
+          "resultChars": 1674,
+          "isError": false,
+          "input": {
+            "site": "netflix",
+            "op": "getDisplayedEpisodeGuide",
+            "args": {
+              "titleId": "80057281"
+            }
+          }
+        }
+      ],
+      "toolWaitMs": 1143,
+      "wallMs": 7681
+    },
+    {
+      "task": "ikea-5",
+      "arm": "browser",
+      "trial": 3,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "browser_navigate",
+          "startedMs": 3494,
+          "endedMs": 6794,
+          "resultChars": 425,
+          "isError": false
+        },
+        {
+          "tool": "browser_find",
+          "startedMs": 8239,
+          "endedMs": 8309,
+          "resultChars": 2545,
+          "isError": false
+        },
+        {
+          "tool": "browser_evaluate",
+          "startedMs": 11581,
+          "endedMs": 22097,
+          "resultChars": 1135,
+          "isError": false
+        }
+      ],
+      "toolWaitMs": 13886,
+      "wallMs": 29620
+    },
+    {
+      "task": "ikea-5",
+      "arm": "api",
+      "trial": 3,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "list_operations",
+          "startedMs": 1926,
+          "endedMs": 1948,
+          "resultChars": 5548,
+          "isError": false,
+          "input": {
+            "site": "ikea"
+          }
+        },
+        {
+          "tool": "call_operation",
+          "startedMs": 3642,
+          "endedMs": 4024,
+          "resultChars": 4100,
+          "isError": false,
+          "input": {
+            "site": "ikea",
+            "op": "listStores"
+          }
+        },
+        {
+          "tool": "call_batch",
+          "startedMs": 6471,
+          "endedMs": 11840,
+          "resultChars": 4342,
+          "isError": false,
+          "input": {
+            "items": [
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "emeryville"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "east-palo-alto"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "west-sacramento"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "costa-mesa"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "san-diego"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "toolWaitMs": 5773,
+      "wallMs": 14846
+    },
+    {
+      "task": "netflix-1",
+      "arm": "browser",
+      "trial": 4,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "browser_navigate",
+          "startedMs": 7347,
+          "endedMs": 16037,
+          "resultChars": 414,
+          "isError": false
+        },
+        {
+          "tool": "browser_find",
+          "startedMs": 18606,
+          "endedMs": 18648,
+          "resultChars": 3233,
+          "isError": false
+        },
+        {
+          "tool": "browser_snapshot",
+          "startedMs": 22022,
+          "endedMs": 22052,
+          "resultChars": 2783,
+          "isError": false
+        }
+      ],
+      "toolWaitMs": 8762,
+      "wallMs": 31539
+    },
+    {
+      "task": "netflix-1",
+      "arm": "api",
+      "trial": 4,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "list_operations",
+          "startedMs": 2777,
+          "endedMs": 2800,
+          "resultChars": 3997,
+          "isError": false,
+          "input": {
+            "site": "netflix"
+          }
+        },
+        {
+          "tool": "call_operation",
+          "startedMs": 6075,
+          "endedMs": 7051,
+          "resultChars": 1673,
+          "isError": false,
+          "input": {
+            "site": "netflix",
+            "op": "getDisplayedEpisodeGuide",
+            "args": {
+              "titleId": "80057281"
+            }
+          }
+        }
+      ],
+      "toolWaitMs": 999,
+      "wallMs": 12447
+    },
+    {
+      "task": "ikea-5",
+      "arm": "browser",
+      "trial": 4,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "browser_navigate",
+          "startedMs": 3218,
+          "endedMs": 6852,
+          "resultChars": 425,
+          "isError": false
+        },
+        {
+          "tool": "browser_find",
+          "startedMs": 8296,
+          "endedMs": 8359,
+          "resultChars": 16600,
+          "isError": false
+        },
+        {
+          "tool": "browser_evaluate",
+          "startedMs": 11975,
+          "endedMs": 21877,
+          "resultChars": 881,
+          "isError": false
+        }
+      ],
+      "toolWaitMs": 13599,
+      "wallMs": 29100
+    },
+    {
+      "task": "ikea-5",
+      "arm": "api",
+      "trial": 4,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "list_operations",
+          "startedMs": 2607,
+          "endedMs": 2627,
+          "resultChars": 5548,
+          "isError": false,
+          "input": {
+            "site": "ikea"
+          }
+        },
+        {
+          "tool": "call_operation",
+          "startedMs": 5491,
+          "endedMs": 6802,
+          "resultChars": 4101,
+          "isError": false,
+          "input": {
+            "site": "ikea",
+            "op": "listStores"
+          }
+        },
+        {
+          "tool": "call_batch",
+          "startedMs": 9793,
+          "endedMs": 28971,
+          "resultChars": 4343,
+          "isError": false,
+          "input": {
+            "items": [
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "emeryville"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "east-palo-alto"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "west-sacramento"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "costa-mesa"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "san-diego"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "toolWaitMs": 20509,
+      "wallMs": 34137
+    },
+    {
+      "task": "netflix-1",
+      "arm": "browser",
+      "trial": 5,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "browser_navigate",
+          "startedMs": 4451,
+          "endedMs": 9892,
+          "resultChars": 414,
+          "isError": false
+        },
+        {
+          "tool": "browser_find",
+          "startedMs": 12640,
+          "endedMs": 12672,
+          "resultChars": 7461,
+          "isError": false
+        }
+      ],
+      "toolWaitMs": 5473,
+      "wallMs": 20998
+    },
+    {
+      "task": "netflix-1",
+      "arm": "api",
+      "trial": 5,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "list_operations",
+          "startedMs": 2149,
+          "endedMs": 2174,
+          "resultChars": 3997,
+          "isError": false,
+          "input": {
+            "site": "netflix"
+          }
+        },
+        {
+          "tool": "call_operation",
+          "startedMs": 3955,
+          "endedMs": 5214,
+          "resultChars": 1674,
+          "isError": false,
+          "input": {
+            "site": "netflix",
+            "op": "getDisplayedEpisodeGuide",
+            "args": {
+              "titleId": "80057281"
+            }
+          }
+        }
+      ],
+      "toolWaitMs": 1284,
+      "wallMs": 8207
+    },
+    {
+      "task": "ikea-5",
+      "arm": "browser",
+      "trial": 5,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "browser_navigate",
+          "startedMs": 4139,
+          "endedMs": 9505,
+          "resultChars": 425,
+          "isError": false
+        },
+        {
+          "tool": "browser_find",
+          "startedMs": 11596,
+          "endedMs": 11664,
+          "resultChars": 2292,
+          "isError": false
+        },
+        {
+          "tool": "browser_run_code_unsafe",
+          "startedMs": 15807,
+          "endedMs": 23630,
+          "resultChars": 1006,
+          "isError": false
+        }
+      ],
+      "toolWaitMs": 13257,
+      "wallMs": 31631
+    },
+    {
+      "task": "ikea-5",
+      "arm": "api",
+      "trial": 5,
+      "models": [
+        "claude-opus-5-5"
+      ],
+      "calls": [
+        {
+          "tool": "list_operations",
+          "startedMs": 3776,
+          "endedMs": 3806,
+          "resultChars": 5548,
+          "isError": false,
+          "input": {
+            "site": "ikea"
+          }
+        },
+        {
+          "tool": "call_operation",
+          "startedMs": 6405,
+          "endedMs": 6959,
+          "resultChars": 4100,
+          "isError": false,
+          "input": {
+            "site": "ikea",
+            "op": "listStores"
+          }
+        },
+        {
+          "tool": "call_batch",
+          "startedMs": 10702,
+          "endedMs": 16439,
+          "resultChars": 4341,
+          "isError": false,
+          "input": {
+            "items": [
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "emeryville"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "east-palo-alto"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "west-sacramento"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "costa-mesa"
+                }
+              },
+              {
+                "site": "ikea",
+                "op": "getStoreDetails",
+                "args": {
+                  "store": "san-diego"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "toolWaitMs": 6321,
+      "wallMs": 20840
+    }
+  ]
+}
