@@ -15,6 +15,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { browserAvailable, closeBrowser } from "../src/browser.js";
 import { gate } from "../src/checks.js";
+import { call } from "../src/execute.js";
 import { loadCapture } from "../src/heal.js";
 import { saveSettings } from "../src/identity.js";
 import { hooks, type LearnSiteResult, learnSite } from "../src/learnsite.js";
@@ -349,5 +350,95 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
       gate(loadSite("fx")!.site).errors.filter((e) => e.startsWith("searchScoped:")),
       [],
     );
+  });
+
+  describe("a list behind a 'Show more' button", () => {
+    const more = [{ action: "click" as const, selector: "#more" }];
+    let posts: LearnSiteResult;
+    before(async () => {
+      stubShare((c) => ({ site: c.site, op: c.ops[0]!, shared: true }));
+      posts = await learnSite(
+        {
+          site: "fx",
+          op: "topicPosts",
+          trigger: `${fx.url}/topics/{topic}`,
+          steps: more,
+          args: { topic: "rust" },
+          args2: { topic: "golang" },
+          args3: { topic: "swift" },
+        },
+        fast,
+      );
+    });
+
+    test("steps load page 2 in both runs, and the paging they show is learned: data is page 1, with the cursor of page 2", async () => {
+      assert.equal(posts.ok, true, JSON.stringify(posts));
+      assert.deepEqual(posts.paging, { param: "after", next: "data.posts.pageInfo.endCursor", auto: true });
+      assert.match(JSON.stringify(posts.data), /rust post 1/);
+      assert.doesNotMatch(JSON.stringify(posts.data), /rust post 4/);
+      assert.deepEqual([posts.nextPage, posts.hasMore], [Buffer.from("rust:3").toString("base64url"), true]);
+      const page2 = await call("fx", "topicPosts", { topic: "rust", after: posts.nextPage }, fast);
+      assert.match(JSON.stringify(page2.data), /rust post 4/);
+      assert.equal(posts.proof?.holdout.ok, true);
+    });
+
+    test("the cursor is the op's own optional param, with no example, and no run's cursor stays in the spec", () => {
+      const op = opOf("fx", "topicPosts");
+      assert.deepEqual(op.trigger.steps, more);
+      assert.deepEqual(
+        op.params.map((p) => [p.name, p.required, p.example]),
+        [
+          ["topic", true, "golang"],
+          ["after", false, undefined],
+        ],
+      );
+      const text = JSON.stringify(op);
+      for (const t of ["rust", "golang"]) assert.ok(!text.includes(Buffer.from(`${t}:3`).toString("base64url")), t);
+    });
+
+    test("a page number given as a next-page URL is learned with path~regex, its short value placed where the pages differ", async () => {
+      const r = await learnSite(
+        {
+          site: "fx",
+          op: "packages",
+          trigger: `${fx.url}/packages?q={q}`,
+          steps: [{ action: "click", selector: "#more" }],
+          args: { q: "tokio" },
+          args2: { q: "serde" },
+          args3: { q: "rayon" },
+        },
+        fast,
+      );
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.deepEqual(r.paging, { param: "page", next: "meta.next_page~[?&]page=([^&#]*)", auto: true });
+      assert.deepEqual([r.nextPage, r.hasMore], ["2", true]);
+      assert.match(JSON.stringify(r.data), /tokio-1/);
+      const op = opOf("fx", "packages");
+      assert.doesNotMatch(JSON.stringify(op), /pagingstandin/);
+      const last = await call("fx", "packages", { q: "serde", page: "3" }, fast);
+      assert.deepEqual([JSON.stringify(last.data).includes("serde-7"), last.hasMore], [true, false]);
+    });
+
+    test("paging the runs do not show is refused, and says to load page 2", async () => {
+      const r = await learnSite(
+        {
+          site: "fx",
+          op: "scopedPaged",
+          trigger: `${fx.url}/scoped?q={q}`,
+          args: { q: "alice" },
+          args2: { q: "bobby" },
+          args3: { q: "carol" },
+          captures: scoped.captures as [string, string],
+          paging: { param: "after", next: "data.next" },
+        },
+        fast,
+      );
+      assert.equal(r.ok, false);
+      assert.match(r.error ?? "", /run 1 loaded no second page of request \d+'s list: give steps that load it/);
+      assert.equal(
+        loadSite("fx")!.site.operations.some((o) => o.name === "scopedPaged"),
+        false,
+      );
+    });
   });
 });

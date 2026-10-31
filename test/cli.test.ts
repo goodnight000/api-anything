@@ -1255,6 +1255,74 @@ describe("paging and readback: a list an agent can walk, and a write it can see 
     assert.match(bad.out.error, /--paging: paging param page is no param of it/);
   });
 
+  test("a capture that loaded two pages of a list says how it pages, and add learns it from the flags it gives", async () => {
+    const PATH = "meta.next_page~[?&]page=([^&#]*)";
+    seed("cpackages", {
+      url: `${fx.url}/packages?q=tokio`,
+      exchanges: [
+        await answered(1, "document", "/packages?q=tokio"),
+        await answered(2, "fetch", "/api/packages?page=1&per_page=3&q=tokio"),
+        await answered(3, "fetch", "/api/packages?page=2&per_page=3&q=tokio"),
+      ],
+    });
+    const listed = await run("inspect", "cpackages");
+    assert.deepEqual(listed.out.pages, [
+      {
+        requests: [2, 3],
+        paging: { param: "page", next: PATH },
+        flags: `--from cpackages --pick-request 3 --example 'page=2' --paging 'page=${PATH}'`,
+      },
+    ]);
+    // learned from page 1 without --paging: add says the list pages, and how to learn it so
+    const plain = await run(
+      "add",
+      ...[
+        "pkgs",
+        "first",
+        "--from",
+        "cpackages",
+        "--pick-request",
+        "2",
+        "--example",
+        "q=tokio",
+        "--extract",
+        "packages",
+      ],
+    );
+    assert.match(
+      plain.out.warnings.join("\n"),
+      /requests 2 and 3 of capture cpackages are two pages of this list: to page it, add it again with --from cpackages --pick-request 3 --example 'page=2'/,
+    );
+    // page "2" is too short to be located by its value: the place paging found is used
+    const add = await run(
+      "add",
+      ...[
+        "pkgs",
+        "search",
+        "--from",
+        "cpackages",
+        "--pick-request",
+        "3",
+        "--example",
+        "q=tokio",
+        "--example",
+        "page=2",
+      ],
+      ...["--extract", "packages", "--paging", `page=${PATH}`],
+    );
+    assert.equal(add.code, 0, add.stdout);
+    assert.deepEqual([add.out.paging, add.out.params], [{ param: "page", next: PATH }, ["q:string", "page:string"]]);
+    assert.doesNotMatch(add.stdout, /pagingstandin|the trigger has no \{page\}/);
+    const names = (r: { out: { data: { name: string }[] } }) => r.out.data.map((x) => x.name);
+    const first = await run("call", "pkgs", "search", "q=serde");
+    assert.deepEqual(
+      [names(first), first.out.nextPage, first.out.hasMore],
+      [["serde-1", "serde-2", "serde-3"], "2", true],
+    );
+    const last = await run("call", "pkgs", "search", "q=serde", "page=3");
+    assert.deepEqual([names(last), last.out.hasMore, "nextPage" in last.out], [["serde-7"], false, false]);
+  });
+
   test("readback makes a write's call say applied when the read finds it, and accepted when it does not yet", async () => {
     assert.equal(
       (await run("add", "todo", "list", "--from", "ctodos", "--pick-request", "2", "--extract", "todos")).code,

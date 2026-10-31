@@ -26,7 +26,7 @@ import {
 import { buildRequest, unknownArgs } from "./http.js";
 import { answerShare } from "./identity.js";
 import { AmbiguousProfile } from "./import.js";
-import { type Candidate, capturePages, pageUrls, rankCandidates } from "./learn.js";
+import { type Candidate, capturePages, matches, pageUrls, rankCandidates } from "./learn.js";
 import { learnSite } from "./learnsite.js";
 import {
   cookieNames,
@@ -39,6 +39,7 @@ import {
   windowRetry,
 } from "./login.js";
 import { type Outline, outline } from "./outline.js";
+import { pagingFlag, pagingHints } from "./paging.js";
 import { plan, uploadName } from "./publish.js";
 import { pull, RegistryError, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
@@ -112,7 +113,9 @@ const HELP: Record<string, string> = {
                embeds (a ready --embedded regex), and a repeated HTML list as a ready --html recipe
   Output: capture (the id), candidates, next (what to do). blocked: the bot challenge the site served.
   pageStatus: the page's own HTTP error, when a request it loaded is recommended all the same.
-  stopped: the requests the steps sent that were stopped without --write (method and path); nothing was sent.`,
+  stopped: the requests the steps sent that were stopped without --write (method and path); nothing was sent.
+  pages: lists the capture loaded two pages of (a "Show more" in --steps): the two requests, the paging
+  found (the param and where page 1's answer gives its value), and the add flags that learn the list.`,
   inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline] [--example k=v]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
   response through add's recipe flags, so a recipe is tried here first: --extract (also spelled --path),
@@ -120,6 +123,7 @@ const HELP: Record<string, string> = {
   list at a path is a result, and so is an --html items selector "<container> <item>" whose container
   is on the page with no item in it (data: [], with a note).
   --outline summarizes the response (as capture --outline does) instead of printing it.
+  Without a request id it also lists pages, as capture does.
   A request's URL and body show the run's cookie and storage values as refs ([cookie:x]), except
   one equal to an --example value.`,
   add: `api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
@@ -159,7 +163,9 @@ const HELP: Record<string, string> = {
                   which a call returns as nextPage (hasMore false: the site said there is no next page).
                   Without =<path> the pages are numbered, and a call says nothing about the next one.
                   The param must be in the request: to page by a cursor, learn the op from the request
-                  that loads page 2 ("Show more"), so the cursor is a param
+                  that loads page 2 ("Show more"), so the cursor is a param. <path>~<regex> keeps the
+                  regex's group 1 from the string there (a next-page URL: meta.next_page~[?&]page=([^&#]*)).
+                  capture lists the pages it finds, and add warns when the capture shows this list pages
                   An op learned again keeps its params' allowed values and descriptions, its checks,
                   its paging and its readback.
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.
@@ -290,7 +296,12 @@ const HELP: Record<string, string> = {
   --from <id> --from2 <id>   learn again from an earlier learn's captures, with no browser
   --fresh     learn the page even when a shared op answers for it (its data was not what you wanted)
   --pick-request <n>, --extract, --pick, --html, --embedded   choose the request and the recipe (see add)
-  Output: data, signature, chosen and alternatives (request and recipe), proof, shared; or data and reused.`,
+  --steps <json>  UI steps after load, as add's ({param} filled): a click on "Show more" loads page 2
+  --paging <param>[=<path>]  the list pages (see add). Without it, a list both runs load two pages of
+              is learned with the paging they show; a cursor param is then the op's own, never in --args.
+              Numbered pages without a cursor: put the page in --args, --args2 and --args3, and --paging page
+  Output: data, signature, chosen and alternatives (request and recipe), proof, shared; or data and reused.
+  paging, nextPage and hasMore: a list learned with its paging, and how to ask for the page after data.`,
 };
 
 const USAGE = `api-anything ${VERSION}: turn a website into operations an agent can call.
@@ -624,14 +635,18 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     )
     .find(Boolean);
   const page: ReturnType<typeof pageSays> = wall ? {} : pageSays(c, ranked, values);
-  const learn = html
-    ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
-    : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`;
+  const pages = pagesOf(c, values);
+  const learn = `${
+    html
+      ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
+      : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`
+  }${pages.length ? `; requests ${pages[0]!.requests.join(" and ")} are two pages of one list: to learn it with its paging, add ${pages[0]!.flags} with the other --example values` : ""}`;
   out({
     capture: c.id,
     finalUrl: c.finalUrl,
     requests: c.exchanges.length,
     candidates,
+    ...(pages.length ? { pages } : {}),
     ...(wall ? { blocked: wall } : {}),
     ...(page.status ? { pageStatus: page.status } : {}),
     ...(stopped.length ? { stopped } : {}),
@@ -683,6 +698,7 @@ function cmdInspect({ v, pos }: Parsed): number {
           : {}),
         ...(e.aborted ? { aborted: true } : {}),
       })),
+      ...withPages(pagesOf(c, Object.values(kv(v.example)).map(String))),
     });
     return 0;
   }
@@ -765,6 +781,20 @@ function cmdInspect({ v, pos }: Parsed): number {
 
 /** One shell word, quoted: a space, a quote or JSON in a hint's command pastes as a single argument. */
 const sh = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
+
+/**
+ * The lists capture `c` loaded two pages of (`pagingHints`), each with the add flags that learn the
+ * list from its second page. The cursor shows the run's live values as refs, as capture's URLs do.
+ */
+function pagesOf(c: CaptureFile, values: string[]) {
+  const live = captureLive(c, values);
+  return pagingHints(c.exchanges).map((h) => ({
+    requests: [h.previous, h.request],
+    paging: h.paging,
+    flags: `--from ${c.id} --pick-request ${h.request} --example ${sh(`${h.paging.param}=${redact(h.value, live, { named: true })}`)} --paging ${sh(pagingFlag(h.paging))}`,
+  }));
+}
+const withPages = (pages: ReturnType<typeof pagesOf>) => (pages.length ? { pages } : {});
 
 /**
  * The command that repeats how capture `c` was made, with the second example's values where the
@@ -875,6 +905,20 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     paging: pagingOf(v.paging),
   });
   const op = r.operation;
+  const c = v.from && !v.paging && !op.paging ? loadCapture(v.from) : undefined;
+  // the request learned, or the one before it, is one of two pages of a list the capture loaded
+  const paged =
+    c &&
+    pagesOf(c, Object.values(ex1)).find((pg) =>
+      pg.requests.some((id) => {
+        const e = c.exchanges.find((x) => x.id === id);
+        return e && matches(op.match, e.request);
+      }),
+    );
+  if (paged)
+    r.warnings.push(
+      `requests ${paged.requests.join(" and ")} of capture ${c!.id} are two pages of this list: to page it, add it again with ${paged.flags} and its other --example values`,
+    );
   out({
     ok: true,
     site,
@@ -1331,7 +1375,7 @@ async function cmdSetup({ v }: Parsed): Promise<number> {
   return r.ok ? 0 : 1;
 }
 
-async function cmdLearn({ v, pos }: Parsed): Promise<number> {
+async function cmdLearn({ v, pos, steps }: Parsed): Promise<number> {
   const trigger = pos[0];
   if (!trigger) throw new Fail("missing <trigger>", "api-anything learn --help");
   if ((v.from === undefined) !== (v.from2 === undefined))
@@ -1353,6 +1397,8 @@ async function cmdLearn({ v, pos }: Parsed): Promise<number> {
       ...(v.from && v.from2 ? { captures: [v.from, v.from2] as [string, string] } : {}),
       ...(v.fresh ? { fresh: true } : {}),
       ...(v.write ? { write: true } : {}),
+      ...(v.paging ? { paging: pagingOf(v.paging) } : {}),
+      ...(steps ? { steps } : {}),
     },
     { consent: process.stdin.isTTY && process.stderr.isTTY ? askYesNo : undefined },
   );
@@ -1448,6 +1494,8 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "from2",
       "fresh",
       "write",
+      "paging",
+      "steps",
     ],
   },
 };

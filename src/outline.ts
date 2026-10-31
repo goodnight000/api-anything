@@ -40,7 +40,8 @@ function sample(v: unknown): string {
   return String(v);
 }
 
-const step = (path: string, k: string) =>
+/** `path` one key deeper, in getPath syntax */
+export const step = (path: string, k: string) =>
   /^[A-Za-z_$][\w$-]*$/.test(k) ? (path ? `${path}.${k}` : k) : `${path}[${JSON.stringify(k)}]`;
 // an id-like key: digits, or a URN/URL-ish value (Apollo's "Book:kca://book/...", "User:123")
 const idLike = (k: string) => /\d{3,}|[:/]/.test(k);
