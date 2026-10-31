@@ -642,9 +642,13 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         : `the write may have run: check the site first. Do not retry: ${why}`;
       return { tier, class: "error", reason: e.message, ambiguous: true, hint, step: "relearn" };
     }
+    const reason = (e as Error).message.split("\n")[0]!;
+    // The site answered with more header bytes than Node's fetch reads (16 KB; YouTube sends ~19 KB):
+    // a browser reads them, so a read climbs as from a block. A write did reach the site: never resent.
+    if (tier === 1 && op.readOnly && /UND_ERR_HEADERS_OVERFLOW/.test(reason))
+      return { tier, class: "blocked", reason: `the answer's headers are too large for plain HTTP (${reason})` };
     // No answer (a timeout, a reset, a page that did not load) teaches nothing about the request; a
     // trigger step that failed (its button is gone) does.
-    const reason = (e as Error).message.split("\n")[0]!;
     return {
       tier,
       class: "error",
