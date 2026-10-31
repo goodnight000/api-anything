@@ -57,6 +57,7 @@ import {
   readbackName,
   TriggerStepSchema,
 } from "./spec.js";
+import { status } from "./status.js";
 import { exportSite, listSites, loadHeals, loadSite, siteNotes, updateSite } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { readbackProblems, SHARED_NOTE } from "./vet.js";
@@ -214,6 +215,14 @@ const HELP: Record<string, string> = {
   Lists the last 20 heals and reverts (of one site, or all), newest first: when, which op, how (rescan,
   recapture, revert) and what changed in its request template, one line each, with {param} and
   cookie:/session: refs in place of values. A call that heals says the same in its heal field.`,
+  status: `api-anything status [site]
+  What this machine knows of each op's health, from local files only (nothing is sent): a site's
+  cool-down, an op's stale mark, the tier calls start at (remembered) beside the op's own (minTier),
+  its last heal, its last verify outcome, its writes of the last 24 h by what each did, and from the
+  call log (calls.jsonl, a week kept) the calls of the last 24 h and 7 days: count, ok rate, tiers,
+  heals, median ms, and the last call's class. degraded: the last 24 h ran at a higher tier, or with
+  an ok rate 20 points lower, than the 6 days before. problems lists each one with its next step.
+  Without a site: every site with something on record here.`,
   revert: `api-anything revert <site> <op>
   Puts back the op as it was before its last heal (heals.jsonl keeps it), and logs the revert; run it
   again to take back the heal before that. Refused when the op has no heal to take back, or changed
@@ -250,7 +259,7 @@ const HELP: Record<string, string> = {
   refuses an op holding a live cookie or session value, or failing its checks. --yes sends them, signed
   with this install's key; an op that needed a login or writes is reviewed before others get it.`,
   mcp: `api-anything mcp [--allow-writes] [--sites a,b] [--print-config] [--no-learn]
-  Serves list_sites, find_sites, list_operations, call_operation, get_job, login and learn_site over
+  Serves list_sites, find_sites, list_operations, call_operation, get_job, site_status, login and learn_site over
   stdio MCP, and call_write_operation with --allow-writes. list_operations and call_operation pull a
   shared site an agent asks for, with its reads only: its writes need a human's api-anything pull. Its
   login only refreshes a session a human imported here. A call still running after about 25 s answers
@@ -308,7 +317,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything check <site> <op> [k=v ...] --expect result|empty|input
   api-anything readback <site> <write-op> <read-op> [k=v ...] [--find field=value]
   api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site>
-  api-anything heals [site] | revert <site> <op>
+  api-anything heals [site] | revert <site> <op> | status [site]
   api-anything mcp [--allow-writes] [--sites a,b] [--print-config]
 
 api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
@@ -966,6 +975,11 @@ function cmdHeals({ pos }: Parsed): number {
   return 0;
 }
 
+function cmdStatus({ pos }: Parsed): number {
+  out(status(pos[0] ? requireSite(pos[0]).site.name : undefined));
+  return 0;
+}
+
 function cmdRevert({ pos }: Parsed): number {
   const [site, name] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything revert <site> <op>");
@@ -1422,6 +1436,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   ops: { run: cmdOps, flags: [] },
   heal: { run: cmdHeal, flags: [] },
   heals: { run: cmdHeals, flags: [] },
+  status: { run: cmdStatus, flags: [] },
   revert: { run: cmdRevert, flags: [] },
   export: { run: cmdExport, flags: ["out", "keep-examples", "force"] },
   search: { run: cmdSearch, flags: [] },

@@ -168,6 +168,34 @@ Transport tiers, cheapest first. The lowest tier that worked is remembered for e
 | 2 | `fetch()` inside a real Chrome page on the site | tier 1 is `blocked` |
 | 3 | run the trigger in Chrome and read the site's own response | per-request signatures, a failed heal (reads only) |
 
+### Health: `api-anything status [site]`
+
+An op can keep working and still be in trouble: an escalation to tier 3 is remembered for good, so
+a read that took 4 ms can take 700 ms and a browser launch on every call while `ops` still says
+nothing. `status` shows what this machine knows of each op, from local files only. It sends
+nothing and needs no browser. Output is one line of JSON:
+
+- per site, `cooling` `{class, until, reason}` while calls answer without sending;
+- per op, `stale` `{until, reason}`, `tier` `{remembered, minTier}`, `lastHeal` `{at, strategy}`,
+  `lastVerify` `{at, outcome, current}` (`current: false`: the op changed after that verify),
+  `writes` (the ledger's writes of the last 24 h, counted by `accepted`, `applied`,
+  `mayHaveApplied`, `notApplied` and `notSent`), and `calls`: for the last `24h` and `7d`, the
+  count, the `ok` rate, the `tiers` that answered, `heals` and `medianMs`, and the `last` call's
+  class;
+- `degraded` on an op whose last 24 h ran mostly at a higher tier, or with an ok rate 20 points
+  lower, than the 6 days before (3 calls in each window at least);
+- `problems`, each `{site, op, problem, detail, next}`: `cooling`, `stale`, `escalated` (a read
+  remembered above its own tier; `next` calls it once with `--max-tier` at that tier, and an
+  answer there forgets the escalation), `degraded`, `failing` (the last call failed for a reason
+  other than its args), `verify` (the last verify on this version failed), `write` (a write may
+  have gone through). `next` is phrased as a call's `next`.
+
+With a site, every op is listed. Without one, only the sites with something on record here, and
+only the ops with something to say: a passing verify alone is not listed. The call history comes
+from `~/.api-anything/calls.jsonl`, one line per finished call: time, site, op, class, tier, ms,
+whether it healed and what a write did. It holds no args, no data and no reason text, and is kept a
+week.
+
 ## Logging in
 
 For sites that need an account, one command signs you in:
@@ -247,6 +275,7 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 | `call_operation` | call a read; a write op is refused and nothing is sent | read-only, idempotent |
 | `call_write_operation` | call a write, with `again` and `idempotencyKey`; only with `--allow-writes` | destructive, not idempotent |
 | `get_job` | wait up to 25 s for a pending call's result | read-only |
+| `site_status` | what `api-anything status` prints, with each problem's `next` in MCP terms | read-only, local |
 | `login` | refresh a session from the profile chosen with the CLI, or open a window to sign in by hand | changes the local session only |
 
 - `--sites goodreads,hacker-news` also serves each operation of those sites as a tool of its own,

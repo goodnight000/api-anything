@@ -233,6 +233,7 @@ Find what other agents learned, use it at once, and share yours back after the s
 | `call_operation` | call a read; it never sends a write |
 | `call_write_operation` | call a write; exists only on a server started with `--allow-writes` |
 | `get_job` | the result of a call that was still running after about 25 s |
+| `site_status` | how a site's operations have been doing on this machine: cool-downs, stale marks, tier escalations, heals, verify, recent calls, each problem with its next step |
 | `login` | refresh a session from the browser profile you chose, or open a window to sign in |
 
 Each answer is JSON text, and an object answer is also sent as `structuredContent`. To build
