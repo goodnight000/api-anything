@@ -58,6 +58,9 @@ export function badAddress(url: string): string | undefined {
 function addresses(op: Operation): [string, string][] {
   return [
     ["request", op.request.url],
+    ...op.slots.flatMap((s): [string, string][] =>
+      s.from ? [[`lookup for ${s.at.join(" > ")}`, s.from.request.url]] : [],
+    ),
     ["trigger", op.trigger.url],
     ...(op.trigger.softFrom ? ([["softFrom", op.trigger.softFrom]] as [string, string][]) : []),
     ...(op.trigger.steps ?? []).flatMap((s, i): [string, string][] =>
@@ -416,6 +419,19 @@ export function vetShared(site: Site, notes?: string): Vetted {
     const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
     for (const leaf of literalCredentials(op.request, pub))
       errors.push(at(`request ${leaf.at.join(" > ")} holds a literal credential`));
+    // a lookup is sent first with the caller's session: a read on the op's own host, credentials by ref only
+    for (const s of op.slots) {
+      if (!s.from) continue;
+      const where = `the lookup for ${s.at.join(" > ")}`;
+      if (s.from.request.method.toUpperCase() !== "GET")
+        errors.push(at(`${where} is a ${s.from.request.method}, not a GET`));
+      if (hostOf(s.from.request.url) !== hostOf(op.request.url))
+        errors.push(at(`${where} is not on the op's own host`));
+      if (!ONE_VALUE_PATH.test(s.path ?? ""))
+        errors.push(at(`${where} reads ${JSON.stringify(s.path)}, not one value`));
+      for (const leaf of literalCredentials(s.from.request, pub))
+        errors.push(at(`${where} ${leaf.at.join(" > ")} holds a literal credential`));
+    }
     for (const fill of signInFills(op.trigger.steps)) errors.push(at(`trigger ${fill}`));
     for (const name of pub)
       if (op.request.headers[name] !== undefined) {

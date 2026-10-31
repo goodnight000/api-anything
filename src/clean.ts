@@ -4,7 +4,8 @@
  * asks it of someone else's candidate, so neither ever sends the user's sessions.
  */
 import { type Class, judge } from "./classify.js";
-import { send, withDefaults } from "./http.js";
+import { withDefaults } from "./http.js";
+import { LookupFailed, sendDerived } from "./lookup.js";
 import type { Session } from "./session.js";
 import type { Operation } from "./spec.js";
 
@@ -32,7 +33,7 @@ export async function cleanCall(
   if (!op.readOnly) return { class: "input", reason: "a write is never replayed", ms: 0 };
   const empty: Session = { cookies: [], values: {} };
   try {
-    const r = await send(op, withDefaults(op, args), empty, {
+    const r = await sendDerived(op, withDefaults(op, args), empty, {
       site: o.site,
       fetchImpl: o.fetchImpl,
       timeoutMs: o.timeoutMs ?? 20_000,
@@ -48,6 +49,13 @@ export async function cleanCall(
       ms: r.ms,
     };
   } catch (e) {
+    if (e instanceof LookupFailed)
+      return {
+        class: e.judged.class,
+        reason: e.judged.reason,
+        status: e.judged.status,
+        ms: Math.round(performance.now() - t0),
+      };
     return { class: "error", reason: (e as Error).message.split("\n")[0]!, ms: Math.round(performance.now() - t0) };
   }
 }
