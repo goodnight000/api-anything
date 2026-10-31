@@ -65,6 +65,14 @@ recommended all the same, and `blocked` is the bot challenge the site served.
 <capture> --pick-request <id> --example k=v`. A capture holds one run, so the second example needs a
 second capture of the page, made with its values: `--from2 <capture2> --example2 k=v2`.
 
+When the page looks up the value its data request needs (a product page at `/p/<slug>` asks
+`/api/resolve?slug=` for the product's numeric id, then loads `/api/products/<id>/reviews`), `add`
+with two examples learns the lookup with the op: each call sends the lookup first, with the same
+session, and fills the id from its answer. Pick the data request (`--pick-request`, or a recipe
+that names its answer) even though it carries no example value. The lookup is a GET on the same
+host; one that fails is the call's answer and the op's own request is not sent (a write reports
+`not_sent`). With one example, `add` says which value looks looked up and asks for `--example2`.
+
 `add` does not save an op whose captured answer is a bot challenge, a sign-in page, a rate limit or
 a server failure: log in (`api-anything login <site>`) or wait, then add again. When example 2 is
 answered with example 1's data, the op is saved with a warning and marked `unproven`: the server may
@@ -336,10 +344,12 @@ This is version 0.1. The offline suite covers the learning, healing, tier and wr
 against a local fixture site. Individual real sites vary and are not continuously verified.
 Known limits:
 
-- An arg a site derives from another request (a numeric user id looked up from a handle) cannot be
-  substituted. Model the lookup as its own op, or rely on tier 3. A page-2 cursor is the exception:
-  `--paging` passes the site's own cursor back as an arg.
-  `add` refuses an example value that the chosen request does not carry.
+- An arg a site derives from another request is substituted only when an earlier GET of the same
+  page load, on the same host and carrying the example values, answers it as JSON, and two examples
+  show it follow. A value the page computes, reads from HTML, or looks up with a POST, on another
+  host or with a stored session value, is not: model the lookup as its own op, or rely on tier 3.
+  A page-2 cursor is passed back as an arg with `--paging`. Otherwise `add` refuses an example
+  value that the chosen request does not carry.
 - Example values need at least 3 characters and must appear in the request (multi-word values
   are fine; they are matched decoded, so `mcp server` finds `mcp%20server`).
 - An op extracts one value from one request. Data in two places of one page takes two ops.

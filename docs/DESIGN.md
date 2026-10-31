@@ -70,7 +70,10 @@ in the capture (the example's), as a param's place does; the slot fills a whole 
 A call sends each distinct lookup first, at the same tier and with the same session as the op's own request,
 reads the path, sets the leaf, then sends the op's request (below, Execution ladder). A lookup is always a
 GET on the op's own host: a read, sent again on every try. A param may live only in the lookup (the slug
-above): it has no slot in the op's own request, and its value reaches it only as the id it looked up.
+above): the op's own request carries it nowhere the server reads (an echo such as the Referer still
+follows it), and its value reaches the request only as the id it looked up. `export` strips the leaf's
+example value as it strips a param's (a JSON number becomes `0`, a path segment `0`) and the lookup's
+own example values with it.
 
 Step kinds: `path:<i>` (URL path segment), `query:<key>`, `header:<name>`, `form:<key>`,
 `json:<RFC6901 pointer>` (the current string is parsed as JSON), `b64` (the current string is
@@ -112,6 +115,14 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    and does not carry an example value is refused (an analytics beacon's ack whose echo of the page
    went unrecognized), with a hint to `--pick-request` the data request or learn the document with
    `--html`/`--embedded`; a request picked by id or pinned by `match` is the agent's call.
+   A request that carries no example value but holds one an earlier request that carries them looked up
+   (step 3, *derived values*) is a candidate only where nothing else fits: with a recipe that resolves on no
+   carrying candidate, the best-ranked such request the recipe resolves on; for a write whose run
+   intercepted none that carries the values, the intercepted such request. When a param has no place and a
+   leaf looks looked up but is not proven (one run, or a lookup that needs more than a template), the
+   error says so, naming the leaf, the path and the request, instead of only a missing place; `learn_site`
+   answers so (with that request first among the alternatives) when no request of run 1 carries the
+   example values in an answer that could be read.
 2. **Decode and substitute.** Walk every decoded layer of URL path, query, form, and JSON (including JSON
    inside strings, base64 JSON, and every occurrence of a repeated key). A leaf equal to an example
    value → a slot. A string leaf containing it (or its percent-encoded form) → a slot with a
