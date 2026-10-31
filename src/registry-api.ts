@@ -8,6 +8,9 @@ import type { Operation } from "./spec.js";
 /** Production registry; API_ANYTHING_REGISTRY overrides it (https, or http to this machine for tests). */
 export const REGISTRY_API = "https://api-anything-registry.forth-site.workers.dev";
 
+/** Longest `GET /v1/search` q: a search answer repeats the query's words for each op it lists. */
+export const MAX_SEARCH_QUERY = 200;
+
 /**
  * - candidate: uploaded, served to others (marked) while no live version of the op exists
  * - live: confirmed by other installs; the default answer

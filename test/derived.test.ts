@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { call } from "../src/execute.js";
 import { learnOperation } from "../src/learn.js";
+import { derive, LookupFailed } from "../src/lookup.js";
 import { type Operation, parseSite, type Site } from "../src/spec.js";
 import { exportSite, saveSite } from "../src/store.js";
 import type { Exchange, StoredCookie } from "../src/types.js";
@@ -307,4 +308,112 @@ test("vet: a shared spec's lookup is a GET on the op's own host, reads one value
       ),
     ).some((e) => /literal credential/.test(e)),
   );
+});
+
+// A lookup's answer is text the site's users may write (a bio): it is held to the read rules an arg is.
+const graphqlRead = (at: string[], body = '{"query":"query { me { id } }"}') =>
+  parseSite({
+    name: "shop",
+    baseUrl: "https://shop.example.com",
+    operations: [
+      {
+        name: "profile",
+        readOnly: true,
+        request: {
+          method: "POST",
+          url: "https://shop.example.com/graphql",
+          headers: { "content-type": "application/json" },
+          body,
+        },
+        slots: [
+          {
+            at,
+            from: {
+              request: { method: "GET", url: "https://shop.example.com/api/user?name=x", headers: {} },
+              slots: [{ param: "name", at: ["query:name"] }],
+            },
+            path: "user.bio",
+          },
+        ],
+        params: [{ name: "name" }],
+        trigger: { url: "https://shop.example.com/u/{name}" },
+        match: { method: "POST", host: "shop.example.com", path: "/graphql" },
+      },
+    ],
+  });
+
+test("vet: a looked-up value never fills a read's GraphQL document, its whole body or a header", () => {
+  const errors = (s: Site) => vetShared(s).errors.join("\n");
+  assert.match(errors(graphqlRead(["body", "json:/query"])), /GraphQL document/);
+  assert.match(errors(graphqlRead(["body"])), /whole body/);
+  assert.match(errors(graphqlRead(["header:x-http-method-override"])), /path, query or body/);
+  // a lookup to the caller's cookies can answer their CSRF token: not into a field named for one
+  assert.match(errors(graphqlRead(["body", "json:/csrf_token"])), /named like a session value or credential/);
+  const site = graphqlRead(["body", "json:/variables/id"]);
+  site.operations[0]!.slots[0]!.from!.request.url = "https://shop.example.com/api/user?name=x&_method=DELETE";
+  assert.match(errors(site), /lookup .* overrides its method to DELETE/);
+});
+
+test("a looked-up value that is no identifier is refused before the read is sent, however deep it lands", async () => {
+  const answer = (bio: string) => async () => ({
+    status: 200,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ user: { bio } }),
+  });
+  const refused = (e: Error) => e instanceof LookupFailed && /not an identifier/.test(e.message);
+  const op = graphqlRead(["body", "json:/query"]).operations[0]!;
+  await assert.rejects(derive(op, answer("mutation { deleteAccount }")), refused);
+  await assert.rejects(derive(op, answer("mutation{deleteAccount}")), refused);
+  // a document inside a base64 envelope the vet cannot read: the value alone decides
+  const inner = Buffer.from(JSON.stringify([{ query: "query { me { id } }" }])).toString("base64");
+  const enveloped = graphqlRead(
+    ["body", "json:/requests", "b64", "json:/0/query"],
+    JSON.stringify({ requests: inner }),
+  );
+  await assert.rejects(derive(enveloped.operations[0]!, answer("mutation { deleteAccount }")), refused);
+  // an id is what a lookup is for
+  const id = await derive(enveloped.operations[0]!, answer("Z2lkOi8vc2hvcC9Qcm9kdWN0LzQ4MjE="));
+  assert.equal(
+    JSON.parse(Buffer.from(JSON.parse(id.request.body!).requests, "base64").toString())[0].query,
+    "Z2lkOi8vc2hvcC9Qcm9kdWN0LzQ4MjE=",
+  );
+});
+
+test("vet: a read never lets an arg, a lookup or a literal override its method", () => {
+  const read = (body: string, slots: object[]) =>
+    parseSite({
+      name: "shop",
+      baseUrl: "https://shop.example.com",
+      operations: [
+        {
+          name: "item",
+          readOnly: true,
+          request: {
+            method: "POST",
+            url: "https://shop.example.com/items/1",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body,
+          },
+          slots,
+          params: [{ name: "id" }],
+          trigger: { url: "https://shop.example.com/items/{id}" },
+          match: { method: "POST", host: "shop.example.com", path: "/items/*" },
+        },
+      ],
+    });
+  const lookup = {
+    request: { method: "GET", url: "https://shop.example.com/api/user?name=x", headers: {} },
+    slots: [{ param: "id", at: ["query:name"] }],
+  };
+  const errors = (s: Site) => vetShared(s).errors.join("\n");
+  assert.match(
+    errors(read("_method=GET&id=1", [{ at: ["form:_method"], from: lookup, path: "user.bio" }])),
+    /method override/,
+  );
+  assert.match(errors(read("id=1&_method=GET", [{ param: "id", at: ["form:_method"] }])), /method override/);
+  assert.match(
+    errors(read("_method=DELETE&id=1", [{ param: "id", at: ["form:id"] }])),
+    /overrides its method to DELETE/,
+  );
+  assert.doesNotMatch(errors(read("_method=GET&id=1", [{ param: "id", at: ["form:id"] }])), /method/);
 });

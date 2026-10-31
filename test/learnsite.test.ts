@@ -469,6 +469,8 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
     assert.equal(r.proof?.cleanReplay, "ok");
     const slot = opOf("fx", "reviews").slots.find((s) => s.from);
     assert.equal(slot?.path, "product.id");
-    assert.match(slot!.from!.request.url, /\/api\/resolve\?slug=blue-mug$/);
+    // the lookup's example is args2 like the op's own, so nothing of the user's request stops the share
+    assert.match(slot!.from!.request.url, /\/api\/resolve\?slug=red-kettle$/);
+    assert.equal(r.shared?.shared, true, JSON.stringify(r.shared));
   });
 });

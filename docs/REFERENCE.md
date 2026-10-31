@@ -427,8 +427,8 @@ api-anything result <resultId> --offset 7 --fields 'id,name=details.title' --max
 MCP: `call_operation {site, op, args, view: {fields: ["id", "name=details.title"], maxChars: 4000}}`.
 Library: `call(site, op, args, {view: {fields: ["id"], maxChars: 4000}})`, then
 `getResult(resultId, {offset: 7, fields: ["id"]})` from `api-anything`.
-`fields` uses the stored pick's path syntax (including `name=path` and `name=path~regex`), per
-item; empty projections stay `{}` so indexes do not shift. Classification and the stored
+`fields` uses the stored pick's path syntax (including `name=path`, but not `path~regex`, which a
+view refuses as `input`), per item; empty projections stay `{}` so indexes do not shift. Classification and the stored
 extraction/pick happen first. A view cannot restore fields that recipe discarded.
 `maxChars` must be an integer from 256 to 200,000 and caps `data`, not its envelope.
 
@@ -443,7 +443,8 @@ fragments, then `JSON.parse`; do not append the initial shortened preview. Offse
 characters. Restart at offset 0 when changing fields in that mode.
 
 The full extracted answer, before the call's view, is private local user data. At most 20 cut
-answers are kept in `API_ANYTHING_HOME/results.json` (default `~/.api-anything`), with 0600
+answers, and at most 16 MiB of them together (an answer over that alone is not kept, and its cut
+answer says so), are kept in `API_ANYTHING_HOME/results.json` (default `~/.api-anything`), with 0600
 permissions in a 0700 directory, for 15 minutes without renewal. Expired records are removed
 on the next successful call or result access; an expired or evicted id fails locally, never
 reruns the call. Answers do not enter specs, logs, or reports. If retention fails, the cut

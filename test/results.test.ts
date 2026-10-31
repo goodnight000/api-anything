@@ -12,6 +12,7 @@ import { createServer } from "../src/mcp.js";
 import {
   getResult,
   MAX_RESULT_CHARS,
+  RESULT_BYTES,
   RESULT_LIMIT,
   RESULT_TTL_MS,
   type ResultCursor,
@@ -112,6 +113,8 @@ test("call views project extracted items with renamed paths, leave the spec unto
     { maxChars: MAX_RESULT_CHARS + 1 },
     { fields: [] },
     { fields: ["bad=x~["] },
+    { fields: ["x~^(a+)+$"] },
+    { fields: ["x~^(a|aa)+$"] },
     { fields: ['bad=details["\\q"]'] },
   ]) {
     const bad = await call("result-fixture", "list", {}, { ...opts, view });
@@ -239,6 +242,21 @@ test("private retained answers expire without extending their TTL, and the oldes
   assert.equal(getResult("../sites/result-fixture").ok, false);
   assert.equal(getResult(ids[1]!, { offset: -1 }).ok, false);
   assert.equal(getResult(ids[1]!, { offset: 0.5 }).ok, false);
+});
+
+test("kept answers fit a byte budget: big ones evict the oldest, and one over it alone is not kept", () => {
+  const t = Date.now();
+  const big = (n: number) => [{ body: "x".repeat(n) }, { body: "y" }];
+  const quarter = Math.floor(RESULT_BYTES / 4);
+  const ids = Array.from({ length: 5 }, () => resultView(big(quarter), { maxChars: 256 }, t).resultId!);
+  assert.ok(ids.every(Boolean));
+  assert.equal(getResult(ids[0]!, {}, t).ok, false, "the oldest went to make room");
+  assert.equal(getResult(ids[4]!, {}, t).ok, true);
+  assert.ok(statSync(join(HOME, "results.json")).size <= RESULT_BYTES);
+  const over = resultView(big(RESULT_BYTES), { maxChars: 256 }, t);
+  assert.equal(over.resultId, undefined);
+  assert.match(over.truncated ?? "", /full answer is not available/);
+  assert.equal(getResult(ids[4]!, {}, t).ok, true, "an answer that is not kept evicts nothing");
 });
 
 test("JSON fragments recover oversized single items, objects, and strings without losing shortened tails", () => {

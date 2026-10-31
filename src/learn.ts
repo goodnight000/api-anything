@@ -49,6 +49,7 @@ import {
   type Volatile,
 } from "./spec.js";
 import type { CaptureResult, Exchange, StoredCookie } from "./types.js";
+import { DERIVED_VALUE, METHOD_OVERRIDE } from "./vet.js";
 
 export type Args = Record<string, unknown>;
 
@@ -1947,7 +1948,8 @@ export function lookedUp(
   const out: LookedUp[] = [];
   for (const leaf of walk(templateOf(e))) {
     if (leaf.container || leaf.type === "boolean" || leaf.type === "null" || !leaf.value) continue;
-    if (!DERIVABLE.test(leaf.at[0]!)) continue;
+    if (!DERIVABLE.test(leaf.at[0]!) || !DERIVED_VALUE.test(leaf.value) || METHOD_OVERRIDE.test(lastToken(leaf.at)))
+      continue;
     const name = lastToken(leaf.at);
     if (SESSION_FIELD.test(name) || credentialName(name) || live(leaf.value)) continue;
     const lower = leaf.value.toLowerCase();

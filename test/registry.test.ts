@@ -1686,6 +1686,12 @@ test("search leaves out common words and labels a real capability's uncovered co
   assert.deepEqual(hotel.unmatched, ["price", "rome"], "hotel lists do not promise pricing or a Rome route");
   assert.deepEqual(await top("the best book ratings"), ["goodreads"]);
   assert.deepEqual(await top("hacker news"), ["hacker-news"], "news keeps its s");
+  // each op repeats the query's words: past the registry's cap, local scoring reads no more of them either
+  const long = `book ratings ${Array.from({ length: 5000 }, (_, i) => `filler${i}`).join(" ")}`;
+  const goodreads = (await search(long, { local })).matches.find((m) => m.site === "goodreads")!;
+  const words = new Set([...goodreads.matched, ...goodreads.unmatched]);
+  assert.ok(words.size < 40, `${words.size} words kept`);
+  assert.ok(!words.has("filler4999"));
 });
 
 test("local search retains registry health without replacing local metadata or verification", async () => {
@@ -1747,13 +1753,14 @@ test("pull carries health from old and new registries without putting the aggreg
   assert.equal(r.operations[0]!.registry.successRate, 0.75);
   assert.equal(r.operations[0]!.registry.lastOkAt, "2026-10-30T12:00:00.000Z");
   assert.ok(!readFileSync(join(registryDir(), `${books.name}.json`), "utf8").includes("successRate"));
-  s.operations[0]!.registry = {
-    hash: s.operations[0]!.hash,
-    status: "live",
-    confirmations: 7,
-    successRate: 1,
-  };
-  assert.equal((await pull(books.name)).operations[0]!.registry.confirmations, 7);
+  const { hash, status, confirmations } = s.operations[0]!;
+  s.operations[0]!.registry = { hash, status, confirmations, successRate: 0.75, lastOkAt: "2026-10-30T12:00:00.000Z" };
+  assert.equal((await pull(books.name)).operations[0]!.registry.hash, hash);
+  // a nested copy that disagrees with what the op is served as is not evidence
+  s.operations[0]!.registry = { hash, status: "live", confirmations: confirmations + 7, successRate: 1 };
+  const contradicted = (await pull(books.name)).operations[0]!.registry;
+  assert.equal(contradicted.confirmations, confirmations);
+  assert.equal(contradicted.successRate, 0.75);
 });
 
 test("CLI search prints partial coverage and keeps remote health beside installed metadata", async () => {

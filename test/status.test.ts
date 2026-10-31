@@ -221,6 +221,17 @@ test("a site with nothing on record lists its ops with nothing to say, and no pr
   assert.deepEqual(status().sites, []);
 });
 
+test("a verify that passed one case and could not test another is inconclusive, as verify itself says", () => {
+  saveDemo("https://demo.example.com");
+  const get = loadSite("demo")!.site.operations.find((o) => o.name === "get")!;
+  recordCases("demo", get, [
+    { op: "get", case: "example", expect: "result", outcome: "pass", got: "result" },
+    { op: "get", case: "check 1", expect: "result", outcome: "inconclusive", got: "rate" },
+  ]);
+  const op = status("demo").sites[0]!.ops.find((o) => o.op === "get")!;
+  assert.equal(op.lastVerify?.outcome, "inconclusive");
+});
+
 test("site_status over MCP is a local read, and names its steps in MCP terms", async () => {
   saveDemo("https://demo.example.com");
   appendCall({ site: "demo", op: "get", class: "auth", tier: 1, ms: 3 });

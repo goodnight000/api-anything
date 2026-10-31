@@ -812,7 +812,11 @@ tier, with `unsent` (the op's own request never left, so a write's status is `no
 example args tell from drift, as for any read. Drift heals as usual (the stored template, lookup
 included, is sent first; a recapture re-learns the lookup from the trigger run). A failed lookup's
 network error is `error` with `server`. A write sends its lookup on every try, the write itself once.
-Tier 3 runs the page, which does its own lookup.
+Tier 3 runs the page, which does its own lookup. A looked-up value is text the site's users may have
+written, so it must be an identifier (letters, digits and `_.~:@+=/-`, at most 512 characters: an id, a
+slug, a UUID, a base64 id) or the call is `error` before the op's request is sent; learning derives no
+other value. No such value can make a GraphQL document, however deep the leaf sits in encoded layers the
+vet cannot read. As a second guard, a read whose filled document defines a mutation is refused too.
 
 Heal strategies, cheapest first:
 - **rescan**: no browser. Fetch the trigger document and the JS bundles it references (resolved
@@ -1032,8 +1036,9 @@ dropped. It runs in about linear time on 10k-member objects.
 
 A call-level `view: {fields?: string[], maxChars?: number}` comes after classification and the
 stored extraction/pick recipe, before the cap. It never changes the spec or the site's args.
-`fields` uses pick's paths and `name=path` (including its regex form), per item of a list or on
-an object. Unlike a stored pick, a view keeps an empty projected item as `{}`, so item indexes
+`fields` uses pick's paths and `name=path`, per item of a list or on an object. Its regex form
+(`path~regex`) is refused (`input`): the agent that names a view may be acting on page text, a
+pattern can backtrack for minutes on a kept answer, and nothing interrupts a running match. Unlike a stored pick, a view keeps an empty projected item as `{}`, so item indexes
 stay stable. It cannot recover fields the stored recipe already discarded. `maxChars` is an
 integer from 256 to 200,000 JSON characters, default 20,000; the cap is on `data`, not the result
 envelope.
@@ -1041,8 +1046,8 @@ envelope.
 When a view is cut, `results.ts` keeps the full extracted answer, before the call's view, in
 `API_ANYTHING_HOME/results.json` (otherwise `~/.api-anything/results.json`), atomically written
 under the store's lock with 0700 directories and 0600 files. Disk rather than MCP memory lets
-the next CLI process read the same answer. Only the newest 20 answers are kept, each for 15
-minutes from creation, with opaque random `resultId`s. Reads never extend the TTL; expired
+the next CLI process read the same answer. Only the newest 20 answers that fit 16 MiB together are kept (one
+larger alone is not kept, and evicts nothing), each for 15 minutes from creation, with opaque random `resultId`s. Reads never extend the TTL; expired
 records are inaccessible and removed on the next successful call or result-store access.
 The file can hold signed-in user data, just as `data` can: it is never a spec, heal log,
 write-ledger entry or report. A retention failure leaves the successful call successful but
@@ -1228,7 +1233,7 @@ local rules below are defense in depth on top of that.
 and by CI over the bundled `sites/`. Errors refuse: every URL an op sends to or opens (request, a derived slot's lookup, trigger, soft-from, `goto` value or
 selector) is https on a host under a public suffix (no IP, `localhost`, single-label or
 `.local`/`.internal`-style name), and so is `baseUrl`; no literal credential in a request or a lookup (the
-export rule) outside the op's `public` names; a lookup is a GET on the op's own host whose `path` names one value; `readOnly` only on GET, HEAD and POST, never on a
+export rule) outside the op's `public` names; a lookup is a GET on the op's own host whose `path` names one value, and its value goes only in the path, a query or the body, never a header nor a field named like a session value or credential, and the lookup overrides no method; a derived slot counts as a param in the read rules that follow; a read's method-override field (`_method`, `x-http-method-override`, `x-method-override`) is neither filled by a param or a lookup nor holds a literal other than GET or HEAD; `readOnly` only on GET, HEAD and POST, never on a
 GraphQL document defining a mutation or subscription (read from a JSON body, a batch, a form, the URL
 or a raw `application/graphql` body, by each definition's operation type, with comments, strings and
 block strings skipped: `query mutation { }` is a query), never with a param as the whole body (raw,

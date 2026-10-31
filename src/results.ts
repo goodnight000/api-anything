@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { capOutput, pick, pickEntry } from "./extract.js";
+import { capOutput, pick, pickEntry, splitRegex } from "./extract.js";
 import { home, readJson, withLock, writePrivate } from "./session.js";
 
 export interface ResultView {
@@ -42,8 +42,29 @@ interface Kept {
   data: unknown;
 }
 
+/** The kept answers together, serialized: a new one evicts the oldest to fit, and one over it alone is not kept. */
+export const RESULT_BYTES = 16 * 1024 * 1024;
+
 const file = () => join(home(), "results.json");
-const alive = (now: number) => readJson<Kept[]>(file(), []).filter((r) => r.expiresAt > now);
+const alive = (now: number) => {
+  const all = readJson<Kept[]>(file(), []);
+  const kept = all.filter((r) => r.expiresAt > now);
+  // every call reads the store while it exists: rewrite it only when something expired
+  if (kept.length !== all.length) writePrivate(file(), JSON.stringify(kept));
+  return kept;
+};
+
+/** The newest kept answers that fit RESULT_LIMIT and RESULT_BYTES. */
+function fit(kept: Kept[]): Kept[] {
+  const out: Kept[] = [];
+  let bytes = 2;
+  for (const r of kept.slice(-RESULT_LIMIT).reverse()) {
+    bytes += Buffer.byteLength(JSON.stringify(r)) + 1;
+    if (bytes > RESULT_BYTES) break;
+    out.unshift(r);
+  }
+  return out;
+}
 
 export function viewProblem(view: ResultView | undefined): string | undefined {
   if (view === undefined) return undefined;
@@ -61,6 +82,10 @@ export function viewProblem(view: ResultView | undefined): string | undefined {
       view.fields.some((p) => typeof p !== "string" || !p.trim() || p.length > 512)
     )
       return "view.fields must contain 1 to 100 non-empty pick paths (at most 512 characters each)";
+    // a view's fields come from the agent, which may be acting on page text: a regex there could hang the
+    // server on a kept answer (catastrophic backtracking), and no time limit interrupts a running match
+    if (view.fields.some((p) => splitRegex(p).regex !== undefined))
+      return "view.fields takes pick paths and renames (name=path), not path~regex";
     try {
       for (const p of view.fields) {
         const { path } = pickEntry(p);
@@ -128,13 +153,13 @@ export function resultView(value: unknown, view: ResultView = {}, now = Date.now
     return withLock(file(), () => {
       const kept = alive(now);
       if (!r.truncated) {
-        writePrivate(file(), JSON.stringify(kept));
         const { next: _next, format: _format, ...out } = r;
         return out;
       }
       const id = randomUUID();
-      kept.push({ id, expiresAt: now + RESULT_TTL_MS, data: value });
-      writePrivate(file(), JSON.stringify(kept.slice(-RESULT_LIMIT)));
+      const fitted = fit([...kept, { id, expiresAt: now + RESULT_TTL_MS, data: value }]);
+      if (fitted.at(-1)?.id !== id) throw new Error(`the answer is over ${RESULT_BYTES} bytes`);
+      writePrivate(file(), JSON.stringify(fitted));
       return cursor(id, r, view);
     });
   } catch {
@@ -162,7 +187,6 @@ export function getResult(
   try {
     return withLock(file(), () => {
       const kept = alive(now);
-      writePrivate(file(), JSON.stringify(kept));
       const found = kept.find((r) => r.id === id);
       if (!found) return { ok: false, class: "input", reason: "result not found, expired, or evicted" };
       const value = project(found.data, opts.fields);

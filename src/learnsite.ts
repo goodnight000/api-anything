@@ -28,6 +28,7 @@ import { buildRequest } from "./http.js";
 import { answerShare, loadSettings, QUESTION } from "./identity.js";
 import { type Args, capturePages, lookedUp, pageUrls, rankCandidates } from "./learn.js";
 import { resolveLoginTarget } from "./login.js";
+import { lookupOp } from "./lookup.js";
 import { outline } from "./outline.js";
 import { pagingHints } from "./paging.js";
 import { pull, registryRequest, sharedName } from "./registry.js";
@@ -272,10 +273,15 @@ function opName(trigger: string, args: Args): string {
  * the params go (a call overwrites them), and those values are the user's own request.
  */
 function asExample(op: Operation, args: Args): Operation {
+  const none = { cookies: [], values: {} };
   const params = { ...op, slots: op.slots.filter((s) => s.param !== undefined) };
   return {
     ...op,
-    request: buildRequest(params, args, { cookies: [], values: {} }),
+    request: buildRequest(params, args, none),
+    // a lookup carries the args too: run 1's would say what the user asked
+    slots: op.slots.map((s) =>
+      s.from ? { ...s, from: { ...s.from, request: buildRequest(lookupOp(op, s.from), args, none) } } : s,
+    ),
     params: op.params.map((p) => ({ ...p, example: args[p.name] ?? p.example })),
   };
 }

@@ -270,6 +270,29 @@ test("a write is never sent: its preflight says what a call would need first", a
   assert.equal(seen.filter((s) => s.method === "POST").length, 0);
 });
 
+test("a write's preflight sees the session as the reads left it: a cookie a read set counts", async () => {
+  const post: Record<string, unknown> = {
+    name: "post",
+    readOnly: false,
+    request: { method: "POST", url: "https://t.test/api/posts", headers: { "x-csrf": "tok" }, body: "x" },
+    slots: [{ ref: "cookie:csrf", at: ["header:x-csrf"] }],
+    params: [],
+    trigger: { url: "https://t.test/posts" },
+    match: { host: "t.test", path: "/api/posts" },
+  };
+  saveSite(site(search(), post));
+  const h: Handler = (_url, init) => {
+    if (init?.method === "POST") throw new Error("a write was sent");
+    const r = json({ hits: [{ title: "kittens" }] });
+    r.headers.set("set-cookie", "csrf=c5rf0123456789abcdef; Path=/; Secure");
+    return r;
+  };
+  const ran = await verifySite("t", opts(h));
+  const row = ran.results.find((r) => r.op === "post")!;
+  assert.ok("preflight" in row, JSON.stringify(row));
+  assert.doesNotMatch(row.preflight.reason ?? "", /cookie csrf/, JSON.stringify(row.preflight));
+});
+
 test("a write with no example for a required param does not build, and one with a param the op refuses says why", async () => {
   const write = (params: unknown[], body: string): Record<string, unknown> => ({
     name: "post",

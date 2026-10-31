@@ -6,6 +6,7 @@ import {
   type ClaimResult,
   canonical,
   fingerprintText,
+  MAX_SEARCH_QUERY,
   nameHashText,
   type Report,
   type SearchMatch,
@@ -236,6 +237,7 @@ async function judge(db: D1Database, t: Thresholds, at: number, v: VersionRow, f
 async function searchApi(c: Ctx) {
   const q = c.url.searchParams.get("q")?.trim();
   if (!q) throw new HttpError(400, "search takes q: words, a domain or a URL");
+  if (q.length > MAX_SEARCH_QUERY) throw new HttpError(400, `q is longer than ${MAX_SEARCH_QUERY} characters`);
   const limit = Math.min(Math.max(Number(c.url.searchParams.get("limit")) || 5, 1), 20);
   const sites = await catalog(c.env.DB, await keyOf(c, false));
   const matches = await withInterfaces(c, search(sites, q, limit));

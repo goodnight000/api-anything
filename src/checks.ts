@@ -461,6 +461,8 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
         .map((r) => r.since ?? at)
         .sort()[0]!;
   }
+  // the reads may have refreshed it (a re-import, a cookie or a captured value): preflight what a write would send now
+  const current = sessionOrNone(name);
   const results = site.operations.flatMap((o): Verified["results"] => {
     if (!o.readOnly) {
       const rb = o.readback;
@@ -469,7 +471,7 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
           ? { op: rb.op, outcome: readbackOutcome(runs.get(rb.op)) }
           : { op: rb.read.name, outcome: "not run" as const }
         : undefined;
-      return [{ op: o.name, preflight: preflight(now, o, session, readback) }];
+      return [{ op: o.name, preflight: preflight(now, o, current, readback) }];
     }
     const run = runs.get(o.name);
     if (!run) return [];
