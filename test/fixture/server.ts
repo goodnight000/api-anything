@@ -305,6 +305,18 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
           )
           .join("")}</ul></body></html>`,
       );
+    // ?q= searches the list; no match drops the list and shows a message instead (pkg.go.dev's shape),
+    // with a hidden copy of that message always in the page under the list
+    if (p === "/dir") {
+      const hits = LIST_USERS.filter((n) => n.includes(u.searchParams.get("q") ?? ""));
+      const list = `<ul class="users">${hits
+        .map((n) => `<li class="user"><a class="name" href="/u/${n}">${n}</a></li>`)
+        .join("")}</ul><p class="no-results" hidden>Nothing here</p>`;
+      return html(
+        200,
+        `<!doctype html><html><body><h1>Directory</h1>${hits.length ? list : '<p class="no-results">No users match</p>'}</body></html>`,
+      );
+    }
     // a server-rendered search: every result carries the query, so the list is found from the example
     if (p === "/shelf") {
       const q = u.searchParams.get("q") ?? "";

@@ -142,7 +142,8 @@ const HELP: Record<string, string> = {
   --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
   --pick a,b.c,name=x.y  fields kept per item; name=path renames the key, name=path~regex keeps regex group 1
   --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages;
-                  "all:<css>[@attr]" returns every match as a list (genres, tags)
+                  "all:<css>[@attr]" returns every match as a list (genres, tags); "empty":"<css>" names the
+                  element a page with no results shows instead of the list, so such a page answers []
   --embedded <regex>  JSON inside the page: group 1 marks where the JSON value starts; then --extract
   --public <name,...>  a header, or a credential-like field such as api_key, whose value is the same for every
                   visitor (a web app's bearer): kept literal unless the value is in a cookie or the page's
@@ -164,7 +165,8 @@ const HELP: Record<string, string> = {
                   its paging and its readback.
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.
   replaced: an op of that name was learned again. unproven: example 2 was answered with example 1's
-  data, so nothing shows the server reads those params (publish refuses the op until it does).
+  data, or (example 2 changing several params of a read) one of them sent alone in example 1's args was,
+  so nothing shows the server reads those params (publish refuses the op until it does).
   An op whose captured response is a bot challenge, a sign-in page, a rate limit or a server failure
   is not saved.`,
   call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
@@ -711,8 +713,9 @@ function cmdInspect({ v, pos }: Parsed): number {
     data = extract({ format: "html", html }, body, e.request.url);
     if (!(data as unknown[]).length) {
       // a results page with no results is an answer, as a call would give it; a selector that is not there is not
-      if (!emptyResults(body, html.items)) throw nothing(`the --html items selector "${html.items}" matched nothing`);
-      note = `no items: the container of "${html.items}" is on the page and empty, so this is a page with no results`;
+      const why = emptyResults(body, html);
+      if (!why) throw nothing(`the --html items selector "${html.items}" matched nothing`);
+      note = `no items: ${why}, so this is a page with no results`;
     } else if (!htmlFinds(html, data as Parameters<typeof htmlFinds>[1])) {
       const fields = Object.keys(html.fields).join(", ");
       throw nothing(

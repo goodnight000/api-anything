@@ -55,9 +55,11 @@ export function registerLearn(
         extract: z.string().optional().describe("a path into a JSON answer: data.items, sections[*].items"),
         pick: z.array(z.string()).optional().describe("fields kept per item; name=path renames"),
         html: z
-          .object({ items: z.string(), fields: z.record(z.string(), z.string()) })
+          .object({ items: z.string(), fields: z.record(z.string(), z.string()), empty: z.string().optional() })
           .optional()
-          .describe('a list in the page: {"items":"<css>","fields":{"name":"<css>[@attr]"}}'),
+          .describe(
+            'a list in the page: {"items":"<css>","fields":{"name":"<css>[@attr]"},"empty":"<css>"}; empty: the element a page with no results shows instead of the list',
+          ),
         embedded: z.string().optional().describe("a regex for JSON inside the page; group 1 marks where it starts"),
         captures: z
           .tuple([z.string(), z.string()])

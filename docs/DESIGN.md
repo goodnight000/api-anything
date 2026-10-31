@@ -158,7 +158,13 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    and marked `unproven: {params, reason}` (the params whose values differed). It can be a false alarm: two
    places with the same stores answer alike. The warning asks for an example 2 that excludes something example
    1 returned; `publish` refuses the op while the mark stands, and `verify` clears it (below). Two answers that
-   differ for another reason (a timestamp, a shuffled order) hide an ignored param: the check finds a copy, no more.
+   differ because another param changed hide an ignored one (pkg.go.dev pages by `limit`, so `q=websocket, page=1`
+   against `q=yaml, page=2` differ while `page` is ignored): when a read's example 2 changed more than one param, and
+   the op is tier 1, `add` sends one tier-1 read per changed param, example 1's args with only that param's value
+   from example 2, at the site's pace, and marks `unproven` the params whose read answered example 1's data again
+   (the reason names them). A read that did not answer ok proves nothing and marks nothing. A write is never sent to
+   learn it: the check is for reads. Two answers that differ for another reason (a timestamp, a shuffled order) still
+   hide an ignored param: the check finds a copy, no more.
 4. **Session references.** A header, query or JSON leaf whose value equals a cookie value (raw,
    quote-stripped, or URL-decoded; ≥ 8 chars) becomes a `cookie:` ref. Capture also snapshots the
    final page origin's localStorage and sessionStorage; a leaf equal to a stored value (or to a
@@ -608,7 +614,7 @@ Every response is classified, never by status code alone:
 
 | class | signals | action |
 |---|---|---|
-| `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`; for an html recipe whose items selector is `<container> <item>`, the container present with no element of the item's tag), no GraphQL `errors` with null `data` or next to a null extract target, no error status in place of the data; any 2xx to a write whose answer does not say it was refused (see Writes) | return |
+| `ok` | 2xx, expected content type, extract path present (an empty list there is a search with no results: `data: []`; for an html recipe, its `empty` selector shown on the page, or, with an items selector `<container> <item>`, the container present with no element of the item's tag), no GraphQL `errors` with null `data` or next to a null extract target, no error status in place of the data; any 2xx to a write whose answer does not say it was refused (see Writes) | return |
 | `drift` | 404/410 on a templated API path, GraphQL "PersistedQueryNotFound"/"must be defined", 400 schema errors, extract path missing, a non-empty list there that the `pick` empties (no item has a picked field: a spec may have no learned shape, and `data: []` would read as no results), a picked field the learned shape typed that no item carries now, or none with that type (see below), an html recipe whose items all match with none of their fields found, breaking shape change (compared under the extract path; id-keyed maps are `*`) | heal once (missing data first checks the example args) |
 | `auth` | 401, 400/403/422 with login wording ("Bad Authentication data") or a refused API key ("Invalid Application-ID or API key") or an explicit CSRF failure (token missing/invalid/mismatch, verification failed, InvalidAuthenticityToken; not a page that merely carries a csrf field), a 403 login page, 419, 200 + HTML login page where JSON expected, a sign-in form that embeds a CAPTCHA widget or a vendor script that also rides on ordinary pages (reCAPTCHA on a login page guards the login; an interstitial's own markers still make the page `blocked`), an html/embedded op's page without its data that says "sign in" or shows a sign-in form (a mere Sign-in link, like Google's ServiceLogin button, is not one), a redirect to a login path, `require_login: true`, a trigger that lands on a sign-in page | each step at most once per call, at any tier, a retry that still answers `auth` going on to the next step (a changed analytics cookie changes the request without renewing a token); a write only when it certainly did not run, so never at tier 3: re-import a browser-imported session; then refresh the jar's cookies from the profile, retrying if that changes the request (a tier-2 page sends the profile's cookies itself, so there only a `cookie:` ref counts: an `x-csrf-token` header); for a read with `session:` refs, one trigger run refreshes them and answers; for a write with them, one trigger run with the write intercepted (as when learning it) refreshes them and the write is sent again; for a read whose only credential is one marked public, with no login on record, a heal re-learns it, as for drift (the site rotated its shared bearer); then diagnostic "run `api-anything login <site>`" |
 | `rate` | 429; any 4xx or 5xx that carries a Retry-After (a 503 in maintenance, a 403 lockout: the server named its wait, so sooner meets it again; a wall's markers still make it `blocked`, a 2xx with one is its answer); "please wait", "rate limit" | back off, report; no heal; the site cools down (Execution ladder) |
@@ -920,7 +926,14 @@ boundary, an item too big on its own is cut rather than dropped, strings are cut
 objects stay objects: members above a common size cap are shortened, then trailing members are
 dropped. It runs in about linear time on 10k-member objects. For HTML-only pages, `response.format:
 "html"` with a selector recipe `{ items: "<css>", fields: { name: "<css>[@attr]" } }` parsed
-in Node; a field written `all:<css>[@attr]` returns every match as a list (a book's genres).
+in Node; a field written `all:<css>[@attr]` returns every match as a list (a book's genres). An
+optional `empty: "<css>"` names the element a page with no results shows instead of the list
+(pkg.go.dev's `p.SearchResults-emptyContentMessage`, on a page with no list container for the
+`<container> <item>` rule to find empty): items matching nothing while that element is shown is `ok`
+with `data: []`, as the structural empty is. Only a shown element counts, as for the items: a message
+a page keeps hidden under its list says nothing. The selector is a string in the spec like the
+others, so the secret scan reads it; `verify`, when an html op without one fails an `empty` check as
+`input` or `drift`, says to add the op again with the recipe plus `empty`.
 `@href` and `@src` values are links, so a relative one is unusable without the page's own
 address: they are resolved as a browser would, against the page's `<base href>` or else the final
 URL the answer came from (redirects included). The other attributes are returned as they are in
@@ -1401,7 +1414,8 @@ independent alternative.
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
     flags (`--extract`, `--pick`, `--html`, `--embedded`): what the recipe would return, or a failure
     when a path or selector finds nothing (an empty list at a path is a result, and so is an `--html`
-    items container that is on the page with no item in it, as the classifier judges a call); JSON inside strings (batchexecute
+    items container that is on the page with no item in it, or the recipe's `empty` element shown on it, as the
+    classifier judges a call); JSON inside strings (batchexecute
     payloads, a form's `f.req`) is shown decoded, in the response and the request body. Every `add` saves its trigger runs as
     captures, so a recipe is fixed without Chrome: `add --from <id>` on an existing op with the recipe
     flags. There is one way an op is learned, and this is it: with no `--example`, what the command
