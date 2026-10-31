@@ -143,7 +143,7 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .wrap{max-width:920px;margin:0 auto;padding:0 20px}
 header.top{border-bottom:1px solid var(--line)}
 header.top .wrap{display:flex;align-items:center;justify-content:space-between;height:56px}
-.brand{font-weight:650;color:var(--fg);letter-spacing:-.01em}
+.brand{font-weight:650;color:var(--fg);letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
 .top nav a{color:var(--muted);margin-left:18px;font-size:15px}
 main{padding:44px 0 64px}
 h1{font-size:clamp(30px,5vw,44px);line-height:1.1;letter-spacing:-.025em;margin:0 0 14px}
@@ -207,7 +207,8 @@ const SCRIPT = `for(const b of document.querySelectorAll("[data-copy]"))b.addEve
 /** No spec text is ever in a script, and this policy lets no script run but the copy buttons'. */
 export const CSP = `default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'sha256-${createHash("sha256").update(SCRIPT).digest("base64")}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`;
 
-const ICON = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#2952e3"/><path d="M9 22l7-12 7 12" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>')}`;
+// docs/media/logo.svg, made by docs/media/draw.mjs: the favicon and the header's mark
+const ICON = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="API Anything"><style>@media (prefers-color-scheme: dark){.mark{stroke:#ecebe6}}</style><path class="mark" d="M32,9L32,55M12.1,20.5L51.9,43.5M12.1,43.5L51.9,20.5" fill="none" stroke="#0b0b0b" stroke-width="10" stroke-linecap="round"/></svg>')}`;
 
 function layout(o: { title: string; description: string; url: string; body: string; noindex?: boolean }) {
   return `<!doctype html>
@@ -226,7 +227,7 @@ ${o.noindex ? '<meta name="robots" content="noindex">\n' : ""}<title>${esc(o.tit
 <style>${CSS}</style>
 </head>
 <body>
-<header class="top"><div class="wrap"><a class="brand" href="/">API Anything</a><nav><a href="/#sites">Sites</a><a href="https://github.com/${REPO}">GitHub</a></nav></div></header>
+<header class="top"><div class="wrap"><a class="brand" href="/"><img src="${ICON}" width="22" height="22" alt="">API Anything</a><nav><a href="/#sites">Sites</a><a href="https://github.com/${REPO}">GitHub</a></nav></div></header>
 <main><div class="wrap">
 ${o.body}
 </div></main>
