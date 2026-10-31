@@ -1088,7 +1088,7 @@ describe("checks: an op that must prove it works before it is shared", () => {
 
     const verify = await run("verify", "stores");
     assert.equal(verify.code, 1);
-    assert.deepEqual(verify.out.counts, { pass: 2, fail: 1, inconclusive: 0, skipped: 0 });
+    assert.deepEqual(verify.out.counts, { pass: 2, fail: 1, inconclusive: 0, skipped: 0, preflight: 0 });
     assert.deepEqual(
       verify.out.results.map((r: { case: string; outcome: string; got: string }) => [r.case, r.outcome, r.got]),
       [
