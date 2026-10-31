@@ -13,6 +13,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { idleWork } from "./background.js";
+import { BATCH_CONCURRENCY, BatchItemSchema, callReads } from "./batch.js";
 import { closeBrowser } from "./browser.js";
 import { call, type NextCall } from "./execute.js";
 import { returnedFields } from "./extract.js";
@@ -536,6 +537,43 @@ export function createServer({
         const got = await install(site);
         if ("error" in got) return installFailed(site, got);
         return callReply(site, op, args, { tool: "call_operation", args: { site, op, args } });
+      }),
+  );
+
+  server.registerTool(
+    "call_batch",
+    {
+      description:
+        "Call up to 20 reads of installed sites, with ordered results and no caching. Use list_operations first (it pulls missing sites); check each site's domain is the one the user means. Takes items {id?, site, op, args?}; missing ids are 1-based positions. Returns {ok, results: [{id, site, op, ...callResult}]}. Partial failures do not stop the batch; writes answer input: writes are not batched, even on a writes-enabled server. concurrency defaults to 1, at most 4 across different sites; same-site calls remain sequential and respect pacing and cool-downs. " +
+        RESULT,
+      inputSchema: {
+        items: z.array(BatchItemSchema).max(20),
+        concurrency: z.number().int().min(1).max(BATCH_CONCURRENCY).optional(),
+      },
+      annotations: READ_HINTS,
+    },
+    ({ items, concurrency = 1 }) =>
+      asJob(`batch ${JSON.stringify([items, concurrency])}`, READ_NOTE, async () => {
+        const results = [];
+        let index = 0;
+        for await (const r of callReads(items, { concurrency, maxItems: 20 })) {
+          const item = items[index++]!;
+          results.push({
+            ...r,
+            ...(r.data !== undefined ? { data: asTable(r.data) } : {}),
+            ...(r.next ? { next: mcpNext(r.next) } : {}),
+            ...(r.nextCall
+              ? {
+                  nextCall: mcpNextCall(r.nextCall, {
+                    tool: "call_operation",
+                    args: { site: item.site, op: item.op, args: item.args ?? {} },
+                  }),
+                }
+              : {}),
+          });
+        }
+        const ok = results.every((r) => r.ok);
+        return reply({ ok, results }, !ok);
       }),
   );
 

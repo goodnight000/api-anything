@@ -1,5 +1,6 @@
 /** Library entry: `import { call } from "api-anything"`. */
 
+export { type BatchItem, type BatchOptions, type BatchResult, callReads } from "./batch.js";
 export { browserAvailable, browserChoice, closeBrowser } from "./browser.js";
 export { classify } from "./classify.js";
 export {

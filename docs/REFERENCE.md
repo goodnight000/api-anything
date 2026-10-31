@@ -5,6 +5,7 @@ Details behind the [README](../README.md). The design and its reasons are in
 
 - [Creating an operation from captured traffic](#creating-an-operation-from-captured-traffic)
 - [Replay, fallback and repair](#replay-fallback-and-repair)
+- [Read batches and stdin](#read-batches-and-stdin)
 - [Logging in](#logging-in)
 - [Finding operations and checking health](#finding-operations-and-checking-health)
 - [MCP server](#mcp-server)
@@ -298,6 +299,63 @@ refused by `export`, `publish` and `pull`.
 
 Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 
+## Read batches and stdin
+
+`call --json -` reads one args object from stdin (at most 4 MiB). Positional `k=v` arguments
+override its keys:
+
+```sh
+printf '%s\n' '{"query":"sqlite"}' | api-anything call hacker-news search --json -
+```
+
+`batch` reads JSONL from stdin by default, from `-`, or from `--input <file>`. Each line is
+`{id?, site, op, args?}`; `id` is a string or number, and omitted args mean `{}`. Sites must
+already be installed: use `pull` first, or MCP `list_operations`.
+
+```sh
+printf '%s\n' \
+  '{"id":"news","site":"hacker-news","op":"search","args":{"query":"sqlite"}}' \
+  '{"id":"books","site":"goodreads","op":"searchBooks","args":{"q":"Circe"}}' |
+  api-anything batch - --concurrency 2
+```
+
+- One JSONL result per line, in input order: `{id, site, op, ...callResult}`. Without an id the
+  1-based line number is used. The normal `class`, `retry`, `next`, `nextCall`, `nextPage`,
+  `hasMore` and `truncated` fields are kept. Args are not echoed.
+- Sequential by default. `--concurrency 1..4` allows different sites to run together; a site's
+  own items stay sequential, including case variants of its name. Every call uses the normal
+  per-site pacing and cool-downs. After a rate limit or block starts a cool-down, remaining
+  valid reads of that site answer from it without sending; other sites continue.
+- At most 200 lines and 4 MiB of input. `--limit 1..200` lowers the line cap. Oversized input
+  fails before any call. Empty input emits nothing. A malformed or blank line gets its own
+  `input` result without echoing its text; a final newline is not an extra line.
+- Writes always answer `input`, `"writes are not batched"`, with `write: "not_sent"`.
+  `--allow-writes` and `--force` are not batch flags. `--max-tier 1` keeps a batch browserless.
+- Partial failures do not stop the batch. Exit 0 when all items are ok, otherwise 1.
+  No result caching, retries of whole batches or automatic pagination.
+
+The library exports `callReads(items, opts)`, an async iterable of the same ordered results:
+
+```js
+import { callReads, closeBrowser } from "api-anything";
+
+try {
+  for await (const result of callReads([
+    { id: "news", site: "hacker-news", op: "search", args: { query: "sqlite" } },
+  ], { concurrency: 2, maxItems: 20, maxTier: 1 })) {
+    console.log(JSON.stringify(result));
+  }
+} finally {
+  await closeBrowser();
+}
+```
+
+`BatchItem`, `BatchOptions` and `BatchResult` are exported types. The array cap is 200;
+`maxItems` can only lower it. Invalid bounds or an oversized array throw before sending; invalid
+items fail individually. Options also accept `timeoutMs` and `fetchImpl`, but no write, force
+or pacing override. Breaking iteration starts no more calls and waits for those already running
+(at most four) to finish.
+
 ## MCP server
 
 `api-anything mcp` serves these tools over stdio:
@@ -307,6 +365,7 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 | `list_sites` | the sites, with how many operations each has | read-only |
 | `list_operations` | a site's operations, each with a JSON Schema of its args (`inputSchema`) the keys its items carry (`returns`), how it pages (`pages`) and the read a write is confirmed by (`readback`), and the site's notes | read-only |
 | `call_operation` | call a read; a write op is refused and nothing is sent | read-only, idempotent |
+| `call_batch` | up to 20 read items, optional `concurrency` 1..4; `{ok, results}` in input order, writes rejected | read-only, idempotent |
 | `call_write_operation` | call a write, with `again` and `idempotencyKey`; only with `--allow-writes` | destructive, not idempotent |
 | `get_job` | wait up to 25 s for a pending call's result | read-only |
 | `site_status` | what `api-anything status` prints, with each problem's `next` in MCP terms | read-only, local |
@@ -320,6 +379,10 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
   call while it runs joins it, so a second `login` for a site whose window is open returns that
   job. Jobs end when the server does; a finished one is kept 15 minutes. A sign-in window nobody
   closes is closed after 10 minutes.
+- `call_batch` uses the same jobs mechanism: an identical running batch joins its job, and
+  `get_job` returns `{ok, results}` when it finishes. A failed item's retry hint names
+  `call_operation` for that item, never the entire batch. Each item's data uses the same compact
+  table representation as a single call; its retry, paging and truncation fields stay intact.
 - Each answer is JSON text, and the same object as `structuredContent`.
 - `--print-config` prints how to add the server to Claude Code, Codex, Gemini CLI, VS Code, Cursor
   and Claude Desktop, with absolute paths. Client timeouts and fixes for common problems are in

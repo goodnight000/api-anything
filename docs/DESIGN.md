@@ -1451,6 +1451,23 @@ independent alternative.
     shows (keeping its `--example` values). None is `data`, which stays the site's answer
   - `add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--match ...] [--pick ...] [--paging ...] [--write]`
   - `call <site> <op> [k=v ...] [--allow-writes] [--again] [--idempotency-key <k>] [--force]` (`--force`: send while the site cools down; a success ends the cool-down)
+    accepts `--json -` for an args object on stdin (at most 4 MiB); positional `k=v` overrides its keys.
+  - `batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200] [--max-tier 1|2|3]`
+    reads JSONL `{id?, site, op, args?}` from the file or stdin (the default). `batch.ts`'s
+    `callReads` delegates every valid item to `call()` with writes off and no cool-down or pacing
+    override. A write's refusal becomes `input`, `"writes are not batched"`, `write: "not_sent"`;
+    no batch entry point takes `allowWrites`. Results are `{id, site, op, ...callResult}`, in input
+    order, with every retry, paging and truncation field intact, never the input args. An omitted id
+    becomes its 1-based input position. The default is sequential; concurrency is at most four
+    different sites, and one site's items (case variants included) never overlap or change order.
+    This keeps `store.ts`'s send slots and lets a call record its cool-down before that site's next
+    item checks it. Valid reads during a cool-down answer from it without sending. Other failures
+    do not stop later items. No caching, automatic pagination or retry of an entire batch.
+    Sites must be installed first; a batch does not pull them implicitly. The whole input is bounded
+    before any call: at most 200 lines (a lower `--limit` only), 4 MiB. An oversized input fails as a
+    whole; a malformed or blank line gets its own `input` result, without quoting its contents. A
+    final newline is not another line, and empty input emits nothing. Exit 0 when every item is ok,
+    otherwise 1.
   - `inspect <captureId> [requestId]` reads a saved capture with no browser, through `add`'s recipe
     flags (`--extract`, `--pick`, `--html`, `--embedded`): what the recipe would return, or a failure
     when a path or selector finds nothing (an empty list at a path is a result, and so is an `--html`
@@ -1504,7 +1521,7 @@ independent alternative.
     program. `test/execute.test.ts` checks the fields over every class, a read and a write, and
     what was sent.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `find_sites`, `list_operations`,
-  `call_operation`, `get_job`, `site_status` (`status`, see the call log), `login` (so an agent can fix an `auth` failure itself) and `learn_site`
+  `call_operation`, `call_batch`, `get_job`, `site_status` (`status`, see the call log), `login` (so an agent can fix an `auth` failure itself) and `learn_site`
   (`mcp-learn.ts`), plus `call_write_operation` on a server started with `--allow-writes`, so the tool list costs the same at 2 sites or 200. `find_sites` is `search` (see
   Sharing specs): each match's ops with their params, lexical coverage, registry health and local
   verification, `nextCall` `{tool: "list_operations", args: {site}}` for the best match, or
@@ -1588,7 +1605,7 @@ independent alternative.
     them only against its idle timeout), and some stop a call at 60 s (Claude Desktop, reportedly;
     Codex before its default became 300 s). A call that heals or runs the page, or a sign-in window
     the user is still using, can take longer, and an agent that never sees the answer may log in
-    again or send a write again. So a tool call (`call_operation`, `call_write_operation`, a per-op
+    again or send a write again. So a tool call (`call_operation`, `call_batch`, `call_write_operation`, a per-op
     tool, `login`) that is still running at 25 s answers
     `{ok: false, class: "pending", job, reason, next, retry: "no", nextCall: get_job}`, with
     `isError` false (nothing failed), and keeps running. `get_job {job}` waits up to 25 s for it and
@@ -1613,6 +1630,14 @@ independent alternative.
     re-imports by itself, so the `login` tool would only import the same cookies once more. The
     prose `next` keeps its rewrite: it carries what the fields do not (check the site first, then
     re-learn), and the other tools' `next` strings have no `nextCall`.
+  - `call_batch` takes at most 20 `items` and an optional `concurrency` (1..4). It runs
+    `callReads` with that lower cap and returns `{ok, results}`; `ok` is true only when all items
+    succeeded. It has read-only, idempotent, non-destructive, open-world hints even on a
+    writes-enabled server. Each item's data uses `asTable`, and its `next`/`nextCall` use MCP
+    terms; a retry names `call_operation` with that item's args, never a repeat of the batch.
+    As with `call_operation`, a batch still running at the deadline answers with a job, and
+    identical running batches join it. Finished results are kept only by the normal jobs mechanism,
+    not as a cache of read calls. `list_operations` installs a missing site before batching it.
   - Each answer is JSON text and, when it is an object, the same object as `structuredContent`. A
     client gives its model one of the two, never both: Codex and VS Code send the structured one
     and drop the text, Gemini CLI sends the text, so neither costs tokens twice, and a program
@@ -1639,7 +1664,12 @@ independent alternative.
 - **Skill** `skills/api-anything/SKILL.md`: the create loop (capture → add → call → verify), the
   strict failure loop (follow `next` at most once, then stop and report), and the safety rules.
 - **Claude Code plugin** manifest (skill + MCP), plus copy-paste install lines for Codex and other agents.
-- Library: `import { call, open } from "api-anything"`.
+- Library: `import { call, callReads, closeBrowser } from "api-anything"`. `callReads(items, opts)`
+  is an async iterable of `BatchResult`; `BatchItem` and `BatchOptions` are exported too. It takes
+  an array of at most 200 items, `maxItems` to lower that cap, `concurrency` (default 1, at most 4),
+  and the call options `maxTier`, `timeoutMs`, `fetchImpl`. Invalid bounds or too many items throw
+  before any call; invalid items fail individually. Breaking iteration starts no further calls
+  and waits for those already running to finish.
 
 ## Non-goals (v1)
 

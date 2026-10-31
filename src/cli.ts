@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /** api-anything CLI. Compact JSON on stdout; every failure also prints one `next:` line on stderr. */
-import { readFileSync, writeFileSync } from "node:fs";
+import { createReadStream, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { z } from "zod";
+import { BATCH_CONCURRENCY, BATCH_MAX, type BatchItem, callReads } from "./batch.js";
 import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { verifySite } from "./checks.js";
 import { botWall, emptyResults, htmlFinds, loginPath, signInForm } from "./classify.js";
@@ -177,6 +178,7 @@ const HELP: Record<string, string> = {
   nextPage (pass it as the op's paging param) and hasMore. A call that healed the op says how and
   what changed in its request in heal (undo: api-anything revert <site> <op>). --dry prints the
   request with credentials redacted.
+  --json -         read the args object from stdin (at most 4 MiB); k=v args override its keys
   --again          send a write refused as a duplicate (the same args within 10 minutes, and the
                     first may have gone through): only when the user checked the site
   --idempotency-key <k>  on the first call: a repeat of the write with the same key returns that
@@ -185,6 +187,14 @@ const HELP: Record<string, string> = {
                     3 minutes) or a block at every tier (10 minutes) calls answer without sending.
                     A forced call that succeeds ends the wait; one limited or blocked again starts
                     it over. A login for the site also ends the wait`,
+  batch: `api-anything batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200] [--max-tier 1|2|3]
+  Read JSONL {id?, site, op, args?} from a file or stdin (the default), at most 4 MiB.
+  Write one JSONL {id, site, op, ...callResult} per line in input order. Missing ids are 1-based
+  line numbers. A malformed line answers input without echoing its contents. Empty input is empty.
+  Sequential by default; concurrency is across sites only, with the usual pacing and cool-downs.
+  --limit lowers the 200-line cap; oversized input is rejected before any calls. Sites must already
+  be installed (pull one first). Writes answer input: "writes are not batched". No caching.
+  Exit 0 if every item is ok, otherwise 1. Failures do not stop later items.`,
   verify: `api-anything verify [site]
   Calls every read operation with its stored example args and its checks, healing as needed, and
   judges each case: pass, fail, or inconclusive (a challenge, a sign-in page, a rate limit, or a server
@@ -313,6 +323,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything capture <url> [--steps ...]
   api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--write]
   api-anything call <site> <op> [k=v ...] [--allow-writes]
+  api-anything batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200]
   api-anything inspect <captureId> [<requestId>]
   api-anything search <words|domain> | pull <site> | publish <site> [--yes]
   api-anything interface mcp|openapi <url>
@@ -420,6 +431,8 @@ const OPTIONS = {
   write: { type: "boolean" },
   description: { type: "string" },
   json: { type: "string" },
+  input: { type: "string" },
+  concurrency: { type: "string" },
   "allow-writes": { type: "boolean" },
   again: { type: "boolean" },
   "idempotency-key": { type: "string" },
@@ -910,6 +923,53 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   return 0;
 }
 
+/** Bound input bytes before parsing; a JSON parser's error may quote a credential from stdin. */
+async function readInput(source = "-"): Promise<string> {
+  const stream = source === "-" ? process.stdin : createReadStream(source);
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of stream) {
+    const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += b.length;
+    if (bytes > 4 * 1024 * 1024) throw new Fail("input exceeds 4 MiB", `api-anything ${command} --help`);
+    chunks.push(b);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function cmdBatch({ v, pos }: Parsed): Promise<number> {
+  if (pos.length > 1 || (pos.length && pos[0] !== "-") || (v.input !== undefined && pos.length))
+    throw new Fail("pass --input <file> or -, not both", "api-anything batch --help");
+  const maxItems = positive(v.limit, "limit") ?? BATCH_MAX;
+  const concurrency = positive(v.concurrency, "concurrency") ?? 1;
+  if (maxItems > BATCH_MAX || concurrency > BATCH_CONCURRENCY)
+    throw new Fail("batch limits: --limit 1..200, --concurrency 1..4", "api-anything batch --help");
+  if (v["max-tier"] !== undefined && !/^[123]$/.test(v["max-tier"]))
+    throw new Fail("--max-tier must be 1, 2 or 3", "api-anything batch --help");
+  const text = await readInput(v.input);
+  const lines = text === "" ? [] : text.split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  if (lines.length > maxItems)
+    throw new Fail(`batch exceeds ${maxItems} lines; nothing was sent`, "split the input into smaller batches");
+  const items = lines.map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return null; // callReads gives this line an input result, without quoting its contents
+    }
+  }) as BatchItem[];
+  let code = 0;
+  for await (const r of callReads(items, {
+    maxItems,
+    concurrency,
+    maxTier: v["max-tier"] ? (Number(v["max-tier"]) as Tier) : undefined,
+  })) {
+    if (!out(r)) await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
+    if (!r.ok) code = 1;
+  }
+  return code;
+}
+
 async function cmdCall({ v, pos }: Parsed): Promise<number> {
   const [site, name, ...rest] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything call --help");
@@ -917,7 +977,14 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     throw new Fail(`--max-tier must be 1, 2 or 3, got "${v["max-tier"]}"`, "pass --max-tier 1, 2 or 3");
   let base: Record<string, unknown> = {};
   if (v.json) {
-    base = json(v.json, z.record(z.string(), z.unknown()), "json") ?? {};
+    if (v.json === "-") {
+      const text = await readInput();
+      try {
+        base = z.record(z.string(), z.unknown()).parse(JSON.parse(text));
+      } catch {
+        throw new Fail("--json - expects one JSON args object on stdin", "api-anything call --help");
+      }
+    } else base = json(v.json, z.record(z.string(), z.unknown()), "json") ?? {};
   }
   const args = { ...base, ...kv(rest) };
   // A shared site this machine lacks is fetched first, as MCP does: an agent with a shell finds it by name.
@@ -1434,6 +1501,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
     ],
   },
   call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "force", "dry"] },
+  batch: { run: cmdBatch, flags: ["input", "concurrency", "limit", "max-tier"] },
   verify: { run: cmdVerify, flags: [] },
   check: { run: cmdCheck, flags: ["expect", "purpose"] },
   readback: { run: cmdReadback, flags: ["find"] },

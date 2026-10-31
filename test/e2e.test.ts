@@ -297,6 +297,7 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
     try {
       const tools = await client.listTools();
       assert.deepEqual(tools.tools.map((t) => t.name).sort(), [
+        "call_batch",
         "call_operation",
         "find_sites",
         "get_job",
@@ -329,6 +330,25 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
       });
       assert.equal(refused.isError, true);
       assert.equal(text(refused).class, "refused");
+
+      const batch = await client.callTool({
+        name: "call_batch",
+        arguments: {
+          items: [
+            { id: "read", site: SITE, op: "search", args: { q: "otters" } },
+            { id: "write", site: SITE, op: "createPost", args: { text: "nope" } },
+          ],
+        },
+      });
+      assert.equal(batch.isError, true);
+      assert.deepEqual(
+        text(batch).results.map((r: { id: string; class: string }) => [r.id, r.class]),
+        [
+          ["read", "ok"],
+          ["write", "input"],
+        ],
+      );
+      assert.equal(text(batch).results[1].reason, "writes are not batched");
     } finally {
       await client.close();
     }
