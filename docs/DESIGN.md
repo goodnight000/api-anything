@@ -813,8 +813,10 @@ example args tell from drift, as for any read. Drift heals as usual (the stored 
 included, is sent first; a recapture re-learns the lookup from the trigger run). A failed lookup's
 network error is `error` with `server`. A write sends its lookup on every try, the write itself once.
 Tier 3 runs the page, which does its own lookup. A looked-up value is text the site's users may have
-written, so a read whose filled GraphQL document defines a mutation or subscription is refused before
-it is sent (`error`), whatever the static document says.
+written, so it must be an identifier (letters, digits and `_.~:@+=/-`, at most 512 characters: an id, a
+slug, a UUID, a base64 id) or the call is `error` before the op's request is sent; learning derives no
+other value. No such value can make a GraphQL document, however deep the leaf sits in encoded layers the
+vet cannot read. As a second guard, a read whose filled document defines a mutation is refused too.
 
 Heal strategies, cheapest first:
 - **rescan**: no browser. Fetch the trigger document and the JS bundles it references (resolved
@@ -1231,7 +1233,7 @@ local rules below are defense in depth on top of that.
 and by CI over the bundled `sites/`. Errors refuse: every URL an op sends to or opens (request, a derived slot's lookup, trigger, soft-from, `goto` value or
 selector) is https on a host under a public suffix (no IP, `localhost`, single-label or
 `.local`/`.internal`-style name), and so is `baseUrl`; no literal credential in a request or a lookup (the
-export rule) outside the op's `public` names; a lookup is a GET on the op's own host whose `path` names one value, and its value goes only in the path, a query or the body, never a header; a derived slot counts as a param in the read rules that follow; `readOnly` only on GET, HEAD and POST, never on a
+export rule) outside the op's `public` names; a lookup is a GET on the op's own host whose `path` names one value, and its value goes only in the path, a query or the body, never a header; a derived slot counts as a param in the read rules that follow; a read's method-override field (`_method`, `x-http-method-override`, `x-method-override`) is neither filled by a param or a lookup nor holds a literal other than GET or HEAD; `readOnly` only on GET, HEAD and POST, never on a
 GraphQL document defining a mutation or subscription (read from a JSON body, a batch, a form, the URL
 or a raw `application/graphql` body, by each definition's operation type, with comments, strings and
 block strings skipped: `query mutation { }` is a query), never with a param as the whole body (raw,

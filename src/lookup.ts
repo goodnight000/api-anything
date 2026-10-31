@@ -7,7 +7,7 @@ import { asText, setAt, walk } from "./codec.js";
 import { AddressRefused, RedirectRefused, type SendOptions, type Sent, send } from "./http.js";
 import type { Session } from "./session.js";
 import type { Lookup, Operation } from "./spec.js";
-import { graphqlDocuments, writesGraphql } from "./vet.js";
+import { DERIVED_VALUE, graphqlDocuments, writesGraphql } from "./vet.js";
 
 /** What a lookup that did not answer with its value said; the op's own request was never sent. */
 export interface LookupJudged {
@@ -101,6 +101,8 @@ export async function derive(op: Operation, fetchOne: (lookup: Operation) => Pro
         ...(j.server ? { server: true } : {}),
         ...(j.retryAfterMs !== undefined ? { retryAfterMs: j.retryAfterMs } : {}),
       });
+    if (!DERIVED_VALUE.test(asText(v)))
+      throw new LookupFailed({ class: "error", reason: `${where}: the value at ${slot.path} is not an identifier` });
     const type = slot.at.at(-1)!.startsWith("json:") ? types.get(JSON.stringify(slot.at)) : "string";
     // a JSON leaf keeps its type: an id past 2^53 comes back as its digits, and goes out as a number again
     const value =

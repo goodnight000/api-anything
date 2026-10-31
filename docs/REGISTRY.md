@@ -37,7 +37,7 @@ registrable domain and the hashed network that asked (demand, below), never the 
 
 1. The agent calls MCP `find_sites` (words, a domain or a URL). The registry's `GET /v1/search`
    answers with each match's operations, their params and status, so the agent can call one next. Its
-   `q` is at most 200 characters (longer is a 400; the client sends the first 200), since each listed
+   `q` is at most 200 characters (longer is a 400; the client searches with the first 200, its local specs too), since each listed
    op repeats the query's words in its `matched`/`unmatched`. Every
    match, local or the registry's, shows its `domain`, and the tool's description, its `next` and the
    skill tell the agent to check that domain is the site the user means: a site's name and description

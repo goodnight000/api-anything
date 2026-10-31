@@ -546,11 +546,12 @@ export async function search(
   o: { limit?: number; local?: Site[] } = {},
 ): Promise<{ matches: Found[]; registryError?: string }> {
   const limit = o.limit ?? 5;
+  // local scoring and each op's coverage repeat the query's words too
+  query = query.trim().slice(0, MAX_SEARCH_QUERY);
   let remote: z.infer<typeof SearchMatchSchema>[] = [];
   let registryError: string | undefined;
   try {
-    const q = query.trim().slice(0, MAX_SEARCH_QUERY);
-    const r = await registryRequest<{ matches?: unknown }>(`/v1/search?q=${encodeURIComponent(q)}&limit=${limit}`, {
+    const r = await registryRequest<{ matches?: unknown }>(`/v1/search?q=${encodeURIComponent(query)}&limit=${limit}`, {
       cap: 4 * 1024 * 1024,
     });
     if (!Array.isArray(r.matches)) throw new Error(`${registryBase()}/v1/search answered no matches`);

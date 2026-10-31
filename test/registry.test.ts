@@ -1686,6 +1686,12 @@ test("search leaves out common words and labels a real capability's uncovered co
   assert.deepEqual(hotel.unmatched, ["price", "rome"], "hotel lists do not promise pricing or a Rome route");
   assert.deepEqual(await top("the best book ratings"), ["goodreads"]);
   assert.deepEqual(await top("hacker news"), ["hacker-news"], "news keeps its s");
+  // each op repeats the query's words: past the registry's cap, local scoring reads no more of them either
+  const long = `book ratings ${Array.from({ length: 5000 }, (_, i) => `filler${i}`).join(" ")}`;
+  const goodreads = (await search(long, { local })).matches.find((m) => m.site === "goodreads")!;
+  const words = new Set([...goodreads.matched, ...goodreads.unmatched]);
+  assert.ok(words.size < 40, `${words.size} words kept`);
+  assert.ok(!words.has("filler4999"));
 });
 
 test("local search retains registry health without replacing local metadata or verification", async () => {
