@@ -1216,6 +1216,43 @@ human-confirmed cases, not a suite in which one wrong case should be outvoted. I
 count neither way. Check args are literals the publisher typed, shared with the op: the personal
 scan lists them for the publisher to confirm.
 
+**Verify unattended.** A nightly `verify` must tell a broken spec from a site that is down, and new
+breakage from old, with no one reading it. Verify is the explicit check, so a read's drift heals here
+even while the op is marked stale or was healed minutes ago (`CallOptions.ignoreStale`, verify's
+alone): the stored template is still what goes first, and only the guard that would answer "stale
+until" is skipped, so healing stays reactive and a saved heal clears the mark as it always did. Each
+recorded case carries `since`, when it began answering its current outcome: a case of the same label
+that answered the same outcome last time keeps the earlier `since` (across versions of the op too,
+so a failure a heal did not cure keeps its start), and a changed outcome starts over; `recordCases`
+does the same for the holdout `learn_site` keeps. Nothing else about the record changes: `publish`'s
+gate reads the same hash, the same cases and the same outcomes, and a record with no `since` (one
+written before the field) reads as beginning at its `at`. From the record before the run and after
+it, verify reports per op `newlyFailing` (a failing case now, none before, or no record before),
+`recovered` (a failing case before, a record with none now; an op whose record went away is neither)
+and `failingSince` (the earliest `since` among its failing cases). The exit code says what the run
+found: 0 when every counted case passed, 1 when a case failed or a site could not be verified, 2
+when nothing failed and a case was inconclusive, so a rate limit or an outage reads as "tested
+nothing", not as a broken spec; `--strict` turns 2 into 1. A skipped op sets no exit code. Scope:
+`verify [site ...]` takes several sites, none means every known one, and `--user` means the user's
+own specs in `~/.api-anything/sites` (not bundled or pulled ones), the ones a signed-in session
+might exist for. A read learned signed in is skipped as `needs login` without a call when the
+session store says the site has no login: no login ever saved a `source`, and the jar holds no live
+login cookie (the same test `call` makes before it says a guest's answer is `auth`); with a source
+on record the read runs, since a call would re-import on `auth`. A write is never sent by verify
+(the rules on writes forbid sending one to test it); each gets a `preflight` row instead, built with
+nothing sent: whether its template `builds` from its example args and the session through
+`buildRequest` (a `session:` ref no trigger run has captured, or captured for another host, says
+"needs a trigger run"; a `cookie:` ref not in the jar says to log in; a required param with no
+example does not build), `learnedLoggedIn` against `loggedIn` now (the same `loggedIn` test a call
+makes before sending a write learned signed in; a call would re-import first), its `readback`'s own
+cases' outcome in this run (`not run` for a readback that carries its own read, which verify does
+not call), and `unconfirmed`: how many of the op's writes in the ledger were sent and nothing
+confirmed landed (`accepted`, `may_have_applied`, or still `sending`). `ok` means every part a send
+needs is in place and the readback passed. The built request is dropped, and the preflight holds no
+session value. A preflight is not a case: it sets no exit code and is no part of the record or the
+gate, since nothing was sent to judge; `--strict` alone exits 1 for a write whose preflight is not
+`ok`, for a job that wants its writes ready too.
+
 **Reports (`report.ts`).** After every `call()` of an op that carries a `version`, with `share` on, a
 report `{hash, outcome, tier, ms}` is queued: ok → `ok`, drift and error → `fail`, auth, blocked, rate
 and input as they are; a call refused before anything was sent (a write without `allowWrites`, a
@@ -1429,7 +1466,9 @@ independent alternative.
     reads and the user never sees is where an injected instruction hides. `aria-hidden` stays: it
     hides only from screen readers and is often the visible copy (a rating shown beside its spoken
     label). A stylesheet's hiding is not computed.
-  - `verify [site]` (health-checks every read op with its example, healing as needed)
+  - `verify [site ...] [--user] [--strict]` (health-checks every read op with its example and checks,
+    healing as needed, stale mark or not; preflights every write without sending it; exit 0 pass,
+    1 fail, 2 inconclusive only; see Verify unattended)
   - `readback <site> <write> <read> [k=v ...] [--find field=value]` (how a write's call proves it
     landed; see Writes)
   - `sites`, `ops <site>` (params with their description and format, `returns` where the recipe names them: the keys a result item
