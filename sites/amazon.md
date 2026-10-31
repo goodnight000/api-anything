@@ -23,4 +23,7 @@ api-anything call amazon search "k=french press"
 
 The op reads the server-rendered results page (`GET /s?k=...`) with an `--html` recipe:
 items are `div[data-component-type=s-search-result]`, with the ASIN from `data-asin`, the title
-from `h2` and the price from `.a-price .a-offscreen`.
+from `h2.a-text-normal` and the price from `.a-price .a-offscreen`. Some results (electronics) put
+the brand in an `h2` of its own above the title; on 2026-10-31 the recipe moved from `h2` to
+`h2.a-text-normal`, so `title` is the product's name there too (`iphone 18 pro`, `kettle` and
+`lego` checked live at tier 1).
