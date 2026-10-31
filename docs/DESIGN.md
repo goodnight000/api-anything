@@ -344,6 +344,34 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    the same name, and keeps its `checks` whose args are all still params. It also keeps its `paging`
    (Response extraction), which `add --paging` sets, and a write keeps its `readback` (Writes), as
    long as the shared rules still pass for them.
+11. **Paging found in a capture** (`paging.ts`). A capture whose steps clicked "Show more" holds
+   two requests for one list. `pagingHints` pairs a request with the latest earlier one to the same
+   method, origin and path depth that it differs from in exactly one place (headers left out: a trace
+   id differs on every request; page 2 may add a cursor page 1 lacked, never drop one of its values).
+   It is a cursor when page 1's answer holds page 2's value there: `next` is the path to it, the one
+   outside the list's items when several hold it (GraphQL's `edges[i].cursor` beside
+   `pageInfo.endCursor`). When the answer holds it only as a query param of a string (crates.io's
+   `meta.next_page: "?per_page=10&page=2"`), `next` is `path~[?&]page=([^&#]*)`. With no cursor in
+   the answer, a number that counts up by one (or a page 2 where page 1 left it out) is numbered
+   pages. A value under 4 characters or all digits is found by chance in most answers (a count, a
+   rating), and a value inside a list's items is often another item's id (a related item, not the
+   next page): either counts only under a key that names paging (`next`, `cursor`, `after`,
+   `token`, `continu...`). `capture` and `inspect` list each hint as `pages` with the `add` flags
+   that learn the list from its second request, and `add` from a capture warns when the request it
+   learned is one of two pages and no `--paging` was given. The CLI only suggests: one capture is
+   one run, and two unrelated requests can look like pages of a list, so the user confirms with
+   `--paging`. A page value under 3 characters (page `2`) cannot be located by its value, and two
+   runs of one list both send `2`; when `--paging` with a `next` names the place a hint found,
+   `add` learns from a copy of each run with a stand-in value there (`standIn`) and puts the run's
+   own value back in the op.
+   `learn_site` applies paging itself, because its two runs are the confirmation: with `steps`
+   that load page 2, a hint for the chosen request's endpoint that both runs show (same place,
+   param and path) is learned as `add --paging` would learn it, from the page-2 request with each
+   run's cursor as the example; `data` is still page 1, the user's answer, and the result carries
+   `paging` (`auto: true`), `nextPage` and `hasMore`. Only a cursor is applied this way: numbered
+   pages need the page in `args`, `args2` and `args3`, so the agent passes `paging` itself. An
+   agent's `paging` with a `next` the runs do not show is refused, with a `next` that says to give
+   steps that load page 2.
 
 ## Writes
 
@@ -934,6 +962,12 @@ away (for `embedded`, in the embedded JSON; never for `html`), to the next page'
 A call returns that value as `nextPage`, with `hasMore: true`. When the answer has `null`, `""` or
 `false` there, the site says this is the last page: `hasMore: false` and no `nextPage`. When the
 path finds nothing, neither field is set, because a moved path must not read as the last page.
+`next` may be `path~regex`, as a `pick` entry may (the same code, `getPathRegex`): `nextPage` is
+the regex's group 1 in the string there. A site that answers with a next-page URL
+(`"?page=2&q=x"`) gives the value to pass back, not the URL. `null`, `""` or `false` at the path is
+still the last page; a string the regex does not match sets neither field. The shared rules check
+the regex as they check a pick's (length, no nested quantifier), and the path before `~` as any
+`next`.
 Without `next` the pages are numbered, and a call says nothing about the next one. `nextPage =
 page + 1` while the list is non-empty would be a guess: the last page is non-empty too, and many
 sites answer a page past the end with the last page again, so an agent paging by it might never
@@ -1472,7 +1506,9 @@ independent alternative.
   request (automatic or `pickRequest`) that the shared rules would refuse as a read or whose method is
   not GET or HEAD (a GraphQL query sent as POST excepted; a GraphQL POST with no query document, a
   persisted query named by a hash or an id, is refused since it may be a mutation), before the holdout
-  call or the clean replay sends anything; the automatic pick passes over such a request for one that reads. Over MCP the trigger
+  call or the clean replay sends anything; the automatic pick passes over such a request for one that reads. It takes `steps`
+  (as `add --steps`: a click on "Show more" loads page 2) and `paging` (as `add --paging`); see
+  "Paging found in a capture" under Learning. Over MCP the trigger, and every `goto` step's address,
   must pass `badAddress` (page text may steer the agent to a page on this machine or the local network);
   the CLI takes any address, the user typed it. A new site's default name is a site this machine has on
   that host, else the name the registry already serves its registrable domain under (`sharedName`, a

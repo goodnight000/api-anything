@@ -224,9 +224,13 @@ don't capture pages the user didn't ask for.
      `--paging page` so `ops` shows the op pages and `verify` checks page 3 isn't page 2 again.
    - A list paged by a cursor ("Show more", infinite scroll): capture after clicking "Show more",
      pick the request that loaded page 2, give the cursor it sent as the example, and say where the
-     answer holds the next one: `--example after=<cursor> --paging after=data.list.pageInfo.endCursor`
-     (find the path with `inspect --outline`). A call without `after` then gets page 1 and
-     returns `nextPage`. Propose paging only when the user needs more than one page.
+     answer holds the next one: `--example after=<cursor> --paging after=data.list.pageInfo.endCursor`.
+     `capture` (with `--steps` that click "Show more") lists the two pages it found as `pages`,
+     with these flags ready; check them, then add the other `--example` values. When the answer
+     gives a next-page URL, not a value, `--paging 'page=meta.next_page~[?&]page=([^&#]*)'` reads
+     it out. A call without `after` then gets page 1 and returns `nextPage`. Over MCP,
+     `learn_site` with `steps` that click "Show more" learns the paging itself. Propose paging only
+     when the user needs more than one page.
    - An op with no args (a feed, a list) needs `--match path=/api/feed` to say which request.
    - If `add` warns that the match is ambiguous, or picks the wrong request, run `capture` again
      and use `add --from <captureId> --pick-request <id>`. A capture holds one run, so a second
