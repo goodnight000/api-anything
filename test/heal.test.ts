@@ -259,7 +259,7 @@ fetch("/api/search?${key}="+encodeURIComponent(p.get("q"))+"&page="+encodeURICom
     assert.equal(r.ok, false, JSON.stringify(r));
     assert.equal(r.class, "drift");
     assert.match(r.reason ?? "", /picked field price disappeared/);
-    assert.match(loadSite("p1")!.site.operations[0]!.request.url, /[?&]q=/, "the candidate was not saved");
+    assert.match(loadSite("p1")!.site.operations[0]!.request!.url, /[?&]q=/, "the candidate was not saved");
   });
 
   test("a failed heal marks the op stale, so the next call skips the browser", async () => {

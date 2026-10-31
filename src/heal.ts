@@ -48,6 +48,7 @@ import {
   OperationSchema,
   type Paging,
   type Param,
+  type Request,
   type ResponseSpec,
   type Site,
   type Slot,
@@ -242,8 +243,8 @@ export const learnGuard = (m?: Match) => {
  */
 const sendOnce = (op: Operation) => {
   const m = op.match;
-  const companions = op.trigger.companions;
-  const site = siteOfUrl(op.request.url);
+  const companions = op.trigger?.companions;
+  const site = siteOfUrl(op.request!.url); // healing only runs on request ops
   let sent = false;
   const stopped = { repeats: 0, resends: 0, others: new Set<string>() };
   const left = new Set<string>();
@@ -275,7 +276,7 @@ const sendOnce = (op: Operation) => {
  * LIMITS.companions. `dropped`: how many more there were.
  */
 function companionsOf(op: Operation, runs: [CaptureResult, Args][]): { companions: Match[]; dropped: number } {
-  const site = siteOfUrl(op.request.url);
+  const site = siteOfUrl(op.request!.url);
   const seen = new Map<string, Match>();
   for (const [run, args] of runs)
     for (const e of run.exchanges) {
@@ -424,7 +425,7 @@ export async function runOpTrigger(
   args: Args,
   o: { intercept?: boolean } = {},
 ): Promise<TriggerRun> {
-  const t = fillTrigger(op.trigger, args);
+  const t = fillTrigger(op.trigger!, args);
   const isHit = (e: Exchange) => matches(op.match, e.request);
   // A write's tier-3 run is the UI sending it for real, once; learning or healing one intercepts it.
   const once = !o.intercept && !op.readOnly ? sendOnce(op) : undefined;
@@ -432,7 +433,7 @@ export async function runOpTrigger(
   const intercept = once ?? (o.intercept ? writeGuard(op.match, { url: t.url, args }) : readGuard(op.match, shared));
   // Intercepted, a write's confirm sends nothing, so learning accepts it. For real, only what its
   // learning recorded is accepted, the question asked with this call's values; a read accepts none.
-  const confirm = o.intercept ? () => true : once ? recordedConfirms(op.trigger.confirms ?? [], args) : undefined;
+  const confirm = o.intercept ? () => true : once ? recordedConfirms(op.trigger?.confirms ?? [], args) : undefined;
   const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit, confirm });
   const hits = capture.exchanges.filter(isHit);
   // a real write's answer is a request that left: a repeat that was stopped answers nothing
@@ -482,7 +483,7 @@ export function firedNothing(op: Operation, capture: CaptureResult): string {
   if (!asked) return no;
   const why = op.readOnly
     ? "a read never confirms"
-    : op.trigger.confirms?.length
+    : op.trigger?.confirms?.length
       ? "it is not one this write's learning recorded"
       : "this write's learning recorded none";
   return `${no}: the page asked to confirm ${atStep(asked.step)} and was told no, since ${why}; nothing is confirmed on the user's behalf`;
@@ -851,13 +852,13 @@ function saveOperation(
 
   const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
   const secrets = scanSecrets(operation, credentialsOf(besideOrigins(session, opUrls(operation))), allowed).secrets;
-  secrets.push(...signInFills(operation.trigger.steps).map((f) => `trigger ${f}`));
+  secrets.push(...signInFills(operation.trigger?.steps).map((f) => `trigger ${f}`));
   if (secrets.length) throw new Error(`refusing to save a spec containing a credential: ${secrets.join("; ")}`);
   // Re-read under the lock: another add or a heal may have saved this site since we started.
   let replaced = false;
   const path = updateSite(site, (current) => {
     replaced = !!current?.operations.some((o) => o.name === operation.name);
-    const fresh = { name: site, baseUrl: new URL(operation.trigger.url).origin, operations: [] };
+    const fresh = { name: site, baseUrl: new URL(operation.trigger!.url).origin, operations: [] };
     return putOperation(current ?? fresh, operation);
   });
   recordOrigins(site, opUrls(operation));
@@ -1044,7 +1045,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   const notRead = i.readsOnly && !i.write ? notARead(learned.operation) : undefined;
   if (notRead)
     throw new NotARead(
-      `request ${learned.exchange.id} (${learned.operation.request.method} ${learned.operation.request.url.split("?")[0]}) is not a read: ${notRead}`,
+      `request ${learned.exchange.id} (${learned.operation.request!.method} ${learned.operation.request!.url.split("?")[0]}) is not a read: ${notRead}`,
     );
   const warnings = recipeWarnings(learned.warnings, r);
   if (stops.length)
@@ -1060,7 +1061,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   const description = i.description ?? prior?.description;
   // The confirms a write's runs accepted (intercepted, so nothing was sent), for its tier-3 calls to
   // accept again; a read keeps none. Derived from the runs alone, never carried over.
-  const { confirms: _given, companions: _was, ...asTriggered } = learned.operation.trigger;
+  const { confirms: _given, companions: _was, ...asTriggered } = learned.operation.trigger!;
   const confirms = i.write ? acceptedConfirms(run1, ex1) : [];
   if (i.write && run2 && JSON.stringify(acceptedConfirms(run2, ex2 ?? ex1)) !== JSON.stringify(confirms))
     warnings.push(
@@ -1115,7 +1116,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   const session = mergeCapture(
     i.site,
     (run2 ?? run1).cookies,
-    { from: learned.operation.request.url, values: learned.sessionValues },
+    { from: learned.operation.request!.url, values: learned.sessionValues },
     {
       settings: learned.settings,
       urls: opUrls(learned.operation),
@@ -1266,10 +1267,10 @@ export async function rescan(
 ): Promise<{ operation: Operation; diff: string } | undefined> {
   if (!op.volatile.length) return undefined;
   const session = loadSession(site);
-  const url = fillTrigger(op.trigger, args).url;
+  const url = fillTrigger(op.trigger!, args).url;
   const headers = (u: string) => {
     const h: Record<string, string> = {};
-    const ua = op.request.headers["user-agent"];
+    const ua = op.request!.headers["user-agent"];
     const cookie = cookieHeaderFor(session.cookies, u);
     if (ua) h["user-agent"] = ua;
     if (cookie) h.cookie = cookie;
@@ -1289,11 +1290,11 @@ export async function rescan(
   );
   const texts = [doc, ...scripts];
 
-  const types = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.type]));
-  let request = op.request;
+  const types = new Map(walk(op.request!).map((l) => [JSON.stringify(l.at), l.type]));
+  let request = op.request!;
   const changes: string[] = [];
   for (const v of op.volatile) {
-    const old = asText(getAt(op.request, v.at));
+    const old = asText(getAt(op.request!, v.at));
     const token = nearestToken(texts, v, !op.readOnly);
     if (!token || token === old) continue;
     const numeric = types.get(JSON.stringify(v.at)) === "number";
@@ -1307,7 +1308,7 @@ export async function rescan(
 
 /** The wire template with these args filled in, so the example values an op was learned with don't count as a change. */
 function template(op: Operation, args: Args): string {
-  let req = op.request;
+  let req = op.request!;
   try {
     // one seed for both sides: generated values are no change
     req = buildRequest(op, args, { cookies: [], values: {} }, "");
@@ -1318,8 +1319,8 @@ function template(op: Operation, args: Args): string {
 }
 
 /** The op's request with each slot's `{param}` or ref template in its place: a change shows those, not values. */
-function placeholders(op: Operation): Operation["request"] {
-  let req = op.request;
+function placeholders(op: Operation): Request {
+  let req = op.request!;
   for (const s of op.slots) {
     try {
       req = setAt(req, s.at, s.template ?? `{${s.param ?? s.ref}}`);
@@ -1347,7 +1348,7 @@ export function templateChanges(a: Operation, b: Operation): string[] {
   if (oa !== ob) out.push(`origin: ${oa} -> ${ob}`);
   if (pa !== pb) out.push(`path: ${pa} -> ${pb}`);
   // a JSON body's own leaves say more than the whole text; path segments are said above
-  const leaves = (req: Operation["request"]) =>
+  const leaves = (req: Request) =>
     new Map(
       walk(req)
         .filter((l) => !l.container && !l.at[0]!.startsWith("path:"))
@@ -1597,7 +1598,7 @@ export async function healOperation(
   let sessionValues: Record<string, string>;
   let settings: string[];
   // Where the op fills each param: a place the page filled with its own value can keep it (learn's paramSlots).
-  const was = walk(op.request);
+  const was = walk(op.request!);
   const wasThere = new Map(was.map((l) => [JSON.stringify(l.at), l]));
   const own = op.slots.filter((slot) => slot.param || slot.template);
   const placed = new Set(own.map((slot) => JSON.stringify(slot.at)));
@@ -1629,7 +1630,7 @@ export async function healOperation(
       storage: run.capture.storage,
       match: op.match,
       name: op.name,
-      trigger: op.trigger,
+      trigger: op.trigger!,
       readOnly: op.readOnly,
       loginCookies: o.loginCookies,
       guestCookies: loadSession(site).guestCookies,
@@ -1644,7 +1645,7 @@ export async function healOperation(
     const there = fresh.slots.find((f) => JSON.stringify(f.at) === JSON.stringify(s.at));
     if (!s.gen || there?.param !== undefined || there?.template !== undefined) return [];
     try {
-      return there?.ref || UUID.test(asText(getAt(fresh.request, s.at))) ? [s.at] : [];
+      return there?.ref || UUID.test(asText(getAt(fresh.request!, s.at))) ? [s.at] : [];
     } catch {
       return []; // the place is gone
     }
@@ -1654,9 +1655,9 @@ export async function healOperation(
     settings = settings.filter((n) => n in sessionValues);
   }
   // A deploy that adds an auth/anti-bot header: its value is needed to validate (and later send) the candidate.
-  mergeCapture(site, [], { from: fresh.request.url, values: sessionValues }, { settings, urls: opUrls(fresh) });
+  mergeCapture(site, [], { from: fresh.request!.url, values: sessionValues }, { settings, urls: opUrls(fresh) });
   // An arg equal to a constant the old template had there ("search" in /api/search) is not a param position.
-  const oldLeaves = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.value.toLowerCase()]));
+  const oldLeaves = new Map(walk(op.request!).map((l) => [JSON.stringify(l.at), l.value.toLowerCase()]));
   const oldSlots = new Set(op.slots.map((sl) => JSON.stringify(sl.at)));
   fresh = {
     ...fresh,
@@ -1664,7 +1665,7 @@ export async function healOperation(
       if (!sl.param) return true;
       const k = JSON.stringify(sl.at);
       if (oldSlots.has(k)) return true;
-      const now = asText(getAt(fresh.request, sl.at)).toLowerCase();
+      const now = asText(getAt(fresh.request!, sl.at)).toLowerCase();
       return oldLeaves.get(k) !== now;
     }),
   };
@@ -1674,7 +1675,7 @@ export async function healOperation(
     ...fresh,
     description: op.description,
     params: op.params,
-    trigger: op.trigger,
+    trigger: op.trigger!,
     match: op.match,
     readOnly: op.readOnly,
     ...(op.public ? { public: op.public } : {}),

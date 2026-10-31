@@ -507,7 +507,7 @@ test("add --from a capture judges the op on the captured response: a wrong --ext
     bad.warnings.join("\n"),
   );
   assert.equal(bad.preview, undefined);
-  assert.equal(bad.operation.trigger.url, "https://t.test/u/{screen_name}");
+  assert.equal(bad.operation.trigger!.url, "https://t.test/u/{screen_name}");
   const good = await addOperation({
     site: "addfrom",
     op: "u",
@@ -958,7 +958,7 @@ test("paging: a call returns the next page's cursor, read from the whole answer 
   // learned from the request that loads page 2, the template holds page 2's cursor: left out, the
   // cursor is cleared (empty, or null in JSON), never the captured one sent
   const learned = pagedAndTodos({ param: "after", next: "data.pageInfo.next" });
-  learned.operations[0]!.request.url = "https://t.test/api/reviews?after=Y2Fw";
+  learned.operations[0]!.request!.url = "https://t.test/api/reviews?after=Y2Fw";
   saveSite(learned);
   await call("t", "reviews", {}, opts(page("c2")));
   assert.equal(new URL(seen.at(-1)!.url).searchParams.get("after"), "");
@@ -1571,3 +1571,83 @@ await new Promise((r) => setTimeout(r, Math.max(0, Number(process.env.AA_START) 
 const r = await call("local", "get", { q: "c" }, { maxTier: 1, minIntervalMs: Number(process.env.AA_INTERVAL) });
 process.stdout.write(String(r.ok));
 `;
+
+describe("a local op", () => {
+  const site2 = parseSite({
+    name: "loc",
+    baseUrl: "https://loc.test",
+    operations: [
+      {
+        name: "greet",
+        local: { command: "printf 'hello %s\\n' '{name}'" },
+        response: { format: "text" },
+        params: [{ name: "name", required: true }],
+        readOnly: true,
+      },
+      {
+        name: "marker",
+        local: { command: "touch {marker} && echo ran" },
+        response: { format: "text" },
+        params: [
+          {
+            name: "marker",
+            required: true,
+            pattern: "^/tmp/aa-exec-marker-[a-z]+$",
+            hint: "a path under /tmp/aa-exec-marker-",
+          },
+        ],
+        readOnly: true,
+      },
+      {
+        name: "fail",
+        local: { command: "echo oops >&2; exit 3" },
+        response: { format: "text" },
+        params: [],
+        readOnly: true,
+      },
+      {
+        name: "slow",
+        local: { command: "sleep 2" },
+        response: { format: "text" },
+        params: [],
+        readOnly: true,
+      },
+    ],
+  });
+  const MARKER = "/tmp/aa-exec-marker-zed";
+
+  beforeEach(() => saveSite(site2));
+  after(() => rmSync(MARKER, { force: true }));
+
+  test("its stdout is answered as text; nothing was sent", async () => {
+    const r = await call("loc", "greet", { name: "world" }, { minIntervalMs: 0 });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.equal((r.data as string).trim(), "hello world");
+  });
+
+  test("a refused arg keeps the command from running, and the accepted one runs", async () => {
+    rmSync(MARKER, { force: true });
+    const r = await call("loc", "marker", { marker: "not-a-path" }, { minIntervalMs: 0 });
+    assert.equal(r.class, "input", JSON.stringify(r));
+    assert.match(r.reason ?? "", /must be a path under/);
+    assert.ok(!existsSync(MARKER), "the command ran although the arg was refused");
+    const ok = await call("loc", "marker", { marker: MARKER }, { minIntervalMs: 0 });
+    assert.equal(ok.ok, true, JSON.stringify(ok));
+    assert.ok(existsSync(MARKER), "the command ran with the accepted arg");
+    rmSync(MARKER, { force: true });
+  });
+
+  test("a non-zero exit is the error, with the tail of the command's stderr", async () => {
+    const r = await call("loc", "fail", {}, { minIntervalMs: 0 });
+    assert.deepEqual([r.ok, r.class, r.tier], [false, "error", 1], JSON.stringify(r));
+    assert.match(r.reason ?? "", /exited 3/);
+    assert.match(r.reason ?? "", /oops/);
+  });
+
+  test("a command past its timeout is stopped, and said so", async () => {
+    const r = await call("loc", "slow", {}, { minIntervalMs: 0, timeoutMs: 300 });
+    assert.equal(r.class, "error", JSON.stringify(r));
+    assert.match(r.reason ?? "", /kept running past 300 ms and was stopped/);
+  });
+});

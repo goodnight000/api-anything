@@ -1,0 +1,91 @@
+[
+  {
+    "op": "search",
+    "args": { "query": "linux kernel" },
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "note": "recorded 2026-10-30, logged out, www.reddit.com/search.json; trimmed to two posts",
+    "body": {
+      "kind": "Listing",
+      "data": {
+        "dist": "LIVE",
+        "after": "t3_9k2q1f",
+        "children": [
+          {
+            "kind": "t3",
+            "data": {
+              "title": "Linux 6.15 is stable",
+              "url": "https://lwn.net/Articles/100001/",
+              "subreddit": "linux",
+              "subreddit_name_prefixed": "r/linux",
+              "subreddit_id": "t5_2",
+              "author": "kernelwatcher",
+              "score": 1234,
+              "num_comments": 56,
+              "permalink": "/r/linux/comments/9k2q1f/linux_615_is_stable/",
+              "selftext": "",
+              "created_utc": 1761890000
+            }
+          },
+          {
+            "kind": "t3",
+            "data": {
+              "title": "Ask HN Linux: what is your daily desktop build, and why not Windows?",
+              "url": "https://www.reddit.com/r/linux/comments/8m1x7c/ask_hn_linux_what_is_your_daily/",
+              "subreddit": "linux",
+              "subreddit_name_prefixed": "r/linux",
+              "author": "disthopper",
+              "score": 88,
+              "num_comments": 120,
+              "permalink": "/r/linux/comments/8m1x7c/ask_hn_linux_what_is_your_daily/",
+              "selftext": "I run Arch with a tiling WM and a tamed browser. Zero lock-in, one reboot a month.",
+              "created_utc": 1761885000
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "op": "hot",
+    "args": { "sub": "programming" },
+    "status": 200,
+    "contentType": "application/json; charset=utf-8",
+    "note": "recorded 2026-10-30, logged out, /r/programming/hot.json; trimmed to two posts",
+    "body": {
+      "kind": "Listing",
+      "data": {
+        "dist": "LIVE",
+        "after": "t3_7n3a8d",
+        "children": [
+          {
+            "kind": "t3",
+            "data": {
+              "title": "The compiler stopped being a compiler, and that is fine",
+              "url": "https://example-essay.dev/compilers",
+              "author": "typechecker",
+              "score": 2400,
+              "num_comments": 311,
+              "permalink": "/r/programming/comments/7n3a8d/the_compiler_stopped_being/",
+              "selftext": "",
+              "created_utc": 1761871200
+            }
+          },
+          {
+            "kind": "t3",
+            "data": {
+              "title": "I ported my build system to a language designed in a weekend: lessons learned",
+              "url": "https://example-essay.dev/buildsystem",
+              "author": "buildtinkerer",
+              "score": 640,
+              "num_comments": 95,
+              "permalink": "/r/programming/comments/6q9b2e/i_ported_my_build_system/",
+              "selftext": "The short version: expressiveness is not productivity. The build broke in ways I could not lint.",
+              "created_utc": 1761798000
+            }
+          }
+        ]
+      }
+    }
+  }
+]

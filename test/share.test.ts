@@ -660,7 +660,7 @@ test("a call that heals a registry version reports it failed, and shares the hea
     paths.join(", "),
   );
   assert.equal(u?.evidence.cleanReplay, "ok");
-  assert.match(u!.operation.request.url, new RegExp(`/api/${NEW}/search`));
+  assert.match(u!.operation.request!.url, new RegExp(`/api/${NEW}/search`));
   assert.equal(cookies.at(-1), null, "the clean replay sent no cookie");
   const op = loadSite("demo")!.site.operations[0]!;
   assert.deepEqual(op.version, { hash: hashOf("example-com", u!.operation), status: "candidate" });
@@ -796,7 +796,7 @@ test("background verification checks the version a job names, even one its site 
 
   // a copy that does not hash to the job's hash is not used: the served site has no such version
   sent.length = 0;
-  const tampered = { ...op, request: { ...op.request, url: "https://www.example.com/elsewhere?q=x" } };
+  const tampered = { ...op, request: { ...op.request!, url: "https://www.example.com/elsewhere?q=x" } };
   fake.jobs = [{ ...job, operation: tampered, baseUrl: other.baseUrl }];
   assert.equal(await verifyCandidates({ fetchImpl, minIntervalMs: 0, now }), 0);
   assert.deepEqual(sent, []);

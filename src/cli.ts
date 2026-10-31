@@ -263,7 +263,7 @@ const HELP: Record<string, string> = {
                   Gemini CLI, VS Code, Cursor and Claude Desktop, with absolute paths and the other
                   flags given, instead of serving
   --no-learn      hide learn_site`,
-  setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop] [--dry-run]
+  setup: `api-anything setup [--yes | --no-share] [--share-only] [--agents claude-code,codex,cursor,claude-desktop,hermes] [--dry-run]
   Connects the MCP server (npx -y api-anything mcp) to each agent found on this machine: Claude Code,
   Codex, Cursor, Claude Desktop. Installs the skill for Claude Code (~/.claude/skills) and Codex
   (~/.agents/skills). Checks for a Chromium browser, makes this install's key, and asks whether to help
@@ -880,7 +880,7 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     site,
     op: op.name,
     ...(r.replaced ? { replaced: true } : {}),
-    request: `${op.request.method} ${op.request.url.split("?")[0]}`,
+    request: `${op.request!.method} ${op.request!.url.split("?")[0]}`,
     params: op.params.map((p) => `${p.name}:${p.type}`),
     readOnly: op.readOnly,
     minTier: op.minTier,
@@ -1158,7 +1158,8 @@ function cmdOps({ pos }: Parsed): number {
         : {}),
       ...(o.readback ? { readback: readbackName(o.readback) } : {}),
       ...(o.unproven ? { unproven: o.unproven.reason } : {}),
-      trigger: o.trigger.url,
+      ...(o.local ? { local: o.local.command } : {}),
+      ...(o.trigger ? { trigger: o.trigger.url } : {}),
     })),
     ...(site.shared ? { shared: SHARED_NOTE } : {}),
     ...(notes ? { notes } : {}),

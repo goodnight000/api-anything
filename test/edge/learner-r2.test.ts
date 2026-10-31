@@ -276,7 +276,7 @@ describe("a credential under any name stays out of the spec", () => {
       [script("https://site.test/main.js", `var cfg={apiKey:"${key}"};`), ex],
       [{ q: "kittens" }],
     );
-    assert.equal(op.request.headers["x-site-api-key"], key);
+    assert.equal(op.request!.headers["x-site-api-key"], key);
     assert.deepEqual(op.public, ["x-site-api-key"]);
     saveSite(parseSite({ name: "shipped", baseUrl: "https://site.test", operations: [op] }));
     assert.deepEqual(exportSite("shipped").secrets, []);
@@ -298,8 +298,8 @@ describe("a credential under any name stays out of the spec", () => {
       op.slots.filter((s) => s.ref),
       [],
     );
-    assert.equal(op.request.headers.traceparent, trace);
-    assert.ok(op.request.url.includes(hash));
+    assert.equal(op.request!.headers.traceparent, trace);
+    assert.ok(op.request!.url.includes(hash));
   });
 
   test("export refuses a credential-named literal in a hand-written spec, and allows it once marked public", () => {
@@ -779,7 +779,7 @@ describe("a read with a public web-app bearer, after the site rotates the bearer
     const got = await call("birds", "getUser", { name: "dave" }, opts);
     assert.equal(got.ok, true, JSON.stringify(got));
     assert.deepEqual(got.data, { name: "dave" });
-    assert.equal(loadSite("birds")!.site.operations[0]!.request.headers.authorization, bearer);
+    assert.equal(loadSite("birds")!.site.operations[0]!.request!.headers.authorization, bearer);
     const again = await call("birds", "getUser", { name: "erin" }, opts);
     assert.equal(again.tier, 1, JSON.stringify(again));
   });

@@ -600,7 +600,7 @@ test("publish previews what may be the publisher's own, and strips their history
   assert.equal(JSON.stringify(upload).includes("learnedAt"), false);
   assert.equal(upload.operation.version, undefined, "the local version record is not uploaded");
   assert.equal(upload.operation.params[0]!.example, "kittens", "the chosen examples are shared");
-  assert.equal(upload.operation.request.url, "https://news.example.com/api/users/4815162/search?q=%7Bq%7D");
+  assert.equal(upload.operation.request!.url, "https://news.example.com/api/users/4815162/search?q=%7Bq%7D");
   assert.equal(upload.site.notes, "Ask jo@example.org about 123e4567-e89b-12d3-a456-426614174000.");
   assert.deepEqual(
     { name: upload.site.name, domain: upload.site.domain, baseUrl: upload.site.baseUrl },
@@ -946,7 +946,7 @@ test("verify records nothing for an op saved meanwhile by something else: its an
       saveSite({
         ...s,
         operations: [
-          { ...s.operations[0]!, request: { ...s.operations[0]!.request, url: `https://news.example.com/v${n}?q=x` } },
+          { ...s.operations[0]!, request: { ...s.operations[0]!.request!, url: `https://news.example.com/v${n}?q=x` } },
         ],
       });
     }
@@ -1013,7 +1013,7 @@ test("a heal vouches only for the version it saved: one saved meanwhile by somet
         ...s,
         operations: s.operations.map((o) => ({
           ...o,
-          request: { ...o.request, url: o.request.url.replace(/\/[\w-]+\?/, `/never-tested-${saves}?`) },
+          request: { ...o.request!, url: o.request!.url.replace(/\/[\w-]+\?/, `/never-tested-${saves}?`) },
         })),
       });
       return json({ hits: [] });
@@ -1022,7 +1022,7 @@ test("a heal vouches only for the version it saved: one saved meanwhile by somet
   }) as typeof fetch;
   await verifySite("heal-race", { maxTier: 1, minIntervalMs: 0, fetchImpl });
   const now = loadSite("heal-race")!.site.operations[0]!;
-  assert.ok(now.request.url.includes(FRESH), "the example healed it");
+  assert.ok(now.request!.url.includes(FRESH), "the example healed it");
   assert.equal(saves, 2, "once more, from the version saved meanwhile");
   assert.notEqual(loadRecord("heal-race").search?.hash, opHash(now));
   assert.ok(now.unproven, "its unproven mark stays");
@@ -1078,7 +1078,7 @@ test("a heal by the next-page case keeps the record, on the healed version", asy
   }) as typeof fetch;
   await verifySite("page-heal", { maxTier: 1, minIntervalMs: 0, fetchImpl });
   const now = loadSite("page-heal")!.site.operations[0]!;
-  assert.ok(now.request.url.includes(FRESH), "the next-page case healed it");
+  assert.ok(now.request!.url.includes(FRESH), "the next-page case healed it");
   assert.equal(loadRecord("page-heal").search?.hash, opHash(now));
 });
 
@@ -1100,7 +1100,7 @@ test("verify runs once more a version put back as it read it while its cases sen
   const b = {
     ...a,
     operations: a.operations.map((o) =>
-      o.name === "target" ? { ...o, request: { ...o.request, url: "https://news.example.com/working" } } : o,
+      o.name === "target" ? { ...o, request: { ...o.request!, url: "https://news.example.com/working" } } : o,
     ),
   };
   const paths: string[] = [];
@@ -1234,7 +1234,7 @@ test("a run that answered from two versions loses the record even when its rerun
   const b: Site = {
     ...a,
     operations: [
-      { ...a.operations[0]!, request: { ...a.operations[0]!.request, url: "https://news.example.com/v2?q=x" } },
+      { ...a.operations[0]!, request: { ...a.operations[0]!.request!, url: "https://news.example.com/v2?q=x" } },
     ],
   };
   let flip = false;
@@ -1355,7 +1355,7 @@ test("a verify that stays mixed takes away the record the op had", async () => {
     }) as typeof fetch,
   });
   assert.deepEqual(urls, ["/a?q=example", "/b?q=absent", "/a?q=example", "/b?q=absent"]);
-  assert.equal(loadSite("flip")!.site.operations[0]!.request.url, a.operations[0]!.request.url);
+  assert.equal(loadSite("flip")!.site.operations[0]!.request!.url, a.operations[0]!.request!.url);
   assert.equal(loadRecord("flip").search, undefined);
   assert.match(plan("flip").errors.join("\n"), /search: its checks have not run on this version/);
 });
@@ -1395,7 +1395,7 @@ test("opHash reads an op in schema order: a recapture's candidate hashes as the 
   const { description: _d, public: _p, checks: _c, ...learned } = op;
   const fresh = OperationSchema.parse({
     ...learned,
-    request: { ...op.request, url: op.request.url.replace("/api", "/v2") },
+    request: { ...op.request!, url: op.request!.url.replace("/api", "/v2") },
   });
   // as heal.ts builds a recapture's candidate: the interface's keys after the fresh template's
   const candidate: Operation = {

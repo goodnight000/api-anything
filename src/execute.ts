@@ -3,6 +3,8 @@
  * the heal-loop guards, and the write rules. Always sends the stored template first; healing is
  * reactive only.
  */
+
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   browserAvailable,
@@ -38,6 +40,7 @@ import {
   holdsRef,
   nextHop,
   pace,
+  preparedValues,
   RedirectRefused,
   refusePrivate,
   refusePrivateHop,
@@ -265,8 +268,10 @@ function bare(ctx: Ctx, op: Operation): boolean {
   // An unreviewed candidate is a public read by the registry's rules, so it needs no session; and a
   // GET can do harm with the user's cookies too (a one-click account action), whoever pulled it.
   if (ctx.shared && op.version?.status === "candidate") return true;
+  // a local op's command takes only its params: nothing of the user's goes to the site
+  if (op.local) return true;
   if (ctx.shared?.by !== "agent") return false;
-  const method = op.request.method.toUpperCase();
+  const method = op.request!.method.toUpperCase();
   return method !== "GET" && method !== "HEAD";
 }
 
@@ -279,14 +284,16 @@ const IDENTITY = /^(user-agent|sec-ch-ua.*|sec-fetch-.*)$/;
  * it, and which combination trips one differs by site, so all of them go.
  */
 function withoutIdentity(op: Operation): Operation | undefined {
-  const names = Object.keys(op.request.headers).filter((h) => IDENTITY.test(h));
+  const req = op.request;
+  if (!req) return undefined;
+  const names = Object.keys(req.headers).filter((h) => IDENTITY.test(h));
   const filled = [...op.slots, ...op.volatile].some((s) => {
     const at = s.at[0]!.toLowerCase();
     return at.startsWith("header:") && IDENTITY.test(at.slice(7));
   });
   if (!names.length || filled) return undefined;
-  const headers = Object.fromEntries(Object.entries(op.request.headers).filter(([h]) => !IDENTITY.test(h)));
-  return { ...op, request: { ...op.request, headers } };
+  const headers = Object.fromEntries(Object.entries(req.headers).filter(([h]) => !IDENTITY.test(h)));
+  return { ...op, request: { ...req, headers } };
 }
 
 /** What one attempt did to a write. */
@@ -448,7 +455,7 @@ function othersNote(op: Operation, o: TriggerRun["others"]): string | undefined 
     );
   if (o.left.length)
     out.push(
-      op.trigger.companions
+      op.trigger?.companions
         ? `the page also sent ${them(o.left)}, as it did when this write was learned`
         : `the page also sent ${them(o.left)}: ${op.name} was learned before api-anything recorded what else a write's trigger sends, so nothing else was stopped; learn it again with add --write to stop any request it did not send then`,
     );
@@ -649,9 +656,10 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
  */
 async function refreshCookies(ctx: Ctx, op: Operation, tier: Tier): Promise<boolean> {
   if (!browserAvailable()) return false;
+  if (op.local) return false; // its command takes no cookies
   let fresh: StoredCookie[];
   try {
-    fresh = await profileCookies({ url: op.request.url, profileDir: profileDir() });
+    fresh = await profileCookies({ url: op.request!.url, profileDir: profileDir() });
   } catch {
     return false;
   }
@@ -962,6 +970,7 @@ function whereToLook(op: Operation, args: Record<string, unknown>): string {
     : "op" in rb
       ? `, or with its readback: the read ${rb.op} with args ${JSON.stringify(readArgs)}`
       : `, or where its readback ${rb.read.name} reads: ${fillTrigger(rb.read.trigger, readArgs!).url}`;
+  if (!op.trigger) return `. Look on the site: it sent no request; its local command ran on this machine${read}`;
   return `. Look on ${fillTrigger(op.trigger, args).url}${read}`;
 }
 
@@ -1034,6 +1043,38 @@ function heldBack(g: Exclude<WriteGate, { send: true }>, op: Operation): Result 
 }
 
 /** Call one operation. Never throws for site-side failures; the result carries class, reason and next. */
+const LOCAL_OUTPUT_MAX = 8 * 1024 * 1024;
+
+/**
+ * A local op's one try: the command runs once and its stdout is judged as a plain-text body. A
+ * non-zero exit (or a stop at the timeout) is an error, not a retry: the command has already done
+ * what it did, and nothing else could be asked of it.
+ */
+function localAttempt(command: string, op: Operation, opts: CallOptions): Attempt {
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  const r = spawnSync("sh", ["-c", command], {
+    encoding: "utf8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: LOCAL_OUTPUT_MAX,
+  });
+  if (r.status === null) {
+    const why = /etimedout/i.test(r.error?.message ?? "")
+      ? `kept running past ${timeoutMs} ms and was stopped`
+      : `did not complete (${r.error?.message ?? `signal ${r.signal}`})`;
+    return { tier: 1, class: "error", reason: `the local command ${why}` };
+  }
+  if (r.status === 0)
+    return {
+      tier: 1,
+      status: 200,
+      ...judge(op, { status: 200, headers: { "content-type": "text/plain" }, body: r.stdout }),
+    };
+  // yt-dlp and friends explain on stderr; the tail is what a fix needs
+  const tail = (r.stderr ?? "").trim().split("\n").filter(Boolean).slice(-3).join(" ").slice(0, 300);
+  return { tier: 1, class: "error", reason: `the local command exited ${r.status}${tail ? `: ${tail}` : ""}` };
+}
+
 export async function call(
   siteName: string,
   opName: string,
@@ -1121,8 +1162,10 @@ async function run(
       retry: "after_fix",
     });
   }
+  let filled: string | undefined;
   try {
-    buildRequest(op, args, session);
+    if (op.local) filled = fillTemplate(op.local.command, preparedValues(op, args));
+    else buildRequest(op, args, session);
   } catch (e) {
     const next =
       e instanceof BadHeader
@@ -1139,7 +1182,7 @@ async function run(
   let signIn: { text: string; step: NextCall } | undefined;
   const reimport = async () => {
     authStep = 1;
-    const r = await reimportIfBrowser(siteName, op.request.url, site.loginCookies);
+    const r = await reimportIfBrowser(siteName, op.request?.url ?? site.baseUrl, site.loginCookies);
     signIn =
       r.signIn && r.profile ? { text: r.signIn, step: { action: "sign_in_browser", profile: r.profile } } : undefined;
     return r.renewed;
@@ -1183,6 +1226,24 @@ async function run(
     if (gate && !gate.send) return done(heldBack(gate, op));
     ledger = gate?.id;
     if (gate) gen = gate.seed;
+  }
+
+  // A local op has no transport tiers and no page to heal: its command runs once (paced like a
+  // send), and its stdout takes the same judge as a response body.
+  if (op.local) {
+    await pace(siteName, opts.minIntervalMs);
+    const a = localAttempt(filled!, op, opts);
+    log.push(a);
+    if (a.class === "ok") return done(success(a));
+    return done({
+      ok: false,
+      class: a.class,
+      tier: 1,
+      reason: a.reason,
+      next: nextFor(a.class, siteName, op, a),
+      ...stepOf(a),
+      ...(a.server ? { server: true as const } : {}),
+    });
   }
 
   // No login on record for this site: the session has no source (a login records one, logout clears it),

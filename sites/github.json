@@ -1,0 +1,212 @@
+{
+  "name": "github",
+  "displayName": "GitHub",
+  "baseUrl": "https://github.com",
+  "description": "Repository data from GitHub's own REST API (api.github.com): the repo, its README, open issues and pull requests. Public, logged out; unauthenticated reads are limited to 60 per hour per IP.",
+  "operations": [
+    {
+      "name": "repo",
+      "description": "A repository's own data: name, description, stars, forks, default branch, license and last activity.",
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/{owner}/{repo}",
+        "headers": {
+          "accept": "application/vnd.github+json",
+          "user-agent": "api-anything (public REST API)",
+          "x-github-api-version": "2022-11-28"
+        }
+      },
+      "slots": [
+        { "param": "owner", "at": ["path:1"] },
+        { "param": "repo", "at": ["path:2"] }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "api.github.com",
+        "path": "/repos/*/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "full_name",
+          "name",
+          "description",
+          "html_url",
+          "stargazers_count",
+          "forks_count",
+          "open_issues_count",
+          "default_branch",
+          "license_name=license.name",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "params": [
+        { "name": "owner", "type": "string", "required": true, "example": "torvalds", "description": "The repository owner's user or organization name." },
+        { "name": "repo", "type": "string", "required": true, "example": "linux", "description": "The repository name." }
+      ],
+      "readOnly": true,
+      "checks": [{ "args": { "owner": "torvalds", "repo": "linux" }, "expect": "result" }],
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "readme",
+      "description": "The repository's README: its metadata and the content, base64-encoded as GitHub serves it.",
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/{owner}/{repo}/readme",
+        "headers": {
+          "accept": "application/vnd.github+json",
+          "user-agent": "api-anything (public REST API)",
+          "x-github-api-version": "2022-11-28"
+        }
+      },
+      "slots": [
+        { "param": "owner", "at": ["path:1"] },
+        { "param": "repo", "at": ["path:2"] }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "api.github.com",
+        "path": "/repos/*/*/readme"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": ["name", "path", "size", "encoding", "content", "download_url"]
+      },
+      "params": [
+        { "name": "owner", "type": "string", "required": true, "example": "torvalds", "description": "The repository owner's user or organization name." },
+        { "name": "repo", "type": "string", "required": true, "example": "linux", "description": "The repository name." }
+      ],
+      "readOnly": true,
+      "checks": [{ "args": { "owner": "torvalds", "repo": "linux" }, "expect": "result" }],
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "issues",
+      "description": "A repository's issues, by state. GitHub lists pull requests as issues too: entries with no base are pull requests.",
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/{owner}/{repo}/issues?state={state}",
+        "headers": {
+          "accept": "application/vnd.github+json",
+          "user-agent": "api-anything (public REST API)",
+          "x-github-api-version": "2022-11-28"
+        }
+      },
+      "slots": [
+        { "param": "owner", "at": ["path:1"] },
+        { "param": "repo", "at": ["path:2"] },
+        { "param": "state", "at": ["query:state"] }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/issues"
+      },
+      "match": {
+        "method": "GET",
+        "host": "api.github.com",
+        "path": "/repos/*/*/issues"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "number",
+          "title",
+          "state",
+          "author=user.login",
+          "comments",
+          "created_at",
+          "updated_at",
+          "html_url"
+        ]
+      },
+      "params": [
+        { "name": "owner", "type": "string", "required": true, "example": "torvalds", "description": "The repository owner's user or organization name." },
+        { "name": "repo", "type": "string", "required": true, "example": "linux", "description": "The repository name." },
+        {
+          "name": "state",
+          "type": "string",
+          "required": false,
+          "default": "open",
+          "enum": ["open", "closed", "all"],
+          "description": "Which state to list."
+        }
+      ],
+      "readOnly": true,
+      "checks": [{ "args": { "owner": "torvalds", "repo": "linux" }, "expect": "result" }],
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "pulls",
+      "description": "A repository's pull requests, by state: title, author, whether merged, when.",
+      "request": {
+        "method": "GET",
+        "url": "https://api.github.com/repos/{owner}/{repo}/pulls?state={state}",
+        "headers": {
+          "accept": "application/vnd.github+json",
+          "user-agent": "api-anything (public REST API)",
+          "x-github-api-version": "2022-11-28"
+        }
+      },
+      "slots": [
+        { "param": "owner", "at": ["path:1"] },
+        { "param": "repo", "at": ["path:2"] },
+        { "param": "state", "at": ["query:state"] }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://github.com/{owner}/{repo}/pulls"
+      },
+      "match": {
+        "method": "GET",
+        "host": "api.github.com",
+        "path": "/repos/*/*/pulls"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "pick": [
+          "number",
+          "title",
+          "state",
+          "author=user.login",
+          "comments",
+          "created_at",
+          "merged_at",
+          "html_url"
+        ]
+      },
+      "params": [
+        { "name": "owner", "type": "string", "required": true, "example": "torvalds", "description": "The repository owner's user or organization name." },
+        { "name": "repo", "type": "string", "required": true, "example": "linux", "description": "The repository name." },
+        {
+          "name": "state",
+          "type": "string",
+          "required": false,
+          "default": "open",
+          "enum": ["open", "closed", "all"],
+          "description": "Which state to list."
+        }
+      ],
+      "readOnly": true,
+      "checks": [{ "args": { "owner": "torvalds", "repo": "linux" }, "expect": "result" }],
+      "minTier": 1,
+      "learnedLoggedIn": false
+    }
+  ]
+}

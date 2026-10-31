@@ -13,6 +13,22 @@ eight queries in a row (`kittens`, `rust programming`, `café crème`, `iphone 1
 | op | args | returns | tier |
 |---|---|---|---|
 | `search` | `q` (example `kittens`) | the first results page, videos only: `id` (video id), `title`, `channel`, `views` | 1 (HTML GET of /results, about 1 to 1.5 s) |
+| `captions` | `id` (example `jNQXAC9IVRw`), `lang` (default `en`) | the video's captions as one WebVTT text | local (runs `yt-dlp` on this machine, a few seconds) |
+
+```sh
+api-anything call youtube search q=otters
+api-anything call youtube search "q=café crème"
+api-anything call youtube captions id=jNQXAC9IVRw
+api-anything call youtube captions "id=https://www.youtube.com/watch?v=jNQXAC9IVRw"
+api-anything call youtube captions id=aqz-KE-bpKQ lang=de
+```
+
+### How `captions` works
+
+`captions` is a local op: it has no request, it runs a shell command on the caller's machine and
+its stdout is the answer. The command needs `yt-dlp` on the machine's PATH (no account, no
+cookies of the user's); author subtitles are preferred over auto-generated ones, `vtt` format.
+Without subtitles in the asked language the command exits non-zero and the call fails saying why.
 
 ```sh
 api-anything call youtube search q=otters
@@ -37,3 +53,6 @@ rotating ids, so it needs no healing in the common case.
 - A live stream's count is "N watching", in another field.
 - The innertube search POST (`/youtubei/v1/search`) sends a gzip-compressed body; api-anything now
   decodes such bodies, but this op keeps to the document, which needs no client context.
+- `captions` has no tier ladder to heal with: the command failing is the answer (its exit and
+  stderr come back as the reason). It can be a read that needs a machine's `yt-dlp` (and network
+  reach to YouTube's timedtext endpoints); a `lang` the video does not have fails the call.

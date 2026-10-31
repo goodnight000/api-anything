@@ -21,6 +21,7 @@ it finds:
 | Codex | `codex mcp add api-anything -- npx -y api-anything mcp`, else `~/.codex/config.toml` `[mcp_servers.api-anything]` | `~/.agents/skills/api-anything/SKILL.md` |
 | Cursor | `~/.cursor/mcp.json` `mcpServers` | none |
 | Claude Desktop | `claude_desktop_config.json` `mcpServers` (macOS: `~/Library/Application Support/Claude/`, Linux: `~/.config/Claude/`, Windows: `%APPDATA%\Claude\`) | none |
+| Hermes | its home's `config.yaml`, the top-level `mcp_servers` block (home: `$HERMES_HOME`, else `~/.hermes`) | `~/.hermes/skills/api-anything/SKILL.md` |
 
 Cursor and Claude Desktop are apps that start with a minimal PATH, where an `npx` from nvm or
 Homebrew is not found. For those two, the entry names npx by its absolute path (the one on setup's
@@ -45,7 +46,7 @@ Flags:
 | `--yes` | answers the question yes without asking |
 | `--no-share` | answers it no |
 | `--share-only` | with `--yes` or `--no-share`: records the answer and changes nothing else (the way to turn sharing on or off later) |
-| `--agents claude-code,codex,cursor,claude-desktop` | connects these agents only, found or not |
+| `--agents claude-code,codex,cursor,claude-desktop,hermes` | connects these agents only, found or not |
 
 Without a terminal (an agent running it) and without `--yes` or `--no-share`, the question is not
 asked and nothing is shared. Running setup again changes only what is missing.
@@ -106,16 +107,16 @@ api-anything learn 'https://lobste.rs/domains/{domain}' \
 
 ## Other clients and flags
 
-`setup` covers Claude Code, Codex, Cursor and Claude Desktop. For any other client (Gemini CLI,
+`setup` covers Claude Code, Codex, Cursor, Claude Desktop and Hermes. For any other client (Gemini CLI,
 VS Code), or when a client can't find `api-anything` or `node`, print its entry with absolute paths:
 
 ```sh
 api-anything mcp --print-config
 ```
 
-It prints the add command for Claude Code, Codex, Gemini CLI and VS Code, and the JSON entry for
-Cursor and Claude Desktop, all pointing at the absolute path of the `node` you ran it with and of the
-installed CLI. Pass the flags you want served (`--allow-writes`, `--sites goodreads`) and it adds
+It prints the add command for Claude Code, Codex, Gemini CLI and VS Code, the JSON entry for Cursor and
+Claude Desktop, and the YAML entry for Hermes, all pointing at the absolute path of the `node` you ran it
+with and of the installed CLI. Pass the flags you want served (`--allow-writes`, `--sites goodreads`) and it adds
 them. A client started from the Dock or a menu may not get your shell's `PATH`, so a bare
 `api-anything`, or a `node` installed with nvm, is not found there. `API_ANYTHING_HOME` and
 `API_ANYTHING_BROWSER` are copied into the entry when you have them set.

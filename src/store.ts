@@ -188,10 +188,10 @@ export interface HealEntry {
 }
 export type HealRecord = HealEntry & { at: string };
 
-/** The template's identity: its request, slots and volatile ids. */
+/** The template's identity: its request (or local command), slots and volatile ids. */
 export const templateHash = (op: Operation) =>
   createHash("sha256")
-    .update(JSON.stringify([op.request, op.slots, op.volatile]))
+    .update(JSON.stringify([op.request ?? op.local, op.slots, op.volatile]))
     .digest("hex")
     .slice(0, 16);
 
@@ -525,6 +525,7 @@ export function exportSite(
   const ips: string[] = [];
   spec.operations.forEach((op, i) => {
     for (const slot of op.slots) {
+      if (!op.request) continue; // slots fill a request; a local op has none
       const p = slot.param !== undefined ? op.params.find((x) => x.name === slot.param) : undefined;
       if (!p) continue;
       const typed = p.type !== "string" && slot.template === undefined && slot.at.at(-1)!.startsWith("json:");
@@ -541,25 +542,27 @@ export function exportSite(
     if (picked) op.response.shape = picked;
     else delete op.response.shape;
     const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
-    for (const h of pub) allowed.add(`$.operations[${i}].request.headers.${h}`);
-    const where = (leaf: Leaf) => `$.operations[${i}].request ${leaf.at.join(" > ")}`;
-    for (const leaf of literalCredentials(op.request, pub)) {
-      const root = leaf.at[0]!;
-      const n = leafName(leaf.at);
-      named.push([
-        `$.operations[${i}].request.${root.startsWith("header:") ? `headers.${root.slice(7)}` : /^(path|query)/.test(root) ? "url" : "body"}`,
-        `${where(leaf)} holds a literal credential (${n}); make it a session: ref, or list ${n} in the op's public names if the site ships it to everyone`,
-      ]);
+    if (op.request) {
+      const where = (leaf: Leaf) => `$.operations[${i}].request ${leaf.at.join(" > ")}`;
+      for (const h of pub) allowed.add(`$.operations[${i}].request.headers.${h}`);
+      for (const leaf of literalCredentials(op.request, pub)) {
+        const root = leaf.at[0]!;
+        const n = leafName(leaf.at);
+        named.push([
+          `$.operations[${i}].request.${root.startsWith("header:") ? `headers.${root.slice(7)}` : /^(path|query)/.test(root) ? "url" : "body"}`,
+          `${where(leaf)} holds a literal credential (${n}); make it a session: ref, or list ${n} in the op's public names if the site ships it to everyone`,
+        ]);
+      }
+      for (const leaf of walk(op.request)) {
+        const ip = leaf.type === "string" && !leaf.container ? ipIn(leaf.value) : undefined;
+        if (ip)
+          ips.push(
+            `${where(leaf)} holds the IP address ${ip} (likely yours, as the page reported it); blank it if the site does not need it`,
+          );
+      }
     }
-    for (const fill of signInFills(op.trigger.steps))
+    for (const fill of signInFills(op.trigger?.steps))
       named.push([`$.operations[${i}].trigger.steps`, `$.operations[${i}].trigger ${fill}`]);
-    for (const leaf of walk(op.request)) {
-      const ip = leaf.type === "string" && !leaf.container ? ipIn(leaf.value) : undefined;
-      if (ip)
-        ips.push(
-          `${where(leaf)} holds the IP address ${ip} (likely yours, as the page reported it); blank it if the site does not need it`,
-        );
-    }
   });
   const own = [spec.baseUrl, ...spec.operations.flatMap(opUrls)];
   const scan = scanSecrets(spec, credentialsOf(besideOrigins(loadSession(name), own)), allowed);

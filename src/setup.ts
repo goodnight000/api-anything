@@ -21,13 +21,14 @@ export interface Entry {
 export const SERVER: Entry = { command: "npx", args: ["-y", "api-anything", "mcp"] };
 const NAME = "api-anything";
 
-export const AGENTS = ["claude-code", "codex", "cursor", "claude-desktop"] as const;
+export const AGENTS = ["claude-code", "codex", "cursor", "claude-desktop", "hermes"] as const;
 export type Agent = (typeof AGENTS)[number];
 const LABEL: Record<Agent, string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   cursor: "Cursor",
   "claude-desktop": "Claude Desktop",
+  hermes: "Hermes",
 };
 
 export const paths = {
@@ -44,6 +45,10 @@ export const paths = {
       : process.platform === "win32"
         ? join(process.env.APPDATA || join(homedir(), "AppData", "Roaming"), "Claude", "claude_desktop_config.json")
         : join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "Claude", "claude_desktop_config.json"),
+  // Hermes's home comes from HERMES_HOME, else ~/.hermes; personal skills live under it
+  hermesHome: () => process.env.HERMES_HOME || join(homedir(), ".hermes"),
+  hermesYaml: () => join(paths.hermesHome(), "config.yaml"),
+  hermesSkill: () => join(paths.hermesHome(), "skills", NAME, "SKILL.md"),
 };
 
 const SKILL = new URL("../skills/api-anything/SKILL.md", import.meta.url);
@@ -70,6 +75,7 @@ export function detect(): Agent[] {
     codex: !!onPath("codex") || existsSync(paths.codexHome()),
     cursor: !!onPath("cursor") || existsSync(dirname(paths.cursorJson())),
     "claude-desktop": existsSync(dirname(paths.desktopJson())),
+    hermes: !!onPath("hermes") || existsSync(paths.hermesHome()),
   };
   return AGENTS.filter((a) => seen[a]);
 }
@@ -206,6 +212,74 @@ function claudeCodeServer(dryRun: boolean): AgentResult {
   return jsonServer("claude-code", file, dryRun);
 }
 
+/** The `api-anything` entry under the top-level `mcp_servers:` of Hermes's config.yaml, if there is one. */
+function hermesEntry(text: string): { command?: string; args?: unknown } | undefined {
+  const block = /^mcp_servers\s*:/m.exec(text);
+  if (!block) return undefined;
+  const rest = text.slice(block.index + block[0].length);
+  const body = rest.slice(0, /^\S/m.exec(rest)?.index ?? rest.length);
+  const head = /^ {2}(?:"api-anything"|api-anything):\s*$/m.exec(body);
+  if (!head) return undefined;
+  const after = body.slice(head.index + head[0].length);
+  const entryBody = after.slice(0, /^\S|^ {2}\S/m.exec(after)?.index ?? after.length);
+  const value = (k: string) => new RegExp(`^    ${k}:\\s*(.+?)\\s*$`, "m").exec(entryBody)?.[1];
+  const parse = (v: string | undefined) => {
+    const un = v?.replace(/^["']|["']$/g, "");
+    if (un === undefined) return undefined;
+    try {
+      return JSON.parse(un);
+    } catch {
+      return un;
+    }
+  };
+  return { command: parse(value("command")), args: parse(value("args")) };
+}
+
+/**
+ * Hermes launches its MCP servers from its gateway, a background process, so the entry uses npx by
+ * absolute path with node's directory on PATH, like the GUI apps. Written to config.yaml rather than
+ * via the hermes CLI: the gateway reads the file at startup, so editing it never touches a running
+ * process.
+ */
+function hermesServer(dryRun: boolean): AgentResult {
+  const file = paths.hermesYaml();
+  const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const entry = guiServer();
+  const cur = hermesEntry(text);
+  if (cur)
+    return {
+      agent: "hermes",
+      mcp: same(cur, entry) ? "unchanged" : "kept",
+      file,
+      ...(same(cur, entry) ? {} : { entry: cur }),
+    };
+  if (dryRun) return { agent: "hermes", mcp: "would add", via: "file", file };
+  const saved = backup(file);
+  mkdirSync(dirname(file), { recursive: true });
+  const lines = [
+    `  ${NAME}:`,
+    "    enabled: true",
+    `    command: ${JSON.stringify(entry.command)}`,
+    `    args: ${JSON.stringify(entry.args)}`,
+  ];
+  if (entry.env) {
+    lines.push("    env:");
+    for (const [k, v] of Object.entries(entry.env)) lines.push(`      ${k}: ${JSON.stringify(v)}`);
+  }
+  const block = /^mcp_servers\s*:[ \t]*(?:#.*)?$/m.exec(text);
+  let next: string;
+  if (block) {
+    const rest = text.slice(block.index + block[0].length);
+    const insertAt = block.index + block[0].length + (/^\S/m.exec(rest)?.index ?? rest.length);
+    const prefix = text.slice(0, insertAt);
+    next = `${prefix}${prefix && !prefix.endsWith("\n") ? "\n" : ""}${lines.join("\n")}\n${text.slice(insertAt)}`;
+  } else {
+    next = `${text}${text && !text.endsWith("\n") ? "\n" : ""}${text ? "\n" : ""}mcp_servers:\n${lines.join("\n")}\n`;
+  }
+  writeFileSync(file, next);
+  return { agent: "hermes", mcp: "added", via: "file", file, ...(saved ? { backup: saved } : {}) };
+}
+
 /** The package's SKILL.md, copied where the agent reads skills; an older copy is backed up, then replaced. */
 function installSkill(file: string, dryRun: boolean): Pick<AgentResult, "skill" | "skillFile" | "skillBackup"> {
   const text = readFileSync(SKILL, "utf8");
@@ -233,6 +307,8 @@ function connect(agent: Agent, dryRun: boolean): AgentResult {
         return jsonServer("cursor", paths.cursorJson(), dryRun, guiServer());
       case "claude-desktop":
         return jsonServer("claude-desktop", paths.desktopJson(), dryRun, guiServer());
+      case "hermes":
+        return { ...hermesServer(dryRun), ...installSkill(paths.hermesSkill(), dryRun) };
     }
   } catch (e) {
     return { agent, mcp: "failed", file: "", error: (e as Error).message.split("\n")[0] };
@@ -330,7 +406,9 @@ export function summary(r: SetupResult): string {
     return `  ${LABEL[a.agent]}: ${what}${skill}${a.backup ? ` (backup: ${a.backup})` : ""}`;
   });
   if (!lines.length)
-    lines.push("  No agent found. Name one: api-anything setup --agents claude-code,codex,cursor,claude-desktop");
+    lines.push(
+      "  No agent found. Name one: api-anything setup --agents claude-code,codex,cursor,claude-desktop,hermes",
+    );
   const share =
     r.share === undefined
       ? r.dryRun

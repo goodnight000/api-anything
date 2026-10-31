@@ -382,7 +382,7 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
       examples: [{ user: "alice" }, { user: "carol" }],
       write: true,
     });
-    assert.equal(r.operation.request.method, "GET");
+    assert.equal(r.operation.request!.method, "GET");
     assert.equal(follows(), 0, "learning sent no write");
     const cap = await capturePage({ url: `${fx.url}/list` });
     await assert.rejects(
@@ -422,8 +422,8 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
       write: true,
       from: { capture: cap },
     });
-    assert.equal(r.operation.trigger.url, `${fx.url}/follow/{user}`);
-    assert.equal(r.operation.trigger.steps?.[1]?.selector, 'a[href="/u/{user}"], #follow');
+    assert.equal(r.operation.trigger!.url, `${fx.url}/follow/{user}`);
+    assert.equal(r.operation.trigger!.steps?.[1]?.selector, 'a[href="/u/{user}"], #follow');
     assert.deepEqual(r.captures, []);
   });
 

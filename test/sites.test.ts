@@ -6,10 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { judge } from "../src/classify.js";
-import { asText, getAt } from "../src/codec.js";
+import { asText, fillTemplate, getAt } from "../src/codec.js";
 import { call } from "../src/execute.js";
 import { returnedFields } from "../src/extract.js";
-import { buildRequest, holdsRef } from "../src/http.js";
+import { buildRequest, holdsRef, preparedValues } from "../src/http.js";
 import { personalIn } from "../src/publish.js";
 import { providerKeys, scanSecrets } from "../src/secrets.js";
 import { type Operation, parseSite, type Site } from "../src/spec.js";
@@ -88,24 +88,31 @@ test("recorded answers: each fixture's args reach their slots, and its recipe fi
       const at = `${site.name}/${f.op}`;
       assert.deepEqual(fixtureProblems(site, f), [], at);
       const o = site.operations.find((x) => x.name === f.op)!;
-      const req = buildRequest(o, f.args, noSession);
-      for (const [k, v] of Object.entries(f.args)) {
-        // its own slot, or a hole in another slot's template (Google Flights spells the query in one)
-        const slots = o.slots.filter((s) => s.param === k || s.template?.includes(`{${k}}`));
-        assert.ok(slots.length, `${at}: ${k} has no slot`);
-        for (const s of slots) {
-          const leaf = asText(getAt(req, s.at));
-          assert.ok(
-            leaf.includes(asText(v)) || leaf.includes(encodeURIComponent(asText(v))),
-            `${at}: ${k} not in ${leaf}`,
-          );
+      const req = o.request ? buildRequest(o, f.args, noSession) : undefined;
+      if (req) {
+        for (const [k, v] of Object.entries(f.args)) {
+          // its own slot, or a hole in another slot's template (Google Flights spells the query in one)
+          const slots = o.slots.filter((s) => s.param === k || s.template?.includes(`{${k}}`));
+          assert.ok(slots.length, `${at}: ${k} has no slot`);
+          for (const s of slots) {
+            const leaf = asText(getAt(req, s.at));
+            assert.ok(
+              leaf.includes(asText(v)) || leaf.includes(encodeURIComponent(asText(v))),
+              `${at}: ${k} not in ${leaf}`,
+            );
+          }
         }
+      } else {
+        // a local op's args fill its command: fill it and find every one
+        const cmd = fillTemplate(o.local!.command, preparedValues(o, f.args));
+        for (const [k, v] of Object.entries(f.args))
+          assert.ok(cmd.includes(asText(v)), `${at}: ${k} not in its command`);
       }
       const j = judge(o, {
         status: f.status,
         headers: { "content-type": f.contentType },
         body: bodyOf(f),
-        url: req.url,
+        ...(req ? { url: req.url } : {}),
       });
       assert.equal(j.class, "ok", `${at}: ${j.reason}`);
       const items = (Array.isArray(j.data) ? j.data : [j.data]) as Record<string, unknown>[];
@@ -312,6 +319,28 @@ test("youtube search with the ad layout (VISITOR_INFO1_LIVE set) still returns e
   assert.deepEqual(got[0], { id: "a", title: "ta", channel: "c", views: "1 view" });
 });
 
+test("youtube captions: the local command carries the args, and its WebVTT comes back as text", () => {
+  const o = op("youtube", "captions");
+  const cmd = fillTemplate(o.local!.command, preparedValues(o, { id: "jNQXAC9IVRw" }));
+  assert.ok(o.local!.command.includes("yt-dlp"), "captions is a local op");
+  assert.ok(cmd.includes("'{id}'") === false && cmd.includes("'jNQXAC9IVRw'"), "the id fills the command");
+  assert.ok(cmd.includes("'en'"), "the default language is en");
+  // the response comes back as its whole body: a VTT text, not a JSON read
+  const j = judge(o, { status: 200, headers: { "content-type": "text/plain" }, body: fixture("youtube", "captions") });
+  assert.equal(j.class, "ok", j.reason);
+  assert.match(j.data as string, /^WEBVTT\nKind: captions\nLanguage: en/);
+  // the id accepts a bare id, a watch URL and a youtu.be link, and rejects the rest
+  for (const v of [
+    "jNQXAC9IVRw",
+    "https://youtu.be/jNQXAC9IVRw",
+    "https://www.youtube.com/watch?v=jNQXAC9IVRw&list=PL",
+  ])
+    assert.ok(accepts(o.params.find((p) => p.name === "id")!, v), v);
+  for (const v of ["jNQXAC9IVRwx", "https://example.com/watch?v=jNQXAC9IVRw", "x y"])
+    assert.ok(!accepts(o.params.find((p) => p.name === "id")!, v), v);
+  assert.ok(!accepts(o.params.find((p) => p.name === "lang")!, "en,de"), "one language per call");
+});
+
 // ---------------------------------------------------------------- linkedin
 
 const entity = (title: string, url: string) => ({
@@ -377,6 +406,105 @@ test("linkedin search keywords are percent-encoded once inside the Rest.li query
     for (const v of ["rust engineer, zurich", "a:b", "x (y)"])
       assert.ok(!accepts(kw!, v), `${v} would break the Rest.li query`);
   }
+});
+
+// ---------------------------------------------------------------- reddit
+
+test("reddit search encodes the query in q= and hot puts the subreddit in the path segment", () => {
+  const s = new URL(buildRequest(op("reddit", "search"), { query: "what is rust" }, noSession).url);
+  assert.equal(s.pathname, "/search.json");
+  assert.equal(s.searchParams.get("q"), "what is rust");
+  const u = new URL(buildRequest(op("reddit", "hot"), { sub: "programming" }, noSession).url);
+  assert.equal(u.pathname, "/r/programming/hot.json");
+});
+
+test("reddit recipes read the .json listing the site answers", () => {
+  const got = ok(op("reddit", "search"), fixture("reddit", "search"));
+  assert.deepEqual(
+    got.map((p) => p.subreddit),
+    ["r/linux", "r/linux"],
+  );
+  assert.deepEqual(got[0], {
+    title: "Linux 6.15 is stable",
+    url: "https://lwn.net/Articles/100001/",
+    subreddit: "r/linux",
+    author: "kernelwatcher",
+    score: 1234,
+    comments: 56,
+    permalink: "/r/linux/comments/9k2q1f/linux_615_is_stable/",
+    selftext: "",
+    created_utc: 1761890000,
+  });
+  assert.equal(
+    typeof got[1]!.selftext === "string" && (got[1]!.selftext as string).length > 0,
+    true,
+    "the self post carries its text",
+  );
+  const hot = ok(op("reddit", "hot"), fixture("reddit", "hot"));
+  assert.deepEqual(
+    hot.map((p) => [p.score, p.comments]),
+    [
+      [2400, 311],
+      [640, 95],
+    ],
+  );
+  assert.equal("subreddit" in hot[0]!, false, "the hot feed names no subreddit: it is in the path");
+});
+
+// ---------------------------------------------------------------- github
+
+test("github ops put owner and repo in the api path; state defaults to open", () => {
+  for (const [name, path] of [
+    ["repo", "/repos/torvalds/linux"],
+    ["readme", "/repos/torvalds/linux/readme"],
+  ] as const) {
+    const u = new URL(buildRequest(op("github", name), { owner: "torvalds", repo: "linux" }, noSession).url);
+    assert.equal(u.origin, "https://api.github.com");
+    assert.equal(u.pathname, path);
+  }
+  const issues = new URL(buildRequest(op("github", "issues"), { owner: "o", repo: "r" }, noSession).url);
+  assert.equal(issues.pathname, "/repos/o/r/issues");
+  assert.equal(issues.searchParams.get("state"), "open");
+  const pulls = new URL(buildRequest(op("github", "pulls"), { owner: "o", repo: "r", state: "all" }, noSession).url);
+  assert.equal(pulls.pathname, "/repos/o/r/pulls");
+  assert.equal(pulls.searchParams.get("state"), "all");
+});
+
+test("github recipes read the api.github.com answers", () => {
+  const repo = judge(op("github", "repo"), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: fixture("github", "repo"),
+  });
+  assert.equal(repo.class, "ok", repo.reason);
+  const repoData = repo.data as Record<string, unknown>;
+  assert.equal(repoData.full_name, "torvalds/linux");
+  assert.equal(repoData.license_name, "MIT License");
+  const readme = judge(op("github", "readme"), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" },
+    body: fixture("github", "readme"),
+  });
+  assert.equal(readme.class, "ok", readme.reason);
+  assert.equal(
+    Buffer.from((readme.data as Record<string, unknown>).content as string, "base64")
+      .toString("utf8")
+      .trim(),
+    "# Linux kernel source tree",
+  );
+  const issues = ok(op("github", "issues"), fixture("github", "issues"));
+  assert.deepEqual(
+    issues.map((i) => [i.number, i.state, i.author]),
+    [
+      [1001, "open", "kernelpatcher"],
+      [1002, "open", "storagecrew"],
+    ],
+  );
+  const pulls = ok(op("github", "pulls"), fixture("github", "pulls"));
+  assert.deepEqual(
+    pulls.map((p) => p.merged_at),
+    [null, null],
+  );
 });
 
 // ---------------------------------------------------------------- notes

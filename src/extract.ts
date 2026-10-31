@@ -286,6 +286,7 @@ export function extractEmbedded(body: string, regex: string): unknown {
 export function extract(res: ResponseSpec, body: string, base?: string): unknown {
   let data: unknown;
   if (res.format === "html") data = res.html ? extractHtml(body, res.html, base) : body;
+  else if (res.format === "text") data = body;
   else if (res.format === "embedded") data = res.embedded ? extractEmbedded(body, res.embedded.regex) : undefined;
   else data = parseBody(body, res.xssiPrefix);
   if (res.extract && data !== undefined) data = getPath(data, res.extract);

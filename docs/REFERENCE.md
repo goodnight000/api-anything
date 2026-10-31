@@ -258,8 +258,8 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
   job. Jobs end when the server does; a finished one is kept 15 minutes. A sign-in window nobody
   closes is closed after 10 minutes.
 - Each answer is JSON text, and the same object as `structuredContent`.
-- `--print-config` prints how to add the server to Claude Code, Codex, Gemini CLI, VS Code, Cursor
-  and Claude Desktop, with absolute paths. Client timeouts and fixes for common problems are in
+- `--print-config` prints how to add the server to Claude Code, Codex, Gemini CLI, VS Code, Cursor,
+  Claude Desktop and Hermes, with absolute paths. Client timeouts and fixes for common problems are in
   [QUICKSTART.md](QUICKSTART.md#client-timeouts).
 
 ## Safety and terms of service

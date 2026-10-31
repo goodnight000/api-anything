@@ -8,5 +8,16 @@
     "contentType": "text/html; charset=utf-8",
     "note": "the layout a visitor with VISITOR_INFO1_LIVE gets: an ad, shelves and a continuation among the videos; ids and titles stand-ins",
     "body": "<script>var ytInitialData = {\"contents\":{\"twoColumnSearchResultsRenderer\":{\"primaryContents\":{\"sectionListRenderer\":{\"contents\":[{\"itemSectionRenderer\":{\"contents\":[{\"searchPyvRenderer\":{\"ads\":[]}},{\"shelfRenderer\":{}},{\"videoRenderer\":{\"videoId\":\"a\",\"title\":{\"runs\":[{\"text\":\"ta\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}},{\"videoRenderer\":{\"videoId\":\"b\",\"title\":{\"runs\":[{\"text\":\"tb\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}}]}},{\"adSlotRenderer\":{\"slotId\":\"1\"}},{\"itemSectionRenderer\":{\"contents\":[{\"videoRenderer\":{\"videoId\":\"c\",\"title\":{\"runs\":[{\"text\":\"tc\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}},{\"reelShelfRenderer\":{}},{\"videoRenderer\":{\"videoId\":\"d\",\"title\":{\"runs\":[{\"text\":\"td\"}]},\"ownerText\":{\"runs\":[{\"text\":\"c\"}]},\"viewCountText\":{\"simpleText\":\"1 view\"}}}]}},{\"continuationItemRenderer\":{}}]}}}}};</script>"
+  },
+  {
+    "op": "captions",
+    "args": {
+      "id": "jNQXAC9IVRw",
+      "lang": "en"
+    },
+    "status": 200,
+    "contentType": "text/plain",
+    "note": "recorded 2026-10-30 via yt-dlp, the video's author/auto captions in en",
+    "body": "WEBVTT\nKind: captions\nLanguage: en\n\n00:00:01.200 --> 00:00:03.360\nAll right, so here we are, in front of the\nelephants\n\n00:00:05.318 --> 00:00:07.974\nthe cool thing about these guys is that they\nhave really...\n\n00:00:07.974 --> 00:00:12.616\nreally really long trunks\n\n00:00:12.616 --> 00:00:14.367\nand that's cool\n\n00:00:14.421 --> 00:00:15.733\n(baaaaaaaaaaahhh!!)\n\n00:00:16.881 --> 00:00:18.881\nand that's pretty much all there is to\nsay\n\n"
   }
 ]

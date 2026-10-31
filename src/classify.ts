@@ -414,7 +414,7 @@ function errorInQuery(url: string | undefined): string | undefined {
 function onForm(op: Operation, url: string | undefined): boolean {
   if (!url) return false;
   try {
-    const t = new URL(op.trigger.url.replace(/\{[^{}]+\}/g, "0p0"));
+    const t = new URL((op.trigger?.url ?? "").replace(/\{[^{}]+\}/g, "0p0"));
     const u = new URL(url);
     const path = t.pathname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replaceAll("0p0", "[^/]+");
     return u.origin === t.origin && new RegExp(`^${path}/?$`).test(u.pathname);
@@ -462,7 +462,7 @@ function formError(body: string): string | undefined {
  * its shell at the request's own address is drift.
  */
 function unfinishedPage(op: Operation, r: Observed): string | undefined {
-  if (!r.redirected || !r.url) return undefined;
+  if (!r.redirected || !r.url || !op.request) return undefined;
   const holds = op.slots.some((s) => !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0));
   if (!holds && !op.learnedLoggedIn) return undefined;
   try {
@@ -636,7 +636,7 @@ function classifyResponse(
   if (r.url) {
     try {
       const u = new URL(r.url);
-      if (LOGIN_URL.test(u.pathname) && !LOGIN_URL.test(new URL(op.request.url).pathname)) {
+      if (LOGIN_URL.test(u.pathname) && (op.request ? !LOGIN_URL.test(new URL(op.request.url).pathname) : true)) {
         return is("auth", `redirected to ${u.pathname}`);
       }
     } catch {

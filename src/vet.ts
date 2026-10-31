@@ -56,14 +56,16 @@ export function badAddress(url: string): string | undefined {
 
 /** Every address an op sends to or opens: its request, trigger, soft-from page and goto steps. */
 function addresses(op: Operation): [string, string][] {
-  return [
-    ["request", op.request.url],
-    ["trigger", op.trigger.url],
-    ...(op.trigger.softFrom ? ([["softFrom", op.trigger.softFrom]] as [string, string][]) : []),
-    ...(op.trigger.steps ?? []).flatMap((s, i): [string, string][] =>
-      s.action === "goto" ? [[`steps[${i}] goto`, s.value ?? s.selector ?? ""]] : [],
-    ),
-  ];
+  const out: [string, string][] = [];
+  if (op.request) out.push(["request", op.request.url]);
+  if (op.trigger) {
+    out.push(["trigger", op.trigger.url]);
+    if (op.trigger.softFrom) out.push(["softFrom", op.trigger.softFrom]);
+    (op.trigger.steps ?? []).forEach((s, i) => {
+      if (s.action === "goto") out.push([`steps[${i}] goto`, s.value ?? s.selector ?? ""]);
+    });
+  }
+  return out;
 }
 
 function regexes(op: Operation): [string, string][] {
@@ -82,6 +84,7 @@ function regexes(op: Operation): [string, string][] {
  * placeholder of a param named query, not a document asking for one field.
  */
 function isGraphql(op: Pick<Operation, "request" | "params">): boolean {
+  if (!op.request) return false; // GraphQL is a request's protocol; a local op cannot speak it
   let path = "";
   try {
     path = new URL(op.request.url).pathname;
@@ -209,6 +212,7 @@ function documentless(req: Request): boolean {
  * With no slots (a captured request not yet learned) the rules about params find nothing.
  */
 export function notARead(op: Pick<Operation, "request" | "slots" | "params">): string | undefined {
+  if (!op.request) return undefined; // a local op's readness is what its readOnly says
   const method = op.request.method.toUpperCase();
   const graphql = isGraphql(op);
   if (graphqlDocuments(op.request).some(writesGraphql)) return "it is a GraphQL mutation";
@@ -239,8 +243,8 @@ export function pagingProblems(op: Operation): string[] {
   else if (p.next && param.required && param.default === undefined)
     out.push(`paging param ${p.param} is required, so the first page cannot be asked for: a cursor is left out for it`);
   if (p.next !== undefined) {
-    if (op.response.format === "html")
-      out.push("paging next reads JSON (the answer, or JSON the page embeds), not HTML");
+    if (op.response.format === "html" || op.response.format === "text")
+      out.push(`paging next reads JSON (the answer, or JSON the page embeds), not ${op.response.format.toUpperCase()}`);
     if (p.next.length > LIMITS.regex) out.push(`paging next is ${p.next.length} characters; at most ${LIMITS.regex}`);
     else if (p.next.includes("[*]")) out.push(`paging next ${JSON.stringify(p.next)} names many values, not one value`);
     else if (!ONE_VALUE_PATH.test(p.next)) out.push(`paging next ${JSON.stringify(p.next)} is not a path`);
@@ -341,7 +345,8 @@ export function vetShared(site: Site, notes?: string): Vetted {
       if (!NAME.test(p.name))
         errors.push(at(`param name ${JSON.stringify(p.name)} is not a letter, then letters, digits, _ . -`));
     // The match is what a trigger run lets through as the op's own request: one naming no request lets every one through.
-    if (!op.match.host && !op.match.path && !op.match.operationName)
+    // A local op has no trigger run for a match to guard.
+    if (!op.local && !op.match.host && !op.match.path && !op.match.operationName)
       errors.push(at("its match names no host, path or operationName"));
     long(at("description"), op.description);
     for (const p of op.params) {
@@ -380,32 +385,37 @@ export function vetShared(site: Site, notes?: string): Vetted {
       else if (own && siteOf(hostOf(url)!) !== own) offSite.add(hostOf(url)!);
     }
     if (offSite.size) warnings.push(at(`sends to or opens ${[...offSite].join(", ")}, off the spec's own site ${own}`));
-    const method = op.request.method.toUpperCase();
-    if (op.readOnly && !READ_METHODS.has(method)) errors.push(at(`a ${method} request cannot be a read`));
-    if (op.readOnly && graphqlDocuments(op.request).some(writesGraphql))
-      errors.push(at("a GraphQL mutation cannot be a read"));
+    if (op.request) {
+      const method = op.request.method.toUpperCase();
+      if (op.readOnly && !READ_METHODS.has(method)) errors.push(at(`a ${method} request cannot be a read`));
+      if (op.readOnly && graphqlDocuments(op.request).some(writesGraphql))
+        errors.push(at("a GraphQL mutation cannot be a read"));
+      if (op.readOnly && method === "POST") warnings.push(at("a read sent as POST: check it changes nothing"));
+    }
     const param = argSlots(op);
     if (op.readOnly && param.some((st) => WHOLE_BODY.test(st))) errors.push(at("a read whose whole body a param is"));
     else if (op.readOnly && param.some((st) => DOCUMENT_AT.test(st)) && isGraphql(op))
       errors.push(at("a read whose GraphQL document a param fills"));
-    if (op.readOnly && method === "POST") warnings.push(at("a read sent as POST: check it changes nothing"));
-    if (!op.readOnly) warnings.push(at(`a write (${method}): it runs only with --allow-writes`));
+    if (!op.readOnly)
+      warnings.push(
+        at(`a write (${op.request ? op.request.method : "a local command"}): it runs only with --allow-writes`),
+      );
     // A recorded confirm is accepted on the user's behalf at tier 3: only a write's, a few, each at a step it has.
-    const confirms = op.trigger.confirms ?? [];
+    const confirms = op.trigger?.confirms ?? [];
     if (confirms.length && op.readOnly) errors.push(at("a read accepts no confirm dialog, and this one records some"));
     if (confirms.length > LIMITS.confirms)
       errors.push(at(`${confirms.length} recorded confirm dialogs; at most ${LIMITS.confirms}`));
-    const steps = op.trigger.steps?.length ?? 0;
+    const steps = op.trigger?.steps?.length ?? 0;
     for (const c of confirms)
       if (c.step >= steps)
         errors.push(at(`a recorded confirm dialog at steps[${c.step}], a step the trigger does not have`));
     // A companion is let out at tier 3 beside the write: only a write's, a few, each one unsafe request on the op's own site.
-    const companions = op.trigger.companions ?? [];
+    const companions = op.trigger?.companions ?? [];
     if (companions.length && op.readOnly)
       errors.push(at("a read sends no companion requests, and this one lists some"));
     if (companions.length > LIMITS.companions)
       errors.push(at(`${companions.length} companion requests; at most ${LIMITS.companions}`));
-    const opSite = hostOf(op.request.url) && siteOf(hostOf(op.request.url)!);
+    const opSite = op.request && hostOf(op.request.url) && siteOf(hostOf(op.request.url)!);
     for (const [j, c] of companions.entries()) {
       const where = `companion ${j + 1} (${c.method ?? "any method"} ${c.host ?? "any host"}${c.path ?? ""})`;
       if (!c.method || READ_ONLY.has(c.method.toUpperCase()) || !c.host || !c.path)
@@ -413,15 +423,23 @@ export function vetShared(site: Site, notes?: string): Vetted {
       else if (siteOf(c.host.toLowerCase()) !== opSite) errors.push(at(`${where} is off the op's own site ${opSite}`));
     }
     if (op.learnedLoggedIn) warnings.push(at("learned while signed in: calls use the caller's own login"));
+    if (op.local)
+      warnings.push(
+        at(
+          "runs a local command on the caller's machine: it is code the spec's author wrote, with the op's params filled in",
+        ),
+      );
     const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
-    for (const leaf of literalCredentials(op.request, pub))
-      errors.push(at(`request ${leaf.at.join(" > ")} holds a literal credential`));
-    for (const fill of signInFills(op.trigger.steps)) errors.push(at(`trigger ${fill}`));
-    for (const name of pub)
-      if (op.request.headers[name] !== undefined) {
-        warnings.push(at(`sends the literal ${name} it lists as public: every caller sends that same value`));
-        allowed.add(`${path}.request.headers.${name}`);
-      }
+    if (op.request)
+      for (const leaf of literalCredentials(op.request, pub))
+        errors.push(at(`request ${leaf.at.join(" > ")} holds a literal credential`));
+    for (const fill of signInFills(op.trigger?.steps)) errors.push(at(`trigger ${fill}`));
+    if (op.request)
+      for (const name of pub)
+        if (op.request.headers[name] !== undefined) {
+          warnings.push(at(`sends the literal ${name} it lists as public: every caller sends that same value`));
+          allowed.add(`${path}.request.headers.${name}`);
+        }
     for (const [where, re] of regexes(op)) {
       if (re.length > LIMITS.regex)
         errors.push(at(`${where} regex is ${re.length} characters; at most ${LIMITS.regex}`));

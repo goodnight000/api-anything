@@ -51,7 +51,7 @@ export const versionHash = (site: string, op: Operation) => sha256Hex(versionHas
 /** The request an op matches: method, host, path, GraphQL operationName; stored with each version for maintainers. */
 export const matchSig = (op: Operation) =>
   JSON.stringify([
-    op.request.method.toUpperCase(),
+    op.request ? op.request.method.toUpperCase() : "LOCAL",
     op.match.host ?? "",
     op.match.path ?? "",
     op.match.operationName ?? "",
@@ -82,10 +82,10 @@ export function refusals(site: SiteContext, ops: Operation[]): string[] {
 function offSite(op: Operation, domain: string): string[] {
   const rb = op.readback && "read" in op.readback ? op.readback.read : undefined;
   const urls = [op, ...(rb ? [rb] : [])].flatMap((o) => [
-    o.request.url,
-    o.trigger.url,
-    o.trigger.softFrom,
-    ...(o.trigger.steps ?? []).map((s) => (s.action === "goto" ? (s.value ?? s.selector) : undefined)),
+    o.request?.url,
+    o.trigger?.url,
+    o.trigger?.softFrom,
+    ...(o.trigger?.steps ?? []).map((s) => (s.action === "goto" ? (s.value ?? s.selector) : undefined)),
   ]);
   const hosts = urls.flatMap((u) => {
     try {
@@ -109,8 +109,8 @@ export function nameRefusal(name: string, domain: string): string | undefined {
 
 /** The GraphQL documents a JSON or GraphQL body carries at `query`. */
 function documents(op: Operation): string[] {
-  const body = op.request.body ?? "";
-  if (/graphql/i.test(op.request.headers["content-type"] ?? "")) return [body];
+  const body = op.request?.body ?? "";
+  if (/graphql/i.test(op.request?.headers["content-type"] ?? "")) return [body];
   try {
     const j: unknown = JSON.parse(body);
     return (Array.isArray(j) ? j : [j]).flatMap((item) => {
@@ -157,8 +157,8 @@ export function reviewReasons(
   if (op.learnedLoggedIn || evidence.learnedLoggedIn) reasons.push("learned while signed in");
   if (!op.readOnly) reasons.push("a write");
   // a "read" that changes something, run by every caller's client with their cookies, is a write by proxy
-  const method = op.request.method.toUpperCase();
-  if (op.readOnly && method !== "GET" && method !== "HEAD" && !(method === "POST" && graphqlQuery(op)))
+  const method = op.request?.method.toUpperCase();
+  if (op.request && op.readOnly && method !== "GET" && method !== "HEAD" && !(method === "POST" && graphqlQuery(op)))
     reasons.push(`a read sent as ${method}${method === "POST" ? ", not a GraphQL query" : ""}`);
   const refs = [...new Set(op.slots.flatMap((s) => (s.ref ? [s.ref] : [])))];
   if (refs.length) reasons.push(`sends the caller's own ${refs.join(", ")}`);
