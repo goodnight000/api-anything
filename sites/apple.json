@@ -1,8 +1,8 @@
 {
   "name": "apple",
-  "displayName": "Apple US iPhone",
+  "displayName": "Apple US public reads",
   "baseUrl": "https://www.apple.com",
-  "description": "Public US iPhone technical specifications from Apple model-family pages. Includes public iPhone, iPad and Mac model-family catalog links.",
+  "description": "Public US iPhone technical specifications from Apple model-family pages. Includes public iPhone, iPad and Mac model-family catalog links. Includes selected public US retail store business details and source-declared opening hours.",
   "operations": [
     {
       "name": "getTechSpecs",
@@ -170,6 +170,139 @@
           "purpose": "Unsupported category/path is refused locally before sending."
         }
       ]
+    },
+    {
+      "name": "getRetailStoreDetails",
+      "description": "Read source-labelled public Apple US store identity, business address/contact and regular and date-scoped special opening hours.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.apple.com/retail/%7Bstore%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "store",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.apple.com/retail/{store}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.apple.com",
+        "path": "/retail/*/"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "sourceType=@type",
+          "sourceIdentity=@id",
+          "sourceUrl=url",
+          "storeCode=branchCode",
+          "name",
+          "telephone",
+          "address",
+          "regularOpeningHours=openingHoursSpecification",
+          "specialOpeningHours=specialOpeningHoursSpecification"
+        ],
+        "embedded": {
+          "regex": "<script type=\"application/ld\\+json\"[^>]*>(\\{\"@context\":\"http://schema.org\",\"@id\":[\\s\\S]*?)</script>"
+        }
+      },
+      "params": [
+        {
+          "name": "store",
+          "type": "string",
+          "required": true,
+          "description": "Single store path segment from a literal Apple US retail directory link.",
+          "example": "thesummit",
+          "pattern": "[a-z0-9-]{1,80}",
+          "hint": "Copy the single store segment from a public Apple US /retail/ link; no slashes."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "store": "anchorage5thavenuemall"
+          },
+          "expect": "result",
+          "purpose": "Different store changes business identity, address, contact and regular closing hours."
+        },
+        {
+          "args": {
+            "store": "appleparkvisitorcenter"
+          },
+          "expect": "result",
+          "purpose": "Reserved unseen US store must match separate genuine frontend evidence for every claimed field."
+        },
+        {
+          "args": {
+            "store": "invalid/path"
+          },
+          "expect": "input",
+          "purpose": "Slash outside the single store segment is refused locally with zero requests."
+        }
+      ]
+    },
+    {
+      "name": "listUSRetailStores",
+      "description": "Discover source-labelled United States Apple retail stores in document order, returning literal names and store segments from their published links.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.apple.com/retail/storelist/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.apple.com/retail/storelist/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.apple.com",
+        "path": "/retail/storelist/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "name",
+          "store=url~^https://www.apple.com/retail/([a-z0-9-]+)/$"
+        ],
+        "html": {
+          "items": ".stores-list-en_US a",
+          "fields": {
+            "name": "",
+            "url": "@href"
+          }
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
     }
   ]
 }

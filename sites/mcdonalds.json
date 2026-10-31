@@ -2,7 +2,7 @@
   "name": "mcdonalds",
   "displayName": "McDonald's US",
   "baseUrl": "https://www.mcdonalds.com",
-  "description": "Public national US menu product descriptions. No restaurant pricing, availability or customized nutrition.",
+  "description": "Public national US menu category product links and product descriptions. No restaurant pricing, availability or customized nutrition.",
   "operations": [
     {
       "name": "getProduct",
@@ -72,6 +72,97 @@
           },
           "expect": "result",
           "purpose": "Small fries must differ from the Big Mac example."
+        }
+      ]
+    },
+    {
+      "name": "listCategoryProducts",
+      "description": "List product cards in exact US category source-document order, preserving duplicates and the source product links.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.mcdonalds.com/us/en-us/full-menu/%7BcategorySlug%7D.html",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "categorySlug",
+          "at": [
+            "path:3"
+          ],
+          "template": "{categorySlug}.html"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.mcdonalds.com/us/en-us/full-menu/{categorySlug}.html"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.mcdonalds.com",
+        "path": "/us/en-us/full-menu/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html;charset=utf-8",
+        "pick": [
+          "name",
+          "sourceUrl",
+          "productId",
+          "productSlug=sourceUrl~/product/([a-z0-9-]{1,100})[.]html"
+        ],
+        "html": {
+          "items": "#maincatcontent .product-category .cmp-category__item",
+          "fields": {
+            "name": ".cmp-category__item-name",
+            "sourceUrl": "a.cmp-category__item-link@href",
+            "productId": "@data-product-id"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "categorySlug",
+          "type": "string",
+          "required": true,
+          "description": "Slug of an observed US full-menu category link, without .html.",
+          "example": "burgers",
+          "pattern": "[a-z0-9-]{1,100}",
+          "hint": "Use a category from the observed menu navigation enum.",
+          "enum": [
+            "monopoly-sweepstakes",
+            "extra-value-meals-menu",
+            "mcvalue-menu",
+            "breakfast",
+            "burgers",
+            "chicken-and-fish-sandwiches",
+            "mcnuggets-and-mccrispy-strips",
+            "snack-wrap",
+            "fries-sides",
+            "happy-meal",
+            "sweets-treats",
+            "mccafe-coffees",
+            "drinks",
+            "sauces-and-condiments"
+          ]
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "categorySlug": "breakfast"
+          },
+          "expect": "result",
+          "purpose": "Breakfast cards must differ from the Burgers example."
         }
       ]
     }

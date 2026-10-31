@@ -251,6 +251,52 @@
           "purpose": "A slash is outside a single store segment and must be refused locally."
         }
       ]
+    },
+    {
+      "name": "listStores",
+      "description": "Read the fixed public IKEA US English directory of entries explicitly labelled Store, with literal names and links for selected-store navigation.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.ikea.com/us/en/stores/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.ikea.com/us/en/stores/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.ikea.com",
+        "path": "/us/en/stores/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "name",
+          "url",
+          "store=url~/stores/([^/]+)/$"
+        ],
+        "html": {
+          "items": ".pub__text p:contains(\"- Store\")",
+          "fields": {
+            "name": "a",
+            "url": "a@href"
+          }
+        }
+      },
+      "params": [],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
     }
   ]
 }

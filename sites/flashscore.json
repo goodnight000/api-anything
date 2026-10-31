@@ -1,8 +1,8 @@
 {
   "name": "flashscore",
-  "displayName": "Flashscore football pair metadata",
+  "displayName": "Flashscore football navigation and pair metadata",
   "baseUrl": "https://www.flashscore.com",
-  "description": "Public identity and competition metadata for the fixture Flashscore selects from a known football team-pair link. The route does not uniquely select a date or event.",
+  "description": "Public competition document pair navigation and identity/competition metadata for the fixture selected by a known football pair link. Pair links do not uniquely select a date or event.",
   "operations": [
     {
       "name": "resolveFootballPairMetadata",
@@ -99,6 +99,103 @@
           },
           "expect": "result",
           "purpose": "Held-out pair matches independent source event vLaHlpR9, EFL Cup, Manchester City home and Brighton away. URL order differs from home/away."
+        }
+      ]
+    },
+    {
+      "name": "listFootballCompetitionPairs",
+      "description": "List the literal football pair navigation links in a competition document. Document order only; these links do not select a fixed event or date.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.flashscore.com/football/%7Bcountry%7D/%7Bcompetition%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "country",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "competition",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.flashscore.com/football/{country}/{competition}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.flashscore.com",
+        "path": "/football/*/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "pick": [
+          "label",
+          "pairUrl",
+          "first=pairUrl~/match/football/([^/]+)/",
+          "second=pairUrl~/match/football/[^/]+/([^/]+)/"
+        ],
+        "html": {
+          "items": "#extraContent .next_round a[href^=\"/match/football/\"]",
+          "fields": {
+            "label": "",
+            "pairUrl": "@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "country",
+          "type": "string",
+          "required": true,
+          "description": "Country segment copied from a public Flashscore football competition link.",
+          "example": "england",
+          "pattern": "[a-z0-9-]{3,80}",
+          "hint": "Copy this segment from an existing public /football/<country>/<competition>/ link."
+        },
+        {
+          "name": "competition",
+          "type": "string",
+          "required": true,
+          "description": "Competition segment copied from the same public football competition link.",
+          "example": "premier-league",
+          "pattern": "[a-z0-9-]{3,80}",
+          "hint": "Copy this segment from an existing public /football/<country>/<competition>/ link."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "country": "spain",
+            "competition": "laliga"
+          },
+          "expect": "result",
+          "purpose": "Actual second frontend document has a distinct competition pair collection."
+        },
+        {
+          "args": {
+            "country": "germany",
+            "competition": "bundesliga"
+          },
+          "expect": "result",
+          "purpose": "Held-out collection compared field by field and in document order to a separately parsed public document."
         }
       ]
     }

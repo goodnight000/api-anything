@@ -1,10 +1,23 @@
-# edX public provider courses
+# edX public courses
 
-`listCourses(school)` lists the initial public course cards on an edX provider page. Use a provider slug from an actual `https://www.edx.org/school/` link, such as `harvardx`, `edx` or `uc-berkeleyx`.
+`listCourses(school)` lists initial provider course cards. Use a slug from an actual /school/ link. Pagination and complete catalog coverage are excluded. Empty or removed provider pages have no established empty-result contract.
 
-Each row returns the displayed course `title`, displayed `provider` and absolute frontend `url`. Program and certificate cards are excluded. The initial list is partial. Pagination, the complete catalog, course details, tuition, workload, enrollment and access to course content are outside this operation. A successful listing does not establish that enrollment is open or free. A removed or empty provider page can fail extraction; no reliable empty-provider contract was established.
+`getCourse(subject, courseSlug)` reads public structured course metadata. Take both arguments together from one actual /learn/{subject}/{courseSlug} URL returned by listCourses. Arbitrary combinations are unproved. Provider names and learning outcomes retain source order. Prerequisites are the source statements, including “None” when supplied. Language is the source language code. Missing source fields may be absent.
+
+Details come from the document’s Course JSON-LD, not a fully hydrated course interface. Neither operation establishes enrollment availability, free access, price, completion, or access to course content. Course dates, duration and workload are excluded.
+
+`getProgramCourses(programSlug)` lists course members of the observed professional-certificate route, in the document's supplied frontend course order. Use a slug from a literal program link. Course URLs retain the source's double slash before learn. Take subject and courseSlug together from the two segments following /learn/ to call getCourse; do not send the double-slash URL as a detail request. Membership order does not establish prerequisites or required sequencing. Full curriculum, certificate rights, prices and enrollment guarantees are unproved.
 
 ## Maintainer notes
+
+Program membership qualification evidence: docs/research/discovery/edx-program-curriculum-qualified-r1.md. Signed out on 2026-10-28 UTC, genuine exact-GET frontend captures and paired learning. JSON-LD membership order agrees with separately parsed frontend courses props. Hydrated DOM order is not independently observed.
+
+
+
+Course details qualified signed out on 2026-10-28 UTC using genuine exact-GET browser captures and paired learning. Independent source, unseen tier-1, initially empty-home and exact-version verification receipts are in docs/research/discovery/edx-course-qualified-r1.md. No private session imported. Only isolated site-issued guest cookies may be reused after the first cookie-free request.
+
+### Historical provider evidence
+
 
 Qualified signed out on 2026-10-26 UTC. Real exact-document browser captures were Harvard `cmvp9nj6ebd5213`, document 1, and edX `cmvp9qelpd6897c`, document 1. Each capture supplied 32 course cards matching an independent HTMLParser audit. Request URLs were `https://www.edx.org/school/harvardx` and `https://www.edx.org/school/edx`; these documents directly contain the returned data. The capture helper limits requests to the exact GET document and does not prove a fully hydrated GUI.
 

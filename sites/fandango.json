@@ -2,7 +2,7 @@
   "name": "fandango",
   "displayName": "Fandango",
   "baseUrl": "https://www.fandango.com",
-  "description": "Public movie metadata from Fandango movie overview pages.",
+  "description": "Public movie discovery and metadata from Fandango search and movie overview pages.",
   "operations": [
     {
       "name": "getMovie",
@@ -79,6 +79,83 @@
           },
           "expect": "result",
           "purpose": "Held-out Clayface page checks that the movie path changes the returned identity."
+        }
+      ]
+    },
+    {
+      "name": "searchMovies",
+      "description": "Discover public movie overview links from the movie section of Fandango search. Returns the first at most four movie matches in site order.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.fandango.com/search?q=%7Bq%7D&mode=all",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.fandango.com/search?q={q}&mode=all"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.fandango.com",
+        "path": "/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "url",
+          "moviePath=url~^https://www\\.fandango\\.com/([^/]+)/movie-overview$"
+        ],
+        "html": {
+          "items": "#search-results-movies li.search__panel",
+          "fields": {
+            "title": "a.search__movie-title",
+            "url": "a.search__movie-title@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "description": "Public movie search text. Only movie matches are returned; city, cinema and video sections are excluded.",
+          "example": "Wildwood"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "Clayface"
+          },
+          "expect": "result",
+          "purpose": "Different public title returns different movie identities from Wildwood."
+        },
+        {
+          "args": {
+            "q": "Wicker"
+          },
+          "expect": "result",
+          "purpose": "Public catalog title held out from learning."
         }
       ]
     }

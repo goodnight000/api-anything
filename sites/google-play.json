@@ -108,6 +108,184 @@
           "purpose": "Reject URL path syntax locally before sending."
         }
       ]
+    },
+    {
+      "name": "listCategoryApps",
+      "description": "Read app cards from the initial public category document, in displayed document order.",
+      "request": {
+        "method": "GET",
+        "url": "https://play.google.com/store/apps/category/%7Bcategory%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "category",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://play.google.com/store/apps/category/{category}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "play.google.com",
+        "path": "/store/apps/category/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "packageId=packageId~[?&]id=([^&]+)",
+          "listingUrl",
+          "name",
+          "ratingDisplay"
+        ],
+        "html": {
+          "items": "a.ZD8Cqc[href*=\"/store/apps/details?\"]",
+          "fields": {
+            "packageId": "@href",
+            "listingUrl": "@href",
+            "name": ".Epkrse",
+            "ratingDisplay": "[role=\"img\"]@aria-label"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "Category code copied from the last path segment of a public Google Play category link.",
+          "example": "VIDEO_PLAYERS",
+          "pattern": "[A-Z_]{3,64}",
+          "hint": "A category code copied from a Play category link, such as VIDEO_PLAYERS."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "category": "PRODUCTIVITY"
+          },
+          "expect": "result",
+          "purpose": "Different category has different app identities than Video Players & Editors."
+        },
+        {
+          "args": {
+            "category": "EDUCATION"
+          },
+          "expect": "result",
+          "purpose": "Unseen category grounded from the retained ScratchJr category link before its source or replay was opened."
+        },
+        {
+          "args": {
+            "category": "invalid/path"
+          },
+          "expect": "input",
+          "purpose": "Reject path syntax locally before sending."
+        }
+      ]
+    },
+    {
+      "name": "listDeveloperApps",
+      "description": "Read app cards from the initial public numeric developer-catalog document, in document order.",
+      "request": {
+        "method": "GET",
+        "url": "https://play.google.com/store/apps/dev?id=%7BdeveloperId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "developerId",
+          "at": [
+            "query:id"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://play.google.com/store/apps/dev?id={developerId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "play.google.com",
+        "path": "/store/apps/dev"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "packageId=packageId~[?&]id=([^&]+)",
+          "listingUrl",
+          "name",
+          "ratingDisplay"
+        ],
+        "html": {
+          "items": "a.ZD8Cqc[href*=\"/store/apps/details?\"]",
+          "fields": {
+            "packageId": "@href",
+            "listingUrl": "@href",
+            "name": ".Epkrse",
+            "ratingDisplay": "[role=\"img\"]@aria-label"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "developerId",
+          "type": "string",
+          "required": true,
+          "description": "Exact numeric ID copied as a string from a public /store/apps/dev?id= link; never round or convert to Number.",
+          "example": "6364851808230428105",
+          "pattern": "[0-9]{19}",
+          "hint": "The exact 19-digit string from a Play /store/apps/dev?id= link."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "developerId": "6720847872553662727"
+          },
+          "expect": "result",
+          "purpose": "Microsoft catalog differs in app identities from the captured VLC catalog."
+        },
+        {
+          "args": {
+            "developerId": "6957685454452609502"
+          },
+          "expect": "result",
+          "purpose": "Unseen Duolingo catalog grounded from a retained detail-page link before catalog content was opened."
+        },
+        {
+          "args": {
+            "developerId": "invalid/path"
+          },
+          "expect": "input",
+          "purpose": "Reject path syntax locally before sending."
+        }
+      ]
     }
   ]
 }

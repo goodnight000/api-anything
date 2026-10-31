@@ -97,6 +97,89 @@
           "purpose": "A source-linked soya drink has a different product identity from both milk examples."
         }
       ]
+    },
+    {
+      "name": "listProducts",
+      "description": "Discover product links in a public UK Long Life Milk child category.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.waitrose.com/ecom/shop/browse/groceries/fresh_and_chilled/milk_butter_and_eggs/milk/long_life_milk/%7Bcategory%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "category",
+          "at": [
+            "path:8"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.waitrose.com/ecom/shop/browse/groceries/fresh_and_chilled/milk_butter_and_eggs/milk/long_life_milk/{category}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.waitrose.com",
+        "path": "/ecom/shop/browse/groceries/fresh_and_chilled/milk_butter_and_eggs/milk/long_life_milk/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "title",
+          "sourceUrl",
+          "slug=sourceUrl~/products/([^/]+)/",
+          "productId=sourceUrl~/([^/]+)$"
+        ],
+        "html": {
+          "items": "main [data-testid=\"product-pod-header\"]",
+          "fields": {
+            "title": "h2",
+            "sourceUrl": "a@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "description": "Long Life Milk child category observed in public navigation.",
+          "example": "semi-skimmed_milk",
+          "enum": [
+            "semi-skimmed_milk",
+            "skimmed_milk",
+            "whole_milk"
+          ]
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "category": "skimmed_milk"
+          },
+          "expect": "result",
+          "purpose": "Skimmed category excludes the semi-skimmed identity."
+        },
+        {
+          "args": {
+            "category": "whole_milk"
+          },
+          "expect": "result",
+          "purpose": "Independently reserved whole-milk category, excluded from A/B learning."
+        }
+      ]
     }
   ]
 }

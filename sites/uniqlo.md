@@ -16,6 +16,10 @@ prices, selectable variants, stock, delivery estimates, search results or catalo
 coverage. Product-link query parameters such as `colorDisplayCode` are not inputs.
 Only the Denmark English storefront was checked.
 
+A category-navigation probe on 2026-10-28 received an Akamai challenge. Further
+UNIQLO reads were stopped. The product cases below retain their 2026-10-26 evidence;
+they were not freshly reverified after that stop.
+
 ## Maintainer notes
 
 Qualified signed out on 2026-10-26 UTC. No private browser import or login occurred.
@@ -62,3 +66,20 @@ Receipts are under ignored `bench/explore/state/discovery/uniqlo-finalize-r2/`:
 Capture files and held-out source remain under the preceding batch's evidence
 directory. See `docs/research/discovery/uniqlo-finalize-r2.md` for resource limits
 and cleanup. No publication was performed.
+
+Discovery continuation on 2026-10-28 UTC stopped on the first grounded category
+document, `https://www.uniqlo.com/dk/en/men/tops`. Its literal link came from
+the retained product capture `cmvp5inuvb11ebe`, whose raw file hash was checked
+against the previous report before inspecting navigation. The exact-GET browser
+capture returned HTTP 200 with an Akamai behavioral challenge and no category
+content. The helper reported `ok: true`; its status and existing bot-wall check
+did not identify this challenge. A separate core document judgment returned
+`drift` for missing title data and immediately persisted a stop before any further
+send. Raw inspection established the challenge. No alternate route or transport,
+second capture, unseen replay, fresh-home call or live verification followed.
+
+No discovery operation was added. `getProduct` and its three public cases are
+unchanged. This run adds no current live reuse proof for them. The brand stop
+applies across UNIQLO consumer routes and transports. See
+`docs/research/discovery/uniqlo-discovery-qualified-r1.md` for exact receipts,
+hashes and the missing gates. Integrated checks remain with the coordinator.

@@ -341,6 +341,117 @@
           },
           "expect": "input",
           "purpose": "An empty guide is refused by the local declared format without a network request."
+        },
+        {
+          "args": {
+            "guide": "womens-tops-alpha"
+          },
+          "expect": "result",
+          "purpose": "Official tops chart tests apparel body measurements, source unit labels and aligned size columns."
+        },
+        {
+          "args": {
+            "guide": "mens-bottoms-numeric"
+          },
+          "expect": "result",
+          "purpose": "Official numeric bottoms chart tests a distinct garment and numeric-size measurement table context."
+        }
+      ]
+    },
+    {
+      "name": "listColorways",
+      "description": "List the public US product color selector navigation links in source order. Color labels are chip alt text; no stock claim.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.nike.com/t/%7Bslug%7D/%7Bstyle%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "slug",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "style",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.nike.com/t/{slug}/{style}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.nike.com",
+        "path": "/t/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "pick": [
+          "url",
+          "color",
+          "slug=url~/t/([^/]+)/",
+          "style=url~/t/[^/]+/([^/?]+)"
+        ],
+        "html": {
+          "items": "#colorway-picker-container a",
+          "fields": {
+            "url": "@href",
+            "color": "img@alt"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "description": "Path segment after /t/ copied from the product URL.",
+          "example": "jordan-spizike-low-mens-shoes-E3tPjSZP",
+          "pattern": "[A-Za-z0-9-]+",
+          "hint": "Copy the complete path segment from a public US Nike link."
+        },
+        {
+          "name": "style",
+          "type": "string",
+          "required": true,
+          "description": "Final style/color code copied from the same product URL.",
+          "example": "FQ1759-200",
+          "pattern": "[A-Za-z0-9-]+",
+          "hint": "Copy the complete path segment from a public US Nike link."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "slug": "air-max-metro-mens-shoes-bWvVBEWx",
+            "style": "IW4935-102"
+          },
+          "expect": "result",
+          "purpose": "A different product has different color-selector identities and labels."
+        },
+        {
+          "args": {
+            "slug": "dunk-low-retro-mens-shoes-5FQWGR",
+            "style": "IM4414-700"
+          },
+          "expect": "result",
+          "purpose": "Reserved catalog-sourced third product checks literal navigation links and complete source order."
         }
       ]
     }

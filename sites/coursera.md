@@ -6,6 +6,8 @@ These operations read Coursera's public, signed-out catalog. No login is needed.
 
 These operations expose public discovery metadata only. They do not access paid lessons, assessments, enrollment, accounts or purchases. Availability of a public listing does not imply free course access.
 
+`getSpecializationCourses(slug)` accepts the slug from a public `/specializations/` link and returns constituent courses in the displayed curriculum order. Each destination retains its specialization membership query. `courseSummary` contains Coursera's displayed course number and estimated workload. The order is not proof of enrollment prerequisites. Estimates can change. Certificates and degrees are separate page types.
+
 ## Maintainer notes
 
 Verified signed out on 2026-10-26 UTC using isolated API_ANYTHING_HOME directories, without importing browser cookies or logging in.
@@ -21,3 +23,11 @@ Course trigger/request is `https://www.coursera.org/learn/{slug}`. It reads the 
 Recorded public checks cover both examples and each unseen input, with tier-1-only verify. Separate initially empty fresh-home reuse is also tier 1 without cookies. Exact verification, export, vet and reuse receipts are retained under ignored `bench/explore/state/discovery/education-r1/`; the research report is `docs/research/discovery/education-r1.md`.
 
 Only these public pages and inputs were checked. Locale, ranking and rating values may vary. The recipe's first JSON-LD script assumption has not been tested across the whole catalog. A later challenge, auth response or rate limit requires stopping the discovery run. Paid content and all site writes are excluded.
+
+Curriculum qualification on 2026-10-28 UTC: genuine signed-out exact-document captures of Machine Learning and Deep Learning returned three and five ordered course records. The HTML recipe selects only the syllabus accordion course items. It does not select footer recommendations. Learning used both documents and emitted zero warnings. Qualification receipts and hashes are recorded in docs/research/discovery/coursera-curriculum-qualified-r2.md.
+
+`getSpecializationCourses(slug)` uses `https://www.coursera.org/specializations/{slug}` as trigger and request. Actual Chrome document captures were machine-learning-introduction and deep-learning, selected request ID 1 in each, HTTP 200. The current captures show three and five courses. A distinct Excel specialization URL came from an actual link on the Machine Learning page, with no Excel detail content inspected before the tier-1 replay. A separate Excel Chrome document capture and a Python HTMLParser comparator matched every returned field and course position across all four records. A and B also matched independent comparisons. Public checks use deep-learning and excel in addition to the Machine Learning example.
+
+Offline candidate preflight preceded unseen, cold and verification requests. An initially empty home received the exact final export, and its new operation's first call succeeded at tier 1 with Cookie and Authorization absent. Coursera then issued CSRF3-Token and __204u guest cookies; all-read verification reused only those isolated site-issued cookies. All nine saved cases passed at tier 1 on 2026-10-28 UTC, preserving both complete original operations and all six original cases. Final public-example export and exact JSON/notes vet had zero errors and warnings. The parent owns integrated registry, lint and type gates before counting.
+
+The exact-document helper ran directly under the global browser mutex. Historical resource watchdog wording above describes the older baseline only. No resource snapshots or wrappers ran in this qualification. No private cookie import, paid content, enrollment or website writes occurred. No live access stop occurred. An isolated HTTP 200 login mock tested the sticky core-judge guard; it is not Coursera frontend evidence.

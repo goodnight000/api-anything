@@ -7,8 +7,13 @@ three movies. `releaseDate` is the film release date advertised by Fandango. It 
 establish a cinema screening or ticket availability. `genres` is the site's comma-separated
 string, preserving its labels. The content rating is the site's supplied label.
 
+`searchMovies(q)` discovers movie links from the public search page's movie section. It
+returns at most the first four matches, in Fandango's order, rather than a complete catalog.
+Copy a returned `moviePath` unchanged into `getMovie`. The query is movie search text, not a
+location request. No pagination, ranking meaning or empty-result behavior was qualified.
+
 No login is needed for the verified reads. Showtimes, cinemas, personal location, ticket
-inventory, purchasing, accounts, pagination and film search were not verified. Movie paths
+inventory, purchasing and accounts were not verified. Movie paths
 must come from public links; malformed or missing movie pages were not qualified. Metadata
 can change. There is no synopsis or article-body extraction.
 
@@ -40,3 +45,19 @@ warnings. The parent owns integrated registry checks. Exact evidence paths, oper
 resource samples and limitations are in `docs/research/discovery/fandango-qualified-r2.md`.
 Raw documents and captures remain ignored under
 `bench/explore/state/discovery/fandango-qualified-r2/`.
+
+
+Discovery extension, 2026-10-28 UTC: the public GET search form supplies `q` and fixed
+`mode=all`. Only `#search-results-movies` rows are extracted. City, theater and video
+sections are excluded. Search result labels can differ from Movie JSON-LD metadata;
+use getMovie for that established metadata contract. The existing operation and all three
+saved cases remain unchanged. Current capture IDs, exact hashes, independent comparisons,
+cold-first credentials, verification and limits are recorded in
+`docs/research/discovery/fandango-discovery-qualified-r1.md`. Raw evidence stays ignored under
+`bench/explore/state/discovery/fandango-discovery-qualified-r1-20261028/`.
+
+The extension's signed-out exact-version verify finished at 2026-10-28T08:46:58.232Z:
+all six saved cases passed at tier 1, including the original three getMovie cases.
+Wicker search and the detail handoff matched separate HTML sources field by field.
+The new search operation's first call from its initially empty home sent no Cookie or
+Authorization. Subsequent verification sent only guest cookies issued to that home.

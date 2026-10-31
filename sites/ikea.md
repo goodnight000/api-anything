@@ -1,50 +1,62 @@
-`getStoreDetails(store)` reads public visit-planning details for an IKEA US English Store page.
-Copy the final segment, such as `houston`, from an actual `/us/en/stores/` Store link in
-https://www.ikea.com/us/en/stores/. Pickup facilities and plan-and-order locations are not qualified.
-The address includes the store name. Hours retain department scope, retailer day/time wording,
-variable-hours notices and dated holiday exceptions. `clickCollectHours` describes public hours
-only; it does not perform pickup or establish order eligibility. Småland may have variable hours.
-`closed` and `specialStoreHours` retain their actual dates; do not turn them into permanent schedules.
-Text comes from the document at request time, with whitespace collapsed; adjacent inline date/time
-text may touch. No timezone, open-now status, stock, delivery eligibility or booking is inferred.
+`listStores()` reads the fixed public US English directory, in document order. It takes no
+arguments. Only entries explicitly labelled "Store" are returned. Small stores, plan-and-order
+points and pickup facilities are excluded. Names and links are literal source text; `store` is
+the link's final segment for `getStoreDetails`. No state/metro, address or hours is inferred.
+This is a directory snapshot, not a complete network inventory or distance ranking.
 
-`listCategoryProducts(category)` reads initial product cards. Copy the full final category segment,
-such as `bookcases-10382`, from an existing `/us/en/cat/` link. This is a partial initial page;
-pagination, filters, category prices and stock are not covered. Product numbers are opaque strings,
-sometimes starting with `s`; preserve them. A returned product URL supplies the slug for `getProduct`.
+`getStoreDetails(store)` reads a linked Store page. Hours preserve department scope, variable-hours
+notices and dated holiday exceptions. The address includes the store name. `clickCollectHours`
+means public hours, not pickup eligibility. Småland may vary. Adjacent inline dates/times can touch
+after whitespace collapse. Keep dates and literal text; no timezone or open-now calculation.
+Selected layouts were checked; future department reordering can invalidate extraction.
 
-`getProduct(slug)` reads public product metadata and national online price. Copy the full last segment
-of an existing `/us/en/p/` URL, including its article number. No ZIP or store is selected for product
-prices. USD prices may differ from special member offers or checkout. Dimensions retain retailer
-text and units; a double quote means inches. Some dimensions can be absent.
+`listCategoryProducts(category)` returns the partial initial category page. Copy the complete
+`/us/en/cat/` final segment. Pagination, filters, category prices and stock are unqualified.
+Product numbers are opaque strings, including `s` prefixes. Product links feed `getProduct`.
 
-No account or API key is needed. All three operations are fixed to US English. Product search,
-other countries, local inventory, purchase, pickup actions, event booking and restaurant menus are
-outside this spec.
+`getProduct(slug)` needs the complete final `/us/en/p/` segment including article number.
+Price is national online USD without ZIP/store selection, and can differ from member offers or
+checkout. Dimensions keep source units; a double quote means inches. Dimensions may be absent.
+
+All reads are public, signed out, US English, without an API key. Search, other countries,
+local inventory, availability, delivery, purchase, pickup actions, bookings and menus are outside
+this spec. Invalid slash arguments are refused locally, without testing origin not-found behavior.
 
 ## Maintainer notes
 
-The original `getProduct` and `listCategoryProducts` parsed operation objects are preserved exactly.
-Their signed-out qualification and seven-case tier-1 verification are recorded in
-[the category parent report](../docs/research/discovery/ikea-parent-depth-r4.md), including original
-product capture provenance and the category A/B/C examples. Those historical receipts remain
-separate from the current all-read rerun.
+Directory qualification is recorded in [the directory report](../docs/research/discovery/ikea-directory-qualified-r1.md).
+Source and exact GET request URL: https://www.ikea.com/us/en/stores/ . On 2026-10-28 UTC,
+two fresh genuine frontend document captures A/B used this same fixed request. There is no
+varying parameter and no distinct third directory input. Actual addOperation selects the exact
+GET document explicitly, with empty examples and no unproven parameter or warnings.
 
-Selected-store qualification used genuine frontend GET documents for Houston and Orlando, with
-paired CLI learning and meaningful differences in identity, address and hours. Source/request URLs
-are https://www.ikea.com/us/en/stores/houston/ and https://www.ikea.com/us/en/stores/orlando/.
-Houston's retained capture is `cmvq6ytsrf073a1:1`; Orlando's new capture and exact provenance are in
-[the round 2 report](../docs/research/discovery/ikea-stores-qualified-r2.md). The unchanged exact-GET
-helper aborts other requests and has a 15-second trigger timeout. This is document evidence, not
-hydrated GUI proof. Both captures sent neither Cookie nor Authorization; no private profile or
-cookie import occurred. The visible department sections and dated exceptions, rather than regular
-JSON-LD hours alone, define this operation's contract.
+The exact public-example candidate and these complete notes passed offline vetShared before
+reserved D was exposed. D is a later fresh whole-directory frontend snapshot, independently parsed
+by semantic paragraph labels and literal links, compared row-by-row with a tier-1 result.
+This tests fixed-input reuse over snapshots, not parameter variation. Atlanta is a separately
+reserved unopened literal Store link for a directory-to-unchanged-getStoreDetails handoff.
+All its fields must match independently labelled department/holiday sections, including absences.
 
-The exact final candidate with these notes passed a zero-issue export/credential/vetShared preflight
-before opening the reserved Emeryville document. The report records all claimed-field source
-comparisons for A/B/C, the exact-version first API call from an initially empty isolated home,
-actual header-presence receipts, later site-issued guest cookies, all-read maxTier-1 verification,
-final operation hashes and final exports/scan/vet. Local invalid-slash checks prove input bounds;
-they do not claim live not-found behavior. No healing, login, private session, or publication was used.
-Final JSON and notes are accepted only with those exact-version proofs. Integrated registry, lint
-and type checks are parent-owned and are reported separately.
+The unchanged exact-document helper allows only the requested GET document, aborts other requests
+and keeps its 15-second trigger bound. Captures prove document delivery, not hydrated GUI or
+computed stylesheet visibility. Source labels, rather than slug geography or generic pickup links,
+define inclusion. State/metro fields are deliberately omitted. No addresses or hours come from
+the directory. No exhaustiveness, ranking, pagination or store inventory claim is made.
+
+The first new API call uses an initially empty separate home containing exactly the candidate
+export, with actual Cookie/Authorization absence recorded before fetch. Later cookies may be only
+IKEA-issued guest cookies in that home. Native getSetCookie lines, including duplicate issuance,
+are retained privately before serialization; reports disclose names and provenance without values.
+All ten original stored cases and the no-argument directory example require maxTier-1 verification,
+operation-specific core judgment, synchronous independent comparisons and current parsed opHash
+records. Invalid/path cases must send nothing. No retry, healing, fallback or import is permitted.
+
+All three original whole parsed operation objects and ten cases remain exact. Historical evidence:
+[depth map](../docs/research/discovery/ikea-depth-map-r1.md),
+[category parent](../docs/research/discovery/ikea-parent-depth-r4.md),
+[store qualification](../docs/research/discovery/ikea-stores-qualified-r2.md),
+[store parent](../docs/research/discovery/ikea-stores-parent-r1.md), and
+[parked search](../docs/research/discovery/ikea-search-parent-r2.md).
+Those reports retain previous capture provenance and limits. Search is not reopened.
+Current artifact hashes and exact export/cold/final equality are in the directory report.
+Parent-owned registry, lint, type and operation-count acceptance are separate gates.
