@@ -109,7 +109,7 @@ function isGraphql(op: Pick<Operation, "request" | "params">): boolean {
 }
 
 /** The GraphQL documents a request carries. */
-function graphqlDocuments(req: Request): string[] {
+export function graphqlDocuments(req: Request): string[] {
   const docs: unknown[] = [];
   const body = req.body ?? "";
   if (/graphql/i.test(req.headers["content-type"] ?? "")) docs.push(body);
@@ -184,10 +184,13 @@ const hostOf = (url: string) => {
 /**
  * Where the args go: the last step of each slot an arg reaches. An arg that is, or is spliced into,
  * the body or the document could make it any request. An arg reaches a param's own slot, and any slot
- * whose template has a hole that is no ref: a ref slot's template is filled from the args too.
+ * whose template has a hole that is no ref: a ref slot's template is filled from the args too. A derived
+ * slot counts as one: its value is whatever the lookup's answer holds, which the site's users may write.
  */
 const argSlots = (op: Pick<Operation, "slots">) =>
-  op.slots.filter((sl) => sl.param !== undefined || argHoles(sl.template ?? "").length > 0).map((sl) => sl.at.at(-1)!);
+  op.slots
+    .filter((sl) => sl.param !== undefined || sl.from !== undefined || argHoles(sl.template ?? "").length > 0)
+    .map((sl) => sl.at.at(-1)!);
 
 /** A GraphQL request with an operation that carries no document: a JSON item, form or raw body without one. */
 function documentless(req: Request): boolean {
@@ -444,6 +447,9 @@ export function vetShared(site: Site, notes?: string): Vetted {
     for (const s of op.slots) {
       if (!s.from) continue;
       const where = `the lookup for ${s.at.join(" > ")}`;
+      // as learning places one (learn.ts DERIVABLE): never a header, where credentials and method overrides go
+      if (!/^((path|query|form)(\[\d+\])?:|body$)/.test(s.at[0] ?? ""))
+        errors.push(at(`${where} fills ${s.at[0]}: a looked-up value goes only in the path, query or body`));
       if (s.from.request.method.toUpperCase() !== "GET")
         errors.push(at(`${where} is a ${s.from.request.method}, not a GET`));
       if (hostOf(s.from.request.url) !== hostOf(op.request.url))

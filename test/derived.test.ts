@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { call } from "../src/execute.js";
 import { learnOperation } from "../src/learn.js";
+import { derive, LookupFailed } from "../src/lookup.js";
 import { type Operation, parseSite, type Site } from "../src/spec.js";
 import { exportSite, saveSite } from "../src/store.js";
 import type { Exchange, StoredCookie } from "../src/types.js";
@@ -307,4 +308,55 @@ test("vet: a shared spec's lookup is a GET on the op's own host, reads one value
       ),
     ).some((e) => /literal credential/.test(e)),
   );
+});
+
+// A lookup's answer is text the site's users may write (a bio): it is held to the read rules an arg is.
+const graphqlRead = (at: string[], body = '{"query":"query { me { id } }"}') =>
+  parseSite({
+    name: "shop",
+    baseUrl: "https://shop.example.com",
+    operations: [
+      {
+        name: "profile",
+        readOnly: true,
+        request: {
+          method: "POST",
+          url: "https://shop.example.com/graphql",
+          headers: { "content-type": "application/json" },
+          body,
+        },
+        slots: [
+          {
+            at,
+            from: {
+              request: { method: "GET", url: "https://shop.example.com/api/user?name=x", headers: {} },
+              slots: [{ param: "name", at: ["query:name"] }],
+            },
+            path: "user.bio",
+          },
+        ],
+        params: [{ name: "name" }],
+        trigger: { url: "https://shop.example.com/u/{name}" },
+        match: { method: "POST", host: "shop.example.com", path: "/graphql" },
+      },
+    ],
+  });
+
+test("vet: a looked-up value never fills a read's GraphQL document, its whole body or a header", () => {
+  const errors = (s: Site) => vetShared(s).errors.join("\n");
+  assert.match(errors(graphqlRead(["body", "json:/query"])), /GraphQL document/);
+  assert.match(errors(graphqlRead(["body"])), /whole body/);
+  assert.match(errors(graphqlRead(["header:x-http-method-override"])), /path, query or body/);
+});
+
+test("a looked-up value that turns a read into a GraphQL mutation is refused before the read is sent", async () => {
+  const op = graphqlRead(["body", "json:/query"]).operations[0]!;
+  const fetchOne = async () => ({
+    status: 200,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ user: { bio: "mutation { deleteAccount }" } }),
+  });
+  await assert.rejects(derive(op, fetchOne), (e: Error) => e instanceof LookupFailed && /mutation/.test(e.message));
+  const harmless = async () => ({ ...(await fetchOne()), body: JSON.stringify({ user: { bio: "query { a }" } }) });
+  assert.match((await derive(op, harmless)).request.body ?? "", /query \{ a \}/);
 });

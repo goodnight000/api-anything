@@ -7,6 +7,7 @@ import { asText, setAt, walk } from "./codec.js";
 import { AddressRefused, RedirectRefused, type SendOptions, type Sent, send } from "./http.js";
 import type { Session } from "./session.js";
 import type { Lookup, Operation } from "./spec.js";
+import { graphqlDocuments, writesGraphql } from "./vet.js";
 
 /** What a lookup that did not answer with its value said; the op's own request was never sent. */
 export interface LookupJudged {
@@ -106,6 +107,9 @@ export async function derive(op: Operation, fetchOne: (lookup: Operation) => Pro
       type === "string" ? asText(v) : type === "number" && typeof v === "string" && /^-?\d+$/.test(v) ? BigInt(v) : v;
     request = setAt(request, slot.at, value);
   }
+  // the spec's rules see only the static document; a looked-up value must not turn a read into a mutation
+  if (op.readOnly && graphqlDocuments(request).some(writesGraphql))
+    throw new LookupFailed({ class: "error", reason: `a looked-up value made ${op.name} a GraphQL mutation` });
   return { ...op, request, slots: op.slots.filter((s) => !s.from) };
 }
 
