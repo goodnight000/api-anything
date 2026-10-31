@@ -280,7 +280,9 @@ don't capture pages the user didn't ask for.
 5. **Verify.** `api-anything verify site` runs every read op's example and checks: each case is
    `pass`, `fail` or `inconclusive` (a challenge, sign-in, rate limit or server failure: it tested
    nothing; follow its `next`, then verify again). A failing case means the op is broken, or the check
-   is wrong: change a check only if the site's own page answers those args the other way.
+   is wrong: change a check only if the site's own page answers those args the other way. A write is
+   never sent: its `preflight` row says what a call would need first (a trigger run, a login, a
+   passing readback). Exit 1 is a failing case; exit 2 is inconclusive only.
 
 The `add` output lists `warnings`. Read them. A warning such as "minTier 3" means every call runs
 the browser. Verify new arguments there too; the runtime refuses captures whose parameter

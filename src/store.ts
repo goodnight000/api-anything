@@ -517,14 +517,21 @@ export function settleWrite(id: string, status: WriteStatus, outcome: { ok: bool
   }
 }
 
-/** The ledger's records since `since`, oldest first; an unreadable ledger has none. */
-export function loadWrites(since = 0): WriteRecord[] {
+/** The ledger's records, oldest first: of a site (and op) when named, since `since`; a corrupt ledger reads as empty. */
+export function loadWrites(o: { site?: string; op?: string; since?: number } = {}): WriteRecord[] {
+  let all: WriteRecord[];
   try {
-    const all = readJson<WriteRecord[]>(writesFile(), []);
-    return Array.isArray(all) ? all.filter((r) => r.at >= since) : [];
+    all = readJson<WriteRecord[]>(writesFile(), []);
   } catch {
     return [];
   }
+  if (!Array.isArray(all)) return [];
+  return all.filter(
+    (r) =>
+      (o.site === undefined || r.site === o.site) &&
+      (o.op === undefined || r.op === o.op) &&
+      (o.since === undefined || r.at >= o.since),
+  );
 }
 
 /* --------------------------------------------------------------- call log */
@@ -607,6 +614,13 @@ export function loadCalls(site?: string, now = Date.now()): CallRecord[] {
   }
   return parseCalls(text).filter((c) => (!site || c.site === site) && now - Date.parse(c.at) < KEEP_CALLS_MS);
 }
+
+/**
+ * A write that was sent and whose landing nothing confirmed: accepted (its readback did not find it,
+ * or it has none), may_have_applied, or still "sending" (the process died mid-call).
+ */
+export const unconfirmedWrite = (r: WriteRecord) =>
+  r.status === "accepted" || r.status === "may_have_applied" || r.status === "sending";
 
 /* ----------------------------------------------------------------- export */
 

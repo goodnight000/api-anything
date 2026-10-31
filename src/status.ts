@@ -154,7 +154,7 @@ function sitesWithState(now: number): string[] {
   const names = new Set<string>();
   for (const x of [...staleList(now), ...tierList(), ...coolList(now), ...loadHeals(), ...loadCalls(undefined, now)])
     names.add(x.site);
-  for (const w of loadWrites(now - DAY_MS)) names.add(w.site);
+  for (const w of loadWrites({ since: now - DAY_MS })) names.add(w.site);
   try {
     for (const f of readdirSync(join(home(), "checks"))) if (f.endsWith(".json")) names.add(f.slice(0, -5));
   } catch {
@@ -202,7 +202,7 @@ function siteStatus(name: string, now: number, named: boolean): { status: SiteSt
     // a corrupt record: verify writes it again
   }
   const writes = new Map<string, NonNullable<OpStatus["writes"]>>();
-  for (const w of loadWrites(now - DAY_MS)) {
+  for (const w of loadWrites({ since: now - DAY_MS })) {
     if (w.site !== name) continue;
     const key = (
       {

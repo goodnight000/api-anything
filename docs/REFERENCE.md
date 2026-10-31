@@ -184,6 +184,30 @@ refused). `verify` reports each case as `pass`, `fail` or `inconclusive`: a chal
 page, a rate limit or a server that failed or could not be reached tests nothing. Check args are
 shared with the spec, so use public values only.
 
+`verify` is made for a job nobody watches:
+
+```sh
+api-anything verify hn-search goodreads        # several sites; none means every known site
+api-anything verify --user                     # the user's own specs in ~/.api-anything/sites
+api-anything verify --user --strict            # inconclusive, or a write not ready, exits 1 too
+```
+
+- Exit code: 0 when every counted case passed; 1 when a case failed or a site could not be
+  verified; 2 when nothing failed and a case was inconclusive (the site, not the spec). `--strict`
+  makes 2 into 1. A skipped op never sets the exit code.
+- A read that drifted heals even while marked stale: verify is the explicit check. The stored
+  template is still sent first.
+- Each case's record keeps `since`, when it began answering its current outcome, and the output
+  lists `newlyFailing`, `recovered` and `failingSince` (per `site/op`), so a nightly run tells new
+  breakage from old.
+- A read learned signed in is `skipped: needs login` without a call when no login is on record for
+  the site. Log in, then verify again.
+- A write is never sent. Its row is a `preflight`: `builds` (the template fills from the example and
+  the session; a missing `session:` value says "needs a trigger run"), `learnedLoggedIn` against
+  `loggedIn` now, its `readback`'s outcome in this run, `unconfirmed` (writes in the ledger that were
+  sent and never confirmed landed), and `ok`. A preflight is not a case: without `--strict` it never
+  sets the exit code, and it is no part of what `publish` reads.
+
 ## Replay, fallback and repair
 
 Besides its request template, each operation stores two things:

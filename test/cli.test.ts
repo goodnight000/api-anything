@@ -25,17 +25,18 @@ const HOME = mkdtempSync(join(tmpdir(), "api-anything-cli-"));
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI = join(ROOT, "src", "cli.ts");
 
-function cli(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function cliAt(home: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   // async on purpose: the fixture server lives in this process and must keep answering
   return new Promise((resolve) =>
     execFile(
       process.execPath,
       ["--import", "tsx", CLI, ...args],
-      { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } },
+      { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: home } },
       (err, stdout, stderr) => resolve({ code: err ? Number(err.code ?? 1) : 0, stdout, stderr }),
     ),
   );
 }
+const cli = (...args: string[]) => cliAt(HOME, ...args);
 
 let fx: Fixture;
 before(async () => (fx = await startFixture()));
@@ -1109,7 +1110,7 @@ describe("checks: an op that must prove it works before it is shared", () => {
 
     const verify = await run("verify", "stores");
     assert.equal(verify.code, 1);
-    assert.deepEqual(verify.out.counts, { pass: 2, fail: 1, inconclusive: 0, skipped: 0 });
+    assert.deepEqual(verify.out.counts, { pass: 2, fail: 1, inconclusive: 0, skipped: 0, preflight: 0 });
     assert.deepEqual(
       verify.out.results.map((r: { case: string; outcome: string; got: string }) => [r.case, r.outcome, r.got]),
       [
@@ -1204,7 +1205,7 @@ describe("an --html recipe's empty selector: what a no-results page shows instea
     assert.deepEqual((await run("call", "dir", "find", "q=bob")).out.data, [{ name: "bob" }]);
     const verify = await run("verify", "dir");
     assert.equal(verify.code, 0, verify.stdout);
-    assert.deepEqual(verify.out.counts, { pass: 2, fail: 0, inconclusive: 0, skipped: 0 });
+    assert.deepEqual(verify.out.counts, { pass: 2, fail: 0, inconclusive: 0, skipped: 0, preflight: 0 });
   });
 });
 
@@ -1773,5 +1774,152 @@ describe("call: answers that are not what their status says", () => {
     assert.equal(out.class, "error", r.stdout);
     assert.match(out.next, /open http:\/\/127\.0\.0\.1:\d+\/privacy\/consent\?\S+ in their browser.*login verdicts/);
     assert.equal(fx.calls.filter((c) => c.path.startsWith("/api/consented")).length, 1, "no second try, no heal");
+  });
+});
+
+describe("verify unattended: scope, exit codes, and a write's preflight", () => {
+  // its own home: --user lists the specs there, and nothing another describe learned
+  const home = mkdtempSync(join(tmpdir(), "api-anything-verify-"));
+  after(() => rmSync(home, { recursive: true, force: true }));
+  const run = async (...args: string[]) => {
+    const r = await cliAt(home, ...args);
+    return { ...r, out: JSON.parse(r.stdout) };
+  };
+  type Row = { site: string; op: string; outcome?: string; preflight?: Record<string, unknown>; ok: boolean };
+  const posts = () => fx.calls.filter((c) => c.method === "POST" && c.path === "/api/todos").length;
+
+  before(async () => {
+    mkdirSync(join(home, "sites"), { recursive: true });
+    writeFileSync(
+      join(home, "sites", "green.json"),
+      JSON.stringify({
+        name: "green",
+        baseUrl: fx.url,
+        operations: [
+          {
+            name: "getUser",
+            readOnly: true,
+            trigger: { url: `${fx.url}/spa/{name}` },
+            match: { method: "GET", path: "/api/spa/user" },
+            request: { method: "GET", url: `${fx.url}/api/spa/user?name=alice`, headers: {} },
+            slots: [{ param: "name", at: ["query:name"] }],
+            params: [{ name: "name", example: "alice" }],
+          },
+          {
+            name: "addTodo",
+            readOnly: false,
+            learnedLoggedIn: true,
+            trigger: { url: `${fx.url}/todos` },
+            match: { method: "POST", path: "/api/todos" },
+            request: {
+              method: "POST",
+              url: `${fx.url}/api/todos`,
+              headers: { "content-type": "application/json" },
+              body: '{"title":"buy milk"}',
+            },
+            slots: [{ param: "title", at: ["body", "json:/title"] }],
+            params: [{ name: "title", example: "buy milk" }],
+            readback: { op: "getUser", args: {} },
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(home, "sites", "limited.json"),
+      JSON.stringify({
+        name: "limited",
+        baseUrl: fx.url,
+        operations: [
+          {
+            name: "feed",
+            readOnly: true,
+            trigger: { url: `${fx.url}/limited` },
+            match: { method: "GET", path: "/api/limited" },
+            request: { method: "GET", url: `${fx.url}/api/limited`, headers: {} },
+            response: { extract: "data" },
+          },
+        ],
+      }),
+    );
+    // the fixture's /api/limited answers 429 from its third hit on
+    for (let i = 0; i < 3; i++) await fetch(`${fx.url}/api/limited`);
+  });
+
+  test("several sites at once; a rate limit alone exits 2, and a write is preflighted, never sent", async () => {
+    const sent = posts();
+    const r = await run("verify", "green", "limited");
+    assert.equal(r.code, 2, r.stdout);
+    assert.equal(r.out.ok, false);
+    assert.deepEqual(r.out.counts, { pass: 1, fail: 0, inconclusive: 1, skipped: 0, preflight: 1 });
+    assert.match(r.stderr, /an inconclusive case tested nothing/);
+    const rows: Row[] = r.out.results;
+    assert.deepEqual(
+      rows.map((x) => [x.site, x.op, x.outcome ?? (x.preflight ? "preflight" : "?"), x.ok]),
+      [
+        ["green", "getUser", "pass", true],
+        ["green", "addTodo", "preflight", false],
+        ["limited", "feed", "inconclusive", false],
+      ],
+    );
+    const p = rows[1]!.preflight!;
+    assert.equal(p.builds, true);
+    assert.equal(p.learnedLoggedIn, true);
+    assert.equal(p.loggedIn, false);
+    assert.deepEqual(p.readback, { op: "getUser", outcome: "pass" });
+    assert.equal(p.unconfirmed, 0);
+    assert.match(String(p.next), /api-anything login green/);
+    assert.equal(posts(), sent, "the write was not sent");
+    assert.deepEqual(r.out.newlyFailing, []);
+    assert.deepEqual(r.out.recovered, []);
+    assert.deepEqual(r.out.failingSince, {});
+    // the limit's cool-down keeps the second site inconclusive: --strict makes that exit 1
+    const strict = await run("verify", "green", "limited", "--strict");
+    assert.equal(strict.code, 1, strict.stdout);
+  });
+
+  test("--user verifies the user's own specs and takes no names; a preflight sets the exit code only under --strict", async () => {
+    const refused = await run("verify", "--user", "green");
+    assert.equal(refused.code, 1);
+    assert.match(refused.out.error, /--user takes no site names/);
+
+    const user = await run("verify", "--user");
+    assert.deepEqual([...new Set((user.out.results as Row[]).map((x) => x.site))].sort(), ["green", "limited"]);
+
+    const soft = await run("verify", "green");
+    assert.equal(soft.code, 0, soft.stdout);
+    assert.equal(soft.out.ok, true);
+    const strict = await run("verify", "green", "--strict");
+    assert.equal(strict.code, 1, strict.stdout);
+    assert.equal(strict.out.ok, false);
+    assert.match(strict.stderr, /a write's preflight found something a call would need first/);
+  });
+
+  test("a failing case exits 1 and is newly failing once; the next run says since when", async () => {
+    const check = await run("check", "green", "getUser", "name=bob", "--expect", "empty");
+    assert.equal(check.code, 0, check.stdout);
+    const first = await run("verify", "green");
+    assert.equal(first.code, 1, first.stdout);
+    assert.deepEqual(first.out.newlyFailing, ["green/getUser"]);
+    const since = first.out.failingSince["green/getUser"];
+    assert.ok(since, first.stdout);
+    assert.match(first.stderr, /a failing case is a broken op or a wrong check/);
+
+    const again = await run("verify", "green");
+    assert.equal(again.code, 1);
+    assert.deepEqual(again.out.newlyFailing, []);
+    assert.equal(again.out.failingSince["green/getUser"], since);
+    const failing = (again.out.results as (Row & { case?: string; since?: string })[]).find(
+      (x) => x.outcome === "fail",
+    )!;
+    assert.equal(failing.case, "check 1");
+    assert.equal(failing.since, since);
+
+    // the check corrected: the op recovered, and the exit code says so
+    const fixed = await run("check", "green", "getUser", "name=bob", "--expect", "result");
+    assert.equal(fixed.out.replaced, true);
+    const after = await run("verify", "green");
+    assert.equal(after.code, 0, after.stdout);
+    assert.deepEqual(after.out.recovered, ["green/getUser"]);
+    assert.deepEqual(after.out.failingSince, {});
   });
 });
