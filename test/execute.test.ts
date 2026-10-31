@@ -164,6 +164,23 @@ test("writes: refused without allowWrites; 5xx and network errors are ambiguous 
   assert.match(n.next ?? "", /may have gone through/);
 });
 
+test("headers too large for Node's fetch: a read climbs toward the browser, a write is sent once and stays an error", async () => {
+  const overflow = () =>
+    Promise.reject(
+      new TypeError("fetch failed", { cause: { code: "UND_ERR_HEADERS_OVERFLOW", message: "Headers Overflow Error" } }),
+    );
+  const r = await call("t", "user", { name: "alice" }, opts(overflow));
+  assert.equal(r.class, "blocked", JSON.stringify(r));
+  assert.match(r.reason ?? "", /headers are too large for plain HTTP.*needs tier 2, capped at 1/);
+  assert.equal(seen.length, 1);
+
+  seen = [];
+  const w = await call("t", "post", { text: "hi" }, { ...opts(overflow), allowWrites: true });
+  assert.equal(w.class, "error", JSON.stringify(w));
+  assert.equal(seen.length, 1);
+  assert.match(w.next ?? "", /may have gone through/);
+});
+
 test("drift heals by rescan and retries once; drifting again within 10 min marks it stale instead", async () => {
   let current = QID;
   const h: Handler = (url) => {

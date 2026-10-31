@@ -525,8 +525,11 @@ function decodeLoose(s: string): string {
 /* --------------------------------------------------------------- learning */
 
 // Conditional headers (a revalidating browser's If-None-Match) would turn every replay into a 304.
-// The body is stored decoded, so its content-encoding goes too.
-const DROP_HEADER = /^(:.*|host|content-length|connection|cookie|accept-encoding|content-encoding|if-[a-z-]+)$/i;
+// The body is stored decoded, so its content-encoding goes too. Available-Dictionary names a
+// compression dictionary in the learning browser's cache: replayed, the site can answer compressed
+// against a dictionary the caller lacks, and the fetch fails.
+const DROP_HEADER =
+  /^(:.*|host|content-length|connection|cookie|accept-encoding|content-encoding|available-dictionary|dictionary-id|if-[a-z-]+)$/i;
 // Headers the browser computes itself: an example inside them is a coincidence ("apple" in the
 // user-agent, "app" in application/json), and they never carry a nonce of the site's.
 const BROWSER_HEADER =

@@ -631,8 +631,9 @@ function classifyResponse(
       "blocked",
       `HTTP 451: not available from this network or region${body.trim() ? `: ${snippet(body)}` : ""}`,
     );
-  // a failure that names its wait (a 503 in maintenance, a 403 lockout) is a limit: sooner meets it again
-  if (r.status >= 400 && waitMs !== undefined) return rate(`HTTP ${r.status}${wait}: ${snippet(body)}`);
+  // a failure that names its wait (a 503 in maintenance, a 403 lockout) is a limit: sooner meets it again.
+  // Retry-After: 0 names none (Reddit sends it on its network block page), so the status decides.
+  if (r.status >= 400 && waitMs) return rate(`HTTP ${r.status}${wait}: ${snippet(body)}`);
   if (r.status >= 400 && REQUIRE_LOGIN.test(body)) return is("auth", `HTTP ${r.status}: ${snippet(body)}`);
   if (r.status >= 400 && RATE.test(body)) return rate(`HTTP ${r.status}${wait}: ${snippet(body)}`);
   // Laravel answers a stale CSRF token with 419, Rails with 422 InvalidAuthenticityToken. A bot
