@@ -814,6 +814,15 @@ describe("admin", () => {
 });
 
 describe("serving", () => {
+  test("search refuses a query longer than its cap, since each listed op repeats the query's words", async () => {
+    const { env } = registry();
+    await seed(env, { site, operations: [op()] });
+    const long = Array.from({ length: 60 }, (_, i) => `w${i}`).join(" ");
+    const r = await send(env, "GET", `/v1/search?q=${encodeURIComponent(long)}`);
+    assert.equal(r.status, 400, r.text);
+    assert.equal((await send(env, "GET", `/v1/search?q=${encodeURIComponent("book ratings")}`)).status, 200);
+  });
+
   test("search answers SearchMatch with FoundOp params", async () => {
     const { env } = registry();
     const seeded = await seed(env, { site, operations: [op()] });

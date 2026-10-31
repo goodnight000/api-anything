@@ -36,7 +36,9 @@ registrable domain and the hashed network that asked (demand, below), never the 
 ## Using an operation that exists
 
 1. The agent calls MCP `find_sites` (words, a domain or a URL). The registry's `GET /v1/search`
-   answers with each match's operations, their params and status, so the agent can call one next. Every
+   answers with each match's operations, their params and status, so the agent can call one next. Its
+   `q` is at most 200 characters (longer is a 400; the client sends the first 200), since each listed
+   op repeats the query's words in its `matched`/`unmatched`. Every
    match, local or the registry's, shows its `domain`, and the tool's description, its `next` and the
    skill tell the agent to check that domain is the site the user means: a site's name and description
    are the uploader's words, and can imitate another site.
@@ -163,7 +165,9 @@ say yes and share it at once, as before.
 **Health on the wire.** `GET /v1/sites/:name` (`ServedOp`) and `GET /v1/search` (`FoundOp`)
 add an optional `registry` object: `{hash?, status, confirmations, successRate?, lastOkAt?}`.
 These are the selected version's stored aggregates only. Existing top-level status, confirmations,
-successRate and lastOkAt remain for older clients; search now also carries lastOkAt. No report keys,
+successRate and lastOkAt remain for older clients; search now also carries lastOkAt. The client shows
+the top-level fields as the registry's evidence: a `registry` object that disagrees with them lends
+nothing, not even its hash. No report keys,
 network identifiers, args or data are served. Serving still reads versions, not reports, and runs no
 new probes. Tier and ms exist on individual reports but have no stored dominant-tier or median-latency
 aggregate, so neither is exposed. Absent successRate/lastOkAt are unknown, not zero or a seed's date;

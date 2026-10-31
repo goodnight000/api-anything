@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { loadRecord, opHash } from "./checks.js";
 import { loadSettings, signedHeaders } from "./identity.js";
-import { REGISTRY_API, type ServedSite, type Status } from "./registry-api.js";
+import { MAX_SEARCH_QUERY, REGISTRY_API, type ServedSite, type Status } from "./registry-api.js";
 import { indexEntry, matchQuery, operationMatch, type QueryMatch, summarize } from "./search.js";
 import { dropUnbound, home, loadSession, readJson, safeName, siteOf, writePrivate } from "./session.js";
 import { type Operation, parseSite, type Site } from "./spec.js";
@@ -341,11 +341,22 @@ export interface LocalEvidence {
   at?: string;
 }
 
+// The top-level fields are what the registry serves the op as; a nested copy that disagrees with them is not
+// evidence of anything, so it lends only its hash, and only when it agrees.
 function registryEvidence(value?: unknown): RegistryEvidence {
-  const nested = (value as { registry?: unknown } | undefined)?.registry;
-  const p = RegistryHealthSchema.safeParse(nested ?? value);
+  const p = RegistryHealthSchema.safeParse(value);
+  const n = RegistryHealthSchema.safeParse((value as { registry?: unknown } | undefined)?.registry);
+  const agrees =
+    p.success &&
+    n.success &&
+    n.data.status === p.data.status &&
+    n.data.confirmations === p.data.confirmations &&
+    n.data.successRate === p.data.successRate &&
+    n.data.lastOkAt === p.data.lastOkAt &&
+    (!p.data.hash || n.data.hash === p.data.hash);
+  const hash = p.success ? (p.data.hash ?? (agrees ? n.data?.hash : undefined)) : undefined;
   return {
-    ...(p.success && p.data.hash ? { hash: p.data.hash } : {}),
+    ...(hash ? { hash } : {}),
     status: p.success ? p.data.status : "unknown",
     confirmations: p.success ? p.data.confirmations : "unknown",
     successRate: p.success ? (p.data.successRate ?? "unknown") : "unknown",
@@ -538,7 +549,8 @@ export async function search(
   let remote: z.infer<typeof SearchMatchSchema>[] = [];
   let registryError: string | undefined;
   try {
-    const r = await registryRequest<{ matches?: unknown }>(`/v1/search?q=${encodeURIComponent(query)}&limit=${limit}`, {
+    const q = query.trim().slice(0, MAX_SEARCH_QUERY);
+    const r = await registryRequest<{ matches?: unknown }>(`/v1/search?q=${encodeURIComponent(q)}&limit=${limit}`, {
       cap: 4 * 1024 * 1024,
     });
     if (!Array.isArray(r.matches)) throw new Error(`${registryBase()}/v1/search answered no matches`);
