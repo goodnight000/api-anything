@@ -6,6 +6,7 @@
   "operations": [
     {
       "name": "searchMovies",
+      "links": [{ "from": "url", "to": { "op": "getMovie", "arg": "slug" }, "transform": "~/m/([^/?#]+)" }],
       "description": "Search public Rotten Tomatoes movie titles, first-page results only.",
       "request": {
         "method": "GET",

@@ -4,6 +4,11 @@
   "operations": [
     {
       "name": "searchBooks",
+      "links": [
+        { "from": "bookId", "to": { "op": "getBook", "arg": "bookId" } },
+        { "from": "bookId", "to": { "op": "getWorkId", "arg": "bookId" } },
+        { "from": "authorId", "to": { "op": "authorBooks", "arg": "authorId" } }
+      ],
       "request": {
         "method": "GET",
         "url": "https://www.goodreads.com/book/auto_complete?format=json&q=%7Bq%7D",
@@ -239,6 +244,9 @@
     },
     {
       "name": "getWorkId",
+      "links": [
+        { "from": "workId", "to": { "op": "getReviews", "arg": "workId" } }
+      ],
       "request": {
         "method": "GET",
         "url": "https://www.goodreads.com/book/show/%7BbookId%7D",
@@ -304,6 +312,10 @@
     },
     {
       "name": "authorBooks",
+      "links": [
+        { "from": "bookId", "to": { "op": "getBook", "arg": "bookId" } },
+        { "from": "bookId", "to": { "op": "getWorkId", "arg": "bookId" } }
+      ],
       "request": {
         "method": "GET",
         "url": "https://www.goodreads.com/author/list/%7BauthorId%7D",

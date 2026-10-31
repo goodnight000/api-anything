@@ -192,6 +192,7 @@
     },
     {
       "name": "searchPeople",
+      "links": [{ "from": "publicId", "to": { "op": "getProfile", "arg": "publicId" } }],
       "description": "People search (the first 10 results of linkedin.com/search/results/people/?keywords=...): name, headline, location, url (linkedin.com/in/<publicId>?...), publicId (getProfile's arg), network distance.",
       "request": {
         "method": "GET",
@@ -258,6 +259,7 @@
     },
     {
       "name": "searchCompanies",
+      "links": [{ "from": "universalName", "to": { "op": "getCompany", "arg": "universalName" } }],
       "description": "Company search (the first 10 results of linkedin.com/search/results/companies/?keywords=...): name, subtitle (industry, and location when set), followers, description, url (linkedin.com/company/<universalName>/), universalName (getCompany's arg).",
       "request": {
         "method": "GET",
