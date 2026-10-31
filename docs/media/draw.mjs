@@ -1,5 +1,5 @@
 // Draw the README's illustrations, each in a light and a dark variant.
-// Usage: node docs/media/draw.mjs   -> docs/media/{hero,how-it-works,benchmark,feature-*}-{light,dark}.svg
+// Usage: node docs/media/draw.mjs   -> docs/media/{hero,how-it-works,benchmark,feature-*}-{light,dark}.svg, logo.svg
 // System fonts only: GitHub's image proxy blocks web fonts. Animation is CSS and SMIL, which GitHub
 // plays in an <img>.
 import { writeFileSync } from "node:fs";
@@ -225,7 +225,8 @@ function hero(t) {
     `<mask id="fadeMask"><rect width="${W}" height="${H}" fill="url(#fade)"/></mask>` +
     `<radialGradient id="glow"><stop offset="0" stop-color="${t.api}" stop-opacity=".9"/><stop offset="1" stop-color="${t.api}" stop-opacity="0"/></radialGradient></defs>` +
     `<rect x="1" y="1" width="${W - 2}" height="${H - 2}" rx="15" fill="url(#dots)" mask="url(#fadeMask)"/>` +
-    // left: type
+    // left: the mark, then type
+    asterisk(90, 50, 16, 7.5, t.text) +
     text(72, 106, "the agent internet · built by the agents that use it", {
       size: 14,
       fill: t.muted,
@@ -773,6 +774,28 @@ function icon(draw) {
     `<g fill="none" stroke="${t.text2}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">${draw(t)}</g></svg>`;
 }
 
+/**
+ * The mark: the wildcard. To a programmer `*` means "anything", so it is the name in one glyph.
+ * Six round-capped arms; on the 64-unit logo, arms of 23 and a stroke of 10.
+ */
+function asterisk(cx, cy, arm, width, fill, cls = "") {
+  const d = [0, 60, 120]
+    .map((deg) => {
+      const a = (deg * Math.PI) / 180,
+        dx = r1(arm * Math.sin(a)),
+        dy = r1(arm * Math.cos(a));
+      return `M${r1(cx - dx)},${r1(cy - dy)}L${r1(cx + dx)},${r1(cy + dy)}`;
+    })
+    .join("");
+  return `<path${cls ? ` class="${cls}"` : ""} d="${d}" fill="none" stroke="${fill}" stroke-width="${width}" stroke-linecap="round"/>`;
+}
+
+// logo.svg, also the favicon: dark on a light page or tab bar, light on a dark one
+const logo = () =>
+  `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="API Anything">` +
+  `<style>@media (prefers-color-scheme: dark){.mark{stroke:${THEMES.dark.text}}}</style>` +
+  `${asterisk(32, 32, 23, 10, THEMES.light.text, "mark")}</svg>`;
+
 const ASSETS = {
   hero,
   flywheel,
@@ -785,3 +808,4 @@ for (const [name, draw] of Object.entries(ASSETS)) {
   if (only.length && !only.includes(name)) continue;
   for (const [mode, t] of Object.entries(THEMES)) writeFileSync(join(out, `${name}-${mode}.svg`), draw(t));
 }
+if (!only.length || only.includes("logo")) writeFileSync(join(out, "logo.svg"), logo());
