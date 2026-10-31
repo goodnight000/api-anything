@@ -1233,7 +1233,7 @@ local rules below are defense in depth on top of that.
 and by CI over the bundled `sites/`. Errors refuse: every URL an op sends to or opens (request, a derived slot's lookup, trigger, soft-from, `goto` value or
 selector) is https on a host under a public suffix (no IP, `localhost`, single-label or
 `.local`/`.internal`-style name), and so is `baseUrl`; no literal credential in a request or a lookup (the
-export rule) outside the op's `public` names; a lookup is a GET on the op's own host whose `path` names one value, and its value goes only in the path, a query or the body, never a header; a derived slot counts as a param in the read rules that follow; a read's method-override field (`_method`, `x-http-method-override`, `x-method-override`) is neither filled by a param or a lookup nor holds a literal other than GET or HEAD; `readOnly` only on GET, HEAD and POST, never on a
+export rule) outside the op's `public` names; a lookup is a GET on the op's own host whose `path` names one value, and its value goes only in the path, a query or the body, never a header nor a field named like a session value or credential, and the lookup overrides no method; a derived slot counts as a param in the read rules that follow; a read's method-override field (`_method`, `x-http-method-override`, `x-method-override`) is neither filled by a param or a lookup nor holds a literal other than GET or HEAD; `readOnly` only on GET, HEAD and POST, never on a
 GraphQL document defining a mutation or subscription (read from a JSON body, a batch, a form, the URL
 or a raw `application/graphql` body, by each definition's operation type, with comments, strings and
 block strings skipped: `query mutation { }` is a query), never with a param as the whole body (raw,

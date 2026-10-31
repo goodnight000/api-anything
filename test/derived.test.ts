@@ -347,6 +347,11 @@ test("vet: a looked-up value never fills a read's GraphQL document, its whole bo
   assert.match(errors(graphqlRead(["body", "json:/query"])), /GraphQL document/);
   assert.match(errors(graphqlRead(["body"])), /whole body/);
   assert.match(errors(graphqlRead(["header:x-http-method-override"])), /path, query or body/);
+  // a lookup to the caller's cookies can answer their CSRF token: not into a field named for one
+  assert.match(errors(graphqlRead(["body", "json:/csrf_token"])), /named like a session value or credential/);
+  const site = graphqlRead(["body", "json:/variables/id"]);
+  site.operations[0]!.slots[0]!.from!.request.url = "https://shop.example.com/api/user?name=x&_method=DELETE";
+  assert.match(errors(site), /lookup .* overrides its method to DELETE/);
 });
 
 test("a looked-up value that is no identifier is refused before the read is sent, however deep it lands", async () => {

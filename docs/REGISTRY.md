@@ -218,7 +218,10 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
 - was learned while signed in, or its clean replay was neither ok nor a bot wall;
 - writes, or is a read sent with a method other than GET or HEAD. The one exception is a POST that
   carries only GraphQL query documents. A persisted query names no document and could be a mutation;
-- has a slot with a `cookie:` or `session:` ref: every caller's client would send its own credentials;
+- has a slot with a `cookie:` or `session:` ref, its lookups' slots included: every caller's client would
+  send its own credentials;
+- has a derived slot: its lookup is sent with the caller's cookies, and what it answers (a CSRF token
+  under any name) goes into the request;
 - is a new op name on a site that lists `loginCookies` or has an op learned while signed in;
 - is a new op name on an established site: some site on its domain has a live or seeded op. Callers
   trust an established site, so a maintainer approves what it newly does (an x.com `follow`). The check

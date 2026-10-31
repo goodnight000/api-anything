@@ -160,8 +160,12 @@ export function reviewReasons(
   const method = op.request.method.toUpperCase();
   if (op.readOnly && method !== "GET" && method !== "HEAD" && !(method === "POST" && graphqlQuery(op)))
     reasons.push(`a read sent as ${method}${method === "POST" ? ", not a GraphQL query" : ""}`);
-  const refs = [...new Set(op.slots.flatMap((s) => (s.ref ? [s.ref] : [])))];
+  const lookupSlots = op.slots.flatMap((s) => s.from?.slots ?? []);
+  const refs = [...new Set([...op.slots, ...lookupSlots].flatMap((s) => (s.ref ? [s.ref] : [])))];
   if (refs.length) reasons.push(`sends the caller's own ${refs.join(", ")}`);
+  // a lookup runs with the caller's cookies, and what it answers (a CSRF token under any name) goes into the read
+  const derived = op.slots.filter((s) => s.from).map((s) => s.at.join(" > "));
+  if (derived.length) reasons.push(`fills ${derived.join(", ")} from a lookup sent with the caller's cookies`);
   const newOp = !held.opNames.includes(op.name);
   if (newOp && (held.login || site.loginCookies?.length)) reasons.push(`a new op on a site with a login: ${op.name}`);
   // callers trust an established site: a maintainer approves what it newly does (x.com "follow")

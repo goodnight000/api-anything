@@ -7,7 +7,16 @@ import { parse } from "tldts";
 import { walk } from "./codec.js";
 import { siteOf } from "./domain.js";
 import { linkProblems } from "./links.js";
-import { leafName, literalCredentials, providerKeys, scanSecrets, signInFills } from "./secrets.js";
+import {
+  credentialName,
+  lastToken,
+  leafName,
+  literalCredentials,
+  providerKeys,
+  SESSION_FIELD,
+  scanSecrets,
+  signInFills,
+} from "./secrets.js";
 import type { Operation, Readback, ReadbackRead, Request, Site } from "./spec.js";
 
 export const LIMITS = {
@@ -480,6 +489,12 @@ export function vetShared(site: Site, notes?: string): Vetted {
         errors.push(at(`${where} is not on the op's own host`));
       if (!ONE_VALUE_PATH.test(s.path ?? ""))
         errors.push(at(`${where} reads ${JSON.stringify(s.path)}, not one value`));
+      // a lookup's answer to the caller's cookies can be their CSRF token: never derived into such a field (learning skips them too)
+      const field = lastToken(s.at);
+      if (SESSION_FIELD.test(field) || credentialName(field))
+        errors.push(at(`${where} fills ${field}, a field named like a session value or credential`));
+      const override = overridden(s.from.request);
+      if (override) errors.push(at(`${where} overrides its method to ${override}`));
       for (const leaf of literalCredentials(s.from.request, pub))
         errors.push(at(`${where} ${leaf.at.join(" > ")} holds a literal credential`));
     }
