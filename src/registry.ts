@@ -267,7 +267,13 @@ export function adopt(name: string, op: Operation, next: Operation): void {
   name = safeName(name);
   const r = loadSite(name);
   if (!r) return;
-  const swap = (s: Site): Site => ({ ...s, operations: s.operations.map((x) => (x.name === op.name ? next : x)) });
+  // an upload carries no links (their targets are other ops), so the local ones stay
+  const swap = (s: Site): Site => ({
+    ...s,
+    operations: s.operations.map((x) =>
+      x.name === op.name ? { ...next, ...(x.links && !next.links ? { links: x.links } : {}) } : x,
+    ),
+  });
   if (r.source === "registry") writePrivate(r.path, `${JSON.stringify(swap(r.site), null, 2)}\n`);
   else updateSite(name, (cur) => swap(cur ?? r.site));
 }

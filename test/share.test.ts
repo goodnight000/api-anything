@@ -19,12 +19,13 @@ import { call } from "../src/execute.js";
 import { resolver } from "../src/http.js";
 import { ensureKey, saveSettings, signedHeaders } from "../src/identity.js";
 import { embedReadback, plan, registryName } from "../src/publish.js";
+import { adopt } from "../src/registry.js";
 import { anonymous, fingerprintText } from "../src/registry-api.js";
 import { settle } from "../src/report.js";
 import { mergeCapture, saveSession } from "../src/session.js";
 import { answerClaims, HOLDOUT_PURPOSE, shareOps } from "../src/share.js";
 import { parseSite, type Site } from "../src/spec.js";
-import { loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
+import { exportSite, loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
 import { vetShared } from "../src/vet.js";
 import { type FakeRegistry, hashOf, served, startRegistry } from "./fixture/registry.js";
 
@@ -85,6 +86,31 @@ const uploads = () => fake.received.filter((r) => r.path === "/v1/versions");
 const reportRequests = () => fake.received.filter((r) => r.path === "/v1/reports");
 
 /* ------------------------------------------------------------ shareOps */
+
+test("whole-site exports keep links but one-op uploads omit their unavailable targets", () => {
+  const spec = site();
+  const read = structuredClone(spec.operations[0]!);
+  read.name = "detail";
+  spec.operations.push(read);
+  spec.operations[0]!.links = [{ from: "id", to: { op: "detail", arg: "q" } }];
+  saveSite(spec);
+  assert.deepEqual(vetShared(spec).errors, []);
+  assert.deepEqual(exportSite("demo").spec.operations[0]!.links, spec.operations[0]!.links);
+  const preview = plan("demo", { ops: ["search"] });
+  assert.equal(preview.ops[0]!.upload.operation.links, undefined);
+  assert.ok(preview.stripped.some((s) => /operation links/.test(s)));
+  assert.equal(
+    preview.errors.some((s) => /link target/.test(s)),
+    false,
+  );
+  assert.deepEqual(loadSite("demo")!.site.operations[0]!.links, spec.operations[0]!.links);
+  // the registry's version of the op replaces it, the links it could not carry kept
+  const version = { ...preview.ops[0]!.upload.operation, description: "served" };
+  adopt("demo", spec.operations[0]!, version);
+  const now = loadSite("demo")!.site.operations[0]!;
+  assert.equal(now.description, "served");
+  assert.deepEqual(now.links, spec.operations[0]!.links);
+});
 
 test("shareOps: a public read goes automatically, signed, and the local op records its version", async () => {
   shareOn();
