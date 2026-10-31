@@ -1151,7 +1151,11 @@ to `~/.api-anything/registry/<site>.json` with its notes, notes first, and the r
 `shared: {from, sha256 of the spec written, by?}`. Resolution is user → registry → bundled. It refuses
 when a local spec or session of that name belongs to another site (one name is one session), and
 reports when the user's own copy shadows the pulled one. Output: each op (`name(params) -> fields`,
-method, hosts, write, login, status), the warnings, and what changed since the last pull. A call or
+method, hosts, write, login, status), the warnings, and what changed since the last pull. Each op's
+`registry` holds the served version's hash, status, confirmations, successRate and lastOkAt;
+missing evidence is `"unknown"`, never an inferred success. Its separate `local` holds the current
+op's verify status (`pass`, `fail`, `inconclusive`, or `unknown`) and record time when present,
+not args or case results. These summaries are output only, not part of the spec. A call or
 `ops` for a site that does not exist says `next: api-anything pull <site>` before suggesting `capture`.
 
 **Agents pull.** MCP `list_operations` and `call_operation` on a site that is not installed pull it,
@@ -1168,16 +1172,29 @@ their hosts.
 and merge the answer with the specs on this machine (the user's, pulled and bundled) as `installed`,
 the local copy winning, so a site learned here and never shared is found too; a registry that cannot
 be reached leaves the local ones with a `registryError`. Each match lists its ops with their params and
-status, so the agent can call one next. A registry match reaches the agent as text, so it is held to
+status, with `registry` health and `local` verification separated as in pull, so the agent can decide
+whether to call one next. An installed copy keeps its own call metadata and gains registry health only
+for the same site name, domain and op name; that health names the registry's version, not necessarily
+the installed one. With no registry answer its health is unknown, even if the installed op records a
+version's status. No new probes run. A registry match reaches the agent as text, so it is held to
 the shared rules' limits (a site name as `safeName` allows, op and param names the rules allow, an op
 signature, texts of at most 500 characters, at most 50 ops); one that breaks them is dropped, not
 the rest. The registry ranks its own matches; local specs are scored here: a domain or URL query
 matches the specs whose ops use its registrable domain; words (lower-cased, under 3 letters and
 common words such as "the", "in" or "best" left out, a plural `s` dropped but not from "news") are
-scored against the site's name (most), its title and domains, then its description and ops (op names
-and fields split at camelCase; part of a longer word there counts from 5 letters), a word that
-matches nothing counting against the site, and a local site under a third of the best score matched
-a stray word and is left out. With no match, `find_sites` answers `nextCall: {tool: "learn_site"}`.
+scored against the site's name (most), its title and domains, then op signatures, the site's description
+and op descriptions. Op names and fields split at camelCase; part of a longer word there counts from
+5 letters. Unmatched words do not subtract: `vegetarian pasta recipes` can find a recipe capability
+without claiming it filters vegetarian pasta. The sum of word weights is multiplied by the number of
+matched words, favoring coverage; a generic action or output word alone (`search`, `price`, `title`,
+`name`, `description`, `result`, `data`) does not establish a capability when other query words miss.
+A local site under a third of the best score matched a stray word and is left out. Each site and each
+op returns normalized `matched` and `unmatched` words; an op's coverage uses only its own signature
+and description, never another op's text. Domain queries keep their exact registrable-domain rules.
+When all matches are partial, `next` suggests trying their core capabilities or broadening before
+learning. `find_sites.nextCall` is executable: `list_operations {site}` for a match (notes before
+calling), `list_sites {}` for no match; an interface-only match has none. Learning needs a page and
+examples, so a bare `learn_site` is not a next call.
 
 **Sharing what this install learned (`shareOps`).** Each op's upload (`VersionUpload`) is built by
 `publish.ts`'s `plan`: the export's stripping (no example values in the request, no response shapes but the picked fields' types,
@@ -1489,8 +1506,9 @@ independent alternative.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `find_sites`, `list_operations`,
   `call_operation`, `get_job`, `site_status` (`status`, see the call log), `login` (so an agent can fix an `auth` failure itself) and `learn_site`
   (`mcp-learn.ts`), plus `call_write_operation` on a server started with `--allow-writes`, so the tool list costs the same at 2 sites or 200. `find_sites` is `search` (see
-  Sharing specs): each match's ops with their params and registry status, `nextCall`
-  `{tool: "call_operation", args: {site}}` for the best match, or `{tool: "learn_site"}` with none;
+  Sharing specs): each match's ops with their params, lexical coverage, registry health and local
+  verification, `nextCall` `{tool: "list_operations", args: {site}}` for the best match, or
+  `{tool: "list_sites", args: {}}` with none;
   `list_operations`, `call_operation` and `call_write_operation` on a site that is not installed pull it from the registry first
   (see "Agents pull"), and `list_operations` shows each op's registry status. `learn_site` (CLI
   `learn`, `learnsite.ts`) learns a read with the user's args, the agent's second and third values, a

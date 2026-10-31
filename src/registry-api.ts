@@ -135,6 +135,16 @@ export interface UploadResult {
   reasons?: string[];
 }
 
+/** The selected registry version's stored aggregate health. */
+export interface RegistryHealth {
+  /** the registry version these aggregates describe, not necessarily an installed local op */
+  hash?: string;
+  status: Status;
+  confirmations: number;
+  successRate?: number;
+  lastOkAt?: string;
+}
+
 /** One op as the registry serves it: the best version of it. */
 export interface ServedOp {
   hash: string;
@@ -144,6 +154,7 @@ export interface ServedOp {
   /** ok / (ok + fail + wrong) over the recent window, distinct installs; absent with no reports */
   successRate?: number;
   lastOkAt?: string;
+  registry?: RegistryHealth;
   operation: Operation;
 }
 
@@ -179,6 +190,10 @@ export interface FoundOp {
   status: Status;
   confirmations: number;
   successRate?: number;
+  lastOkAt?: string;
+  registry?: RegistryHealth;
+  matched?: string[];
+  unmatched?: string[];
   login?: true;
   params: { name: string; type: string; required: boolean; description?: string; hint?: string; example?: unknown }[];
 }
@@ -190,6 +205,8 @@ export interface SearchMatch {
   displayName?: string;
   description?: string;
   operations: FoundOp[];
+  matched?: string[];
+  unmatched?: string[];
   /** the site's own agent interfaces; a domain search finds a site that has only these, with no operations */
   interfaces?: ServedInterface[];
 }

@@ -82,9 +82,9 @@ function statusCell(o: ServedOp): string {
   const [label, tone, why] = STATUS[o.status] ?? [o.status, "none", ""];
   const facts = [
     `${o.confirmations} confirmation${o.confirmations === 1 ? "" : "s"}`,
-    ...(o.successRate !== undefined ? [`${Math.round(o.successRate * 100)}% success`] : []),
+    o.successRate !== undefined ? `${Math.round(o.successRate * 100)}% success` : "success unknown",
   ];
-  const last = o.lastOkAt ? `; last worked ${day(o.lastOkAt)}` : "";
+  const last = o.lastOkAt ? `; last worked ${day(o.lastOkAt)}` : "; last worked unknown";
   return `<span class="h ${tone}" title="${esc(why)}">${esc(label)}</span><small>${facts.join(" · ")}${last}</small>`;
 }
 

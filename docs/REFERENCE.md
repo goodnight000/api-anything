@@ -6,10 +6,37 @@ Details behind the [README](../README.md). The design and its reasons are in
 - [Creating an operation from captured traffic](#creating-an-operation-from-captured-traffic)
 - [Replay, fallback and repair](#replay-fallback-and-repair)
 - [Logging in](#logging-in)
+- [Finding operations and checking health](#finding-operations-and-checking-health)
 - [MCP server](#mcp-server)
 - [Safety and terms of service](#safety-and-terms-of-service)
 - [Status and known limits](#status-and-known-limits)
 - [Prior art](#prior-art)
+
+## Finding operations and checking health
+
+`api-anything search <words | domain | url>` and MCP `find_sites {query}` search the registry and
+this machine's specs. Extra words do not cancel a capability match: `vegetarian pasta recipes`
+can find recipe search. Each site and op returns normalized `matched` and `unmatched` words.
+An op's words come from its own summary, not a different op at that site. Partial matches are
+suggestions, not guarantees for uncovered constraints. Try the existing capability with the user's
+values, or broaden the query, before learning a new site. Check each match's `domain` first.
+Unconfirmed registry sites still require a domain or URL query.
+
+Each search op, and each op in `pull <site>` output, separates evidence:
+
+- `registry`: the registry version's `hash`, `status`, `confirmations`, `successRate` (0–1) and
+  `lastOkAt`. Missing values say `"unknown"`; live with zero confirmations is not proof of success.
+- `local`: the matching current op's last verify record, `status` (`pass`, `fail`, `inconclusive`,
+  or `unknown`) and `at` when present. It includes no args or case results.
+
+An installed copy keeps its params and descriptions without losing the registry's health. Health
+describes the registry version, which may differ from the local one. An unreachable registry leaves
+local matches with `registryError` and unknown registry health. No probes run, and no tier or latency
+is inferred: the Worker does not store aggregates for them.
+
+`find_sites.nextCall` is a complete discovery call: `list_operations {site}` for a match, so the
+agent reads notes before calling, or `list_sites {}` when nothing matched. An interface-only match
+has no next call. `learn_site` still needs a page template and examples supplied by the agent.
 
 ## Creating an operation from captured traffic
 

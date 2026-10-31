@@ -7,9 +7,10 @@ import { createHash } from "node:crypto";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { loadRecord, opHash } from "./checks.js";
 import { loadSettings, signedHeaders } from "./identity.js";
 import { REGISTRY_API, type ServedSite, type Status } from "./registry-api.js";
-import { indexEntry, score, summarize } from "./search.js";
+import { indexEntry, matchQuery, operationMatch, type QueryMatch, summarize } from "./search.js";
 import { dropUnbound, home, loadSession, readJson, safeName, siteOf, writePrivate } from "./session.js";
 import { type Operation, parseSite, type Site } from "./spec.js";
 import { listSites, loadSite, registryDir, updateSite } from "./store.js";
@@ -95,7 +96,11 @@ export interface Pulled {
   site: string;
   from: string;
   sha256: string;
-  operations: (ReturnType<typeof summarize> & { status?: string })[];
+  operations: (ReturnType<typeof summarize> & {
+    status?: string;
+    registry: RegistryEvidence;
+    local: LocalEvidence;
+  })[];
   warnings: string[];
   /** on a pull again: ops that are new, changed or gone since the last one */
   changed?: { added: string[]; changed: string[]; removed: string[] };
@@ -194,6 +199,8 @@ export async function pull(name: string, o: { by?: "agent"; signal?: AbortSignal
     operations: site.operations.map((op) => ({
       ...summarize(op),
       ...(op.version ? { status: op.version.status } : {}),
+      registry: registryEvidence(served.operations.find((o) => o.operation.name === op.name)),
+      local: localEvidence(name, op),
     })),
     warnings,
     ...(before ? { changed: changes(before, site) } : {}),
@@ -304,6 +311,52 @@ function readJsonOr<T>(file: string, fallback: T): T {
 const text = z.string().max(LIMITS.text);
 const NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
 const STATUS = z.enum(["candidate", "live", "degraded", "review", "archived", "blocked"]);
+const RegistryHealthSchema = z.object({
+  hash: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .optional(),
+  status: STATUS,
+  confirmations: z.number().int().min(0),
+  successRate: z.number().min(0).max(1).optional(),
+  lastOkAt: z.iso.datetime().optional(),
+});
+
+export interface RegistryEvidence {
+  hash?: string;
+  status: Status | "unknown";
+  confirmations: number | "unknown";
+  successRate: number | "unknown";
+  lastOkAt: string;
+}
+
+export interface LocalEvidence {
+  status: "pass" | "fail" | "inconclusive" | "unknown";
+  at?: string;
+}
+
+function registryEvidence(value?: unknown): RegistryEvidence {
+  const nested = (value as { registry?: unknown } | undefined)?.registry;
+  const p = RegistryHealthSchema.safeParse(nested ?? value);
+  return {
+    ...(p.success && p.data.hash ? { hash: p.data.hash } : {}),
+    status: p.success ? p.data.status : "unknown",
+    confirmations: p.success ? p.data.confirmations : "unknown",
+    successRate: p.success ? (p.data.successRate ?? "unknown") : "unknown",
+    lastOkAt: p.success ? (p.data.lastOkAt ?? "unknown") : "unknown",
+  };
+}
+
+function localEvidence(site: string, op: Operation): LocalEvidence {
+  const r = loadRecord(site)[op.name];
+  if (!r || r.hash !== opHash(op) || !r.results.length) return { status: "unknown" };
+  const outcomes = r.results.map((c) => c.outcome);
+  return {
+    status: outcomes.includes("fail") ? "fail" : outcomes.includes("inconclusive") ? "inconclusive" : "pass",
+    at: r.at,
+  };
+}
+
 const FoundOpSchema = z.object({
   name: z.string().regex(NAME),
   // `name(params) -> fields`, whose name the shared rules restrict
@@ -315,6 +368,8 @@ const FoundOpSchema = z.object({
   status: STATUS,
   confirmations: z.number().int().min(0),
   successRate: z.number().min(0).max(1).optional(),
+  lastOkAt: z.iso.datetime().optional(),
+  registry: RegistryHealthSchema.optional(),
   login: z.literal(true).optional(),
   params: z
     .array(
@@ -391,12 +446,17 @@ export interface FoundOperation {
   status?: Status | string;
   confirmations?: number;
   successRate?: number;
+  lastOkAt?: string;
+  registry: RegistryEvidence;
+  local: LocalEvidence;
+  matched: string[];
+  unmatched: string[];
   login?: true;
   write?: true;
   params: z.infer<typeof FoundOpSchema>["params"];
 }
 
-export interface Found {
+export interface Found extends QueryMatch {
   site: string;
   /** the registrable domain its operations call: what the agent checks is the site the user means */
   domain: string;
@@ -427,11 +487,17 @@ const localFound = (s: Site): Found => ({
   ...(s.displayName ? { displayName: s.displayName } : {}),
   ...(s.description ? { description: s.description } : {}),
   installed: true,
+  matched: [],
+  unmatched: [],
   operations: s.operations.map((op) => ({
     name: op.name,
     signature: summarize(op).op,
     ...(op.description ? { description: op.description } : {}),
     ...(op.version ? { status: op.version.status } : {}),
+    registry: registryEvidence(),
+    local: localEvidence(s.name, op),
+    matched: [],
+    unmatched: [],
     ...(op.learnedLoggedIn ? { login: true as const } : {}),
     ...(op.readOnly ? {} : { write: true as const }),
     params: op.params.map((p) => ({
@@ -474,16 +540,28 @@ export async function search(
   }
   const local = o.local ?? localSites();
   const installed = new Set(local.map((s) => s.name));
-  // a site already here keeps its own operations, and gains the interfaces the registry knows for its domain
+  // Local call metadata wins. Registry evidence describes its own version, never local verification.
   const remoteInterfaces = new Map(
     remote.flatMap((m) => (m.interfaces?.length ? [[m.domain, m.interfaces] as const] : [])),
   );
   const withInterfaces = (f: Found): Found => {
     const own = remoteInterfaces.get(f.domain);
-    return own ? { ...f, interfaces: own } : f;
+    const shared = remote.find((m) => m.name === f.site && m.domain === f.domain);
+    return {
+      ...f,
+      ...(own ? { interfaces: own } : {}),
+      operations: f.operations.map((op) => ({
+        ...op,
+        registry: registryEvidence(shared?.operations.find((o) => o.name === op.name)),
+      })),
+    };
   };
   const scored = [
-    ...local.map((s) => ({ found: withInterfaces(localFound(s)), s: score(indexEntry(s, ""), query), local: true })),
+    ...local.map((s) => ({
+      found: withInterfaces(localFound(s)),
+      match: matchQuery(indexEntry(s, ""), query),
+      local: true,
+    })),
     ...remote
       .filter((m) => !installed.has(m.name))
       .map((m) => ({
@@ -493,23 +571,39 @@ export async function search(
           ...(m.displayName ? { displayName: m.displayName } : {}),
           ...(m.description ? { description: m.description } : {}),
           installed: false,
-          operations: m.operations,
+          matched: [],
+          unmatched: [],
+          operations: m.operations.map((op) => ({
+            ...op,
+            registry: registryEvidence(op),
+            local: { status: "unknown" as const },
+            matched: [],
+            unmatched: [],
+          })),
           ...(m.interfaces?.length ? { interfaces: m.interfaces } : {}),
         },
-        s: score(
+        match: matchQuery(
           { ...m, site: m.name, domains: [m.domain], operations: m.operations.map((x) => ({ ...x, op: x.signature })) },
           query,
         ),
         local: false,
       })),
   ];
-  const best = Math.max(0, ...scored.map((x) => x.s));
+  const best = Math.max(0, ...scored.map((x) => x.match.score));
   // a local site far behind the best answer matched a stray word; the registry already chose its own
   const matches = scored
-    .filter((x) => !x.local || (x.s > 0 && x.s * 3 >= best))
-    .sort((a, b) => b.s - a.s || a.found.site.localeCompare(b.found.site))
+    .filter((x) => !x.local || (x.match.score > 0 && x.match.score * 3 >= best))
+    .sort((a, b) => b.match.score - a.match.score || a.found.site.localeCompare(b.found.site))
     .slice(0, limit)
-    .map((x) => x.found);
+    .map(({ found, match }) => ({
+      ...found,
+      matched: match.matched,
+      unmatched: match.unmatched,
+      operations: found.operations.map((op) => ({
+        ...op,
+        ...operationMatch({ op: op.signature, description: op.description }, query),
+      })),
+    }));
   return { matches, ...(registryError ? { registryError } : {}) };
 }
 

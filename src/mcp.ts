@@ -445,7 +445,7 @@ export function createServer({
     "find_sites",
     {
       description:
-        'Find websites someone already turned into operations: the shared registry and this machine\'s sites, best match first, each op with its params and its status in the registry (live: confirmed by others; candidate: not yet). query is words (what you need: "book ratings", "flight prices"), a domain or a URL. Each match has its domain: check that a match\'s domain is the site the user means before calling it: a name or description can imitate another site. Call an op with call_operation; a match with installed false is fetched on first use.',
+        'Find websites someone already turned into operations: the shared registry and this machine\'s sites, best match first. Each op has params, matched/unmatched query words and separate registry health and local verification (unknown without evidence). Partial lexical matches do not guarantee the unmatched constraints: try the core capability or broaden before learning. query is words ("book ratings", "flight prices"), a domain or a URL. Check each match\'s domain is the site the user means: a name or description can imitate another site. list_operations shows notes before call_operation; a match with installed false is fetched on first use.',
       inputSchema: { query: z.string().describe("words, a domain or a URL") },
       annotations: READ_HINTS,
     },
@@ -465,14 +465,14 @@ export function createServer({
             top && !top.operations.length && top.interfaces?.length
               ? `${top.domain} offers its own agent interface (${top.interfaces.map((i) => `${i.kind} ${i.url}`).join(", ")}): tell the user, who can connect it; nothing here calls it`
               : top
-                ? `check that ${top.domain} is the site the user means (a lookalike name can point elsewhere), then call_operation {"site":"${top.site}","op":<an op above>,"args":<its params>}; list_operations {"site":"${top.site}"} first shows the site's notes (caveats, arg formats)`
-                : "nothing matched. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, find_sites with that, which also finds unconfirmed ones; else learn it with learn_site (the page that shows the data, example args and what you want from it), which calls an op someone shared for the same page before it opens a browser",
+                ? `check that ${top.domain} is the site the user means (a lookalike name can point elsewhere), then call_operation {"site":"${top.site}","op":<an op above>,"args":<its params>}; list_operations {"site":"${top.site}"} first shows the site's notes (caveats, arg formats)${r.matches.every((m) => m.unmatched.length) ? "; these are partial lexical matches, not guarantees for the unmatched constraints: try their core capabilities or broaden the query before learning a new site" : ""}`
+                : "nothing matched. Broaden the query or check list_sites before learning. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, find_sites with that, which also finds unconfirmed ones; else learn it with learn_site (the page that shows the data, example args and what you want from it), which calls an op someone shared for the same page before it opens a browser",
           nextCall:
             top && !top.operations.length
               ? undefined
               : top
-                ? { tool: "call_operation", args: { site: top.site } }
-                : { tool: "learn_site" },
+                ? { tool: "list_operations", args: { site: top.site } }
+                : { tool: "list_sites", args: {} },
         });
       }),
   );

@@ -1224,12 +1224,14 @@ async function cmdSearch({ pos }: Parsed): Promise<number> {
     ...(r.registryError ? { registryError: r.registryError } : {}),
     ...(r.matches.length ? { shared: SHARED_NOTE } : {}),
     next: !top
-      ? "nothing matched. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, search with that, which also finds unconfirmed ones; else learn it with api-anything learn"
+      ? "nothing matched. Broaden the query or check api-anything sites before learning. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, search with that, which also finds unconfirmed ones; else learn it with api-anything learn"
       : !top.operations.length && top.interfaces?.length
         ? `${top.domain} offers its own agent interface: ${top.interfaces.map((i) => `${i.kind} ${i.url}`).join(", ")}`
-        : top.installed
-          ? `check that ${top.domain} is the site meant, then api-anything ops ${top.site} lists its operations`
-          : `check that ${top.domain} is the site meant (a lookalike name can point elsewhere), then api-anything pull ${top.site} fetches it; read its warnings with the user before the first call`,
+        : r.matches.every((m) => m.unmatched.length)
+          ? `partial lexical matches, not guarantees for the unmatched constraints: check that ${top.domain} is the site meant, then api-anything ${top.installed ? "ops" : "pull"} ${top.site}; read its notes and warnings, then try the core capabilities or broaden the query before learning a new site`
+          : top.installed
+            ? `check that ${top.domain} is the site meant, then api-anything ops ${top.site} lists its operations`
+            : `check that ${top.domain} is the site meant (a lookalike name can point elsewhere), then api-anything pull ${top.site} fetches it; read its warnings with the user before the first call`,
   });
   return 0;
 }

@@ -1,6 +1,6 @@
 /** What the registry serves: each site with the best version of each of its ops, and search over them. */
 import type { FoundOp, SearchMatch, ServedOp, ServedSite } from "../../src/registry-api.js";
-import { domainOf, type IndexEntry, indexEntry, score, summarize } from "../../src/search.js";
+import { domainOf, type IndexEntry, indexEntry, matchQuery, operationMatch, summarize } from "../../src/search.js";
 import type { Operation, Site } from "../../src/spec.js";
 import { byRank, successRate } from "./rules.js";
 import { allSites, context, type D1Database, getSite, servable, type VersionRow } from "./store.js";
@@ -13,6 +13,13 @@ const servedOp = (r: VersionRow): ServedOp => {
     confirmations: r.confirmations,
     ...(rate !== undefined ? { successRate: rate } : {}),
     ...(r.last_ok_at ? { lastOkAt: r.last_ok_at } : {}),
+    registry: {
+      hash: r.hash,
+      status: r.status,
+      confirmations: r.confirmations,
+      ...(rate !== undefined ? { successRate: rate } : {}),
+      ...(r.last_ok_at ? { lastOkAt: r.last_ok_at } : {}),
+    },
     operation: JSON.parse(r.operation) as Operation,
   };
 };
@@ -64,6 +71,8 @@ const foundOp = (o: ServedOp): FoundOp => ({
   status: o.status,
   confirmations: o.confirmations,
   ...(o.successRate !== undefined ? { successRate: o.successRate } : {}),
+  ...(o.lastOkAt ? { lastOkAt: o.lastOkAt } : {}),
+  ...(o.registry ? { registry: o.registry } : {}),
   ...(o.operation.learnedLoggedIn ? { login: true as const } : {}),
   params: o.operation.params.map((p) => ({
     name: p.name,
@@ -87,18 +96,23 @@ export function search(sites: ServedSite[], query: string, limit: number): Searc
   const byDomain = domainOf(query) !== undefined;
   const scored = sites
     .filter((s) => byDomain || confirmed(s))
-    .map((s) => ({ s, live: confirmed(s), score: score(entryOf(s), query) }))
+    .map((s) => ({ s, live: confirmed(s), ...matchQuery(entryOf(s), query) }))
     .sort((a, b) => Number(b.live) - Number(a.live) || b.score - a.score || a.s.name.localeCompare(b.s.name));
   // a site far behind the best answer matched a stray word
   const best = Math.max(0, ...scored.map((x) => x.score));
   return scored
     .filter(({ score }) => score > 0 && score * 3 >= best)
     .slice(0, limit)
-    .map(({ s }) => ({
+    .map(({ s, matched, unmatched }) => ({
       name: s.name,
       domain: s.domain,
       ...(s.displayName ? { displayName: s.displayName } : {}),
       ...(s.description ? { description: s.description } : {}),
-      operations: s.operations.map(foundOp),
+      matched,
+      unmatched,
+      operations: s.operations.map((o) => ({
+        ...foundOp(o),
+        ...operationMatch({ op: summarize(o.operation).op, description: o.operation.description }, query),
+      })),
     }));
 }

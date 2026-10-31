@@ -47,6 +47,13 @@ registrable domain and the hashed network that asked (demand, below), never the 
      own domain;
    - `GET /v1/index`, the home page list and the sitemap leave such a site out. Its page
      (`/sites/:name`) still renders, marked `noindex`.
+   Lexical ranking is shared with the client (`src/search.ts`). Unmatched constraint words do not
+   subtract from a capability hit; covering more query words improves rank. Optional `matched` and
+   `unmatched` arrays on `SearchMatch` and `FoundOp` explain normalized query words, with each op
+   matched only against its own summary. Partial matches suggest calling the existing capability or
+   broadening before learning, not that the uncovered constraints are supported.
+   `find_sites.nextCall` is `list_operations {site}` (read its notes first), or `list_sites {}` on
+   no match, rather than an incomplete call or learn request.
 2. `call_operation` on a site that is not installed fetches it (`GET /v1/sites/:name`) first. Of a
    site fetched this way only the reads run until a human runs `api-anything pull` (the `by: "agent"`
    mark, as before). An op of a fetched or pulled site that is still a `candidate` is called with none of
@@ -60,7 +67,8 @@ registrable domain and the hashed network that asked (demand, below), never the 
 
 ## Learning an operation that does not exist
 
-1. `find_sites` finds nothing, or the site lacks the op. Its `nextCall` is `learn_site`.
+1. After trying partial capabilities or broadening discovery, `find_sites` finds nothing, or the site
+   lacks the op. The agent supplies a page and examples to `learn_site`.
 2. `learn_site {page URL template, args, args2, args3, intent}` (MCP; CLI `learn`) first looks for the
    op among what is shared: words never find a site with only candidates, so a newcomer would learn it
    again, and since the version hash covers the op's name, description, examples and checks, two
@@ -151,6 +159,16 @@ hold it among its reasons, because a login op runs with every caller's credentia
 say yes and share it at once, as before.
 
 ## Verification by the crowd
+
+**Health on the wire.** `GET /v1/sites/:name` (`ServedOp`) and `GET /v1/search` (`FoundOp`)
+add an optional `registry` object: `{hash?, status, confirmations, successRate?, lastOkAt?}`.
+These are the selected version's stored aggregates only. Existing top-level status, confirmations,
+successRate and lastOkAt remain for older clients; search now also carries lastOkAt. No report keys,
+network identifiers, args or data are served. Serving still reads versions, not reports, and runs no
+new probes. Tier and ms exist on individual reports but have no stored dominant-tier or median-latency
+aggregate, so neither is exposed. Absent successRate/lastOkAt are unknown, not zero or a seed's date;
+pages say so explicitly. Clients show missing health as `"unknown"` under `registry`, keep local
+verify evidence under `local`, and do not replace either with the other when merging installed ops.
 
 A new version is a **candidate**. It is served to others while no live version of that op exists,
 marked as such. It becomes **live** once installs other than its uploader report it ok:
