@@ -14,7 +14,7 @@ import {
 } from "./browser.js";
 import { type Class, judge } from "./classify.js";
 import { asText, fillTemplate } from "./codec.js";
-import { capOutput, getPath } from "./extract.js";
+import { getPath } from "./extract.js";
 import {
   type Attempt,
   challengePage,
@@ -50,6 +50,7 @@ import { loadSettings } from "./identity.js";
 import { reimportIfBrowser } from "./login.js";
 import { adopt, servedNow } from "./registry.js";
 import { afterCall, queueReport } from "./report.js";
+import { type ResultCursor, type ResultView, resultView, viewProblem } from "./results.js";
 import { redact } from "./secrets.js";
 import {
   dropUnbound,
@@ -88,6 +89,8 @@ import { proofOp } from "./vet.js";
 export type Tier = 1 | 2 | 3;
 
 export interface CallOptions {
+  /** Shape the classified, extracted answer, never the site's arguments or stored recipe. */
+  view?: ResultView;
   /** required for any readOnly:false op, at every entry point */
   allowWrites?: boolean;
   /**
@@ -164,6 +167,9 @@ export interface CallResult {
   /** extracted, picked, capped */
   data?: unknown;
   truncated?: string;
+  resultId?: string;
+  /** Local continuation of this answer, not the site's nextPage. */
+  more?: ResultCursor;
   /**
    * reads with `paging.next` only: the value to pass as the op's paging param for the next page,
    * as the site's answer gave it
@@ -405,15 +411,11 @@ function nextFor(
 }
 
 function success(a: Attempt, extra: Partial<Result> = {}): Result {
-  const capped = capOutput(a.data);
-  // the site's cursor points past the page it sent, not past what fitted in the output
-  if (capped.truncated && a.nextPage !== undefined)
-    capped.truncated += "; nextPage starts after the last item of this page, cut or not";
   return {
     ok: true,
     class: "ok",
     tier: a.tier,
-    ...capped,
+    data: a.data,
     ...(a.nextPage !== undefined ? { nextPage: a.nextPage } : {}),
     ...(a.hasMore !== undefined ? { hasMore: a.hasMore } : {}),
     ...extra,
@@ -923,6 +925,7 @@ async function readBack(
     again: undefined,
     idempotencyKey: undefined,
     onAnswered: undefined,
+    view: undefined,
   };
   const read =
     "op" in rb
@@ -1042,6 +1045,16 @@ export async function call(
   opts: CallOptions = {},
 ): Promise<CallResult> {
   const t0 = Date.now();
+  const problem = viewProblem(opts.view);
+  if (problem)
+    return {
+      ok: false,
+      class: "input",
+      reason: problem,
+      next: "check view.fields and view.maxChars; do not put them in the site's args",
+      retry: "after_fix",
+      ms: Date.now() - t0,
+    };
   const found = resolve(siteName, opName);
   if ("ok" in found) return { ...finish(found, undefined, undefined, []), ms: Date.now() - t0 };
   opts.onAnswered?.(found.op);
@@ -1102,6 +1115,12 @@ async function run(
         fetchImpl: opts.fetchImpl,
         minIntervalMs: opts.minIntervalMs,
       });
+    if (out.ok && !proof && out.data !== undefined) {
+      const viewed = resultView(out.data, opts.view);
+      if (viewed.truncated && out.nextPage !== undefined)
+        viewed.truncated += "; nextPage starts after the last item of this page, cut or not; more stays on this page";
+      return { ...out, ...viewed };
+    }
     return out;
   };
   const write = !op.readOnly;
@@ -1400,7 +1419,12 @@ export async function heal(
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
     if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
-    return { ...f, ...extra, ms: Date.now() - t0 };
+    return {
+      ...f,
+      ...(f.ok && f.data !== undefined ? resultView(f.data) : {}),
+      ...extra,
+      ms: Date.now() - t0,
+    };
   };
   const found = resolve(siteName, opName);
   if ("ok" in found) return done(found);

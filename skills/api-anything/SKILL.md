@@ -14,7 +14,7 @@ cookies stay on this machine, under `~/.api-anything` (`API_ANYTHING_HOME` overr
 catalog holds operations people's agents learned from public pages.
 
 Over MCP the agent has `find_sites`, `list_operations`, `call_operation`, `learn_site`, `list_sites`,
-`get_job`, `site_status` and `login`. With a shell, the CLI is `api-anything` (or `npx -y api-anything`): `search`, `ops`, `call`,
+`get_result`, `get_job`, `site_status` and `login`. With a shell, the CLI is `api-anything` (or `npx -y api-anything`): `search`, `ops`, `call`,
 `learn`, `status` and `sites` do the same, and its output is one line of JSON. A failure also prints a `next:`
 line on stderr. `list_operations` gives each op's args as a JSON Schema (`inputSchema`).
 `call_operation` sends only reads; a server started with `--allow-writes` also has
@@ -346,7 +346,15 @@ Every failure carries:
 - `nextPage`, `hasMore` (paged reads): pass `nextPage` as the op's paging param (`ops` shows it
   under `pages`) for the next page. `hasMore: false` means the site said this is the last page.
   Neither field means the answer didn't say: stop, or ask for the next page number yourself. When
-  the result is also `truncated`, the cut items are skipped by `nextPage`: ask for fewer per page.
+  the result is also `truncated`, first pass its local `more` to `get_result`: no site request.
+  `nextPage` skips to the site's next page, not to the items cut from this one.
+- `resultId`, `more`: a cut answer is kept privately for 15 minutes (at most 20 answers).
+  `get_result` takes `more` unchanged, or `{resultId, fields, maxChars}` to reshape from the
+  start. CLI: `api-anything result <id> --offset <n> --fields a,b --max-chars <n>`.
+  Normal offsets count items. With `more.format: "json"` (CLI `--format json`), offsets count
+  characters and `data` is a JSON fragment (`encoding: "json"`): concatenate fragments, then
+  parse, without the initial shortened preview. Restart at offset 0 if changing fields.
+  An expired or evicted id cannot be retrieved; never repeat a write to recover its answer.
 
 `reason` and `next` never hold a live cookie or session value: one the site echoed is replaced by
 `[redacted]`. `data` is not redacted.
@@ -411,8 +419,12 @@ Every failure carries:
 
 - Set `--extract` to the part of the response you need, and `--pick` to the fields you need per
   item. `add` suggests an extract path. When results are split across sections, `[*]` joins them
-  (`contents[*].items`). Output over about 20k characters is cut, and the result
-  carries a `truncated` note.
+  (`contents[*].items`). For one call, use `view: {fields: ["id", "name=details.title"],
+  maxChars: 4000}` separately from `args` (CLI `--fields id,name=details.title --max-chars 4000`).
+  It shapes the already-extracted output, not the spec. `maxChars` is 256 to 200000, default
+  20000. A cut answer has `truncated`, `resultId` and `more`: use `get_result` to recover or
+  reproject it locally instead of calling the site again. Fields the stored recipe already
+  discarded are not available.
 - Prefer `ops` over reading spec files, and a single `call` over capture runs. A capture is for
   learning, not for fetching data.
 - Don't loop `call` over hundreds of values without asking. api-anything spaces requests to one site

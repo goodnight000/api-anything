@@ -44,6 +44,7 @@ import { pagingFlag, pagingHints } from "./paging.js";
 import { plan, uploadName } from "./publish.js";
 import { pull, RegistryError, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
+import { getResult, type ResultView, viewProblem } from "./results.js";
 import { captureLive, redact } from "./secrets.js";
 import { loadSession } from "./session.js";
 import { AGENTS, type Agent, askYesNo, setup, summary } from "./setup.js";
@@ -177,7 +178,7 @@ const HELP: Record<string, string> = {
   so nothing shows the server reads those params (publish refuses the op until it does).
   An op whose captured response is a bot challenge, a sign-in page, a rate limit or a server failure
   is not saved.`,
-  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
+  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--fields a,b] [--max-chars n] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, heal?, ms, next?}; a failure also says retry
   (safe, after_wait, after_fix, no), retryAfterMs and nextCall, and a write says write (not_sent,
   not_applied, accepted, may_have_applied, applied: its readback found it). A paged read says
@@ -185,6 +186,9 @@ const HELP: Record<string, string> = {
   what changed in its request in heal (undo: api-anything revert <site> <op>). --dry prints the
   request with credentials redacted.
   --json -         read the args object from stdin (at most 4 MiB); k=v args override its keys
+  --fields a,b     project each extracted item (pick paths, including name=path); not site args
+  --max-chars n    data budget, 256 to 200000 JSON characters (default 20000)
+  A cut answer has resultId and more: retrieve it locally with api-anything result, not nextPage.
   --again          send a write refused as a duplicate (the same args within 10 minutes, and the
                     first may have gone through): only when the user checked the site
   --idempotency-key <k>  on the first call: a repeat of the write with the same key returns that
@@ -201,6 +205,12 @@ const HELP: Record<string, string> = {
   --limit lowers the 200-line cap; oversized input is rejected before any calls. Sites must already
   be installed (pull one first). Writes answer input: "writes are not batched". No caching.
   Exit 0 if every item is ok, otherwise 1. Failures do not stop later items.`,
+  result: `api-anything result <resultId> [--offset n] [--fields a,b] [--max-chars n] [--format json]
+  Reads a kept answer locally, with no site request or spec change. offset is an item index.
+  Use the fields/maxChars/format in more to continue the same view. fields uses call's pick paths.
+  With --format json, data is a serialized-JSON fragment and offset counts characters: concatenate
+  fragments and JSON.parse once complete. This recovers oversized single items and objects.
+  Answers expire after 15 minutes, or sooner when 20 newer answers displace them.`,
   verify: `api-anything verify [site]
   Calls every read operation with its stored example args and its checks, healing as needed, and
   judges each case: pass, fail, or inconclusive (a challenge, a sign-in page, a rate limit, or a server
@@ -277,7 +287,7 @@ const HELP: Record<string, string> = {
   refuses an op holding a live cookie or session value, or failing its checks. --yes sends them, signed
   with this install's key; an op that needed a login or writes is reviewed before others get it.`,
   mcp: `api-anything mcp [--allow-writes] [--sites a,b] [--print-config] [--no-learn]
-  Serves list_sites, find_sites, list_operations, call_operation, get_job, site_status, login and learn_site over
+  Serves list_sites, find_sites, list_operations, call_operation, call_batch, get_result, get_job, site_status, login and learn_site over
   stdio MCP, and call_write_operation with --allow-writes. list_operations and call_operation pull a
   shared site an agent asks for, with its reads only: its writes need a human's api-anything pull. Its
   login only refreshes a session a human imported here. A call still running after about 25 s answers
@@ -335,6 +345,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--write]
   api-anything call <site> <op> [k=v ...] [--allow-writes]
   api-anything batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200]
+  api-anything result <resultId> [--offset n] [--fields a,b] [--max-chars n]
   api-anything inspect <captureId> [<requestId>]
   api-anything search <words|domain> | pull <site> | publish <site> [--yes]
   api-anything interface mcp|openapi <url>
@@ -438,6 +449,10 @@ const OPTIONS = {
   "keep-examples": { type: "boolean" },
   extract: { type: "string" },
   pick: { type: "string" },
+  fields: { type: "string" },
+  "max-chars": { type: "string" },
+  offset: { type: "string" },
+  format: { type: "string" },
   html: { type: "string" },
   write: { type: "boolean" },
   description: { type: "string" },
@@ -1014,11 +1029,36 @@ async function cmdBatch({ v, pos }: Parsed): Promise<number> {
   return code;
 }
 
+function callView(v: Parsed["v"]): ResultView {
+  const view = {
+    ...(v.fields !== undefined ? { fields: splitPick(v.fields) } : {}),
+    ...(v["max-chars"] !== undefined ? { maxChars: Number(v["max-chars"]) } : {}),
+  };
+  const problem = viewProblem(view);
+  if (problem) throw new Fail(problem, "use --fields a,b and --max-chars 256..200000");
+  return view;
+}
+
+async function cmdResult({ v, pos }: Parsed): Promise<number> {
+  if (pos.length !== 1) throw new Fail("expected <resultId>", "api-anything result --help");
+  if (v.format !== undefined && v.format !== "json")
+    throw new Fail("--format must be json", "api-anything result --help");
+  const r = getResult(pos[0]!, {
+    ...callView(v),
+    ...(v.offset !== undefined ? { offset: Number(v.offset) } : {}),
+    ...(v.format === "json" ? { format: "json" as const } : {}),
+  });
+  out(r);
+  if (!r.ok) process.stderr.write("next: check the resultId and continuation; expired results cannot be recovered\n");
+  return r.ok ? 0 : 1;
+}
+
 async function cmdCall({ v, pos }: Parsed): Promise<number> {
   const [site, name, ...rest] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything call --help");
   if (v["max-tier"] !== undefined && !/^[123]$/.test(v["max-tier"]))
     throw new Fail(`--max-tier must be 1, 2 or 3, got "${v["max-tier"]}"`, "pass --max-tier 1, 2 or 3");
+  const view = callView(v);
   let base: Record<string, unknown> = {};
   if (v.json) {
     if (v.json === "-") {
@@ -1061,6 +1101,7 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     idempotencyKey: v["idempotency-key"],
     maxTier,
     ignoreCoolDown: v.force,
+    view,
   });
   out(pulled ? { ...r, pulled: site } : r);
   if (r.heal) process.stderr.write(healNote(site, name, r.heal));
@@ -1546,8 +1587,12 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "paging",
     ],
   },
-  call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "force", "dry"] },
   batch: { run: cmdBatch, flags: ["input", "concurrency", "limit", "max-tier"] },
+  call: {
+    run: cmdCall,
+    flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "force", "dry", "fields", "max-chars"],
+  },
+  result: { run: cmdResult, flags: ["offset", "fields", "max-chars", "format"] },
   verify: { run: cmdVerify, flags: [] },
   check: { run: cmdCheck, flags: ["expect", "purpose"] },
   readback: { run: cmdReadback, flags: ["find"] },

@@ -17,6 +17,7 @@ export {
 export { type AddInput, addOperation, capturePage, healOperation } from "./heal.js";
 export { learnOperation, rankCandidates } from "./learn.js";
 export { createServer, serveStdio } from "./mcp.js";
+export { type GetResultOptions, getResult, type ResultCursor, type ResultSlice, type ResultView } from "./results.js";
 export {
   type Match,
   type Operation,

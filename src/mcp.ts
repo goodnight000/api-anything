@@ -31,6 +31,7 @@ import {
 import { registerLearn } from "./mcp-learn.js";
 import { type Pulled, pull, search } from "./registry.js";
 import { settle } from "./report.js";
+import { getResult, MAX_RESULT_CHARS, MIN_RESULT_CHARS, type ResultView } from "./results.js";
 import { type Operation, type Paging, type Param, readbackName } from "./spec.js";
 import { status } from "./status.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
@@ -55,6 +56,21 @@ const LOGIN_HINTS = { readOnlyHint: false, destructiveHint: false, idempotentHin
 const WAIT_MS = 25_000;
 /** A sign-in window nobody closes is closed after this, so it does not hold the browser profile forever. */
 const WINDOW_MS = 10 * 60_000;
+const viewSchema = z.object({
+  fields: z
+    .array(z.string().min(1).max(512))
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("pick paths per item, including name=path; not site args"),
+  maxChars: z
+    .number()
+    .int()
+    .min(MIN_RESULT_CHARS)
+    .max(MAX_RESULT_CHARS)
+    .optional()
+    .describe("JSON data budget; default 20000"),
+});
 
 /**
  * Longest per-op tool name. Clients prefix the server's name: Gemini CLI cuts `mcp_<server>_<tool>`
@@ -381,9 +397,14 @@ export function createServer({
     args: Record<string, unknown>,
     as: ToolCall,
     write?: { again?: boolean; idempotencyKey?: string },
+    view?: ResultView,
   ): Promise<Reply> => {
     const pulled = agentPulled(site);
-    const r = await callOp(site, op, args, { allowWrites: !!write && allowWrites && !pulled, ...write });
+    const r = await callOp(site, op, args, {
+      allowWrites: !!write && allowWrites && !pulled,
+      ...write,
+      ...(view ? { view } : {}),
+    });
     // call_write_operation would refuse it too: the step is a human's pull
     if (r.class === "refused" && allowWrites && pulled) return pulledWrite(site, op);
     const toWriteTool = r.class === "refused" && !write && allowWrites;
@@ -519,6 +540,7 @@ export function createServer({
 
   const RESULT =
     "Returns {ok, class, data, tier, healed?, heal?, ms, reason?, next?, nextCall?, retry?, retryAfterMs?, write?, nextPage?, hasMore?}; a list of two or more records comes back as data {columns, rows} when that shortens the JSON (one row per item, null for a missing field); otherwise it stays a list. `reason` also explains a slow success. On failure follow `next` (nextCall is the same step as data, with the tool to use) at most once, then stop and report. `retry` says whether to send the same call again: safe, after_wait (retryAfterMs), after_fix (once the step is done) or no. An op that pages (list_operations: pages) answers nextPage, the value its paging param takes for the next page, and hasMore (false: the last page). A call that repaired the op (healed: true) says how in heal {strategy, changes}: tell the user it healed and what changed in its request (a human can undo it with api-anything revert <site> <op>). A call still running after about 25 s answers class pending with a job: call get_job with it. " +
+    " view {fields?, maxChars?} shapes output after classification/extraction, separately from site args. A cut answer has resultId and more: call get_result with more to recover it locally, not nextPage (which skips to the site's next page). " +
     UNTRUSTED_NOTE;
 
   server.registerTool(
@@ -529,14 +551,22 @@ export function createServer({
         site: z.string(),
         op: z.string().describe("operation name from list_operations"),
         args: z.record(z.string(), z.unknown()).optional().describe("param name -> value"),
+        view: viewSchema.optional(),
       },
       annotations: READ_HINTS,
     },
-    ({ site, op, args = {} }: { site: string; op: string; args?: Record<string, unknown> }) =>
-      asJob(`call ${JSON.stringify([site, op, args])}`, READ_NOTE, async () => {
+    ({ site, op, args = {}, view }: { site: string; op: string; args?: Record<string, unknown>; view?: ResultView }) =>
+      asJob(`call ${JSON.stringify([site, op, args, view ?? null])}`, READ_NOTE, async () => {
         const got = await install(site);
         if ("error" in got) return installFailed(site, got);
-        return callReply(site, op, args, { tool: "call_operation", args: { site, op, args } });
+        return callReply(
+          site,
+          op,
+          args,
+          { tool: "call_operation", args: { site, op, args, ...(view ? { view } : {}) } },
+          undefined,
+          view,
+        );
       }),
   );
 
@@ -577,6 +607,25 @@ export function createServer({
       }),
   );
 
+  server.registerTool(
+    "get_result",
+    {
+      description:
+        "Read or reshape a kept extracted answer locally, without requesting the site. Pass more unchanged to continue, or resultId and fields/maxChars to reproject from the start. offset counts items; with format json it counts characters and data is a JSON fragment (encoding json): concatenate fragments, then JSON.parse. Kept for 15 minutes, at most 20 answers. Changing fields in JSON-fragment mode requires restarting at offset 0.",
+      inputSchema: {
+        resultId: z.string(),
+        offset: z.number().int().min(0).optional(),
+        ...viewSchema.shape,
+        format: z.literal("json").optional(),
+      },
+      annotations: LOCAL_HINTS,
+    },
+    ({ resultId, ...opts }) => {
+      const r = getResult(resultId, opts);
+      return reply({ ...r, ...(r.ok && r.encoding !== "json" ? { data: asTable(r.data) } : {}) }, !r.ok);
+    },
+  );
+
   const WRITE_DESCRIPTION =
     "A write changes the user's account: only call it when the user asked for that exact action. A write's `write` says what it did: not_sent, not_applied, accepted, applied (its readback found it) or may_have_applied; never send one again that is accepted, applied or may_have_applied without checking the site.";
   if (allowWrites)
@@ -588,6 +637,7 @@ export function createServer({
           site: z.string(),
           op: z.string().describe("a write operation's name from list_operations"),
           args: z.record(z.string(), z.unknown()).optional().describe("param name -> value"),
+          view: viewSchema.optional(),
           again: z
             .boolean()
             .optional()
@@ -609,12 +659,14 @@ export function createServer({
         args = {},
         again,
         idempotencyKey,
+        view,
       }: {
         site: string;
         op: string;
         args?: Record<string, unknown>;
         again?: boolean;
         idempotencyKey?: string;
+        view?: ResultView;
       }) =>
         guard(async () => {
           const got = await install(site);
@@ -629,8 +681,9 @@ export function createServer({
               site,
               op,
               args,
-              { tool: "call_write_operation", args: { site, op, args } },
+              { tool: "call_write_operation", args: { site, op, args, ...(view ? { view } : {}) } },
               { again, idempotencyKey },
+              view,
             ),
           );
         }),
@@ -668,7 +721,7 @@ export function createServer({
         (args: Record<string, unknown>) => {
           const as = { tool, args };
           return o.readOnly
-            ? asJob(`call ${JSON.stringify([s.name, o.name, args])}`, READ_NOTE, () =>
+            ? asJob(`call ${JSON.stringify([s.name, o.name, args, null])}`, READ_NOTE, () =>
                 callReply(s.name, o.name, args, as),
               )
             : asJob(`write ${JSON.stringify([s.name, o.name, args, null])}`, WRITE_NOTE, () =>
