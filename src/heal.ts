@@ -1127,6 +1127,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     response: withRecipe(learned.operation.response, r),
     params,
     ...(checks?.length && !i.write ? { checks } : {}),
+    ...(old?.links ? { links: old.links } : {}),
   };
   if (stood) operation = stood.restore(operation);
   // Paging and a readback are the caller's contract too: kept while they still fit the op learned again.
@@ -1745,6 +1746,7 @@ export async function healOperation(
     ...(op.public ? { public: op.public } : {}),
     ...(op.checks ? { checks: op.checks } : {}),
     ...(op.paging ? { paging: op.paging } : {}),
+    ...(op.links ? { links: op.links } : {}),
     ...(op.readback ? { readback: op.readback } : {}),
     ...(op.unproven ? { unproven: op.unproven } : {}),
     minTier: Math.max(op.minTier, fresh.minTier) as Operation["minTier"],

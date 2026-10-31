@@ -432,7 +432,7 @@ answer says it is unavailable instead of returning a continuation.
 | tool | what it does | hints |
 |---|---|---|
 | `list_sites` | the sites, with how many operations each has | read-only |
-| `list_operations` | a site's operations, each with a JSON Schema of its args (`inputSchema`) the keys its items carry (`returns`), how it pages (`pages`) and the read a write is confirmed by (`readback`), and the site's notes | read-only |
+| `list_operations` | a site's operations: args (`inputSchema`), output shape/type hints (`output`), field names (`returns`), operation `links`, paging and readback, and the site's notes; optional `prepare` builds a linked call without executing it | read-only |
 | `call_operation` | call a read; a write op is refused and nothing is sent | read-only, idempotent |
 | `call_batch` | up to 20 read items, optional `concurrency` 1..4; `{ok, results}` in input order, writes rejected | read-only, idempotent |
 | `call_write_operation` | call a write, with `again` and `idempotencyKey`; only with `--allow-writes` | destructive, not idempotent |
@@ -457,6 +457,53 @@ answer says it is unavailable instead of returning a continuation.
 - `--print-config` prints how to add the server to Claude Code, Codex, Gemini CLI, VS Code, Cursor
   and Claude Desktop, with absolute paths. Client timeouts and fixes for common problems are in
   [QUICKSTART.md](QUICKSTART.md#client-timeouts).
+
+### Portable operation descriptions and links
+
+`api-anything ops goodreads getBook --schema` prints `{site, op, description?, readOnly, params, output, links?}`.
+`params` is JSON Schema, identical to MCP's `inputSchema`. `output.cardinality` is `list`, `one`
+or `unknown`; `output.fields` maps names to `{type?, source}`. A type is `declared` by a recipe
+(HTML text stays a string, `all:` stays an array, a pick regex returns a string), `observed` in
+the stored learned shape, or `unknown` without evidence. These are hints, not an output
+validator: absent fields stay absent, no numbers are parsed from text, and a stripped response
+shape cannot establish a type. Goodreads `getBook` is a list even when it has just one item.
+Neither discovery surface calls the site.
+
+An operation's optional `links` records how one of its result fields supplies another op's arg:
+`{from: "url", to: {op: "getRecipe", arg: "slug"}, transform: "lastPathSegment"}`.
+The URL's final non-empty pathname segment is used, without its query/fragment and without
+percent-decoding. Alternatively `path~regex` uses the same path/group-1 semantics as `--pick`,
+relative to the source field; `~regex` applies to the source string itself (Rotten Tomatoes
+`searchMovies` links `url` to `getMovie.slug` with `~/m/([^/?#]+)`). When the op's recipe names
+its fields (a pick or an HTML recipe), `from` must start with one of them. The bundled
+Goodreads, BBC Good Food, Rotten Tomatoes and LinkedIn specs declare their chains this way.
+
+Choose an item, then ask MCP to prepare (not execute) a link:
+
+```json
+{"site":"bbcgoodfood","prepare":{"op":"search","link":0,"item":{"url":"https://www.bbcgoodfood.com/recipes/beef-bourguignon"}}}
+```
+
+Pass that to `list_operations`; its `nextCall` names `call_operation` and contains
+`{site:"bbcgoodfood", op:"getRecipe", args:{slug:"beef-bourguignon"}}`.
+`link` is a zero-based index from the listed op's `links`. The site must already be installed;
+preparing does not pull it. Additional target params go in `prepare.args`; defaults are filled,
+but required params without a value fail instead of borrowing examples. MCP preparation only
+offers reads. It never selects among results or runs any request.
+
+The library exports `describeOperation(siteSpec, op)`, `prepareLink(siteSpec, sourceOp, item,
+link, extraArgs?)`, and registry reads `search` and `pull`:
+
+```ts
+import { describeOperation, loadSite, prepareLink } from "api-anything";
+const site = loadSite("bbcgoodfood")!.site;
+const description = describeOperation(site, "search");
+const next = prepareLink(site, "search", selectedItem, description.links![0]!);
+// next is {site, op, args}; executing it remains a separate, permission-checked call.
+```
+
+Links survive whole-site export, healing, relearning and adopting the registry's version of an op. Single-operation registry uploads
+omit them, because their targets are not part of that upload.
 
 ## Safety and terms of service
 

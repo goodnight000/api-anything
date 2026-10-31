@@ -491,14 +491,14 @@ function unfinishedPage(op: Operation, r: Observed): string | undefined {
 }
 
 /** A path as the learned shape keys it: `a[0].b` and `a[*].b` -> `a[].b`, `a["x.y"]` -> `a.x.y`. */
-const shapeKey = (path: string) =>
+export const shapeKey = (path: string) =>
   path
     .replace(/\[(\d+|\*)\]/g, "[]")
     .replace(/\["((?:[^"\\]|\\.)*)"\]/g, (_m, k: string) => `.${JSON.parse(`"${k}"`) as string}`)
     .replace(/^\./, "");
 
 /** A learned shape key relative to the extract path's target; undefined outside it. */
-function underTarget(extract: string | undefined, k: string): string | undefined {
+export function underTarget(extract: string | undefined, k: string): string | undefined {
   if (!extract) return k;
   const prefix = shapeKey(extract);
   // a trailing [*] returns the items themselves, as a list: compare them as "[]..." like any list

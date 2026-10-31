@@ -24,7 +24,7 @@ import {
 } from "../src/mcp.js";
 import { saveSession } from "../src/session.js";
 import { type Operation, parseSite } from "../src/spec.js";
-import { saveSite } from "../src/store.js";
+import { loadSite, saveSite } from "../src/store.js";
 
 /** A fresh home and a client connected to a server made with `opts`; `done` undoes both. */
 async function connect(opts: ServerOptions = {}) {
@@ -442,6 +442,62 @@ test("MCP per-op tool names fit every client's limit and characters, and stay di
     assert.match(n, /^[a-zA-Z0-9_-]+$/);
   }
   assert.notEqual(a, b);
+});
+
+test("MCP lists portable output hints and prepares declared links without sending any request", async () => {
+  const site = await localSite();
+  const s = await connect();
+  try {
+    saveMixed(site.base);
+    const spec = loadSite("mw")!.site;
+    const find = spec.operations[0]!;
+    find.response = {
+      format: "json",
+      pick: ["title"],
+      shape: { "[].title": "string" },
+    };
+    find.links = [
+      { from: "title", to: { op: "find", arg: "kind" } },
+      { from: "title", to: { op: "vote", arg: "id" } },
+    ];
+    saveSite(spec);
+    await s.start({ allowWrites: true });
+    const listed = await s.tool("list_operations", { site: "mw" });
+    assert.deepEqual(listed.operations[0].output, {
+      cardinality: "list",
+      fields: { title: { type: "string", source: "observed" } },
+    });
+    assert.deepEqual(listed.operations[0].links, find.links);
+    const prepared = await s.tool("list_operations", {
+      site: "mw",
+      prepare: { op: "find", link: 0, item: { title: "book" } },
+    });
+    assert.deepEqual(prepared.nextCall, {
+      tool: "call_operation",
+      args: { site: "mw", op: "find", args: { kind: "book", page: 1 } },
+    });
+    const write = await s.tool("list_operations", {
+      site: "mw",
+      prepare: { op: "find", link: 1, item: { title: "123" } },
+    });
+    assert.equal(write.isError, true);
+    assert.match(write.reason, /only offers links to read/);
+    const missing = await s.tool("list_operations", {
+      site: "mw",
+      prepare: { op: "find", link: 0, item: {} },
+    });
+    assert.equal(missing.class, "input");
+    assert.doesNotMatch(missing.reason, /book/);
+    const absent = await s.tool("list_operations", {
+      site: "uninstalled-contracts",
+      prepare: { op: "find", link: 0, item: {} },
+    });
+    assert.equal(absent.missing, true);
+    assert.equal(site.hits(), 0, "preparing never fetches, executes, or follows the link");
+  } finally {
+    await s.done();
+    site.close();
+  }
 });
 
 test("MCP --sites keeps punctuation and separator-ambiguous operations distinct and routes each one", async () => {

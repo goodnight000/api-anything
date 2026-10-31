@@ -5,6 +5,7 @@
  */
 import { parse } from "tldts";
 import { siteOf } from "./domain.js";
+import { linkProblems } from "./links.js";
 import { literalCredentials, providerKeys, scanSecrets, signInFills } from "./secrets.js";
 import type { Operation, Readback, ReadbackRead, Request, Site } from "./spec.js";
 
@@ -79,6 +80,9 @@ function regexes(op: Operation): [string, string][] {
       ? ([["paging next", op.paging.next.slice(op.paging.next.indexOf("~") + 1)]] as [string, string][])
       : []),
     ...op.params.flatMap((p): [string, string][] => (p.pattern ? [[`param ${p.name} pattern`, p.pattern]] : [])),
+    ...(op.links ?? []).flatMap((l): [string, string][] =>
+      l.transform?.includes("~") ? [["link transform", l.transform.slice(l.transform.indexOf("~") + 1)]] : [],
+    ),
   ];
 }
 
@@ -373,6 +377,12 @@ export function vetShared(site: Site, notes?: string): Vetted {
         ),
       );
     for (const problem of [...pagingProblems(op), ...readbackShape(op)]) errors.push(at(problem));
+    for (const problem of linkProblems(site, op)) errors.push(at(problem));
+    if ((op.links?.length ?? 0) > LIMITS.operations) errors.push(at("too many operation links"));
+    for (const link of op.links ?? []) {
+      long(at("link source"), link.from);
+      long(at("link transform"), link.transform);
+    }
     // the read a shared write's readback carries is sent with the caller's session like any read
     const rb = op.readback;
     if (rb && "read" in rb && !op.readOnly)

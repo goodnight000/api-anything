@@ -129,6 +129,28 @@ describe("flags and command names", () => {
     assert.equal((await cli("call", "--limit", "1", "--help")).code, 0, "--help still answers");
   });
 
+  test("ops <site> <op> --schema prints a portable contract without calling the site", async () => {
+    const r = await cli("ops", "plain", "getUser", "--schema");
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout), {
+      site: "plain",
+      op: "getUser",
+      readOnly: true,
+      params: {
+        type: "object",
+        properties: { name: { type: "string", examples: ["alice"] } },
+        required: ["name"],
+        additionalProperties: false,
+      },
+      output: { cardinality: "unknown", fields: {} },
+    });
+    assert.equal((await cli("ops", "plain", "--schema")).code, 1);
+    const absent = await cli("ops", "plain", "absent", "--schema");
+    assert.equal(absent.code, 1);
+    assert.match(JSON.parse(absent.stdout).error, /no operation "absent"/);
+    assert.equal((await cli("ops", "plain")).code, 0);
+  });
+
   test("a name every object inherits is an unknown command like any other", async () => {
     const usage = (await cli("--help")).stdout;
     for (const name of ["toString", "constructor"]) {

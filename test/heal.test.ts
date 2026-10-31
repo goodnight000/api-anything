@@ -150,6 +150,7 @@ describe("add: what it refuses to save, and what it doubts", () => {
     assert.deepEqual(r.operation.params[0]!.enum, ["kittens", "puppies"]);
     const site = loadSite("allowed")!.site;
     site.operations[0]!.checks = [{ args: { q: "puppies" }, expect: "result" }];
+    site.operations[0]!.links = [{ from: "q", to: { op: "search", arg: "q" } }];
     saveSite(site);
     const again = await addOperation({
       site: "allowed",
@@ -159,6 +160,7 @@ describe("add: what it refuses to save, and what it doubts", () => {
     });
     assert.deepEqual(again.operation.params[0]!.enum, ["kittens", "puppies"]);
     assert.deepEqual(again.operation.checks, [{ args: { q: "puppies" }, expect: "result" }]);
+    assert.deepEqual(again.operation.links, site.operations[0]!.links);
   });
 
   test("an op learned from a sign-in page is not saved: add says to log in, then add again", async () => {
@@ -227,11 +229,13 @@ fetch("/api/search?${key}="+encodeURIComponent(p.get("q"))+"&page="+encodeURICom
     });
     const site = loadSite("s1")!.site;
     site.operations[0]!.params[1] = { ...site.operations[0]!.params[1]!, required: false, default: "100" };
+    site.operations[0]!.links = [{ from: "q", to: { op: "search", arg: "q" } }];
     saveSite(site);
     version = "v2";
     const r = await call("s1", "search", { q: "cats" }, fast);
     assert.equal(r.healed, true, JSON.stringify(r));
     const op = loadSite("s1")!.site.operations[0]!;
+    assert.deepEqual(op.links, site.operations[0]!.links);
     assert.deepEqual([...new Set(op.slots.flatMap((s) => (s.param ? [s.param] : [])))].sort(), ["page", "q"]);
     const later = await call("s1", "search", { q: "dogs", page: "250" }, fast);
     assert.deepEqual((later.data as unknown[])[0], { q: "dogs", page: "250" });

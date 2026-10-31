@@ -15,9 +15,11 @@ import { z } from "zod";
 import { idleWork } from "./background.js";
 import { BATCH_CONCURRENCY, BatchItemSchema, callReads } from "./batch.js";
 import { closeBrowser } from "./browser.js";
+import { describeOperation, inputSchema } from "./describe.js";
 import { call, type NextCall } from "./execute.js";
 import { returnedFields } from "./extract.js";
 import { type Job, Jobs } from "./jobs.js";
+import { prepareLink } from "./links.js";
 import {
   browserSource,
   cookieNames,
@@ -32,7 +34,7 @@ import { registerLearn } from "./mcp-learn.js";
 import { type Pulled, pull, search } from "./registry.js";
 import { settle } from "./report.js";
 import { getResult, MAX_RESULT_CHARS, MIN_RESULT_CHARS, type ResultView } from "./results.js";
-import { type Operation, type Paging, type Param, readbackName } from "./spec.js";
+import { type Operation, type Paging, readbackName } from "./spec.js";
 import { status } from "./status.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
 import { SHARED_NOTE } from "./vet.js";
@@ -92,42 +94,11 @@ export function toolName(site: string, op: Pick<Operation, "name">): string {
   return `_${name.slice(0, TOOL_NAME_MAX - 10)}_${hash}`;
 }
 
-type JsonSchema = Record<string, unknown>;
+export { inputSchema } from "./describe.js";
 
 /** How an op pages, as `ops` says it: by its paging param, from the result's nextPage when the site gives one. */
 const pagesOf = (p: Paging) =>
   p.next ? `by ${p.param}: pass the result's nextPage (hasMore false: the last page)` : `by ${p.param}`;
-
-/** One param as JSON Schema: what call() accepts, so a client that validates refuses nothing call() would take. */
-function paramSchema(p: Param): JsonSchema {
-  const typed = (v: string) => {
-    if (p.type === "number" && /^-?\d+(\.\d+)?$/.test(v)) return Number(v);
-    if (p.type === "boolean" && (v === "true" || v === "false")) return v === "true";
-    return v;
-  };
-  return {
-    type: p.type,
-    ...(p.description || p.hint ? { description: [p.description, p.hint].filter(Boolean).join("; format: ") } : {}),
-    ...(p.enum ? { enum: p.enum.map(typed) } : {}),
-    // a spec's pattern must match the whole value; a JSON Schema pattern matches anywhere in it
-    ...(p.pattern !== undefined ? { pattern: `^(?:${p.pattern})$` } : {}),
-    ...(p.min !== undefined ? { minimum: p.min } : {}),
-    ...(p.max !== undefined ? { maximum: p.max } : {}),
-    ...(p.default !== undefined ? { default: p.default } : {}),
-    ...(p.example !== undefined ? { examples: [p.example] } : {}),
-  };
-}
-
-/** An op's args as a JSON Schema object: list_operations shows it, and a per-op tool takes it. */
-export function inputSchema(op: Pick<Operation, "params">): JsonSchema {
-  const required = op.params.filter((p) => p.required && p.default === undefined).map((p) => p.name);
-  return {
-    type: "object",
-    properties: Object.fromEntries(op.params.map((p) => [p.name, paramSchema(p)])),
-    ...(required.length ? { required } : {}),
-    additionalProperties: false,
-  };
-}
 
 /** Whether the user imported the site's session from a browser, so the login tool can refresh it. */
 const userImported = (site: string) => !!loadSite(site) && !!browserSource(site);
@@ -503,16 +474,49 @@ export function createServer({
     "list_operations",
     {
       description:
-        "List a site's operations, each with a JSON Schema of its args (inputSchema) and the keys a result item can carry (returns; one the site leaves out is absent), and the site's notes (caveats, arg formats). Call this before call_operation. A shared site from find_sites that is not installed is pulled from the registry first (reads only).",
-      inputSchema: { site: z.string().describe("site name from list_sites or find_sites") },
+        "List a site's operations, each with a JSON Schema of its args (inputSchema), output cardinality and field type hints (unknown when not recorded), links to other operations, and the site's notes. Call this before call_operation. An uninstalled shared site is pulled first (reads only). To prepare a linked call without executing it, set prepare to {op, link: <zero-based link index>, item: <one selected result object>, args?: <other required target args>}; returns nextCall with complete call_operation args. It never chooses an item or runs a link.",
+      inputSchema: {
+        site: z.string().describe("site name from list_sites or find_sites"),
+        prepare: z
+          .object({
+            op: z.string(),
+            link: z.number().int().min(0),
+            item: z.record(z.string(), z.unknown()),
+            args: z.record(z.string(), z.unknown()).optional(),
+          })
+          .optional(),
+      },
       annotations: LOCAL_HINTS,
     },
-    ({ site }: { site: string }) =>
+    ({ site, prepare }) =>
       guard(async () => {
-        const got = await install(site);
+        // Preparing is local: it cannot pull a spec or run any request.
+        const got = prepare
+          ? loadSite(site)
+            ? {}
+            : { error: "site is not installed", next: "list_operations without prepare first", missing: true }
+          : await install(site);
         if ("error" in got) return reply(got, true);
         const pulled = got.pulled;
         const r = loadSite(site)!;
+        if (prepare) {
+          const source = r.site.operations.find((o) => o.name === prepare.op);
+          const link = source?.links?.[prepare.link];
+          if (!link) return reply({ ok: false, class: "input", reason: "no such link on the source operation" }, true);
+          const target = r.site.operations.find((o) => o.name === link.to.op);
+          if (!target?.readOnly)
+            return reply({ ok: false, class: "input", reason: "prepare only offers links to read operations" }, true);
+          try {
+            return reply({
+              nextCall: {
+                tool: "call_operation",
+                args: prepareLink(r.site, prepare.op, prepare.item, link, prepare.args),
+              },
+            });
+          } catch (e) {
+            return reply({ ok: false, class: "input", reason: (e as Error).message }, true);
+          }
+        }
         const writes = allowWrites && !agentPulled(r.site.name);
         const notes = siteNotes(r.site.name);
         return reply({
@@ -522,16 +526,21 @@ export function createServer({
             : {}),
           operations: r.site.operations
             .filter((o) => writes || o.readOnly)
-            .map((o) => ({
-              name: o.name,
-              ...(o.description ? { description: o.description } : {}),
-              ...(o.readOnly ? {} : { write: true }),
-              ...(o.version ? { status: o.version.status } : {}),
-              ...(returnedFields(o.response) ? { returns: returnedFields(o.response) } : {}),
-              ...(o.paging ? { pages: pagesOf(o.paging) } : {}),
-              ...(o.readback ? { readback: readbackName(o.readback) } : {}),
-              inputSchema: inputSchema(o),
-            })),
+            .map((o) => {
+              const d = describeOperation(r.site, o.name);
+              return {
+                name: o.name,
+                ...(o.description ? { description: o.description } : {}),
+                ...(o.readOnly ? {} : { write: true }),
+                ...(o.version ? { status: o.version.status } : {}),
+                ...(returnedFields(o.response) ? { returns: returnedFields(o.response) } : {}),
+                ...(o.paging ? { pages: pagesOf(o.paging) } : {}),
+                ...(o.readback ? { readback: readbackName(o.readback) } : {}),
+                inputSchema: d.params,
+                output: d.output,
+                ...(d.links ? { links: d.links } : {}),
+              };
+            }),
           ...(r.site.shared ? { shared: SHARED_NOTE } : {}),
           ...(notes ? { notes } : {}),
         });

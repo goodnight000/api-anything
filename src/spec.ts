@@ -245,6 +245,13 @@ export const ReadbackSchema = z.union([
   }),
 ]);
 
+/** A selected result item's field supplies an arg of another operation on this site. */
+export const OperationLinkSchema = z.object({
+  from: z.string().min(1),
+  to: z.object({ op: z.string().min(1), arg: z.string().min(1) }),
+  transform: z.string().min(1).optional(),
+});
+
 export const OperationSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -270,6 +277,7 @@ export const OperationSchema = z.object({
   paging: PagingSchema.optional(),
   /** a write's proof: a read run once after it is sent; finding it makes the call's `write` "applied" */
   readback: ReadbackSchema.optional(),
+  links: z.array(OperationLinkSchema).optional(),
   /**
    * Learning could not show these params change the answer: example 2, which gave them other values,
    * was answered with example 1's data. `publish` refuses while it is set; a `verify` clears it when
@@ -314,6 +322,7 @@ export type Readback = z.infer<typeof ReadbackSchema>;
 export type ReadbackRef = Extract<Readback, { op: string }>;
 export type ReadbackRead = Extract<Readback, { read: unknown }>["read"];
 export type Operation = z.infer<typeof OperationSchema>;
+export type OperationLink = z.infer<typeof OperationLinkSchema>;
 export type Site = z.infer<typeof SiteSchema>;
 
 /** The name a readback's read goes by: the op it names, or the label of the one it carries. */

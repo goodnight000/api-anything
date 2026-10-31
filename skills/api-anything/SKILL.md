@@ -92,6 +92,9 @@ the user.
    the format a param expects, when the spec says), and the site's `notes`. Read the notes: they
    hold caveats such as "airport codes only". If the site is not listed, run
    `api-anything search <what you need or the site's domain>` before learning it.
+   `api-anything ops <site> <op> --schema` gives one op's params as JSON Schema, its output hints
+   (a list or one value, field types the spec records, `unknown` otherwise) and its `links`: which
+   result field feeds which arg of the next op (`searchBooks.bookId → getWorkId.bookId`).
 2. `api-anything call <site> <op> name=value ...`. An arg that doesn't fit the param's declared
    format comes back `class: "input"` with that format, and nothing was sent: fix the arg.
 3. Check `ok` before using `data`, and check the output's identity/range against the task. Treat a

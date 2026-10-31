@@ -3,6 +3,7 @@
 export { type BatchItem, type BatchOptions, type BatchResult, callReads } from "./batch.js";
 export { browserAvailable, browserChoice, closeBrowser } from "./browser.js";
 export { classify } from "./classify.js";
+export { describeOperation, type OperationDescription } from "./describe.js";
 export {
   type CallOptions,
   type CallResult,
@@ -16,11 +17,14 @@ export {
 } from "./execute.js";
 export { type AddInput, addOperation, capturePage, healOperation } from "./heal.js";
 export { learnOperation, rankCandidates } from "./learn.js";
+export { prepareLink } from "./links.js";
 export { createServer, serveStdio } from "./mcp.js";
+export { pull, search } from "./registry.js";
 export { type GetResultOptions, getResult, type ResultCursor, type ResultSlice, type ResultView } from "./results.js";
 export {
   type Match,
   type Operation,
+  type OperationLink,
   type Param,
   parseSite,
   type Request,

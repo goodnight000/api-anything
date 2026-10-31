@@ -1112,6 +1112,16 @@ Site names are case-insensitive (lower-cased), so one file never gets two sets o
 Resolution order: `~/.api-anything/sites/<site>.json` (user-created and healed copies win) → a
 pulled `~/.api-anything/registry/<site>.json` → the bundled `sites/<site>.json` (community). A heal
 of a pulled or bundled spec writes a user copy.
+An operation may carry `links: [{from, to: {op, arg}, transform?}]`: a selected result item's
+field/path supplies an arg of another operation in the same spec. Shared vetting requires the
+target operation and param to exist, and the source field to be one the op returns when its
+recipe names them (a pick or an HTML recipe). Transforms are `lastPathSegment` (an absolute URL's final
+non-empty pathname segment, without query or fragment, still percent-encoded) or `path~regex`,
+the pick expression relative to the source value (`~regex` reads the value itself). Link regexes
+have the same limits as pick regexes. Links are metadata, never triggers: no item is chosen and
+no request is sent. Relearning, healing and adopting the registry's version of an op preserve
+them. Whole-site exports keep them; individual
+registry uploads omit them, since an upload carries no target operations to validate against.
 `api-anything export <site>` writes a shareable copy. It strips examples (unless `--keep-examples`:
 a human confirmed they are public, so `verify` works for others) and samples (response shapes,
 whose keys can be user data, but for the picked fields' learned types: the pick names them already, and they let every copy tell a picked field that went; typed example values in the request become null), and it runs an
@@ -1627,6 +1637,15 @@ independent alternative.
     items, so it cannot disagree with the recipe; a key the site leaves out is absent, and the site's notes: `<site>.md` beside its
     spec, the user's copy first, up to its `## Maintainer notes` heading; the rest of the file is
     for people working on the spec), `heal <site> <op>`, `export <site>`, `mcp`
+  - `ops <site> <op> --schema` describes the stored operation without a call:
+    `{site, op, description?, readOnly, params, output: {cardinality, fields}, links?}`. `params` is the same JSON
+    Schema MCP advertises. Cardinality is `list`, `one` or `unknown`, derived from the response
+    recipe and stored learned shape, never the op's name or prose. A field has an optional `type`
+    and `source` (`declared` by an HTML/pick recipe, `observed` in the stored learned shape, or
+    `unknown`). Hints describe the extracted data, not the call envelope; no values are coerced
+    and no response samples are gathered for discovery. A shape stripped on export leaves the
+    corresponding hints unknown. A learned `null` also stays unknown: the shape uses it for a
+    field absent from some items, not only a JSON null.
   - All output is JSON-first, compact, and ends with a `next` hint on failure.
   - A call's result says what happened in fields as well as prose: `retry` (`safe`, `after_wait`,
     `after_fix`, `no`), `retryAfterMs`, `nextCall` (`{action, site, op}`, with `mode` for a window
@@ -1708,6 +1727,12 @@ independent alternative.
     notes, `pages` and `readback` as `ops` shows them, and `shared` for a pulled spec. A per-op tool's
     description says the same, and the call tools name `nextPage`/`hasMore` and write `applied`. The schema replaces the old `params` list, so each param
     is sent once.
+    It also gives the shared description's `output` hints and optional `links`.
+    `list_operations {site, prepare: {op, link, item, args?}}` prepares a declared link (zero-based
+    index) from one item the agent selected, returning `nextCall: {tool: "call_operation", args:
+    {site, op, args}}`. The site must already be installed and the target a read; preparation does
+    not pull or call anything. Target defaults and explicit extra args fill the remaining params;
+    missing required params are an input error, never filled from examples or guesses.
   - **Per-op tools**: `mcp --sites a,b` also registers each op of those sites as a tool of its own,
     `<site>__<op>` (any character outside `[A-Za-z0-9_-]` becomes `_`), taking the op's args
     directly with its `inputSchema` and a read's or a write's hints; writes only with
@@ -1792,6 +1817,11 @@ independent alternative.
   and the call options `maxTier`, `timeoutMs`, `fetchImpl`. Invalid bounds or too many items throw
   before any call; invalid items fail individually. Breaking iteration starts no further calls
   and waits for those already running to finish.
+- Library: `call`, `describeOperation(siteSpec, op)`, `prepareLink(siteSpec, sourceOp, item, link,
+  extraArgs?)`, and the existing safe registry reads `search(query)` and `pull(site)`.
+  The description builder is shared with MCP's input schema; the link helper returns complete
+  `{site, op, args}` without executing, validating/coercing values, or granting permission for a
+  write. A later `call` still enforces every arg and write rule.
 
 ## Non-goals (v1)
 
