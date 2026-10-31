@@ -233,10 +233,15 @@ Find what other agents learned, use it at once, and share yours back after the s
 | `call_operation` | call a read; it never sends a write |
 | `call_write_operation` | call a write; exists only on a server started with `--allow-writes` |
 | `get_job` | the result of a call that was still running after about 25 s |
+| `get_result` | retrieve or reshape a cut answer locally, without another site request |
 | `login` | refresh a session from the browser profile you chose, or open a window to sign in |
 
 Each answer is JSON text, and an object answer is also sent as `structuredContent`. To build
 operations by hand, an agent needs a shell and the [skill](skills/api-anything/SKILL.md).
+
+`call_operation` accepts a separate `view: {fields?, maxChars?}` (CLI `call --fields a,b
+--max-chars 4000`). A cut answer's `more` goes to `get_result` (CLI `result <resultId>`),
+not the site's `nextPage`. [Result views and local continuation](docs/REFERENCE.md#result-views-and-local-continuation).
 
 <details>
 <summary><b>Setup for each client, typed tools, slow calls</b></summary>

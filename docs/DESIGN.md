@@ -918,7 +918,39 @@ object; `name=path` renames, `name=path~regex` keeps what the regex's group 1 fi
 result is never over it) with a truncation note that says what was cut. Arrays are cut at an item
 boundary, an item too big on its own is cut rather than dropped, strings are cut as strings, and
 objects stay objects: members above a common size cap are shortened, then trailing members are
-dropped. It runs in about linear time on 10k-member objects. For HTML-only pages, `response.format:
+dropped. It runs in about linear time on 10k-member objects.
+
+A call-level `view: {fields?: string[], maxChars?: number}` comes after classification and the
+stored extraction/pick recipe, before the cap. It never changes the spec or the site's args.
+`fields` uses pick's paths and `name=path` (including its regex form), per item of a list or on
+an object. Unlike a stored pick, a view keeps an empty projected item as `{}`, so item indexes
+stay stable. It cannot recover fields the stored recipe already discarded. `maxChars` is an
+integer from 256 to 200,000 JSON characters, default 20,000; the cap is on `data`, not the result
+envelope.
+
+When a view is cut, `results.ts` keeps the full extracted answer, before the call's view, in
+`API_ANYTHING_HOME/results.json` (otherwise `~/.api-anything/results.json`), atomically written
+under the store's lock with 0700 directories and 0600 files. Disk rather than MCP memory lets
+the next CLI process read the same answer. Only the newest 20 answers are kept, each for 15
+minutes from creation, with opaque random `resultId`s. Reads never extend the TTL; expired
+records are inaccessible and removed on the next successful call or result-store access.
+The file can hold signed-in user data, just as `data` can: it is never a spec, heal log,
+write-ledger entry or report. A retention failure leaves the successful call successful but
+explicitly says that its full answer is unavailable.
+
+A cut call returns `resultId` and `more: {resultId, offset, fields?, maxChars?, format?}`.
+`get_result` (CLI `result <id>`, library `getResult`) reads it without a site request, spec
+lookup, classification, or healing. Normally `offset` is an item index and `data` is the next
+list slice, capped on whole items. Pass `more` unchanged for the same view, or pass just the
+id and a different view to project from the start. If even one item cannot fit whole, or a
+non-list answer is cut, `more` restarts at offset 0 with `format: "json"`. In that mode `data`
+is a fragment of the full projected answer's serialized JSON and `encoding: "json"` is set;
+offset counts string characters. Concatenate only these fragments, then parse once complete,
+not the initial shortened preview. This recovers oversized strings, objects, and single items
+without a new site request. Changing the projection in JSON-fragment mode requires restarting
+at offset 0. Missing, expired, or evicted ids fail locally and never rerun the call.
+
+For HTML-only pages, `response.format:
 "html"` with a selector recipe `{ items: "<css>", fields: { name: "<css>[@attr]" } }` parsed
 in Node; a field written `all:<css>[@attr]` returns every match as a list (a book's genres).
 `@href` and `@src` values are links, so a relative one is unusable without the page's own
@@ -945,10 +977,10 @@ example, since a captured cursor can expire or carry the session it was made for
 leaves the cursor out gets the first page: the slot is emptied (`null` in a JSON leaf, `""`
 elsewhere), so the template's captured page-2 cursor is never sent. Calls are stateless replays,
 so the cursor is the site's own value, passed through untouched. It is not signed or re-windowed
-as Pomerado's list cursors are (`docs/how-it-works.md`): there is no server state for a cursor to
-point into. When the output cap cuts a page, `truncated` says that `nextPage` starts after the
-page's last item, cut or not. The cut items are on neither page, so a smaller page size (a
-`limit` param) is the fix.
+as Pomerado's list cursors are (`docs/how-it-works.md`): it is not a local result-store offset.
+When the output cap cuts a page, `truncated` says that `nextPage` starts after the page's last
+item, cut or not. Retrieve the cut items with `more`/`get_result` before following `nextPage`;
+the two continuations are independent, and `hasMore` describes the site only.
 
 ## Spec files and where they live
 
@@ -1450,7 +1482,8 @@ independent alternative.
     program. `test/execute.test.ts` checks the fields over every class, a read and a write, and
     what was sent.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `find_sites`, `list_operations`,
-  `call_operation`, `get_job`, `login` (so an agent can fix an `auth` failure itself) and `learn_site`
+  `call_operation`, `get_result` (local result views, above), `get_job`, `login` (so an agent can fix
+  an `auth` failure itself) and `learn_site`
   (`mcp-learn.ts`), plus `call_write_operation` on a server started with `--allow-writes`, so the tool list costs the same at 2 sites or 200. `find_sites` is `search` (see
   Sharing specs): each match's ops with their params and registry status, `nextCall`
   `{tool: "call_operation", args: {site}}` for the best match, or `{tool: "learn_site"}` with none;

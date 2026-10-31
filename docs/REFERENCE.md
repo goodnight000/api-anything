@@ -6,6 +6,7 @@ Details behind the [README](../README.md). The design and its reasons are in
 - [Creating an operation from captured traffic](#creating-an-operation-from-captured-traffic)
 - [Replay, fallback and repair](#replay-fallback-and-repair)
 - [Logging in](#logging-in)
+- [Result views and local continuation](#result-views-and-local-continuation)
 - [MCP server](#mcp-server)
 - [Safety and terms of service](#safety-and-terms-of-service)
 - [Status and known limits](#status-and-known-limits)
@@ -236,6 +237,41 @@ refused by `export`, `publish` and `pull`.
 
 Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 
+## Result views and local continuation
+
+Output is capped at 20,000 JSON characters by default. Shape just this call's output, separately
+from the site's params:
+
+```sh
+api-anything call <site> <op> q=example --fields 'id,name=details.title' --max-chars 4000
+api-anything result <resultId> --offset 7 --fields 'id,name=details.title' --max-chars 4000
+```
+
+MCP: `call_operation {site, op, args, view: {fields: ["id", "name=details.title"], maxChars: 4000}}`.
+Library: `call(site, op, args, {view: {fields: ["id"], maxChars: 4000}})`, then
+`getResult(resultId, {offset: 7, fields: ["id"]})` from `api-anything`.
+`fields` uses the stored pick's path syntax (including `name=path` and `name=path~regex`), per
+item; empty projections stay `{}` so indexes do not shift. Classification and the stored
+extraction/pick happen first. A view cannot restore fields that recipe discarded.
+`maxChars` must be an integer from 256 to 200,000 and caps `data`, not its envelope.
+
+A cut answer has `resultId` and `more`, independent of the site's `nextPage`/`hasMore`.
+MCP `get_result` takes `more` unchanged. CLI `result` takes its id and the corresponding
+`--offset`, `--fields`, `--max-chars`, and `--format` flags. It only reads the local kept answer,
+with no site request or spec change. To reshape from the start, use just the id and new fields.
+Normal offsets count items. An oversized single item or non-list answer instead returns
+`more.format: "json"` with offset 0: `get_result` (`result --format json`) returns `encoding:
+"json"` and `data` string fragments of the full projected answer's JSON. Concatenate those
+fragments, then `JSON.parse`; do not append the initial shortened preview. Offsets then count
+characters. Restart at offset 0 when changing fields in that mode.
+
+The full extracted answer, before the call's view, is private local user data. At most 20 cut
+answers are kept in `API_ANYTHING_HOME/results.json` (default `~/.api-anything`), with 0600
+permissions in a 0700 directory, for 15 minutes without renewal. Expired records are removed
+on the next successful call or result access; an expired or evicted id fails locally, never
+reruns the call. Answers do not enter specs, logs, or reports. If retention fails, the cut
+answer says it is unavailable instead of returning a continuation.
+
 ## MCP server
 
 `api-anything mcp` serves these tools over stdio:
@@ -247,6 +283,7 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 | `call_operation` | call a read; a write op is refused and nothing is sent | read-only, idempotent |
 | `call_write_operation` | call a write, with `again` and `idempotencyKey`; only with `--allow-writes` | destructive, not idempotent |
 | `get_job` | wait up to 25 s for a pending call's result | read-only |
+| `get_result` | retrieve or reshape a kept answer, with no site request | read-only, local |
 | `login` | refresh a session from the profile chosen with the CLI, or open a window to sign in by hand | changes the local session only |
 
 - `--sites goodreads,hacker-news` also serves each operation of those sites as a tool of its own,
@@ -389,7 +426,8 @@ Known limits:
   repair that ends on a challenge that did not solve is `blocked` and marks nothing stale.
 - Paging returns the site's own next cursor, and only when the answer holds one. Numbered pages
   get no `nextPage`. When the output cap cuts a page, the cut items are on neither that page nor
-  the next, so `truncated` says to ask for fewer per page.
+  the next; use the local `more`/`get_result` continuation to recover them before following
+  `nextPage`, or reshape the kept answer with `fields`.
 - A readback finds what the read shows: a write the site lists later, or under a value other than
   the one sent, stays `accepted`. An older item with the same value passes for a new one, so find
   something only this write makes.
