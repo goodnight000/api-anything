@@ -63,6 +63,7 @@ import {
 } from "./session.js";
 import { type Operation, readbackName, type Site } from "./spec.js";
 import {
+  appendCall,
   BLOCKED_COOL_MS,
   beginWrite,
   type CoolDown,
@@ -1086,6 +1087,16 @@ async function run(
     // a proof's rate limit or block is the site's, as any call's
     coolAfter(siteName, op, f, log);
     const out = { ...f, ms: Date.now() - t0 };
+    if (!proof)
+      appendCall({
+        site: siteName,
+        op: op.name,
+        class: out.class,
+        ...(log.length && out.tier ? { tier: out.tier } : {}),
+        ms: out.ms,
+        ...(out.healed ? { healed: true as const } : {}),
+        ...(out.write ? { write: out.write } : {}),
+      });
     if (how.source && !proof && !held)
       afterCall(siteName, op, how.source, out, {
         fetchImpl: opts.fetchImpl,

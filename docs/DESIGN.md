@@ -802,6 +802,29 @@ value's prefix gives the same result without passing the session to it. A value 
 is left. `data` is the answer the user asked for and is not redacted. The jar, `state.json` and a
 spec (every add and heal, re-read under the lock) are read-modify-written under a lock file, so
 concurrent processes and calls lose nothing.
+
+**Call log.** Every finished call (a write's readback is part of its call, not one of its own)
+appends one line to `~/.api-anything/calls.jsonl`: `{at, site, op, class, tier, ms, healed?,
+write?}`. `tier` is the tier that answered, absent when nothing was sent (a cool-down's answer,
+args refused before the send). Only names, enums and numbers go in. Args are the user's (a search
+term, a message, an account id), data and `reason` quote the site's answer, and `next` can repeat
+either, so none of them is kept. A call log is something an agent reads too. Without it nothing
+recorded a call that worked, so an op that still answers but 150 times slower (a remembered
+escalation to tier 3) or that fails `auth` on every call left no trace. The log is appended under
+its lock and rewritten only when it passes 1 MB, or when its first line is more than a day past the
+7 days kept. The rewrite keeps the week, and the newest half of it if that is still over 1 MB. A
+home that cannot be written keeps no log, and the call's answer is the same. Nothing in it leaves
+the machine: `report.ts` does not read it.
+
+`api-anything status [site]` (MCP `site_status`) reads it with the rest of the home: the state's
+cool-downs, stale marks and remembered tiers, the heal log, verify's record and the write ledger
+(counts by status only, never a digest or args). It sends nothing. Per op it gives each source's
+latest and the calls of the last 24 h and 7 days: count, ok rate, tier mix, heals and median ms.
+An op is `degraded` when its last 24 h ran mostly at a higher tier than the 6 days before, or with
+an ok rate 20 points lower (3 calls in each window at least: fewer say nothing). Each problem
+carries `next`, phrased as a call's is. A read remembered above its own `minTier` is called once
+with `--max-tier` at that tier. That needs no new mechanism: an answer at the op's own tier already
+forgets the escalation.
 At tier 2 `timeoutMs` is one deadline for the whole call, counted from the moment Chrome is up
 (starting it, seconds on a busy machine, is not counted): the first load of the origin page, every
 hop of the fetch, and the wait and second fetch after the page navigated all draw on it. When the
@@ -1450,7 +1473,7 @@ independent alternative.
     program. `test/execute.test.ts` checks the fields over every class, a read and a write, and
     what was sent.
 - **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `find_sites`, `list_operations`,
-  `call_operation`, `get_job`, `login` (so an agent can fix an `auth` failure itself) and `learn_site`
+  `call_operation`, `get_job`, `site_status` (`status`, see the call log), `login` (so an agent can fix an `auth` failure itself) and `learn_site`
   (`mcp-learn.ts`), plus `call_write_operation` on a server started with `--allow-writes`, so the tool list costs the same at 2 sites or 200. `find_sites` is `search` (see
   Sharing specs): each match's ops with their params and registry status, `nextCall`
   `{tool: "call_operation", args: {site}}` for the best match, or `{tool: "learn_site"}` with none;
@@ -1502,8 +1525,8 @@ independent alternative.
     op is `refused` and nothing is sent, and on a writes-enabled server its `next` and `nextCall`
     name `call_write_operation` with the same arguments. `call_write_operation` is destructive and
     not idempotent, takes `again` and `idempotencyKey`, and refuses a read (`input`, pointing back
-    at `call_operation`), so a read never meets the write prompt. `list_sites`, `list_operations`
-    and `get_job` are read-only, idempotent and closed-world (`find_sites` is read-only and open-world); `login` changes the local session,
+    at `call_operation`), so a read never meets the write prompt. `list_sites`, `list_operations`,
+    `get_job` and `site_status` are read-only, idempotent and closed-world (`find_sites` is read-only and open-world); `login` changes the local session,
     never the site (not read-only, not destructive, idempotent: a repeat joins the first). Every
     tool sets all four hints, since the spec's defaults for an unset one are the pessimistic ones.
     The split costs a second tool name; the package was not published with the single tool.

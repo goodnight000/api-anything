@@ -14,8 +14,8 @@ cookies stay on this machine, under `~/.api-anything` (`API_ANYTHING_HOME` overr
 catalog holds operations people's agents learned from public pages.
 
 Over MCP the agent has `find_sites`, `list_operations`, `call_operation`, `learn_site`, `list_sites`,
-`get_job` and `login`. With a shell, the CLI is `api-anything` (or `npx -y api-anything`): `search`, `ops`, `call`,
-`learn` and `sites` do the same, and its output is one line of JSON. A failure also prints a `next:`
+`get_job`, `site_status` and `login`. With a shell, the CLI is `api-anything` (or `npx -y api-anything`): `search`, `ops`, `call`,
+`learn`, `status` and `sites` do the same, and its output is one line of JSON. A failure also prints a `next:`
 line on stderr. `list_operations` gives each op's args as a JSON Schema (`inputSchema`).
 `call_operation` sends only reads; a server started with `--allow-writes` also has
 `call_write_operation`, the only tool that sends a write, which takes `again` and `idempotencyKey`. A
