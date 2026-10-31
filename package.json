@@ -1,6 +1,6 @@
 {
   "name": "api-anything",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Learn reusable operations from a website's browser traffic and call them from a CLI, library or MCP server.",
   "license": "MIT",
   "type": "module",

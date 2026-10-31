@@ -1,3 +1,26 @@
+# Release readiness — 0.3.2, 2026-10-31
+
+Ready to publish. The limits of 0.3.0 still apply.
+
+## Verified
+
+- `REQUIRE_BROWSER=1 npm test` passed (1080 tests) with `npm run check` and `npm run lint` on the
+  launch fixes (#87); CI is green on Node 22 and 24.
+- Live, logged out, `api-anything verify` on every bundled site from one empty home: 247 cases
+  passed, 3 failed, 4 inconclusive, 8 skipped (linkedin needs a login; dominos-au ships no examples).
+  97 of the 99 operations that need no account answered with data.
+- New: `reddit` (`search`, `hot`), passing `verify reddit` 4 of 4 from an empty home at tier 2.
+- Fixed: `youtube.search` (headers past Node's 16 KB limit now send a read on, and the plain retry
+  answers at tier 1), `amazon.search` titles on results with a brand row, `setup` wiring agents
+  from a leftover directory, `Retry-After: 0` read as a rate limit, `Available-Dictionary` kept in
+  learned requests.
+
+## Known issues
+
+- `google-flights.priceCalendar` answers batchexecute error 13; `aldi.applianceDetails`'s example
+  product is gone (HTTP 410).
+- Reddit challenges plain HTTP from many networks: a first call can take about 12 s through Chrome.
+
 # Release readiness — 0.3.0, 2026-10-29
 
 Ready to publish. The same limits as 0.2.0 apply: this is not a claim that every website, every
