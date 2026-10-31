@@ -816,7 +816,7 @@ describe("admin", () => {
 describe("serving", () => {
   test("search answers SearchMatch with FoundOp params", async () => {
     const { env } = registry();
-    await seed(env, { site, operations: [op()] });
+    const seeded = await seed(env, { site, operations: [op()] });
     await seed(env, {
       site: { name: "weather", domain: "example.net", baseUrl: "https://www.example.net", description: "Forecasts" },
       operations: [
@@ -845,11 +845,70 @@ describe("serving", () => {
         description: "Find books by title words, with their ratings",
         status: "live",
         confirmations: 0,
+        registry: { hash: seeded.body.operations[0].hash, status: "live", confirmations: 0 },
+        matched: ["book", "rating"],
+        unmatched: [],
         params: [{ name: "q", type: "string", required: true, description: "title words", example: "dune" }],
       },
     ]);
     assert.equal((await send(env, "GET", "/v1/search?q=example.net")).body.matches[0].name, "weather");
     assert.equal((await send(env, "GET", "/v1/search")).status, 400);
+  });
+
+  test("search and pull expose only stored aggregate health, including unknown health on a seed", async () => {
+    const { env } = registry();
+    const seeded = await seed(env, { site, operations: [op()] });
+    const hash = seeded.body.operations[0].hash;
+    let served = (await send(env, "GET", "/v1/sites/example-com")).body.operations[0];
+    assert.deepEqual(served.registry, { hash, status: "live", confirmations: 0 });
+    const page = await send(env, "GET", "/sites/example-com");
+    assert.match(page.text, /success unknown/);
+    assert.match(page.text, /last worked unknown/);
+    const caller = install();
+    await send(env, "POST", "/v1/reports", {
+      as: caller,
+      body: { reports: [{ hash, outcome: "ok", tier: 2, ms: 123 }] },
+    });
+    served = (await send(env, "GET", "/v1/sites/example-com")).body.operations[0];
+    assert.equal(served.registry.successRate, 1);
+    assert.equal(served.registry.confirmations, 1);
+    assert.equal(served.registry.lastOkAt, served.lastOkAt);
+    const match = (await send(env, "GET", "/v1/search?q=book")).body.matches[0].operations[0];
+    assert.deepEqual(match.registry, served.registry);
+    assert.equal(match.lastOkAt, served.lastOkAt);
+    assert.deepEqual(Object.keys(match.registry).sort(), [
+      "confirmations",
+      "hash",
+      "lastOkAt",
+      "status",
+      "successRate",
+    ]);
+    assert.ok(!JSON.stringify(match).includes(caller.key), "no caller identity reaches search");
+    assert.equal(match.registry.tier, undefined, "the store has no tier aggregate");
+    assert.equal(match.registry.ms, undefined, "the store has no latency aggregate");
+  });
+
+  test("partial search explains each op without making unconfirmed sites visible by words", async () => {
+    const { env } = registry();
+    await seed(env, {
+      site,
+      operations: [op({ name: "searchRecipes", description: "Search recipes" }), op({ name: "searchAuthors" })],
+    });
+    const r = await send(env, "GET", "/v1/search?q=vegetarian%20pasta%20recipes");
+    assert.equal(r.body.matches.length, 1);
+    assert.deepEqual(r.body.matches[0].matched, ["recipe"]);
+    assert.deepEqual(r.body.matches[0].unmatched, ["vegetarian", "pasta"]);
+    const recipe = r.body.matches[0].operations.find((o: { name: string }) => o.name === "searchRecipes");
+    assert.deepEqual(recipe.matched, ["recipe"]);
+    assert.deepEqual(recipe.unmatched, ["vegetarian", "pasta"]);
+
+    const fresh = registry();
+    await send(fresh.env, "POST", "/v1/versions", {
+      as: install(),
+      body: upload({ operation: op({ name: "searchRecipes", description: "Search recipes" }) }),
+    });
+    assert.deepEqual((await send(fresh.env, "GET", "/v1/search?q=vegetarian%20recipes")).body.matches, []);
+    assert.equal((await send(fresh.env, "GET", "/v1/search?q=example.com")).body.matches[0].name, "example-com");
   });
 
   test("the index is a RegistryIndex of the best ops", async () => {

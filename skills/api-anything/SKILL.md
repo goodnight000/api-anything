@@ -14,8 +14,8 @@ cookies stay on this machine, under `~/.api-anything` (`API_ANYTHING_HOME` overr
 catalog holds operations people's agents learned from public pages.
 
 Over MCP the agent has `find_sites`, `list_operations`, `call_operation`, `learn_site`, `list_sites`,
-`get_job` and `login`. With a shell, the CLI is `api-anything` (or `npx -y api-anything`): `search`, `ops`, `call`,
-`learn` and `sites` do the same, and its output is one line of JSON. A failure also prints a `next:`
+`get_result`, `get_job`, `site_status` and `login`. With a shell, the CLI is `api-anything` (or `npx -y api-anything`): `search`, `ops`, `call`,
+`learn`, `status` and `sites` do the same, and its output is one line of JSON. A failure also prints a `next:`
 line on stderr. `list_operations` gives each op's args as a JSON Schema (`inputSchema`).
 `call_operation` sends only reads; a server started with `--allow-writes` also has
 `call_write_operation`, the only tool that sends a write, which takes `again` and `idempotencyKey`. A
@@ -92,6 +92,9 @@ the user.
    the format a param expects, when the spec says), and the site's `notes`. Read the notes: they
    hold caveats such as "airport codes only". If the site is not listed, run
    `api-anything search <what you need or the site's domain>` before learning it.
+   `api-anything ops <site> <op> --schema` gives one op's params as JSON Schema, its output hints
+   (a list or one value, field types the spec records, `unknown` otherwise) and its `links`: which
+   result field feeds which arg of the next op (`searchBooks.bookId → getWorkId.bookId`).
 2. `api-anything call <site> <op> name=value ...`. An arg that doesn't fit the param's declared
    format comes back `class: "input"` with that format, and nothing was sent: fix the arg.
 3. Check `ok` before using `data`, and check the output's identity/range against the task. Treat a
@@ -106,7 +109,8 @@ the user.
 4. No results look like this:
    - `ok: true` with `data: []` when the page shows it's empty: a JSON op's list at the extract
      path is empty, an `--embedded` op's extract resolves to `[]`, or an `--html` op whose items
-     selector is `"<container> <item>"` finds the container with no element of the item's tag in it.
+     selector is `"<container> <item>"` finds the container with no element of the item's tag in it,
+     or whose recipe's `empty` element is shown on the page.
    - Otherwise (the list or selector is simply missing) api-anything replays the op's example
      args once: if those still return data, the answer is `ok: false`, `class: "input"`, "no
      results for these args ... the operation works". Treat that as "nothing found" for these
@@ -224,9 +228,13 @@ don't capture pages the user didn't ask for.
      `--paging page` so `ops` shows the op pages and `verify` checks page 3 isn't page 2 again.
    - A list paged by a cursor ("Show more", infinite scroll): capture after clicking "Show more",
      pick the request that loaded page 2, give the cursor it sent as the example, and say where the
-     answer holds the next one: `--example after=<cursor> --paging after=data.list.pageInfo.endCursor`
-     (find the path with `inspect --outline`). A call without `after` then gets page 1 and
-     returns `nextPage`. Propose paging only when the user needs more than one page.
+     answer holds the next one: `--example after=<cursor> --paging after=data.list.pageInfo.endCursor`.
+     `capture` (with `--steps` that click "Show more") lists the two pages it found as `pages`,
+     with these flags ready; check them, then add the other `--example` values. When the answer
+     gives a next-page URL, not a value, `--paging 'page=meta.next_page~[?&]page=([^&#]*)'` reads
+     it out. A call without `after` then gets page 1 and returns `nextPage`. Over MCP,
+     `learn_site` with `steps` that click "Show more" learns the paging itself. Propose paging only
+     when the user needs more than one page.
    - An op with no args (a feed, a list) needs `--match path=/api/feed` to say which request.
    - If `add` warns that the match is ambiguous, or picks the wrong request, run `capture` again
      and use `add --from <captureId> --pick-request <id>`. A capture holds one run, so a second
@@ -242,7 +250,9 @@ don't capture pages the user didn't ask for.
    - For a server-rendered page, use
      `--html '{"items":"ul.results li.result","fields":{"title":"a","url":"a@href"}}'` or
      `--embedded '<regex>'`. Write `items` as `"<container> <item>"` when the results sit in a
-     stable container: a results page with the container and no items then reads as `[]`.
+     stable container: a results page with the container and no items then reads as `[]`. When
+     the no-results page drops the list and shows a message instead, add `"empty":"<css>"` naming
+     that message's element to the recipe (`inspect` a capture of such a page to find it).
    - A header that carries a public constant (a web app's shared bearer, the same for every
      visitor) can stay literal with `--public authorization`. Only do this when it is not the user's.
    - Check `preview` in the output: it is what a call returns, judged on the captured response. If
@@ -270,7 +280,9 @@ don't capture pages the user didn't ask for.
 5. **Verify.** `api-anything verify site` runs every read op's example and checks: each case is
    `pass`, `fail` or `inconclusive` (a challenge, sign-in, rate limit or server failure: it tested
    nothing; follow its `next`, then verify again). A failing case means the op is broken, or the check
-   is wrong: change a check only if the site's own page answers those args the other way.
+   is wrong: change a check only if the site's own page answers those args the other way. A write is
+   never sent: its `preflight` row says what a call would need first (a trigger run, a login, a
+   passing readback). Exit 1 is a failing case; exit 2 is inconclusive only.
 
 The `add` output lists `warnings`. Read them. A warning such as "minTier 3" means every call runs
 the browser. Verify new arguments there too; the runtime refuses captures whose parameter
@@ -339,7 +351,15 @@ Every failure carries:
 - `nextPage`, `hasMore` (paged reads): pass `nextPage` as the op's paging param (`ops` shows it
   under `pages`) for the next page. `hasMore: false` means the site said this is the last page.
   Neither field means the answer didn't say: stop, or ask for the next page number yourself. When
-  the result is also `truncated`, the cut items are skipped by `nextPage`: ask for fewer per page.
+  the result is also `truncated`, first pass its local `more` to `get_result`: no site request.
+  `nextPage` skips to the site's next page, not to the items cut from this one.
+- `resultId`, `more`: a cut answer is kept privately for 15 minutes (at most 20 answers).
+  `get_result` takes `more` unchanged, or `{resultId, fields, maxChars}` to reshape from the
+  start. CLI: `api-anything result <id> --offset <n> --fields a,b --max-chars <n>`.
+  Normal offsets count items. With `more.format: "json"` (CLI `--format json`), offsets count
+  characters and `data` is a JSON fragment (`encoding: "json"`): concatenate fragments, then
+  parse, without the initial shortened preview. Restart at offset 0 if changing fields.
+  An expired or evicted id cannot be retrieved; never repeat a write to recover its answer.
 
 `reason` and `next` never hold a live cookie or session value: one the site echoed is replaced by
 `[redacted]`. `data` is not redacted.
@@ -404,8 +424,12 @@ Every failure carries:
 
 - Set `--extract` to the part of the response you need, and `--pick` to the fields you need per
   item. `add` suggests an extract path. When results are split across sections, `[*]` joins them
-  (`contents[*].items`). Output over about 20k characters is cut, and the result
-  carries a `truncated` note.
+  (`contents[*].items`). For one call, use `view: {fields: ["id", "name=details.title"],
+  maxChars: 4000}` separately from `args` (CLI `--fields id,name=details.title --max-chars 4000`).
+  It shapes the already-extracted output, not the spec. `maxChars` is 256 to 200000, default
+  20000. A cut answer has `truncated`, `resultId` and `more`: use `get_result` to recover or
+  reproject it locally instead of calling the site again. Fields the stored recipe already
+  discarded are not available.
 - Prefer `ops` over reading spec files, and a single `call` over capture runs. A capture is for
   learning, not for fetching data.
 - Don't loop `call` over hundreds of values without asking. api-anything spaces requests to one site

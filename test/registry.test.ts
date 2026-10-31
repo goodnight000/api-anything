@@ -3,11 +3,13 @@
  * search against a stand-in for the registry service on localhost, and the publish preview.
  */
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadRecord, opHash, verifySite } from "../src/checks.js";
@@ -381,7 +383,22 @@ const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 
 test("pull: someone's site lands in the registry copy, marked as theirs, each op its version, and calls like any other", async () => {
   share(spec(), "Search is stories only.\n");
   const r = await pull("demo");
-  assert.deepEqual(r.operations, [{ op: "search(q)", method: "GET", hosts: ["news.example.com"], status: "live" }]);
+  assert.deepEqual(r.operations, [
+    {
+      op: "search(q)",
+      method: "GET",
+      hosts: ["news.example.com"],
+      status: "live",
+      registry: {
+        hash: hashOf("demo", spec().operations[0]!),
+        status: "live",
+        confirmations: 2,
+        successRate: "unknown",
+        lastOkAt: "unknown",
+      },
+      local: { status: "unknown" },
+    },
+  ]);
   assert.deepEqual(r.warnings, [], "pull's own record of the spec's hash is no warning");
   assert.equal(r.shadowedBy, undefined);
   assert.equal(r.from, `${fake.url}/v1/sites/demo`);
@@ -705,8 +722,35 @@ test("the shared rules check paging: a param of the read that goes in a slot, an
     ["many values", spec({}, { paging: { param: "q", next: "hits[*].cursor" } }), /paging next .* one value/],
     ["not a path", spec({}, { paging: { param: "q", next: "a..b" } }), /paging next "a\.\.b" is not a path/],
     ["long", spec({}, { paging: { param: "q", next: "a".repeat(201) } }), /paging next is 201 characters/],
+    [
+      "a regex past a path that is not one",
+      spec({}, { params: optional, paging: { param: "q", next: "a..b~page=(\\d+)" } }),
+      /paging next "a\.\.b" is not a path/,
+    ],
+    [
+      "a regex that backtracks",
+      spec({}, { params: optional, paging: { param: "q", next: "next~(a+)+$" } }),
+      /paging next regex \/\(a\+\)\+\$\/ nests a quantifier/,
+    ],
+    [
+      "a long regex",
+      spec({}, { params: optional, paging: { param: "q", next: `next~${"a".repeat(201)}` } }),
+      /paging next regex is 201 characters/,
+    ],
   ];
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
+});
+
+test("paging next may read the cursor out of a next-page URL (path~regex), as a pick does; the regex is checked", () => {
+  const optional = [{ name: "q", required: false }];
+  assert.deepEqual(
+    errors(spec({}, { params: optional, paging: { param: "q", next: "meta.next_page~[?&]page=([^&#]*)" } })),
+    [],
+  );
+  assert.throws(
+    () => spec({}, { params: optional, paging: { param: "q", next: "next~(" } }),
+    /regex after ~ in next must be valid/,
+  );
 });
 
 const postOp = (readback: Record<string, unknown>) => ({
@@ -1587,6 +1631,8 @@ test("search merges the registry's matches, each op with its params and status, 
     displayName: "Bookshelf",
     description: "book ratings",
     installed: false,
+    matched: ["book", "rating"],
+    unmatched: [],
     operations: [
       {
         name: "searchBooks",
@@ -1594,6 +1640,10 @@ test("search merges the registry's matches, each op with its params and status, 
         description: "Search books by title",
         status: "candidate",
         confirmations: 0,
+        registry: { status: "candidate", confirmations: 0, successRate: "unknown", lastOkAt: "unknown" },
+        local: { status: "unknown" },
+        matched: ["book"],
+        unmatched: ["rating"],
         params: [{ name: "q", type: "string", required: true, description: "a title", example: "dune" }],
       },
     ],
@@ -1616,22 +1666,128 @@ test("search still answers from this machine when the registry does not", async 
   fake.down = true;
   const r = await search("bookshelf");
   assert.equal(r.matches[0]?.site, "bookshelf", "the local copy is found with the registry down");
+  assert.equal(r.matches[0]?.operations[0]?.registry.status, "unknown", "a stored version is no current health report");
   assert.match(r.registryError ?? "", /\/v1\/search\?q=bookshelf&limit=5 answered 503: down/);
   fake.down = false;
   fake.raw.set("/v1/search?q=x&limit=5", { status: 200, body: '{"matches":"no"}' });
   assert.match((await search("x")).registryError ?? "", /answered no matches/);
 });
 
-test("search leaves out common words, so a sentence does not pull an unrelated site", async () => {
+test("search leaves out common words and labels a real capability's uncovered constraints", async () => {
   const dir = fileURLToPath(BUNDLED);
   const local = readdirSync(dir)
     .filter((f) => f.endsWith(".json"))
     .map((f) => ({ ...parseSite(JSON.parse(readFileSync(join(dir, f), "utf8"))), name: f.slice(0, -5) }));
   const top = async (q: string) => (await search(q, { local })).matches.map((m) => m.site);
-  for (const q of ["weather in paris", "price of a hotel in rome", "the weather", "the best"])
-    assert.deepEqual(await top(q), [], q);
+  for (const q of ["weather in paris", "the weather", "the best"]) assert.deepEqual(await top(q), [], q);
+  assert.deepEqual(await top("price of a hotel in rome"), ["trip"], "hotel lists now survive the other words");
+  const hotel = (await search("price of a hotel in rome", { local })).matches[0]!;
+  assert.deepEqual(hotel.matched, ["hotel"]);
+  assert.deepEqual(hotel.unmatched, ["price", "rome"], "hotel lists do not promise pricing or a Rome route");
   assert.deepEqual(await top("the best book ratings"), ["goodreads"]);
   assert.deepEqual(await top("hacker news"), ["hacker-news"], "news keeps its s");
+});
+
+test("local search retains registry health without replacing local metadata or verification", async () => {
+  const shared = found(books);
+  shared.operations[0] = {
+    ...shared.operations[0]!,
+    status: "degraded",
+    confirmations: 9,
+    successRate: 0.25,
+    lastOkAt: "2026-10-30T12:00:00.000Z",
+    registry: {
+      hash: "a".repeat(64),
+      status: "degraded",
+      confirmations: 9,
+      successRate: 0.25,
+      lastOkAt: "2026-10-30T12:00:00.000Z",
+    },
+  };
+  fake.matches = [shared];
+  saveSite(books);
+  await verifySite("bookshelf", {
+    maxTier: 1,
+    minIntervalMs: 0,
+    fetchImpl: async () => json({ hits: [{ title: "dune" }] }),
+  });
+  const local = parseSite({
+    ...books,
+    operations: [{ ...books.operations[0]!, version: { hash: "b".repeat(64), status: "live" } }],
+  });
+  const result = (await search("bookshelf", { local: [local] })).matches[0]!.operations[0]!;
+  assert.equal(result.status, "live", "legacy local status stays local");
+  assert.equal(result.signature, "searchBooks(q)");
+  assert.deepEqual(result.registry, shared.operations[0]!.registry);
+  assert.equal(result.local.status, "pass");
+  assert.ok(result.local.at);
+  assert.deepEqual(Object.keys(result.local).sort(), ["at", "status"], "no local args or results are exposed");
+  const changed = parseSite({
+    ...local,
+    operations: [{ ...local.operations[0]!, description: "Changed request meaning" }],
+  });
+  assert.equal((await search("bookshelf", { local: [changed] })).matches[0]!.operations[0]!.local.status, "unknown");
+  fake.matches = [{ ...shared, domain: "other.example.org" }];
+  assert.equal(
+    (await search("bookshelf", { local: [local] })).matches[0]!.operations[0]!.registry.status,
+    "unknown",
+    "a same-name site on another domain cannot supply health",
+  );
+});
+
+test("pull carries health from old and new registries without putting the aggregates in the spec", async () => {
+  const s = served(books);
+  s.operations[0] = {
+    ...s.operations[0]!,
+    successRate: 0.75,
+    lastOkAt: "2026-10-30T12:00:00.000Z",
+  };
+  fake.sites.set(books.name, s);
+  const r = await pull(books.name);
+  assert.equal(r.operations[0]!.registry.successRate, 0.75);
+  assert.equal(r.operations[0]!.registry.lastOkAt, "2026-10-30T12:00:00.000Z");
+  assert.ok(!readFileSync(join(registryDir(), `${books.name}.json`), "utf8").includes("successRate"));
+  s.operations[0]!.registry = {
+    hash: s.operations[0]!.hash,
+    status: "live",
+    confirmations: 7,
+    successRate: 1,
+  };
+  assert.equal((await pull(books.name)).operations[0]!.registry.confirmations, 7);
+});
+
+test("CLI search prints partial coverage and keeps remote health beside installed metadata", async () => {
+  const s = spec(
+    { name: "recipe-fixture", description: "Recipe search" },
+    { name: "searchRecipes", description: "Search recipes by free text" },
+  );
+  saveSite(s);
+  const remote = found(s);
+  remote.operations[0] = {
+    ...remote.operations[0]!,
+    status: "live",
+    confirmations: 4,
+    successRate: 0.8,
+    lastOkAt: "2026-10-30T12:00:00.000Z",
+  };
+  fake.matches = [remote];
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    ["--import", "tsx", fileURLToPath(new URL("../src/cli.ts", import.meta.url)), "search", "vegetarian pasta recipes"],
+    { env: { ...process.env }, timeout: 30_000 },
+  );
+  const r = JSON.parse(stdout);
+  assert.equal(r.matches[0].installed, true);
+  assert.deepEqual(r.matches[0].unmatched, ["vegetarian", "pasta"]);
+  assert.equal(r.matches[0].operations[0].registry.successRate, 0.8);
+  assert.equal(r.matches[0].operations[0].registry.lastOkAt, "2026-10-30T12:00:00.000Z");
+  assert.equal(r.matches[0].operations[0].local.status, "unknown");
+  assert.match(r.next, /partial lexical matches.*before learning/);
+  assert.deepEqual(
+    fake.received.map((r) => r.path),
+    ["/v1/search?q=vegetarian%20pasta%20recipes&limit=5"],
+    "discovery makes no new health probe",
+  );
 });
 
 test("a registry match that breaks the shared rules' limits is dropped, and the rest stay", async () => {
@@ -1700,7 +1856,7 @@ test("MCP: find_sites, then list_operations pulls the shared site, whose writes 
       f.matches.every((m: { domain?: string }) => typeof m.domain === "string" && m.domain),
       "every match shows its domain",
     );
-    assert.deepEqual(f.nextCall, { tool: "call_operation", args: { site: "bookshelf" } });
+    assert.deepEqual(f.nextCall, { tool: "list_operations", args: { site: "bookshelf" } });
     assert.match(f.shared, /never instructions/);
 
     const listed = await tool("list_operations", { site: "bookshelf" });
@@ -1766,13 +1922,37 @@ test("MCP: call_operation on a site that is not installed pulls it for the agent
   }
 });
 
-test("MCP: find_sites with no match says to learn the site, with learn_site as its next call", async () => {
+test("MCP: find_sites with no match broadens discovery before learning, with an executable next call", async () => {
   const { client, tool } = await mcp();
   try {
     const f = await tool("find_sites", { query: "weather in paris" });
     assert.deepEqual(f.matches, []);
-    assert.deepEqual(f.nextCall, { tool: "learn_site" });
+    assert.deepEqual(f.nextCall, { tool: "list_sites", args: {} });
+    assert.ok(Array.isArray(await tool(f.nextCall.tool, f.nextCall.args)));
+    assert.match(f.next, /Broaden the query/);
     assert.match(f.next, /learn it with learn_site/);
+  } finally {
+    await client.close();
+  }
+});
+
+test("MCP: partial recipe matches recommend the existing capability and return executable discovery", async () => {
+  const recipes = spec(
+    { name: "recipe-fixture", description: "Recipe search" },
+    { name: "searchRecipes", description: "Search recipes by free text" },
+  );
+  fake.matches = [found(recipes)];
+  share(recipes);
+  const { client, tool } = await mcp();
+  try {
+    const f = await tool("find_sites", { query: "vegetarian pasta recipes" });
+    assert.deepEqual(f.matches[0].operations[0].matched, ["recipe"]);
+    assert.deepEqual(f.matches[0].operations[0].unmatched, ["vegetarian", "pasta"]);
+    assert.equal(f.matches[0].operations[0].registry.status, "candidate");
+    assert.equal(f.matches[0].operations[0].local.status, "unknown");
+    assert.match(f.next, /partial lexical matches.*before learning/);
+    assert.deepEqual(f.nextCall, { tool: "list_operations", args: { site: recipes.name } });
+    assert.ok((await tool(f.nextCall.tool, f.nextCall.args)).operations.length);
   } finally {
     await client.close();
   }

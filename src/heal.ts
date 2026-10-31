@@ -4,11 +4,11 @@
  */
 import { join } from "node:path";
 import { atStep, browserAvailable, PageUnreachable, ProfileInUse, runTrigger, waitReport } from "./browser.js";
-import { botWall, type Class, judge, pickedShape } from "./classify.js";
+import { botWall, type Class, judge, type Observed, pickedShape } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { capOutput, extract } from "./extract.js";
-import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, refusal, send } from "./http.js";
+import { buildRequest, MAX_REDIRECTS, ownMatch, REDIRECT, refusal } from "./http.js";
 import {
   type Args,
   ASSET_EXT,
@@ -23,10 +23,12 @@ import {
   UUID,
   unplaced,
 } from "./learn.js";
+import { sendDerived } from "./lookup.js";
 
 export { unplaced };
 
 import type { NextAction } from "./execute.js";
+import { standIn } from "./paging.js";
 import { besideOrigins, credentialsOf, opUrls, scanSecrets, signInFills } from "./secrets.js";
 import {
   cookieHeaderFor,
@@ -380,6 +382,8 @@ function carriesArgs(op: Operation, e: Exchange, args: Args): boolean {
         (s.param === p.name || s.template?.includes(`{${p.name}}`)) &&
         !/^header:(referer|origin|cookie)$/i.test(s.at[0]!),
     );
+    // a param only a derived slot's lookup takes reaches this request as the value it looked up: not checkable here
+    if (!slots.length && op.slots.some((s) => s.from?.slots.some((l) => l.param === p.name))) return true;
     return (
       slots.length > 0 &&
       slots.every((s) => {
@@ -780,17 +784,52 @@ function resolves(spec: ResponseSpec, body: string | undefined): boolean {
   }
 }
 
+/** The data the op's recipe reads from an answer, as JSON; undefined when it is no data, or empty. */
+function answerOf(op: Operation, r: Observed | undefined): string | undefined {
+  if (!r) return undefined;
+  const j = judge(op, r);
+  if (j.class !== "ok" || j.data === undefined || j.data === null || (Array.isArray(j.data) && !j.data.length))
+    return undefined;
+  return JSON.stringify(j.data);
+}
+
+const observed = (e: Exchange | undefined): Observed | undefined =>
+  e?.response
+    ? { status: e.response.status, headers: e.response.headers, body: e.response.body ?? "", url: e.request.url }
+    : undefined;
+
 /** Both runs answered, through the op's recipe, with the same data, and it is not empty. */
 function sameAnswer(op: Operation, run1: Exchange, run2: Exchange | undefined): boolean {
-  const data = (e: Exchange | undefined) => {
-    const r = e?.response;
-    if (!e || !r) return undefined;
-    const j = judge(op, { status: r.status, headers: r.headers, body: r.body ?? "", url: e.request.url });
-    return j.class === "ok" ? j.data : undefined;
-  };
-  const one = data(run1);
-  if (one === undefined || one === null || (Array.isArray(one) && !one.length)) return false;
-  return JSON.stringify(one) === JSON.stringify(data(run2));
+  const one = answerOf(op, observed(run1));
+  return one !== undefined && one === answerOf(op, observed(run2));
+}
+
+/**
+ * The params among `changed` whose value from example 2, sent alone in example 1's args, left the
+ * answer as example 1's: one tier-1 read per param, at the site's pace. A probe that does not answer
+ * ok says nothing, so its param is not named. Reads only: a write is never sent to learn it.
+ */
+async function ignoredAlone(
+  op: Operation,
+  ex1: Args,
+  ex2: Args,
+  changed: string[],
+  run1: Exchange,
+  session: Session,
+  opts: { site: string; fetchImpl?: typeof fetch },
+): Promise<string[]> {
+  const one = answerOf(op, observed(run1));
+  if (one === undefined) return [];
+  const ignored: string[] = [];
+  for (const k of changed) {
+    try {
+      const sent = await sendDerived(op, { ...ex1, [k]: ex2[k] }, session, opts);
+      if (answerOf(op, sent) === one) ignored.push(k);
+    } catch {
+      /* a probe that failed proves nothing */
+    }
+  }
+  return ignored;
 }
 
 function previewOf(data: unknown): AddResult["preview"] {
@@ -866,7 +905,8 @@ function saveOperation(
 }
 
 export async function addOperation(input: AddInput): Promise<AddResult> {
-  const i = { ...input, site: safeName(input.site) };
+  const stood = standIn(input.paging, input.examples, input.from, input.from2);
+  const i = { ...input, site: safeName(input.site), ...stood };
   const existing = loadSite(i.site)?.site;
   const old = existing?.operations.find((o) => o.name === i.op);
   const ex2 = i.examples[1];
@@ -926,7 +966,8 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     if (!existing) throw new Error(`relative trigger ${trigger.url} needs an existing site; use a full URL`);
     trigger = { ...trigger, url: existing.baseUrl.replace(/\/$/, "") + trigger.url };
   }
-  const missing = unplaced(trigger, ex1);
+  // a cursor is no part of the page's address: it is the site's answer to an earlier page
+  const missing = unplaced(trigger, ex1).filter((k) => !(i.paging?.next && k === i.paging.param));
 
   let run1: CaptureResult;
   let run2: CaptureResult | undefined;
@@ -1086,7 +1127,9 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     response: withRecipe(learned.operation.response, r),
     params,
     ...(checks?.length && !i.write ? { checks } : {}),
+    ...(old?.links ? { links: old.links } : {}),
   };
+  if (stood) operation = stood.restore(operation);
   // Paging and a readback are the caller's contract too: kept while they still fit the op learned again.
   const paging = i.paging ?? old?.paging;
   if (paging && !i.write) {
@@ -1126,7 +1169,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   // signatures. One replay of run 1's template with example 2's args tells them apart.
   if (operation.minTier === 3 && operation.readOnly && run2) {
     try {
-      const sent = await send(operation, ex2 ?? ex1, session, { site: i.site, fetchImpl: i.fetchImpl });
+      const sent = await sendDerived(operation, ex2 ?? ex1, session, { site: i.site, fetchImpl: i.fetchImpl });
       if (judge(operation, sent).class === "ok") {
         operation = { ...operation, minTier: 1 };
         warnings.push(
@@ -1138,16 +1181,38 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     }
   }
 
-  // The second run proves its args reach the request, not that the server reads them there.
-  const changed = Object.keys(ex1).filter((k) => ex2?.[k] !== undefined && asText(ex2[k]) !== asText(ex1[k]));
-  if (ex2 && changed.length && operation.readOnly && sameAnswer(operation, learned.exchange, learned.exchange2)) {
-    const reason = `example 2 (${changed.map((k) => `${k}=${asText(ex2[k])}`).join(", ")}) was answered with example 1's data`;
-    operation = { ...operation, unproven: { params: changed, reason } };
-    warnings.push(
-      `${reason}: the server may not read ${changed.join(", ")} from this request (it may go by a cookie, the IP or the page it was loaded from). ` +
-        "If the two examples just have the same answer, add it again with an example 2 that excludes something example 1 returned (another place, a filter value one of its rows fails). " +
-        `Until then publish refuses ${operation.name}`,
-    );
+  // The second run proves its args reach the request, not that the server reads them there. A cursor is
+  // the site's answer to an earlier page, not a param to prove: another run's cursor sent with example 1's
+  // args proves nothing, and its value must not reach the spec through a reason.
+  const cursor = (i.paging ?? old?.paging)?.next ? (i.paging ?? old?.paging)!.param : undefined;
+  const changed = Object.keys(ex1).filter(
+    (k) => k !== cursor && ex2?.[k] !== undefined && asText(ex2[k]) !== asText(ex1[k]),
+  );
+  if (ex2 && changed.length && operation.readOnly) {
+    const values = (ks: string[]) => ks.map((k) => `${k}=${asText(ex2[k])}`).join(", ");
+    let doubted: string[] = [];
+    let reason = "";
+    if (sameAnswer(operation, learned.exchange, learned.exchange2)) {
+      doubted = changed;
+      reason = `example 2 (${values(changed)}) was answered with example 1's data`;
+    } else if (changed.length > 1 && operation.minTier === 1) {
+      // Two answers that differ because one param changed hide another the server ignores (a `page`
+      // next to a `q`): each changed param is sent alone in example 1's args, and must change the answer by itself.
+      doubted = await ignoredAlone(operation, ex1, ex2, changed, learned.exchange, session, {
+        site: i.site,
+        fetchImpl: i.fetchImpl,
+      });
+      if (doubted.length)
+        reason = `example 1's args with only ${values(doubted)} from example 2 ${doubted.length > 1 ? "were" : "was"} answered with example 1's data`;
+    }
+    if (doubted.length) {
+      operation = { ...operation, unproven: { params: doubted, reason } };
+      warnings.push(
+        `${reason}: the server may not read ${doubted.join(", ")} from this request (it may go by a cookie, the IP or the page it was loaded from). ` +
+          `If the two examples just have the same answer, add it again with an example 2 whose ${doubted.join(", ")} alone excludes something example 1 returned (another place, a filter value one of its rows fails). ` +
+          `Until then publish refuses ${operation.name}`,
+      );
+    }
   }
 
   const again = captures[0] ?? i.from?.capture.id;
@@ -1322,7 +1387,7 @@ function placeholders(op: Operation): Operation["request"] {
   let req = op.request;
   for (const s of op.slots) {
     try {
-      req = setAt(req, s.at, s.template ?? `{${s.param ?? s.ref}}`);
+      req = setAt(req, s.at, s.template ?? `{${s.param ?? s.ref ?? (s.path ? `lookup:${s.path}` : s.gen)}}`);
     } catch {
       /* position gone; the leaf shows as it is */
     }
@@ -1635,6 +1700,7 @@ export async function healOperation(
       guestCookies: loadSession(site).guestCookies,
       public: op.public,
       established,
+      derived: op.slots.flatMap((s) => (s.from && s.path ? [{ at: s.at, path: s.path }] : [])),
     }));
   } catch (e) {
     return { outcome: "failed", attempt: last, fallback, reason: `re-learning failed: ${(e as Error).message}` };
@@ -1680,6 +1746,7 @@ export async function healOperation(
     ...(op.public ? { public: op.public } : {}),
     ...(op.checks ? { checks: op.checks } : {}),
     ...(op.paging ? { paging: op.paging } : {}),
+    ...(op.links ? { links: op.links } : {}),
     ...(op.readback ? { readback: op.readback } : {}),
     ...(op.unproven ? { unproven: op.unproven } : {}),
     minTier: Math.max(op.minTier, fresh.minTier) as Operation["minTier"],

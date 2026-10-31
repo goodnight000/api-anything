@@ -231,6 +231,8 @@ export function plan(
   const ops = wanted.map((n): OpPlan => {
     const i = ex.spec.operations.findIndex((op) => op.name === n);
     const operation = embedReadback(ex.spec, ex.spec.operations[i]!);
+    // An upload carries one operation, not the target operations its local links require.
+    delete operation.links;
     const mine = r.site.operations.find((op) => op.name === n)!;
     // where the export's scan found something in the read the upload carries
     const rb = mine.readback && "op" in mine.readback ? mine.readback.op : undefined;
@@ -281,6 +283,9 @@ export function plan(
       "the example values in each request (the param examples stay)",
       "response shapes (the picked fields' types stay)",
       "when each op was learned",
+      ...(ops.some((p) => r.site.operations.find((op) => op.name === p.op)?.links?.length)
+        ? ["operation links (an upload carries one operation, without its link targets)"]
+        : []),
       ...(r.site.shared ? ["where it was pulled from"] : []),
     ],
     errors: [...new Set([...ops.flatMap((p) => p.errors), ...checked.errors])],

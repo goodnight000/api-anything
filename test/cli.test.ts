@@ -25,17 +25,18 @@ const HOME = mkdtempSync(join(tmpdir(), "api-anything-cli-"));
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const CLI = join(ROOT, "src", "cli.ts");
 
-function cli(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function cliAt(home: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   // async on purpose: the fixture server lives in this process and must keep answering
   return new Promise((resolve) =>
     execFile(
       process.execPath,
       ["--import", "tsx", CLI, ...args],
-      { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } },
+      { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: home } },
       (err, stdout, stderr) => resolve({ code: err ? Number(err.code ?? 1) : 0, stdout, stderr }),
     ),
   );
 }
+const cli = (...args: string[]) => cliAt(HOME, ...args);
 
 let fx: Fixture;
 before(async () => (fx = await startFixture()));
@@ -127,6 +128,28 @@ describe("flags and command names", () => {
     const own = await cli("call", "plain", "getUser", "name=carol", "--max-tier", "1");
     assert.deepEqual(JSON.parse(own.stdout).data, { name: "carol" }, own.stdout);
     assert.equal((await cli("call", "--limit", "1", "--help")).code, 0, "--help still answers");
+  });
+
+  test("ops <site> <op> --schema prints a portable contract without calling the site", async () => {
+    const r = await cli("ops", "plain", "getUser", "--schema");
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout), {
+      site: "plain",
+      op: "getUser",
+      readOnly: true,
+      params: {
+        type: "object",
+        properties: { name: { type: "string", examples: ["alice"] } },
+        required: ["name"],
+        additionalProperties: false,
+      },
+      output: { cardinality: "unknown", fields: {} },
+    });
+    assert.equal((await cli("ops", "plain", "--schema")).code, 1);
+    const absent = await cli("ops", "plain", "absent", "--schema");
+    assert.equal(absent.code, 1);
+    assert.match(JSON.parse(absent.stdout).error, /no operation "absent"/);
+    assert.equal((await cli("ops", "plain")).code, 0);
   });
 
   test("a name every object inherits is an unknown command like any other", async () => {
@@ -1087,7 +1110,7 @@ describe("checks: an op that must prove it works before it is shared", () => {
 
     const verify = await run("verify", "stores");
     assert.equal(verify.code, 1);
-    assert.deepEqual(verify.out.counts, { pass: 2, fail: 1, inconclusive: 0, skipped: 0 });
+    assert.deepEqual(verify.out.counts, { pass: 2, fail: 1, inconclusive: 0, skipped: 0, preflight: 0 });
     assert.deepEqual(
       verify.out.results.map((r: { case: string; outcome: string; got: string }) => [r.case, r.outcome, r.got]),
       [
@@ -1105,6 +1128,84 @@ describe("checks: an op that must prove it works before it is shared", () => {
       /near: example 2 \(city=Hobart\) was answered with example 1's data, so nothing shows the server reads city/,
     );
     assert.match(errors, /near: check 1 \(city=Nowhere\) expects empty, and answered result/);
+  });
+});
+
+describe("an --html recipe's empty selector: what a no-results page shows instead of the list", () => {
+  const items = '"items":"ul.users li.user","fields":{"name":"a.name"}';
+  const bare = `{${items}}`;
+  const told = `{${items},"empty":"p.no-results"}`;
+  before(async () => {
+    seed("cdir", {
+      url: `${fx.url}/dir?q=alice`,
+      exchanges: [await answered(1, "document", "/dir?q=alice"), await answered(2, "document", "/dir?q=nobody")],
+    });
+  });
+  const run = async (...args: string[]) => {
+    const r = await cli(...args);
+    return { ...r, out: JSON.parse(r.stdout) };
+  };
+
+  test("inspect: the page with the message is no results once the recipe names it; without it, a selector that matched nothing", async () => {
+    assert.equal((await run("inspect", "cdir", "2", "--html", bare)).code, 1);
+    const zero = await run("inspect", "cdir", "2", "--html", told);
+    assert.equal(zero.code, 0, zero.stdout);
+    assert.deepEqual(zero.out.data, []);
+    assert.match(zero.out.note, /"p\.no-results" is on the page, so this is a page with no results/);
+    // the hidden copy under a found list is not what the recipe is about
+    assert.deepEqual((await run("inspect", "cdir", "1", "--html", told)).out.data, [{ name: "alice" }]);
+  });
+
+  test("add takes it, a call for args with no match answers ok with [], and an empty check passes verify", async () => {
+    const without = await run(
+      "add",
+      "dir",
+      "find",
+      "--from",
+      "cdir",
+      "--pick-request",
+      "1",
+      "--example",
+      "q=alice",
+      "--html",
+      bare,
+    );
+    assert.equal(without.code, 0, without.stdout);
+    const none = await run("call", "dir", "find", "q=nobody");
+    assert.equal(none.out.class, "input", none.stdout);
+    assert.match(none.out.reason, /matched nothing/);
+    const check = await run("check", "dir", "find", "q=nobody", "--expect", "empty", "--purpose", "no such user");
+    assert.equal(check.code, 0, check.stdout);
+    const failed = await run("verify", "dir");
+    assert.equal(failed.code, 1, failed.stdout);
+    const fail = failed.out.results.find((r: { case: string }) => r.case === "check 1");
+    assert.equal(fail.outcome, "fail");
+    assert.match(fail.reason, /add find again with the same --html recipe plus "empty": "<css of that element>"/);
+
+    const told2 = await run(
+      "add",
+      "dir",
+      "find",
+      "--from",
+      "cdir",
+      "--pick-request",
+      "1",
+      "--example",
+      "q=alice",
+      "--html",
+      told,
+    );
+    assert.equal(told2.code, 0, told2.stdout);
+    assert.equal(
+      JSON.parse(readFileSync(join(HOME, "sites", "dir.json"), "utf8")).operations[0].response.html.empty,
+      "p.no-results",
+    );
+    const empty = await run("call", "dir", "find", "q=nobody");
+    assert.deepEqual([empty.out.ok, empty.out.class, empty.out.data], [true, "ok", []], empty.stdout);
+    assert.deepEqual((await run("call", "dir", "find", "q=bob")).out.data, [{ name: "bob" }]);
+    const verify = await run("verify", "dir");
+    assert.equal(verify.code, 0, verify.stdout);
+    assert.deepEqual(verify.out.counts, { pass: 2, fail: 0, inconclusive: 0, skipped: 0, preflight: 0 });
   });
 });
 
@@ -1253,6 +1354,74 @@ describe("paging and readback: a list an agent can walk, and a write it can see 
       "page",
     );
     assert.match(bad.out.error, /--paging: paging param page is no param of it/);
+  });
+
+  test("a capture that loaded two pages of a list says how it pages, and add learns it from the flags it gives", async () => {
+    const PATH = "meta.next_page~[?&]page=([^&#]*)";
+    seed("cpackages", {
+      url: `${fx.url}/packages?q=tokio`,
+      exchanges: [
+        await answered(1, "document", "/packages?q=tokio"),
+        await answered(2, "fetch", "/api/packages?page=1&per_page=3&q=tokio"),
+        await answered(3, "fetch", "/api/packages?page=2&per_page=3&q=tokio"),
+      ],
+    });
+    const listed = await run("inspect", "cpackages");
+    assert.deepEqual(listed.out.pages, [
+      {
+        requests: [2, 3],
+        paging: { param: "page", next: PATH },
+        flags: `--from cpackages --pick-request 3 --example 'page=2' --paging 'page=${PATH}'`,
+      },
+    ]);
+    // learned from page 1 without --paging: add says the list pages, and how to learn it so
+    const plain = await run(
+      "add",
+      ...[
+        "pkgs",
+        "first",
+        "--from",
+        "cpackages",
+        "--pick-request",
+        "2",
+        "--example",
+        "q=tokio",
+        "--extract",
+        "packages",
+      ],
+    );
+    assert.match(
+      plain.out.warnings.join("\n"),
+      /requests 2 and 3 of capture cpackages are two pages of this list: to page it, add it again with --from cpackages --pick-request 3 --example 'page=2'/,
+    );
+    // page "2" is too short to be located by its value: the place paging found is used
+    const add = await run(
+      "add",
+      ...[
+        "pkgs",
+        "search",
+        "--from",
+        "cpackages",
+        "--pick-request",
+        "3",
+        "--example",
+        "q=tokio",
+        "--example",
+        "page=2",
+      ],
+      ...["--extract", "packages", "--paging", `page=${PATH}`],
+    );
+    assert.equal(add.code, 0, add.stdout);
+    assert.deepEqual([add.out.paging, add.out.params], [{ param: "page", next: PATH }, ["q:string", "page:string"]]);
+    assert.doesNotMatch(add.stdout, /pagingstandin|the trigger has no \{page\}/);
+    const names = (r: { out: { data: { name: string }[] } }) => r.out.data.map((x) => x.name);
+    const first = await run("call", "pkgs", "search", "q=serde");
+    assert.deepEqual(
+      [names(first), first.out.nextPage, first.out.hasMore],
+      [["serde-1", "serde-2", "serde-3"], "2", true],
+    );
+    const last = await run("call", "pkgs", "search", "q=serde", "page=3");
+    assert.deepEqual([names(last), last.out.hasMore, "nextPage" in last.out], [["serde-7"], false, false]);
   });
 
   test("readback makes a write's call say applied when the read finds it, and accepted when it does not yet", async () => {
@@ -1605,5 +1774,152 @@ describe("call: answers that are not what their status says", () => {
     assert.equal(out.class, "error", r.stdout);
     assert.match(out.next, /open http:\/\/127\.0\.0\.1:\d+\/privacy\/consent\?\S+ in their browser.*login verdicts/);
     assert.equal(fx.calls.filter((c) => c.path.startsWith("/api/consented")).length, 1, "no second try, no heal");
+  });
+});
+
+describe("verify unattended: scope, exit codes, and a write's preflight", () => {
+  // its own home: --user lists the specs there, and nothing another describe learned
+  const home = mkdtempSync(join(tmpdir(), "api-anything-verify-"));
+  after(() => rmSync(home, { recursive: true, force: true }));
+  const run = async (...args: string[]) => {
+    const r = await cliAt(home, ...args);
+    return { ...r, out: JSON.parse(r.stdout) };
+  };
+  type Row = { site: string; op: string; outcome?: string; preflight?: Record<string, unknown>; ok: boolean };
+  const posts = () => fx.calls.filter((c) => c.method === "POST" && c.path === "/api/todos").length;
+
+  before(async () => {
+    mkdirSync(join(home, "sites"), { recursive: true });
+    writeFileSync(
+      join(home, "sites", "green.json"),
+      JSON.stringify({
+        name: "green",
+        baseUrl: fx.url,
+        operations: [
+          {
+            name: "getUser",
+            readOnly: true,
+            trigger: { url: `${fx.url}/spa/{name}` },
+            match: { method: "GET", path: "/api/spa/user" },
+            request: { method: "GET", url: `${fx.url}/api/spa/user?name=alice`, headers: {} },
+            slots: [{ param: "name", at: ["query:name"] }],
+            params: [{ name: "name", example: "alice" }],
+          },
+          {
+            name: "addTodo",
+            readOnly: false,
+            learnedLoggedIn: true,
+            trigger: { url: `${fx.url}/todos` },
+            match: { method: "POST", path: "/api/todos" },
+            request: {
+              method: "POST",
+              url: `${fx.url}/api/todos`,
+              headers: { "content-type": "application/json" },
+              body: '{"title":"buy milk"}',
+            },
+            slots: [{ param: "title", at: ["body", "json:/title"] }],
+            params: [{ name: "title", example: "buy milk" }],
+            readback: { op: "getUser", args: {} },
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(home, "sites", "limited.json"),
+      JSON.stringify({
+        name: "limited",
+        baseUrl: fx.url,
+        operations: [
+          {
+            name: "feed",
+            readOnly: true,
+            trigger: { url: `${fx.url}/limited` },
+            match: { method: "GET", path: "/api/limited" },
+            request: { method: "GET", url: `${fx.url}/api/limited`, headers: {} },
+            response: { extract: "data" },
+          },
+        ],
+      }),
+    );
+    // the fixture's /api/limited answers 429 from its third hit on
+    for (let i = 0; i < 3; i++) await fetch(`${fx.url}/api/limited`);
+  });
+
+  test("several sites at once; a rate limit alone exits 2, and a write is preflighted, never sent", async () => {
+    const sent = posts();
+    const r = await run("verify", "green", "limited");
+    assert.equal(r.code, 2, r.stdout);
+    assert.equal(r.out.ok, false);
+    assert.deepEqual(r.out.counts, { pass: 1, fail: 0, inconclusive: 1, skipped: 0, preflight: 1 });
+    assert.match(r.stderr, /an inconclusive case tested nothing/);
+    const rows: Row[] = r.out.results;
+    assert.deepEqual(
+      rows.map((x) => [x.site, x.op, x.outcome ?? (x.preflight ? "preflight" : "?"), x.ok]),
+      [
+        ["green", "getUser", "pass", true],
+        ["green", "addTodo", "preflight", false],
+        ["limited", "feed", "inconclusive", false],
+      ],
+    );
+    const p = rows[1]!.preflight!;
+    assert.equal(p.builds, true);
+    assert.equal(p.learnedLoggedIn, true);
+    assert.equal(p.loggedIn, false);
+    assert.deepEqual(p.readback, { op: "getUser", outcome: "pass" });
+    assert.equal(p.unconfirmed, 0);
+    assert.match(String(p.next), /api-anything login green/);
+    assert.equal(posts(), sent, "the write was not sent");
+    assert.deepEqual(r.out.newlyFailing, []);
+    assert.deepEqual(r.out.recovered, []);
+    assert.deepEqual(r.out.failingSince, {});
+    // the limit's cool-down keeps the second site inconclusive: --strict makes that exit 1
+    const strict = await run("verify", "green", "limited", "--strict");
+    assert.equal(strict.code, 1, strict.stdout);
+  });
+
+  test("--user verifies the user's own specs and takes no names; a preflight sets the exit code only under --strict", async () => {
+    const refused = await run("verify", "--user", "green");
+    assert.equal(refused.code, 1);
+    assert.match(refused.out.error, /--user takes no site names/);
+
+    const user = await run("verify", "--user");
+    assert.deepEqual([...new Set((user.out.results as Row[]).map((x) => x.site))].sort(), ["green", "limited"]);
+
+    const soft = await run("verify", "green");
+    assert.equal(soft.code, 0, soft.stdout);
+    assert.equal(soft.out.ok, true);
+    const strict = await run("verify", "green", "--strict");
+    assert.equal(strict.code, 1, strict.stdout);
+    assert.equal(strict.out.ok, false);
+    assert.match(strict.stderr, /a write's preflight found something a call would need first/);
+  });
+
+  test("a failing case exits 1 and is newly failing once; the next run says since when", async () => {
+    const check = await run("check", "green", "getUser", "name=bob", "--expect", "empty");
+    assert.equal(check.code, 0, check.stdout);
+    const first = await run("verify", "green");
+    assert.equal(first.code, 1, first.stdout);
+    assert.deepEqual(first.out.newlyFailing, ["green/getUser"]);
+    const since = first.out.failingSince["green/getUser"];
+    assert.ok(since, first.stdout);
+    assert.match(first.stderr, /a failing case is a broken op or a wrong check/);
+
+    const again = await run("verify", "green");
+    assert.equal(again.code, 1);
+    assert.deepEqual(again.out.newlyFailing, []);
+    assert.equal(again.out.failingSince["green/getUser"], since);
+    const failing = (again.out.results as (Row & { case?: string; since?: string })[]).find(
+      (x) => x.outcome === "fail",
+    )!;
+    assert.equal(failing.case, "check 1");
+    assert.equal(failing.since, since);
+
+    // the check corrected: the op recovered, and the exit code says so
+    const fixed = await run("check", "green", "getUser", "name=bob", "--expect", "result");
+    assert.equal(fixed.out.replaced, true);
+    const after = await run("verify", "green");
+    assert.equal(after.code, 0, after.stdout);
+    assert.deepEqual(after.out.recovered, ["green/getUser"]);
+    assert.deepEqual(after.out.failingSince, {});
   });
 });

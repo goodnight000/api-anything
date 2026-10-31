@@ -14,7 +14,7 @@ import {
 } from "./browser.js";
 import { type Class, judge } from "./classify.js";
 import { asText, fillTemplate } from "./codec.js";
-import { capOutput, getPath } from "./extract.js";
+import { getPath } from "./extract.js";
 import {
   type Attempt,
   challengePage,
@@ -42,14 +42,15 @@ import {
   refusePrivate,
   refusePrivateHop,
   type Sent,
-  send,
   unknownArgs,
   withDefaults,
 } from "./http.js";
 import { loadSettings } from "./identity.js";
 import { reimportIfBrowser } from "./login.js";
+import { derive, LookupFailed, sendDerived } from "./lookup.js";
 import { adopt, servedNow } from "./registry.js";
 import { afterCall, queueReport } from "./report.js";
+import { type ResultCursor, type ResultView, resultView, viewProblem } from "./results.js";
 import { redact } from "./secrets.js";
 import {
   dropUnbound,
@@ -63,6 +64,7 @@ import {
 } from "./session.js";
 import { type Operation, readbackName, type Site } from "./spec.js";
 import {
+  appendCall,
   BLOCKED_COOL_MS,
   beginWrite,
   type CoolDown,
@@ -87,6 +89,8 @@ import { proofOp } from "./vet.js";
 export type Tier = 1 | 2 | 3;
 
 export interface CallOptions {
+  /** Shape the classified, extracted answer, never the site's arguments or stored recipe. */
+  view?: ResultView;
   /** required for any readOnly:false op, at every entry point */
   allowWrites?: boolean;
   /**
@@ -114,6 +118,11 @@ export interface CallOptions {
   onAnswered?: (op: Operation) => void;
   /** send even while the site cools down after a rate limit or a block (CLI --force); only when the user asks. Succeeding ends it */
   ignoreCoolDown?: boolean;
+  /**
+   * @internal `verify`'s: heal a read that drifted even while it is marked stale or healed minutes ago,
+   * as `api-anything heal` does. The stored template is still sent first; only the guard is skipped
+   */
+  ignoreStale?: boolean;
 }
 
 export type { WriteStatus };
@@ -163,6 +172,9 @@ export interface CallResult {
   /** extracted, picked, capped */
   data?: unknown;
   truncated?: string;
+  resultId?: string;
+  /** Local continuation of this answer, not the site's nextPage. */
+  more?: ResultCursor;
   /**
    * reads with `paging.next` only: the value to pass as the op's paging param for the next page,
    * as the site's answer gave it
@@ -404,15 +416,11 @@ function nextFor(
 }
 
 function success(a: Attempt, extra: Partial<Result> = {}): Result {
-  const capped = capOutput(a.data);
-  // the site's cursor points past the page it sent, not past what fitted in the output
-  if (capped.truncated && a.nextPage !== undefined)
-    capped.truncated += "; nextPage starts after the last item of this page, cut or not";
   return {
     ok: true,
     class: "ok",
     tier: a.tier,
-    ...capped,
+    data: a.data,
     ...(a.nextPage !== undefined ? { nextPage: a.nextPage } : {}),
     ...(a.hasMore !== undefined ? { hasMore: a.hasMore } : {}),
     ...extra,
@@ -538,7 +546,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     const session = none ? NO_SESSION : loadSession(ctx.site);
     let r: Sent | PageFetchResult;
     if (tier === 1) {
-      const sent = await send(op, ctx.args, session, {
+      const sent = await sendDerived(op, ctx.args, session, {
         site: ctx.site,
         fetchImpl: ctx.opts.fetchImpl,
         timeoutMs: ctx.opts.timeoutMs,
@@ -558,29 +566,32 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       }
       r = sent;
     } else {
-      const req = buildRequest(op, ctx.args, session, ctx.gen);
-      // someone else's spec: the page's fetch goes only to public addresses, as tier 1 does (tier 3 is not covered)
-      if (ctx.shared) await refusePrivate(op, req.url);
-      const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
-      r = await pageFetch({
-        origin: new URL(req.url).origin,
-        url: req.url,
-        method: req.method,
-        headers,
-        body: req.body,
-        profileDir: profileDir(),
-        timeoutMs: ctx.opts.timeoutMs,
-        retryOnNavigation: op.readOnly,
-        // the page's own cookies, unless they may not go (`bare`)
-        ...(none ? { credentials: "omit" as const } : {}),
-        pace: () => pace(ctx.site, ctx.opts.minIntervalMs),
-        // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
-        redirect: async (from, status, location, taken) => {
-          const next = nextHop(op, session, from, status, location, taken);
-          if (ctx.shared) await refusePrivateHop(next, status);
-          return next;
-        },
-      });
+      const viaPage = async (o: Operation) => {
+        const req = buildRequest(o, ctx.args, session, ctx.gen);
+        // someone else's spec: the page's fetch goes only to public addresses, as tier 1 does (tier 3 is not covered)
+        if (ctx.shared) await refusePrivate(o, req.url);
+        const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
+        return pageFetch({
+          origin: new URL(req.url).origin,
+          url: req.url,
+          method: req.method,
+          headers,
+          body: req.body,
+          profileDir: profileDir(),
+          timeoutMs: ctx.opts.timeoutMs,
+          retryOnNavigation: o.readOnly,
+          // the page's own cookies, unless they may not go (`bare`)
+          ...(none ? { credentials: "omit" as const } : {}),
+          pace: () => pace(ctx.site, ctx.opts.minIntervalMs),
+          // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
+          redirect: async (from, status, location, taken) => {
+            const next = nextHop(o, session, from, status, location, taken);
+            if (ctx.shared) await refusePrivateHop(next, status);
+            return next;
+          },
+        });
+      };
+      r = await viaPage(await derive(op, viaPage));
     }
     const j = judge(op, r);
     const hint = j.unfinished
@@ -593,7 +604,10 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       ...j,
       ...(hint ? { hint, step: "login" as const } : {}),
     };
-  } catch (e) {
+  } catch (thrown) {
+    const e = thrown instanceof LookupFailed && thrown.cause instanceof ProfileInUse ? thrown.cause : thrown;
+    // a derived slot's lookup did not give its value: the op's own request never left
+    if (e instanceof LookupFailed) return { tier, ...e.judged, unsent: true };
     // nothing was sent when the browser could not start
     if (e instanceof ProfileInUse) return { tier, class: "error", reason: e.message, hint: PROFILE_HINT, unsent: true };
     // someone else's spec names an address on this machine or the local network: nothing was sent, and no tier sends it
@@ -776,8 +790,9 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   }
 
   let guard: string | undefined;
-  const stale = staleMark(ctx.site, op.name);
-  const healedAt = lastHealAt(ctx.site, op.name);
+  // verify is the explicit check: its drift heals (and a heal that saves clears the mark)
+  const stale = ctx.opts.ignoreStale ? undefined : staleMark(ctx.site, op.name);
+  const healedAt = ctx.opts.ignoreStale ? undefined : lastHealAt(ctx.site, op.name);
   if (stale) guard = `stale until ${new Date(stale.until).toISOString()}: ${stale.reason}`;
   else if (healedAt !== undefined && Date.now() - healedAt < HEAL_GUARD_MS) {
     const reason = `drifted again within 10 min of a heal (${a.reason})`;
@@ -922,6 +937,7 @@ async function readBack(
     again: undefined,
     idempotencyKey: undefined,
     onAnswered: undefined,
+    view: undefined,
   };
   const read =
     "op" in rb
@@ -1041,6 +1057,16 @@ export async function call(
   opts: CallOptions = {},
 ): Promise<CallResult> {
   const t0 = Date.now();
+  const problem = viewProblem(opts.view);
+  if (problem)
+    return {
+      ok: false,
+      class: "input",
+      reason: problem,
+      next: "check view.fields and view.maxChars; do not put them in the site's args",
+      retry: "after_fix",
+      ms: Date.now() - t0,
+    };
   const found = resolve(siteName, opName);
   if ("ok" in found) return { ...finish(found, undefined, undefined, []), ms: Date.now() - t0 };
   opts.onAnswered?.(found.op);
@@ -1086,11 +1112,27 @@ async function run(
     // a proof's rate limit or block is the site's, as any call's
     coolAfter(siteName, op, f, log);
     const out = { ...f, ms: Date.now() - t0 };
+    if (!proof)
+      appendCall({
+        site: siteName,
+        op: op.name,
+        class: out.class,
+        ...(log.length && out.tier ? { tier: out.tier } : {}),
+        ms: out.ms,
+        ...(out.healed ? { healed: true as const } : {}),
+        ...(out.write ? { write: out.write } : {}),
+      });
     if (how.source && !proof && !held)
       afterCall(siteName, op, how.source, out, {
         fetchImpl: opts.fetchImpl,
         minIntervalMs: opts.minIntervalMs,
       });
+    if (out.ok && !proof && out.data !== undefined) {
+      const viewed = resultView(out.data, opts.view);
+      if (viewed.truncated && out.nextPage !== undefined)
+        viewed.truncated += "; nextPage starts after the last item of this page, cut or not; more stays on this page";
+      return { ...out, ...viewed };
+    }
     return out;
   };
   const write = !op.readOnly;
@@ -1389,7 +1431,12 @@ export async function heal(
     if (f.reason) f.reason = hide(f.reason, sessions, true);
     if (f.next) f.next = hide(f.next, sessions);
     if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
-    return { ...f, ...extra, ms: Date.now() - t0 };
+    return {
+      ...f,
+      ...(f.ok && f.data !== undefined ? resultView(f.data) : {}),
+      ...extra,
+      ms: Date.now() - t0,
+    };
   };
   const found = resolve(siteName, opName);
   if ("ok" in found) return done(found);

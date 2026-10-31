@@ -32,6 +32,8 @@ export interface Fixture {
   revoke(token: string): void;
   /** mint a fresh valid session token, as /login would (stands in for a re-login in the browser) */
   mintSession(): string;
+  /** /api/resolve answers the id at item.id instead of product.id, as after a redesign of the lookup */
+  moveLookup(): void;
   close(): Promise<void>;
 }
 
@@ -114,6 +116,13 @@ const LOGIN_PAGE = `<!doctype html><html><head><title>Log in</title></head><body
 
 const LIST_USERS = ["alice", "bob", "carol"];
 
+/** Products by slug: the slug addresses a page, the numeric id the data behind it. */
+export const PRODUCTS: Record<string, { id: number; name: string }> = {
+  "blue-mug": { id: 4821, name: "Blue mug" },
+  "red-kettle": { id: 5170, name: "Red kettle" },
+  "green-plate": { id: 6033, name: "Green plate" },
+};
+
 const user = (name: string, extras: boolean) => ({
   data: {
     user: {
@@ -160,6 +169,8 @@ export async function startFixture(): Promise<Fixture> {
   const todos: { id: string; title: string }[] = [];
   /** order id by Idempotency-Key */
   const orders = new Map<string, string>();
+  let lookupMoved = false;
+  const likes: number[] = [];
 
   const send = (
     res: ServerResponse,
@@ -181,6 +192,19 @@ export async function startFixture(): Promise<Fixture> {
     const jar = cookies(req);
     if (p.startsWith("/api/"))
       calls.push({ method: req.method ?? "GET", path: u.pathname + u.search, headers: req.headers, body });
+
+    if (p === "/api/result-list") {
+      const start = u.searchParams.get("after") === "page2" ? 30 : 0;
+      return json(res, 200, {
+        items: Array.from({ length: 30 }, (_, i) => ({
+          id: start + i + 1,
+          title: `Item ${start + i + 1}`,
+          details: { label: `Label ${start + i + 1}` },
+          body: "Long fixture text. ".repeat(150),
+        })),
+        next: start ? null : "page2",
+      });
+    }
 
     // HTML pages hand out the CSRF cookie that page JS echoes in x-csrf-token (X's ct0 pattern).
     const html = (status: number, markup: string) =>
@@ -204,6 +228,22 @@ export async function startFixture(): Promise<Fixture> {
       p.startsWith("/spa/")
     )
       return html(200, page(state.build));
+    // Two lists with a "Show more" button. A topic's posts page by an opaque cursor, as a GraphQL
+    // connection does: each edge has its cursor, and pageInfo.endCursor is the next page's `after`. A
+    // package search pages by number, and its answer gives the next page as a query string
+    // (meta.next_page "?page=2&per_page=3&q=..."), which the page appends to the endpoint.
+    if (/^\/topics\/[^/]+$/.test(p)) {
+      const topic = decodeURIComponent(p.slice("/topics/".length));
+      return html(
+        200,
+        `<!doctype html><html><body><ul id="posts"></ul><button id="more">Show more</button><script>let after="";const load=()=>fetch("/api/posts?topic="+encodeURIComponent(${JSON.stringify(topic)})+"&first=3&after="+encodeURIComponent(after)).then(r=>r.json()).then(v=>{for(const e of v.data.posts.edges){const li=document.createElement("li");li.textContent=e.node.title;document.getElementById("posts").append(li)}after=v.data.posts.pageInfo.endCursor||""});load();document.getElementById("more").onclick=load</script></body></html>`,
+      );
+    }
+    if (p === "/packages")
+      return html(
+        200,
+        `<!doctype html><html><body><ul id="found"></ul><button id="more">More</button><script>let next="?page=1&per_page=3&q="+encodeURIComponent(${JSON.stringify(u.searchParams.get("q") ?? "")});const load=()=>fetch("/api/packages"+next).then(r=>r.json()).then(v=>{for(const x of v.packages){const li=document.createElement("li");li.textContent=x.name;document.getElementById("found").append(li)}next=v.meta.next_page||next});load();document.getElementById("more").onclick=load</script></body></html>`,
+      );
     // A bot challenge that never solves, in a real browser too: the interstitial on every load.
     if (p === "/challenged")
       return send(
@@ -213,6 +253,13 @@ export async function startFixture(): Promise<Fixture> {
         '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
       );
     if (/^\/follow\/[^/]+$/.test(p)) return html(200, page(state.build, '<button id="follow">Follow</button>'));
+    // A product page addressed by a slug whose data is keyed by a numeric id: the page asks
+    // /api/resolve for the slug's id, then loads the reviews (or, on Like, posts the like) with it.
+    if (/^\/p\/[^/]+$/.test(p))
+      return html(
+        200,
+        `<!doctype html><html><body><button id="like">Like</button><script>const id=fetch("/api/resolve?slug="+location.pathname.slice(3)).then(r=>r.json()).then(v=>v.product.id);id.then(n=>fetch("/api/products/"+n+"/reviews")).then(r=>r.json()).then(v=>{document.title=JSON.stringify(v)});document.getElementById("like").onclick=()=>id.then(n=>fetch("/api/products/"+n+"/like",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({stars:5})}))</script></body></html>`,
+      );
     // A checkout whose page makes an Idempotency-Key per order (crypto.randomUUID()); the server answers
     // a key it has seen with that earlier order, as Stripe-style APIs do.
     if (p.startsWith("/checkout/"))
@@ -305,6 +352,18 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
           )
           .join("")}</ul></body></html>`,
       );
+    // ?q= searches the list; no match drops the list and shows a message instead (pkg.go.dev's shape),
+    // with a hidden copy of that message always in the page under the list
+    if (p === "/dir") {
+      const hits = LIST_USERS.filter((n) => n.includes(u.searchParams.get("q") ?? ""));
+      const list = `<ul class="users">${hits
+        .map((n) => `<li class="user"><a class="name" href="/u/${n}">${n}</a></li>`)
+        .join("")}</ul><p class="no-results" hidden>Nothing here</p>`;
+      return html(
+        200,
+        `<!doctype html><html><body><h1>Directory</h1>${hits.length ? list : '<p class="no-results">No users match</p>'}</body></html>`,
+      );
+    }
     // a server-rendered search: every result carries the query, so the list is found from the example
     if (p === "/shelf") {
       const q = u.searchParams.get("q") ?? "";
@@ -531,6 +590,28 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       const next = from + 3 < all.length ? Buffer.from(`offset:${from + 3}`).toString("base64url") : null;
       return json(res, 200, { data: { reviews: { edges, pageInfo: { nextPageToken: next } } } });
     }
+    if (p === "/api/posts") {
+      const topic = u.searchParams.get("topic") ?? "";
+      const all = Array.from({ length: 7 }, (_, i) => ({ id: `${topic}-p${i + 1}`, title: `${topic} post ${i + 1}` }));
+      const cursor = (n: number) => Buffer.from(`${topic}:${n}`).toString("base64url");
+      const after = u.searchParams.get("after") ?? "";
+      const from = after ? Number(Buffer.from(after, "base64url").toString().split(":").at(-1)) : 0;
+      const n = Number(u.searchParams.get("first") ?? 3);
+      const edges = all.slice(from, from + n).map((node, i) => ({ cursor: cursor(from + i + 1), node }));
+      const end = from + n < all.length ? cursor(from + n) : null;
+      return json(res, 200, { data: { posts: { edges, pageInfo: { endCursor: end, hasNextPage: !!end } } } });
+    }
+    if (p === "/api/packages") {
+      const q = u.searchParams.get("q") ?? "";
+      const all = Array.from({ length: 7 }, (_, i) => ({ name: `${q}-${i + 1}` }));
+      const page = Number(u.searchParams.get("page")) || 1;
+      const per = Number(u.searchParams.get("per_page")) || 3;
+      const more = page * per < all.length;
+      return json(res, 200, {
+        packages: all.slice((page - 1) * per, page * per),
+        meta: { next_page: more ? `?page=${page + 1}&per_page=${per}&q=${encodeURIComponent(q)}` : null },
+      });
+    }
     // An answer keyed by the visitor's session id ("guest" without one), as a per-session cache key
     // is: a recipe suggested from a signed-in visitor's answer would carry the cookie's value.
     if (p === "/api/mine") return json(res, 200, { [jar.session ?? "guest"]: [{ name: u.searchParams.get("name") }] });
@@ -582,6 +663,28 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       return json(res, 201, { orderId: orders.get(key), item });
     }
     if (p === "/api/spa/user") return json(res, 200, { name: u.searchParams.get("name") });
+    if (p === "/api/resolve") {
+      const slug = u.searchParams.get("slug") ?? "";
+      const found = PRODUCTS[slug];
+      if (!found) return json(res, 404, { error: "no such product" });
+      const product = { id: found.id, name: found.name };
+      return json(res, 200, lookupMoved ? { item: product } : { product });
+    }
+    m = p.match(/^\/api\/products\/(\d+)\/(reviews|like)$/);
+    if (m) {
+      const found = Object.values(PRODUCTS).find((x) => x.id === Number(m![1]));
+      if (!found) return json(res, 404, { error: "no such product" });
+      if (m[2] === "like" && req.method === "POST") {
+        likes.push(found.id);
+        return json(res, 200, { liked: found.id, likes: likes.filter((x) => x === found.id).length });
+      }
+      return json(res, 200, {
+        reviews: [
+          { id: `${found.id}-1`, text: `${found.name}: holds up well` },
+          { id: `${found.id}-2`, text: `${found.name}: would buy again` },
+        ],
+      });
+    }
 
     if (p === "/api/limited") {
       limitedHits++;
@@ -615,6 +718,9 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       revoked.add(token);
     },
     mintSession: mint,
+    moveLookup() {
+      lookupMoved = true;
+    },
     close() {
       server.closeAllConnections();
       return new Promise((resolve) => server.close(() => resolve()));

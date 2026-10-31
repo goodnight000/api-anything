@@ -5,11 +5,40 @@ Details behind the [README](../README.md). The design and its reasons are in
 
 - [Creating an operation from captured traffic](#creating-an-operation-from-captured-traffic)
 - [Replay, fallback and repair](#replay-fallback-and-repair)
+- [Read batches and stdin](#read-batches-and-stdin)
 - [Logging in](#logging-in)
+- [Finding operations and checking health](#finding-operations-and-checking-health)
+- [Result views and local continuation](#result-views-and-local-continuation)
 - [MCP server](#mcp-server)
 - [Safety and terms of service](#safety-and-terms-of-service)
 - [Status and known limits](#status-and-known-limits)
 - [Prior art](#prior-art)
+
+## Finding operations and checking health
+
+`api-anything search <words | domain | url>` and MCP `find_sites {query}` search the registry and
+this machine's specs. Extra words do not cancel a capability match: `vegetarian pasta recipes`
+can find recipe search. Each site and op returns normalized `matched` and `unmatched` words.
+An op's words come from its own summary, not a different op at that site. Partial matches are
+suggestions, not guarantees for uncovered constraints. Try the existing capability with the user's
+values, or broaden the query, before learning a new site. Check each match's `domain` first.
+Unconfirmed registry sites still require a domain or URL query.
+
+Each search op, and each op in `pull <site>` output, separates evidence:
+
+- `registry`: the registry version's `hash`, `status`, `confirmations`, `successRate` (0–1) and
+  `lastOkAt`. Missing values say `"unknown"`; live with zero confirmations is not proof of success.
+- `local`: the matching current op's last verify record, `status` (`pass`, `fail`, `inconclusive`,
+  or `unknown`) and `at` when present. It includes no args or case results.
+
+An installed copy keeps its params and descriptions without losing the registry's health. Health
+describes the registry version, which may differ from the local one. An unreachable registry leaves
+local matches with `registryError` and unknown registry health. No probes run, and no tier or latency
+is inferred: the Worker does not store aggregates for them.
+
+`find_sites.nextCall` is a complete discovery call: `list_operations {site}` for a match, so the
+agent reads notes before calling, or `list_sites {}` when nothing matched. An interface-only match
+has no next call. `learn_site` still needs a page template and examples supplied by the agent.
 
 ## Creating an operation from captured traffic
 
@@ -54,9 +83,13 @@ regex's group 1 finds (`publicId=navigationUrl~/in/([^/?]+)`), and `[*]` in a pa
 are used, so its params stay. From a capture made with other values, pass those with `--example`.
 For a server-rendered page, use
 `--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page.
+An `--html` recipe may add `"empty":"<css>"`, the element a page with no results shows instead of
+the list (`p.SearchResults-emptyContentMessage` on pkg.go.dev): a call whose items match nothing
+while that element is shown answers `data: []`.
 `inspect` accepts the same recipe flags (`--extract`, `--pick`, `--html`, `--embedded`), so you can
 try a recipe first: it exits non-zero when a path or selector finds nothing. An `--html` items
-container that is on the page and empty is a page with no results: `data: []`, with a `note`.
+container that is on the page and empty, or the recipe's `empty` element shown on it, is a page
+with no results: `data: []`, with a `note`.
 
 In `capture`'s output, `pageStatus` is the page's own HTTP error when a request it loaded is
 recommended all the same, and `blocked` is the bot challenge the site served.
@@ -65,11 +98,22 @@ recommended all the same, and `blocked` is the bot challenge the site served.
 <capture> --pick-request <id> --example k=v`. A capture holds one run, so the second example needs a
 second capture of the page, made with its values: `--from2 <capture2> --example2 k=v2`.
 
+When the page looks up the value its data request needs (a product page at `/p/<slug>` asks
+`/api/resolve?slug=` for the product's numeric id, then loads `/api/products/<id>/reviews`), `add`
+with two examples learns the lookup with the op: each call sends the lookup first, with the same
+session, and fills the id from its answer. Pick the data request (`--pick-request`, or a recipe
+that names its answer) even though it carries no example value. The lookup is a GET on the same
+host; one that fails is the call's answer and the op's own request is not sent (a write reports
+`not_sent`). With one example, `add` says which value looks looked up and asks for `--example2`.
+
 `add` does not save an op whose captured answer is a bot challenge, a sign-in page, a rate limit or
 a server failure: log in (`api-anything login <site>`) or wait, then add again. When example 2 is
 answered with example 1's data, the op is saved with a warning and marked `unproven`: the server may
 not read those params at all (it goes by a cookie or the IP). Pick an example 2 that excludes
-something example 1 returned, such as another place or a filter value one of its rows fails.
+something example 1 returned, such as another place or a filter value one of its rows fails. When
+example 2 changes more than one param of a read, `add` also sends one read per changed param
+(example 1's args with only that value from example 2) and marks `unproven` only the params whose
+read answered example 1's data again: a `page` the server ignores is caught beside a `q` it reads.
 
 `--enum name=a,b,c` lists the values a param takes (the site's whole set, such as a picker's
 options), and `--min name=n` / `--max name=n` bound a numeric one. A call with another value is
@@ -91,6 +135,31 @@ next page, and `hasMore` (`false` when the site says it is the last page). `--pa
 path, marks numbered pages: the call says nothing about the next page, since a non-empty page is
 also what the last one looks like. `verify` asks a paged op for the page after its example's and
 fails it when that page holds only page 1's items again.
+
+You rarely have to find the cursor yourself. Capture the page with steps that click "Show more"
+(`capture <url> --steps '[{"action":"click","selector":"#more"}]'`): when it loads two pages of one
+list, `capture` and `inspect <capture>` list them as `pages`, with the paging found and the `add`
+flags that learn the list from page 2:
+
+```json
+"pages": [{"requests": [5, 6], "paging": {"param": "after", "next": "data.reviews.pageInfo.endCursor"},
+  "flags": "--from c1 --pick-request 6 --example 'after=Y3Vy...' --paging 'after=data.reviews.pageInfo.endCursor'"}]
+```
+
+Add the list's other `--example` values to those flags. `add` from such a capture without `--paging`
+warns that the request is one of two pages. The suggestion is never applied silently: two unrelated
+requests can look like pages of a list.
+
+When the answer gives the next page as a URL rather than a value (crates.io's
+`meta.next_page: "?per_page=10&q=reqwest&page=2"`), read the value out of it with `path~regex`, as
+`--pick` does: `--paging 'page=meta.next_page~[?&]page=([^&#]*)'` returns `nextPage: "2"`. `capture`
+suggests this form when it finds the value inside such a string.
+
+`learn` (and MCP `learn_site`) takes `--steps` and `--paging` too (`steps` and `paging` over MCP).
+With steps that load page 2, a cursor-paged list that both of its runs page the same way is learned
+with that paging: the result has `paging` (`auto: true`), `data` (page 1), `nextPage` and
+`hasMore`. The cursor is the op's own param, never in `--args`. For numbered pages, put the page in
+`--args`, `--args2` and `--args3` and pass `--paging page`.
 
 A write can prove it landed. Name a read of the same site that shows it, filled from the write's
 args:
@@ -114,6 +183,30 @@ api-anything verify hn-search
 refused). `verify` reports each case as `pass`, `fail` or `inconclusive`: a challenge, a sign-in
 page, a rate limit or a server that failed or could not be reached tests nothing. Check args are
 shared with the spec, so use public values only.
+
+`verify` is made for a job nobody watches:
+
+```sh
+api-anything verify hn-search goodreads        # several sites; none means every known site
+api-anything verify --user                     # the user's own specs in ~/.api-anything/sites
+api-anything verify --user --strict            # inconclusive, or a write not ready, exits 1 too
+```
+
+- Exit code: 0 when every counted case passed; 1 when a case failed or a site could not be
+  verified; 2 when nothing failed and a case was inconclusive (the site, not the spec). `--strict`
+  makes 2 into 1. A skipped op never sets the exit code.
+- A read that drifted heals even while marked stale: verify is the explicit check. The stored
+  template is still sent first.
+- Each case's record keeps `since`, when it began answering its current outcome, and the output
+  lists `newlyFailing`, `recovered` and `failingSince` (per `site/op`), so a nightly run tells new
+  breakage from old.
+- A read learned signed in is `skipped: needs login` without a call when no login is on record for
+  the site. Log in, then verify again.
+- A write is never sent. Its row is a `preflight`: `builds` (the template fills from the example and
+  the session; a missing `session:` value says "needs a trigger run"), `learnedLoggedIn` against
+  `loggedIn` now, its `readback`'s outcome in this run, `unconfirmed` (writes in the ledger that were
+  sent and never confirmed landed), and `ok`. A preflight is not a case: without `--strict` it never
+  sets the exit code, and it is no part of what `publish` reads.
 
 ## Replay, fallback and repair
 
@@ -167,6 +260,34 @@ Transport tiers, cheapest first. The lowest tier that worked is remembered for e
 | 1 | Node `fetch` with a domain/path-scoped cookie jar | default |
 | 2 | `fetch()` inside a real Chrome page on the site | tier 1 is `blocked` |
 | 3 | run the trigger in Chrome and read the site's own response | per-request signatures, a failed heal (reads only) |
+
+### Health: `api-anything status [site]`
+
+An op can keep working and still be in trouble: an escalation to tier 3 is remembered for good, so
+a read that took 4 ms can take 700 ms and a browser launch on every call while `ops` still says
+nothing. `status` shows what this machine knows of each op, from local files only. It sends
+nothing and needs no browser. Output is one line of JSON:
+
+- per site, `cooling` `{class, until, reason}` while calls answer without sending;
+- per op, `stale` `{until, reason}`, `tier` `{remembered, minTier}`, `lastHeal` `{at, strategy}`,
+  `lastVerify` `{at, outcome, current}` (`current: false`: the op changed after that verify),
+  `writes` (the ledger's writes of the last 24 h, counted by `accepted`, `applied`,
+  `mayHaveApplied`, `notApplied` and `notSent`), and `calls`: for the last `24h` and `7d`, the
+  count, the `ok` rate, the `tiers` that answered, `heals` and `medianMs`, and the `last` call's
+  class;
+- `degraded` on an op whose last 24 h ran mostly at a higher tier, or with an ok rate 20 points
+  lower, than the 6 days before (3 calls in each window at least);
+- `problems`, each `{site, op, problem, detail, next}`: `cooling`, `stale`, `escalated` (a read
+  remembered above its own tier; `next` calls it once with `--max-tier` at that tier, and an
+  answer there forgets the escalation), `degraded`, `failing` (the last call failed for a reason
+  other than its args), `verify` (the last verify on this version failed), `write` (a write may
+  have gone through). `next` is phrased as a call's `next`.
+
+With a site, every op is listed. Without one, only the sites with something on record here, and
+only the ops with something to say: a passing verify alone is not listed. The call history comes
+from `~/.api-anything/calls.jsonl`, one line per finished call: time, site, op, class, tier, ms,
+whether it healed and what a write did. It holds no args, no data and no reason text, and is kept a
+week.
 
 ## Logging in
 
@@ -236,6 +357,98 @@ refused by `export`, `publish` and `pull`.
 
 Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 
+## Read batches and stdin
+
+`call --json -` reads one args object from stdin (at most 4 MiB). Positional `k=v` arguments
+override its keys:
+
+```sh
+printf '%s\n' '{"query":"sqlite"}' | api-anything call hacker-news search --json -
+```
+
+`batch` reads JSONL from stdin by default, from `-`, or from `--input <file>`. Each line is
+`{id?, site, op, args?}`; `id` is a string or number, and omitted args mean `{}`. Sites must
+already be installed: use `pull` first, or MCP `list_operations`.
+
+```sh
+printf '%s\n' \
+  '{"id":"news","site":"hacker-news","op":"search","args":{"query":"sqlite"}}' \
+  '{"id":"books","site":"goodreads","op":"searchBooks","args":{"q":"Circe"}}' |
+  api-anything batch - --concurrency 2
+```
+
+- One JSONL result per line, in input order: `{id, site, op, ...callResult}`. Without an id the
+  1-based line number is used. The normal `class`, `retry`, `next`, `nextCall`, `nextPage`,
+  `hasMore` and `truncated` fields are kept. Args are not echoed.
+- Sequential by default. `--concurrency 1..4` allows different sites to run together; a site's
+  own items stay sequential, including case variants of its name. Every call uses the normal
+  per-site pacing and cool-downs. After a rate limit or block starts a cool-down, remaining
+  valid reads of that site answer from it without sending; other sites continue.
+- At most 200 lines and 4 MiB of input. `--limit 1..200` lowers the line cap. Oversized input
+  fails before any call. Empty input emits nothing. A malformed or blank line gets its own
+  `input` result without echoing its text; a final newline is not an extra line.
+- Writes always answer `input`, `"writes are not batched"`, with `write: "not_sent"`.
+  `--allow-writes` and `--force` are not batch flags. `--max-tier 1` keeps a batch browserless.
+- Partial failures do not stop the batch. Exit 0 when all items are ok, otherwise 1.
+  No result caching, retries of whole batches or automatic pagination.
+
+The library exports `callReads(items, opts)`, an async iterable of the same ordered results:
+
+```js
+import { callReads, closeBrowser } from "api-anything";
+
+try {
+  for await (const result of callReads([
+    { id: "news", site: "hacker-news", op: "search", args: { query: "sqlite" } },
+  ], { concurrency: 2, maxItems: 20, maxTier: 1 })) {
+    console.log(JSON.stringify(result));
+  }
+} finally {
+  await closeBrowser();
+}
+```
+
+`BatchItem`, `BatchOptions` and `BatchResult` are exported types. The array cap is 200;
+`maxItems` can only lower it. Invalid bounds or an oversized array throw before sending; invalid
+items fail individually. Options also accept `timeoutMs` and `fetchImpl`, but no write, force
+or pacing override. Breaking iteration starts no more calls and waits for those already running
+(at most four) to finish.
+
+## Result views and local continuation
+
+Output is capped at 20,000 JSON characters by default. Shape just this call's output, separately
+from the site's params:
+
+```sh
+api-anything call <site> <op> q=example --fields 'id,name=details.title' --max-chars 4000
+api-anything result <resultId> --offset 7 --fields 'id,name=details.title' --max-chars 4000
+```
+
+MCP: `call_operation {site, op, args, view: {fields: ["id", "name=details.title"], maxChars: 4000}}`.
+Library: `call(site, op, args, {view: {fields: ["id"], maxChars: 4000}})`, then
+`getResult(resultId, {offset: 7, fields: ["id"]})` from `api-anything`.
+`fields` uses the stored pick's path syntax (including `name=path` and `name=path~regex`), per
+item; empty projections stay `{}` so indexes do not shift. Classification and the stored
+extraction/pick happen first. A view cannot restore fields that recipe discarded.
+`maxChars` must be an integer from 256 to 200,000 and caps `data`, not its envelope.
+
+A cut answer has `resultId` and `more`, independent of the site's `nextPage`/`hasMore`.
+MCP `get_result` takes `more` unchanged. CLI `result` takes its id and the corresponding
+`--offset`, `--fields`, `--max-chars`, and `--format` flags. It only reads the local kept answer,
+with no site request or spec change. To reshape from the start, use just the id and new fields.
+Normal offsets count items. An oversized single item or non-list answer instead returns
+`more.format: "json"` with offset 0: `get_result` (`result --format json`) returns `encoding:
+"json"` and `data` string fragments of the full projected answer's JSON. Concatenate those
+fragments, then `JSON.parse`; do not append the initial shortened preview. Offsets then count
+characters. Restart at offset 0 when changing fields in that mode.
+
+The full extracted answer, before the call's view, is private local user data. At most 20 cut
+answers are kept in `API_ANYTHING_HOME/results.json` (default `~/.api-anything`), with 0600
+permissions in a 0700 directory, for 15 minutes without renewal. Expired records are removed
+on the next successful call or result access; an expired or evicted id fails locally, never
+reruns the call. Answers do not enter specs, logs, or reports. If retention fails, the cut
+answer says it is unavailable instead of returning a continuation.
+
 ## MCP server
 
 `api-anything mcp` serves these tools over stdio:
@@ -243,10 +456,13 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 | tool | what it does | hints |
 |---|---|---|
 | `list_sites` | the sites, with how many operations each has | read-only |
-| `list_operations` | a site's operations, each with a JSON Schema of its args (`inputSchema`) the keys its items carry (`returns`), how it pages (`pages`) and the read a write is confirmed by (`readback`), and the site's notes | read-only |
+| `list_operations` | a site's operations: args (`inputSchema`), output shape/type hints (`output`), field names (`returns`), operation `links`, paging and readback, and the site's notes; optional `prepare` builds a linked call without executing it | read-only |
 | `call_operation` | call a read; a write op is refused and nothing is sent | read-only, idempotent |
+| `call_batch` | up to 20 read items, optional `concurrency` 1..4; `{ok, results}` in input order, writes rejected | read-only, idempotent |
 | `call_write_operation` | call a write, with `again` and `idempotencyKey`; only with `--allow-writes` | destructive, not idempotent |
 | `get_job` | wait up to 25 s for a pending call's result | read-only |
+| `site_status` | what `api-anything status` prints, with each problem's `next` in MCP terms | read-only, local |
+| `get_result` | retrieve or reshape a kept answer, with no site request | read-only, local |
 | `login` | refresh a session from the profile chosen with the CLI, or open a window to sign in by hand | changes the local session only |
 
 - `--sites goodreads,hacker-news` also serves each operation of those sites as a tool of its own,
@@ -257,10 +473,61 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
   call while it runs joins it, so a second `login` for a site whose window is open returns that
   job. Jobs end when the server does; a finished one is kept 15 minutes. A sign-in window nobody
   closes is closed after 10 minutes.
+- `call_batch` uses the same jobs mechanism: an identical running batch joins its job, and
+  `get_job` returns `{ok, results}` when it finishes. A failed item's retry hint names
+  `call_operation` for that item, never the entire batch. Each item's data uses the same compact
+  table representation as a single call; its retry, paging and truncation fields stay intact.
 - Each answer is JSON text, and the same object as `structuredContent`.
 - `--print-config` prints how to add the server to Claude Code, Codex, Gemini CLI, VS Code, Cursor
   and Claude Desktop, with absolute paths. Client timeouts and fixes for common problems are in
   [QUICKSTART.md](QUICKSTART.md#client-timeouts).
+
+### Portable operation descriptions and links
+
+`api-anything ops goodreads getBook --schema` prints `{site, op, description?, readOnly, params, output, links?}`.
+`params` is JSON Schema, identical to MCP's `inputSchema`. `output.cardinality` is `list`, `one`
+or `unknown`; `output.fields` maps names to `{type?, source}`. A type is `declared` by a recipe
+(HTML text stays a string, `all:` stays an array, a pick regex returns a string), `observed` in
+the stored learned shape, or `unknown` without evidence. These are hints, not an output
+validator: absent fields stay absent, no numbers are parsed from text, and a stripped response
+shape cannot establish a type. Goodreads `getBook` is a list even when it has just one item.
+Neither discovery surface calls the site.
+
+An operation's optional `links` records how one of its result fields supplies another op's arg:
+`{from: "url", to: {op: "getRecipe", arg: "slug"}, transform: "lastPathSegment"}`.
+The URL's final non-empty pathname segment is used, without its query/fragment and without
+percent-decoding. Alternatively `path~regex` uses the same path/group-1 semantics as `--pick`,
+relative to the source field; `~regex` applies to the source string itself (Rotten Tomatoes
+`searchMovies` links `url` to `getMovie.slug` with `~/m/([^/?#]+)`). When the op's recipe names
+its fields (a pick or an HTML recipe), `from` must start with one of them. The bundled
+Goodreads, BBC Good Food, Rotten Tomatoes and LinkedIn specs declare their chains this way.
+
+Choose an item, then ask MCP to prepare (not execute) a link:
+
+```json
+{"site":"bbcgoodfood","prepare":{"op":"search","link":0,"item":{"url":"https://www.bbcgoodfood.com/recipes/beef-bourguignon"}}}
+```
+
+Pass that to `list_operations`; its `nextCall` names `call_operation` and contains
+`{site:"bbcgoodfood", op:"getRecipe", args:{slug:"beef-bourguignon"}}`.
+`link` is a zero-based index from the listed op's `links`. The site must already be installed;
+preparing does not pull it. Additional target params go in `prepare.args`; defaults are filled,
+but required params without a value fail instead of borrowing examples. MCP preparation only
+offers reads. It never selects among results or runs any request.
+
+The library exports `describeOperation(siteSpec, op)`, `prepareLink(siteSpec, sourceOp, item,
+link, extraArgs?)`, and registry reads `search` and `pull`:
+
+```ts
+import { describeOperation, loadSite, prepareLink } from "api-anything";
+const site = loadSite("bbcgoodfood")!.site;
+const description = describeOperation(site, "search");
+const next = prepareLink(site, "search", selectedItem, description.links![0]!);
+// next is {site, op, args}; executing it remains a separate, permission-checked call.
+```
+
+Links survive whole-site export, healing, relearning and adopting the registry's version of an op. Single-operation registry uploads
+omit them, because their targets are not part of that upload.
 
 ## Safety and terms of service
 
@@ -336,10 +603,12 @@ This is version 0.1. The offline suite covers the learning, healing, tier and wr
 against a local fixture site. Individual real sites vary and are not continuously verified.
 Known limits:
 
-- An arg a site derives from another request (a numeric user id looked up from a handle) cannot be
-  substituted. Model the lookup as its own op, or rely on tier 3. A page-2 cursor is the exception:
-  `--paging` passes the site's own cursor back as an arg.
-  `add` refuses an example value that the chosen request does not carry.
+- An arg a site derives from another request is substituted only when an earlier GET of the same
+  page load, on the same host and carrying the example values, answers it as JSON, and two examples
+  show it follow. A value the page computes, reads from HTML, or looks up with a POST, on another
+  host or with a stored session value, is not: model the lookup as its own op, or rely on tier 3.
+  A page-2 cursor is passed back as an arg with `--paging`. Otherwise `add` refuses an example
+  value that the chosen request does not carry.
 - Example values need at least 3 characters and must appear in the request (multi-word values
   are fine; they are matched decoded, so `mcp server` finds `mcp%20server`).
 - An op extracts one value from one request. Data in two places of one page takes two ops.
@@ -354,7 +623,11 @@ Known limits:
 - "Not found" is detected by replaying the op's example args, so a spec without examples reports
   missing data as `drift`. An empty result is `ok` with `[]` when the page shows it structurally:
   an empty JSON list at the extract path, or, for `--html`, an items selector written as
-  `"<container> <item>"` whose container is on the page with no item-tag element in it. A list
+  `"<container> <item>"` whose container is on the page with no item-tag element in it, or the
+  recipe's `empty` element shown on the page. A no-results page that drops the list and shows a
+  message instead needs `empty`; without it the call is `input` ("selector matched nothing", since
+  the example args still answer), and an `--expect empty` check fails with a reason that says so.
+  A message the site shows for another reason too (an error it styles the same way) reads as `[]`. A list
   that `--pick` empties (no item has a picked field), or `--html` items with none of their fields
   found, is missing data, not `[]`: the site may have renamed them. So is a picked field the op
   learned with a type (not `null`) that no item carries now, or none with that type: when the
@@ -377,8 +650,12 @@ Known limits:
 - Two examples that the site answers with the same data mark the op `unproven`, which may be a
   false alarm (two places with the same stores). `publish` refuses it until a re-add with a better
   example 2, or until `verify` sees two passing cases that differ only in those params answer
-  differently. A param the server ignores is not caught when the two answers differ for another
-  reason (a timestamp, a shuffled order).
+  differently. When example 2 changes several params of a tier-1 read, each is also sent alone in
+  example 1's args, so a param the server ignores beside one it reads is caught; one read per
+  changed param, at the site's pace. A param the server ignores is still not caught when the two
+  answers differ for another reason (a timestamp, a shuffled order), when the op needs a browser
+  (tier 3, whose per-param reads would not answer), or when example 2 changes only that param and
+  the two answers happen to differ anyway.
 - Chrome locks its profile to one process. An MCP server releases it after 3 s idle; another
   process waits up to 15 s for it, then fails with a hint.
 - Optional request structure (a reply block that only some calls have) needs a separate op.
@@ -389,7 +666,8 @@ Known limits:
   repair that ends on a challenge that did not solve is `blocked` and marks nothing stale.
 - Paging returns the site's own next cursor, and only when the answer holds one. Numbered pages
   get no `nextPage`. When the output cap cuts a page, the cut items are on neither that page nor
-  the next, so `truncated` says to ask for fewer per page.
+  the next; use the local `more`/`get_result` continuation to recover them before following
+  `nextPage`, or reshape the kept answer with `fields`.
 - A readback finds what the read shows: a write the site lists later, or under a value other than
   the one sent, stays `accepted`. An older item with the same value passes for a new one, so find
   something only this write makes.

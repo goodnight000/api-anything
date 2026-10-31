@@ -130,11 +130,29 @@ export function splitPick(s: string): string[] {
   return out;
 }
 
+/** `path~regex` as its path and regex; the regex is everything after the first `~`. */
+export function splitRegex(p: string): { path: string; regex?: string } {
+  const cut = p.indexOf("~");
+  return cut < 0 ? { path: p } : { path: p.slice(0, cut), regex: p.slice(cut + 1) };
+}
+
 export function pickEntry(p: string): { name: string; path: string; re?: RegExp } {
   const [, name, rest] = /^([\w$-]+)=(.+)$/.exec(p) ?? [p, undefined, p];
-  const cut = rest.indexOf("~");
-  const path = cut < 0 ? rest : rest.slice(0, cut);
-  return { name: name ?? path, path, re: cut < 0 ? undefined : new RegExp(rest.slice(cut + 1)) };
+  const { path, regex } = splitRegex(rest);
+  return { name: name ?? path, path, re: regex === undefined ? undefined : new RegExp(regex) };
+}
+
+/** What `re`'s group 1 (or whole match) finds in a string; undefined for a non-string or no match. */
+const found = (v: unknown, re: RegExp) => {
+  const m = typeof v === "string" ? re.exec(v) : null;
+  return m ? (m[1] ?? m[0]) : undefined;
+};
+
+/** getPath, and with `path~regex` the part of the string there that the regex finds, as pick reads it. */
+export function getPathRegex(obj: unknown, p: string): unknown {
+  const { path, regex } = splitRegex(p);
+  const v = getPath(obj, path);
+  return regex === undefined ? v : found(v, new RegExp(regex));
 }
 
 /**
@@ -153,7 +171,7 @@ export function returnedFields(r: Pick<ResponseSpec, "format" | "pick" | "html" 
  * `name=path~regex` keeps the part of a string that the regex's group 1 (or whole match) finds
  * (`publicId=navigationUrl~/in/([^/?]+)`); a non-string or no match drops the field.
  */
-export function pick(value: unknown, paths: string[]): unknown {
+export function pick(value: unknown, paths: string[], keepEmpty = false): unknown {
   const named = paths.map((p) => {
     const entry = pickEntry(p);
     return { ...entry, steps: pathSteps(entry.path) };
@@ -163,10 +181,7 @@ export function pick(value: unknown, paths: string[]): unknown {
     const out: Record<string, unknown> = {};
     for (const { name, steps, re } of named) {
       let v = atPath(item, steps);
-      if (re) {
-        const m = typeof v === "string" ? re.exec(v) : null;
-        v = m ? (m[1] ?? m[0]) : undefined;
-      }
+      if (re) v = found(v, re);
       if (v !== undefined) {
         if (name === "__proto__")
           Object.defineProperty(out, name, { value: v, enumerable: true, configurable: true, writable: true });
@@ -177,7 +192,8 @@ export function pick(value: unknown, paths: string[]): unknown {
   };
   if (!Array.isArray(value)) return one(value);
   // an item with none of the fields (a shelf, an ad, a logo entity) is not a result: drop it, not {}
-  return value.map(one).filter((x) => !(x && typeof x === "object" && !Object.keys(x).length));
+  const items = value.map(one);
+  return keepEmpty ? items : items.filter((x) => !(x && typeof x === "object" && !Object.keys(x).length));
 }
 
 /** Attribute values that are addresses: a relative one needs the page's own address to be usable. */
@@ -368,11 +384,14 @@ function cut(v: unknown, budget: number, total = size(v)): unknown {
  * reads as "no results". Strings are cut as strings; objects stay objects (their biggest members
  * shortened, then trailing members dropped), never cut JSON text. The note says what was cut.
  */
-export function capOutput(value: unknown, maxChars = 20_000): { data: unknown; truncated?: string } {
+export function capOutput(
+  value: unknown,
+  maxChars = 20_000,
+  hint = "narrow with pick or extract",
+): { data: unknown; truncated?: string } {
   const total = size(value);
   if (total <= maxChars) return { data: value };
   const data = cut(value, maxChars, total) ?? null;
-  const hint = "narrow with pick or extract";
   if (Array.isArray(value)) {
     const n = (data as unknown[]).length;
     const whole = n > 0 && (data as unknown[])[n - 1] === value[n - 1];

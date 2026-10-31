@@ -6,6 +6,9 @@
   "operations": [
     {
       "name": "search",
+      "links": [
+        { "from": "url", "to": { "op": "getRecipe", "arg": "slug" }, "transform": "lastPathSegment" }
+      ],
       "description": "Search signed-out Good Food recipes on the first results page.",
       "request": {
         "method": "GET",

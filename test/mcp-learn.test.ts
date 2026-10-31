@@ -379,6 +379,26 @@ test("MCP learn_site loads only https pages on a public host; the CLI's learn ta
       assert.deepEqual([out.ok, out.class], [false, "refused"], trigger);
       assert.match(out.error, /only https pages on a public host/, trigger);
     }
+    // a goto step loads an address as the trigger does
+    const { tools } = await client.listTools();
+    const schema = tools.find((t) => t.name === "learn_site")!.inputSchema.properties!;
+    assert.ok(schema.steps && schema.paging, "learn_site takes steps and paging");
+    const r = await client.callTool({
+      name: "learn_site",
+      arguments: {
+        trigger: "https://www.example.com/s?q={q}",
+        steps: [
+          { action: "click", selector: "#more" },
+          { action: "goto", value: "http://127.0.0.1:8080/admin" },
+        ],
+        args: { q: "aaa" },
+        args2: { q: "bbb" },
+        args3: { q: "ccc" },
+      },
+    });
+    const out = JSON.parse((r.content as { text: string }[])[0]!.text);
+    assert.deepEqual([out.ok, out.class], [false, "refused"]);
+    assert.match(out.error, /^goto step http:\/\/127\.0\.0\.1:8080\/admin is not https/);
   } finally {
     await client.close();
   }

@@ -101,32 +101,70 @@ export function domainOf(query: string): string | undefined {
   }
 }
 
-/**
- * How well an entry answers a query: a domain query matches the domains the spec uses; words weigh most in
- * the site's name, then its title and domains, then what its ops say they do and return.
- */
-export function score(
-  e: Pick<IndexEntry, "site" | "displayName" | "description" | "domains"> & {
-    operations: { op: string; description?: string }[];
-  },
-  query: string,
-): number {
-  const domain = domainOf(query);
-  if (domain) return e.domains.includes(domain) ? 100 : 0;
-  const name = words(e.site);
-  const title = words(`${e.displayName ?? ""} ${e.domains.join(" ")}`);
-  const about = [
-    ...words([e.description, ...e.operations.map((o) => o.description)].filter(Boolean).join(" ")),
-    ...opWords(e.operations.map((o) => o.op).join(" ")),
-  ];
+type SearchEntry = Pick<IndexEntry, "site" | "displayName" | "description" | "domains"> & {
+  operations: { op: string; description?: string }[];
+};
+
+export interface QueryMatch {
+  matched: string[];
+  unmatched: string[];
+}
+
+// An action or a common output field alone does not identify a capability in a longer query.
+const GENERIC = new Set(["search", "price", "title", "name", "description", "result", "data"]);
+
+const hit = (w: string, list: string[], whole: number, part: number, min = 3) =>
+  list.includes(w) ? whole : w.length >= min && list.some((x) => x.includes(w)) ? part : 0;
+
+const coverage = (query: string, weight: (word: string) => number) => {
+  const matched: string[] = [];
+  const unmatched: string[] = [];
   let total = 0;
   for (const w of new Set(words(query))) {
-    // part of a longer word: "book" in "bookshelf"; in the ops' text only from 5 letters, where "time" is in "datetime"
-    const hit = (list: string[], whole: number, part: number, min = 3) =>
-      list.includes(w) ? whole : w.length >= min && list.some((x) => x.includes(w)) ? part : 0;
-    // a word that misses entirely makes the site a worse answer than one that has every word
-    const s = Math.max(hit(name, 10, 6), hit(title, 6, 3), hit(about, 2, 1, 5));
-    total += s || -1;
+    const s = weight(w);
+    (s ? matched : unmatched).push(w);
+    total += s;
   }
-  return total;
+  // Reward covering more capabilities, without treating the user's extra constraints as negatives.
+  return {
+    matched,
+    unmatched,
+    score: unmatched.length && matched.every((w) => GENERIC.has(w)) ? 0 : total * matched.length,
+  };
+};
+
+/** Query coverage in this op's own summary, not text about another op at the same site. */
+export function operationMatch(op: SearchEntry["operations"][number], query: string): QueryMatch {
+  if (domainOf(query)) return { matched: [], unmatched: [] };
+  const signature = opWords(op.op);
+  const description = words(op.description ?? "");
+  const { matched, unmatched } = coverage(query, (w) =>
+    Math.max(hit(w, signature, 4, 2, 5), hit(w, description, 1, 0.5, 5)),
+  );
+  return { matched, unmatched };
 }
+
+/** Shared lexical ranking and its explanation, for the client and Worker. */
+export function matchQuery(e: SearchEntry, query: string): QueryMatch & { score: number } {
+  const domain = domainOf(query);
+  if (domain)
+    return e.domains.includes(domain)
+      ? { score: 100, matched: [domain], unmatched: [] }
+      : { score: 0, matched: [], unmatched: [domain] };
+  const name = words(e.site);
+  const title = words(`${e.displayName ?? ""} ${e.domains.join(" ")}`);
+  const about = words(e.description ?? "");
+  const descriptions = words(e.operations.map((o) => o.description ?? "").join(" "));
+  const signatures = opWords(e.operations.map((o) => o.op).join(" "));
+  return coverage(query, (w) =>
+    Math.max(
+      hit(w, name, 10, 6),
+      hit(w, title, 6, 3),
+      hit(w, about, 2, 1, 5),
+      hit(w, signatures, 4, 2, 5),
+      hit(w, descriptions, 1, 0.5, 5),
+    ),
+  );
+}
+
+export const score = (e: SearchEntry, query: string): number => matchQuery(e, query).score;

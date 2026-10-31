@@ -74,6 +74,34 @@ describe("add: what it refuses to save, and what it doubts", () => {
     assert.deepEqual(loadSite("stores")!.site.operations[0]!.unproven, r.operation.unproven);
   });
 
+  test("example 2 changing two params: each is sent alone, and only the one that leaves the answer alone is unproven", async () => {
+    const from = { capture: await captureOf(fx, "/stores?city=Sydney&open=yes", "/api/stores?city=Sydney&open=yes") };
+    const from2 = await captureOf(fx, "/stores?city=Hobart&open=no", "/api/stores?city=Hobart&open=no");
+    const before = fx.calls.length;
+    const r = await addOperation({
+      site: "stores-filter",
+      op: "near",
+      examples: [
+        { city: "Sydney", open: "yes" },
+        { city: "Hobart", open: "no" },
+      ],
+      from,
+      from2,
+      response: { extract: "stores" },
+    });
+    // open=no answered one store to example 1's two, so the whole-answer check sees nothing
+    assert.deepEqual(r.operation.unproven?.params, ["city"]);
+    assert.match(r.operation.unproven!.reason, /example 1's args with only city=Hobart from example 2 was answered/);
+    const w = r.warnings.find((x) => /example 1's data/.test(x));
+    assert.ok(w, r.warnings.join(" | "));
+    assert.match(w, /may not read city from this request/);
+    assert.match(w, /example 2 whose city alone excludes something example 1 returned/);
+    // one tier-1 read per changed param, each example 1's args with that one value from example 2
+    const probes = fx.calls.slice(before).map((c) => c.path);
+    assert.deepEqual(probes.sort(), ["/api/stores?city=Hobart&open=yes", "/api/stores?city=Sydney&open=no"]);
+    assert.deepEqual(loadSite("stores-filter")!.site.operations[0]!.unproven, r.operation.unproven);
+  });
+
   test("examples answered with different data prove nothing is ignored: no mark", async () => {
     const r = await addOperation({
       site: "scoped",
@@ -122,6 +150,7 @@ describe("add: what it refuses to save, and what it doubts", () => {
     assert.deepEqual(r.operation.params[0]!.enum, ["kittens", "puppies"]);
     const site = loadSite("allowed")!.site;
     site.operations[0]!.checks = [{ args: { q: "puppies" }, expect: "result" }];
+    site.operations[0]!.links = [{ from: "q", to: { op: "search", arg: "q" } }];
     saveSite(site);
     const again = await addOperation({
       site: "allowed",
@@ -131,6 +160,7 @@ describe("add: what it refuses to save, and what it doubts", () => {
     });
     assert.deepEqual(again.operation.params[0]!.enum, ["kittens", "puppies"]);
     assert.deepEqual(again.operation.checks, [{ args: { q: "puppies" }, expect: "result" }]);
+    assert.deepEqual(again.operation.links, site.operations[0]!.links);
   });
 
   test("an op learned from a sign-in page is not saved: add says to log in, then add again", async () => {
@@ -199,11 +229,13 @@ fetch("/api/search?${key}="+encodeURIComponent(p.get("q"))+"&page="+encodeURICom
     });
     const site = loadSite("s1")!.site;
     site.operations[0]!.params[1] = { ...site.operations[0]!.params[1]!, required: false, default: "100" };
+    site.operations[0]!.links = [{ from: "q", to: { op: "search", arg: "q" } }];
     saveSite(site);
     version = "v2";
     const r = await call("s1", "search", { q: "cats" }, fast);
     assert.equal(r.healed, true, JSON.stringify(r));
     const op = loadSite("s1")!.site.operations[0]!;
+    assert.deepEqual(op.links, site.operations[0]!.links);
     assert.deepEqual([...new Set(op.slots.flatMap((s) => (s.param ? [s.param] : [])))].sort(), ["page", "q"]);
     const later = await call("s1", "search", { q: "dogs", page: "250" }, fast);
     assert.deepEqual((later.data as unknown[])[0], { q: "dogs", page: "250" });

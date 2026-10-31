@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { type LearnSiteInput, type LearnSiteResult, learnSite } from "./learnsite.js";
 import { asTable, mcpNext, mcpNextCall, type Reply, reply } from "./mcp.js";
+import { PagingSchema, TriggerStepSchema } from "./spec.js";
 import { badAddress } from "./vet.js";
 
 /**
@@ -27,6 +28,7 @@ const DESCRIPTION =
   "Otherwise it loads the page in a browser with args and with args2, picks the data request and the fields, and checks the result with args3 and with a replay that sends no cookies. " +
   "The answer to the user's request is in `data`; `signature` is the new operation, callable from then on with call_operation. " +
   "`chosen` is the request and recipe it used, and `alternatives` the other candidates: if data is not what the user wanted, call learn_site again with the same args, `captures` from the result (no browser), and pickRequest and/or a recipe (extract and pick for JSON, html or embedded for a page). " +
+  "A list behind a 'Show more' or next-page button: pass steps that click it, so each run loads page 2. The list is then learned with its paging when both runs show it (paging in the result), and data comes with nextPage and hasMore; pass paging to say it yourself (the cursor param is the op's own, never in args). " +
   "Sharing with the catalog is automatic for a public read when the user turned sharing on; if they never answered whether to share, it asks them once (or `next` tells you to ask). An operation that needed a login is shared only with the user's yes. Only reads: a write is learned with the CLI. " +
   "On failure follow `next` once (nextCall is the same step as data).";
 
@@ -55,9 +57,11 @@ export function registerLearn(
         extract: z.string().optional().describe("a path into a JSON answer: data.items, sections[*].items"),
         pick: z.array(z.string()).optional().describe("fields kept per item; name=path renames"),
         html: z
-          .object({ items: z.string(), fields: z.record(z.string(), z.string()) })
+          .object({ items: z.string(), fields: z.record(z.string(), z.string()), empty: z.string().optional() })
           .optional()
-          .describe('a list in the page: {"items":"<css>","fields":{"name":"<css>[@attr]"}}'),
+          .describe(
+            'a list in the page: {"items":"<css>","fields":{"name":"<css>[@attr]"},"empty":"<css>"}; empty: the element a page with no results shows instead of the list',
+          ),
         embedded: z.string().optional().describe("a regex for JSON inside the page; group 1 marks where it starts"),
         captures: z
           .tuple([z.string(), z.string()])
@@ -70,6 +74,15 @@ export function registerLearn(
             "learn the page anew, not calling an op someone shared for it: when a reused answer is not what the user wanted",
           ),
         write: z.boolean().optional().describe("not supported: writes are learned with the CLI"),
+        steps: z
+          .array(TriggerStepSchema)
+          .optional()
+          .describe(
+            'UI steps after the page loads, {param} filled: [{"action":"click","selector":"#more"}] loads page 2 of a list. Actions: click, fill, press, wait (ms), goto (value)',
+          ),
+        paging: PagingSchema.optional().describe(
+          "how the list pages, when the automatic pick is wrong: param takes the next page, next is the path in the whole answer to its value (path~regex keeps group 1 of a string there, e.g. a next-page URL). Without next, the pages are numbered: put param in args, args2 and args3",
+        ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -77,12 +90,21 @@ export function registerLearn(
       o.asJob(`learn ${JSON.stringify(input)}`, LEARN_NOTE, async () => {
         let r: LearnSiteResult;
         // a write is refused by learnSite whatever its trigger
-        const bad = learnTool.publicOnly && !input.write ? badAddress(input.trigger ?? "") : undefined;
+        // a goto step loads an address too
+        const bad =
+          learnTool.publicOnly && !input.write
+            ? [
+                input.trigger ?? "",
+                ...(input.steps ?? []).flatMap((st) => (st.action === "goto" ? [st.value ?? ""] : [])),
+              ]
+                .map((u) => [u, badAddress(u)] as const)
+                .find(([, why]) => why)
+            : undefined;
         if (bad)
           r = {
             ok: false,
             class: "refused",
-            error: `trigger ${input.trigger} ${bad}: learn_site loads only https pages on a public host`,
+            error: `${bad[0] === input.trigger ? "trigger" : "goto step"} ${bad[0]} ${bad[1]}: learn_site loads only https pages on a public host`,
             next: "give the https URL of the site's public page; a page on this machine or the local network is learned with the CLI, by the user: api-anything learn <url> ...",
             nextCall: { action: "fix_args" },
           };

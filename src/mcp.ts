@@ -13,10 +13,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { idleWork } from "./background.js";
+import { BATCH_CONCURRENCY, BatchItemSchema, callReads } from "./batch.js";
 import { closeBrowser } from "./browser.js";
+import { describeOperation, inputSchema } from "./describe.js";
 import { call, type NextCall } from "./execute.js";
 import { returnedFields } from "./extract.js";
 import { type Job, Jobs } from "./jobs.js";
+import { prepareLink } from "./links.js";
 import {
   browserSource,
   cookieNames,
@@ -30,7 +33,9 @@ import {
 import { registerLearn } from "./mcp-learn.js";
 import { type Pulled, pull, search } from "./registry.js";
 import { settle } from "./report.js";
-import { type Operation, type Paging, type Param, readbackName } from "./spec.js";
+import { getResult, MAX_RESULT_CHARS, MIN_RESULT_CHARS, type ResultView } from "./results.js";
+import { type Operation, type Paging, readbackName } from "./spec.js";
+import { status } from "./status.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
 import { SHARED_NOTE } from "./vet.js";
 
@@ -53,6 +58,21 @@ const LOGIN_HINTS = { readOnlyHint: false, destructiveHint: false, idempotentHin
 const WAIT_MS = 25_000;
 /** A sign-in window nobody closes is closed after this, so it does not hold the browser profile forever. */
 const WINDOW_MS = 10 * 60_000;
+const viewSchema = z.object({
+  fields: z
+    .array(z.string().min(1).max(512))
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("pick paths per item, including name=path; not site args"),
+  maxChars: z
+    .number()
+    .int()
+    .min(MIN_RESULT_CHARS)
+    .max(MAX_RESULT_CHARS)
+    .optional()
+    .describe("JSON data budget; default 20000"),
+});
 
 /**
  * Longest per-op tool name. Clients prefix the server's name: Gemini CLI cuts `mcp_<server>_<tool>`
@@ -74,42 +94,11 @@ export function toolName(site: string, op: Pick<Operation, "name">): string {
   return `_${name.slice(0, TOOL_NAME_MAX - 10)}_${hash}`;
 }
 
-type JsonSchema = Record<string, unknown>;
+export { inputSchema } from "./describe.js";
 
 /** How an op pages, as `ops` says it: by its paging param, from the result's nextPage when the site gives one. */
 const pagesOf = (p: Paging) =>
   p.next ? `by ${p.param}: pass the result's nextPage (hasMore false: the last page)` : `by ${p.param}`;
-
-/** One param as JSON Schema: what call() accepts, so a client that validates refuses nothing call() would take. */
-function paramSchema(p: Param): JsonSchema {
-  const typed = (v: string) => {
-    if (p.type === "number" && /^-?\d+(\.\d+)?$/.test(v)) return Number(v);
-    if (p.type === "boolean" && (v === "true" || v === "false")) return v === "true";
-    return v;
-  };
-  return {
-    type: p.type,
-    ...(p.description || p.hint ? { description: [p.description, p.hint].filter(Boolean).join("; format: ") } : {}),
-    ...(p.enum ? { enum: p.enum.map(typed) } : {}),
-    // a spec's pattern must match the whole value; a JSON Schema pattern matches anywhere in it
-    ...(p.pattern !== undefined ? { pattern: `^(?:${p.pattern})$` } : {}),
-    ...(p.min !== undefined ? { minimum: p.min } : {}),
-    ...(p.max !== undefined ? { maximum: p.max } : {}),
-    ...(p.default !== undefined ? { default: p.default } : {}),
-    ...(p.example !== undefined ? { examples: [p.example] } : {}),
-  };
-}
-
-/** An op's args as a JSON Schema object: list_operations shows it, and a per-op tool takes it. */
-export function inputSchema(op: Pick<Operation, "params">): JsonSchema {
-  const required = op.params.filter((p) => p.required && p.default === undefined).map((p) => p.name);
-  return {
-    type: "object",
-    properties: Object.fromEntries(op.params.map((p) => [p.name, paramSchema(p)])),
-    ...(required.length ? { required } : {}),
-    additionalProperties: false,
-  };
-}
 
 /** Whether the user imported the site's session from a browser, so the login tool can refresh it. */
 const userImported = (site: string) => !!loadSite(site) && !!browserSource(site);
@@ -379,9 +368,14 @@ export function createServer({
     args: Record<string, unknown>,
     as: ToolCall,
     write?: { again?: boolean; idempotencyKey?: string },
+    view?: ResultView,
   ): Promise<Reply> => {
     const pulled = agentPulled(site);
-    const r = await callOp(site, op, args, { allowWrites: !!write && allowWrites && !pulled, ...write });
+    const r = await callOp(site, op, args, {
+      allowWrites: !!write && allowWrites && !pulled,
+      ...write,
+      ...(view ? { view } : {}),
+    });
     // call_write_operation would refuse it too: the step is a human's pull
     if (r.class === "refused" && allowWrites && pulled) return pulledWrite(site, op);
     const toWriteTool = r.class === "refused" && !write && allowWrites;
@@ -444,7 +438,7 @@ export function createServer({
     "find_sites",
     {
       description:
-        'Find websites someone already turned into operations: the shared registry and this machine\'s sites, best match first, each op with its params and its status in the registry (live: confirmed by others; candidate: not yet). query is words (what you need: "book ratings", "flight prices"), a domain or a URL. Each match has its domain: check that a match\'s domain is the site the user means before calling it: a name or description can imitate another site. Call an op with call_operation; a match with installed false is fetched on first use.',
+        'Find websites someone already turned into operations: the shared registry and this machine\'s sites, best match first. Each op has params, matched/unmatched query words and separate registry health and local verification (unknown without evidence). Partial lexical matches do not guarantee the unmatched constraints: try the core capability or broaden before learning. query is words ("book ratings", "flight prices"), a domain or a URL. Check each match\'s domain is the site the user means: a name or description can imitate another site. list_operations shows notes before call_operation; a match with installed false is fetched on first use.',
       inputSchema: { query: z.string().describe("words, a domain or a URL") },
       annotations: READ_HINTS,
     },
@@ -464,14 +458,14 @@ export function createServer({
             top && !top.operations.length && top.interfaces?.length
               ? `${top.domain} offers its own agent interface (${top.interfaces.map((i) => `${i.kind} ${i.url}`).join(", ")}): tell the user, who can connect it; nothing here calls it`
               : top
-                ? `check that ${top.domain} is the site the user means (a lookalike name can point elsewhere), then call_operation {"site":"${top.site}","op":<an op above>,"args":<its params>}; list_operations {"site":"${top.site}"} first shows the site's notes (caveats, arg formats)`
-                : "nothing matched. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, find_sites with that, which also finds unconfirmed ones; else learn it with learn_site (the page that shows the data, example args and what you want from it), which calls an op someone shared for the same page before it opens a browser",
+                ? `check that ${top.domain} is the site the user means (a lookalike name can point elsewhere), then call_operation {"site":"${top.site}","op":<an op above>,"args":<its params>}; list_operations {"site":"${top.site}"} first shows the site's notes (caveats, arg formats)${r.matches.every((m) => m.unmatched.length) ? "; these are partial lexical matches, not guarantees for the unmatched constraints: try their core capabilities or broaden the query before learning a new site" : ""}`
+                : "nothing matched. Broaden the query or check list_sites before learning. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, find_sites with that, which also finds unconfirmed ones; else learn it with learn_site (the page that shows the data, example args and what you want from it), which calls an op someone shared for the same page before it opens a browser",
           nextCall:
             top && !top.operations.length
               ? undefined
               : top
-                ? { tool: "call_operation", args: { site: top.site } }
-                : { tool: "learn_site" },
+                ? { tool: "list_operations", args: { site: top.site } }
+                : { tool: "list_sites", args: {} },
         });
       }),
   );
@@ -480,16 +474,49 @@ export function createServer({
     "list_operations",
     {
       description:
-        "List a site's operations, each with a JSON Schema of its args (inputSchema) and the keys a result item can carry (returns; one the site leaves out is absent), and the site's notes (caveats, arg formats). Call this before call_operation. A shared site from find_sites that is not installed is pulled from the registry first (reads only).",
-      inputSchema: { site: z.string().describe("site name from list_sites or find_sites") },
+        "List a site's operations, each with a JSON Schema of its args (inputSchema), output cardinality and field type hints (unknown when not recorded), links to other operations, and the site's notes. Call this before call_operation. An uninstalled shared site is pulled first (reads only). To prepare a linked call without executing it, set prepare to {op, link: <zero-based link index>, item: <one selected result object>, args?: <other required target args>}; returns nextCall with complete call_operation args. It never chooses an item or runs a link.",
+      inputSchema: {
+        site: z.string().describe("site name from list_sites or find_sites"),
+        prepare: z
+          .object({
+            op: z.string(),
+            link: z.number().int().min(0),
+            item: z.record(z.string(), z.unknown()),
+            args: z.record(z.string(), z.unknown()).optional(),
+          })
+          .optional(),
+      },
       annotations: LOCAL_HINTS,
     },
-    ({ site }: { site: string }) =>
+    ({ site, prepare }) =>
       guard(async () => {
-        const got = await install(site);
+        // Preparing is local: it cannot pull a spec or run any request.
+        const got = prepare
+          ? loadSite(site)
+            ? {}
+            : { error: "site is not installed", next: "list_operations without prepare first", missing: true }
+          : await install(site);
         if ("error" in got) return reply(got, true);
         const pulled = got.pulled;
         const r = loadSite(site)!;
+        if (prepare) {
+          const source = r.site.operations.find((o) => o.name === prepare.op);
+          const link = source?.links?.[prepare.link];
+          if (!link) return reply({ ok: false, class: "input", reason: "no such link on the source operation" }, true);
+          const target = r.site.operations.find((o) => o.name === link.to.op);
+          if (!target?.readOnly)
+            return reply({ ok: false, class: "input", reason: "prepare only offers links to read operations" }, true);
+          try {
+            return reply({
+              nextCall: {
+                tool: "call_operation",
+                args: prepareLink(r.site, prepare.op, prepare.item, link, prepare.args),
+              },
+            });
+          } catch (e) {
+            return reply({ ok: false, class: "input", reason: (e as Error).message }, true);
+          }
+        }
         const writes = allowWrites && !agentPulled(r.site.name);
         const notes = siteNotes(r.site.name);
         return reply({
@@ -499,16 +526,21 @@ export function createServer({
             : {}),
           operations: r.site.operations
             .filter((o) => writes || o.readOnly)
-            .map((o) => ({
-              name: o.name,
-              ...(o.description ? { description: o.description } : {}),
-              ...(o.readOnly ? {} : { write: true }),
-              ...(o.version ? { status: o.version.status } : {}),
-              ...(returnedFields(o.response) ? { returns: returnedFields(o.response) } : {}),
-              ...(o.paging ? { pages: pagesOf(o.paging) } : {}),
-              ...(o.readback ? { readback: readbackName(o.readback) } : {}),
-              inputSchema: inputSchema(o),
-            })),
+            .map((o) => {
+              const d = describeOperation(r.site, o.name);
+              return {
+                name: o.name,
+                ...(o.description ? { description: o.description } : {}),
+                ...(o.readOnly ? {} : { write: true }),
+                ...(o.version ? { status: o.version.status } : {}),
+                ...(returnedFields(o.response) ? { returns: returnedFields(o.response) } : {}),
+                ...(o.paging ? { pages: pagesOf(o.paging) } : {}),
+                ...(o.readback ? { readback: readbackName(o.readback) } : {}),
+                inputSchema: d.params,
+                output: d.output,
+                ...(d.links ? { links: d.links } : {}),
+              };
+            }),
           ...(r.site.shared ? { shared: SHARED_NOTE } : {}),
           ...(notes ? { notes } : {}),
         });
@@ -517,6 +549,7 @@ export function createServer({
 
   const RESULT =
     "Returns {ok, class, data, tier, healed?, heal?, ms, reason?, next?, nextCall?, retry?, retryAfterMs?, write?, nextPage?, hasMore?}; a list of two or more records comes back as data {columns, rows} when that shortens the JSON (one row per item, null for a missing field); otherwise it stays a list. `reason` also explains a slow success. On failure follow `next` (nextCall is the same step as data, with the tool to use) at most once, then stop and report. `retry` says whether to send the same call again: safe, after_wait (retryAfterMs), after_fix (once the step is done) or no. An op that pages (list_operations: pages) answers nextPage, the value its paging param takes for the next page, and hasMore (false: the last page). A call that repaired the op (healed: true) says how in heal {strategy, changes}: tell the user it healed and what changed in its request (a human can undo it with api-anything revert <site> <op>). A call still running after about 25 s answers class pending with a job: call get_job with it. " +
+    " view {fields?, maxChars?} shapes output after classification/extraction, separately from site args. A cut answer has resultId and more: call get_result with more to recover it locally, not nextPage (which skips to the site's next page). " +
     UNTRUSTED_NOTE;
 
   server.registerTool(
@@ -527,15 +560,79 @@ export function createServer({
         site: z.string(),
         op: z.string().describe("operation name from list_operations"),
         args: z.record(z.string(), z.unknown()).optional().describe("param name -> value"),
+        view: viewSchema.optional(),
       },
       annotations: READ_HINTS,
     },
-    ({ site, op, args = {} }: { site: string; op: string; args?: Record<string, unknown> }) =>
-      asJob(`call ${JSON.stringify([site, op, args])}`, READ_NOTE, async () => {
+    ({ site, op, args = {}, view }: { site: string; op: string; args?: Record<string, unknown>; view?: ResultView }) =>
+      asJob(`call ${JSON.stringify([site, op, args, view ?? null])}`, READ_NOTE, async () => {
         const got = await install(site);
         if ("error" in got) return installFailed(site, got);
-        return callReply(site, op, args, { tool: "call_operation", args: { site, op, args } });
+        return callReply(
+          site,
+          op,
+          args,
+          { tool: "call_operation", args: { site, op, args, ...(view ? { view } : {}) } },
+          undefined,
+          view,
+        );
       }),
+  );
+
+  server.registerTool(
+    "call_batch",
+    {
+      description:
+        "Call up to 20 reads of installed sites, with ordered results and no caching. Use list_operations first (it pulls missing sites); check each site's domain is the one the user means. Takes items {id?, site, op, args?}; missing ids are 1-based positions. Returns {ok, results: [{id, site, op, ...callResult}]}. Partial failures do not stop the batch; writes answer input: writes are not batched, even on a writes-enabled server. concurrency defaults to 1, at most 4 across different sites; same-site calls remain sequential and respect pacing and cool-downs. " +
+        RESULT,
+      inputSchema: {
+        items: z.array(BatchItemSchema).max(20),
+        concurrency: z.number().int().min(1).max(BATCH_CONCURRENCY).optional(),
+      },
+      annotations: READ_HINTS,
+    },
+    ({ items, concurrency = 1 }) =>
+      asJob(`batch ${JSON.stringify([items, concurrency])}`, READ_NOTE, async () => {
+        const results = [];
+        let index = 0;
+        for await (const r of callReads(items, { concurrency, maxItems: 20 })) {
+          const item = items[index++]!;
+          results.push({
+            ...r,
+            ...(r.data !== undefined ? { data: asTable(r.data) } : {}),
+            ...(r.next ? { next: mcpNext(r.next) } : {}),
+            ...(r.nextCall
+              ? {
+                  nextCall: mcpNextCall(r.nextCall, {
+                    tool: "call_operation",
+                    args: { site: item.site, op: item.op, args: item.args ?? {} },
+                  }),
+                }
+              : {}),
+          });
+        }
+        const ok = results.every((r) => r.ok);
+        return reply({ ok, results }, !ok);
+      }),
+  );
+
+  server.registerTool(
+    "get_result",
+    {
+      description:
+        "Read or reshape a kept extracted answer locally, without requesting the site. Pass more unchanged to continue, or resultId and fields/maxChars to reproject from the start. offset counts items; with format json it counts characters and data is a JSON fragment (encoding json): concatenate fragments, then JSON.parse. Kept for 15 minutes, at most 20 answers. Changing fields in JSON-fragment mode requires restarting at offset 0.",
+      inputSchema: {
+        resultId: z.string(),
+        offset: z.number().int().min(0).optional(),
+        ...viewSchema.shape,
+        format: z.literal("json").optional(),
+      },
+      annotations: LOCAL_HINTS,
+    },
+    ({ resultId, ...opts }) => {
+      const r = getResult(resultId, opts);
+      return reply({ ...r, ...(r.ok && r.encoding !== "json" ? { data: asTable(r.data) } : {}) }, !r.ok);
+    },
   );
 
   const WRITE_DESCRIPTION =
@@ -549,6 +646,7 @@ export function createServer({
           site: z.string(),
           op: z.string().describe("a write operation's name from list_operations"),
           args: z.record(z.string(), z.unknown()).optional().describe("param name -> value"),
+          view: viewSchema.optional(),
           again: z
             .boolean()
             .optional()
@@ -570,12 +668,14 @@ export function createServer({
         args = {},
         again,
         idempotencyKey,
+        view,
       }: {
         site: string;
         op: string;
         args?: Record<string, unknown>;
         again?: boolean;
         idempotencyKey?: string;
+        view?: ResultView;
       }) =>
         guard(async () => {
           const got = await install(site);
@@ -590,8 +690,9 @@ export function createServer({
               site,
               op,
               args,
-              { tool: "call_write_operation", args: { site, op, args } },
+              { tool: "call_write_operation", args: { site, op, args, ...(view ? { view } : {}) } },
               { again, idempotencyKey },
+              view,
             ),
           );
         }),
@@ -629,7 +730,7 @@ export function createServer({
         (args: Record<string, unknown>) => {
           const as = { tool, args };
           return o.readOnly
-            ? asJob(`call ${JSON.stringify([s.name, o.name, args])}`, READ_NOTE, () =>
+            ? asJob(`call ${JSON.stringify([s.name, o.name, args, null])}`, READ_NOTE, () =>
                 callReply(s.name, o.name, args, as),
               )
             : asJob(`write ${JSON.stringify([s.name, o.name, args, null])}`, WRITE_NOTE, () =>
@@ -663,6 +764,23 @@ export function createServer({
       const r = await jobs.wait(job, waitMs);
       return "result" in r ? r.result : pending(r.job);
     },
+  );
+
+  server.registerTool(
+    "site_status",
+    {
+      description:
+        "This machine's record of how a site's operations have been doing, from local files only (nothing is sent): a cool-down, stale marks, the tier calls start at beside the op's own, the last heal and verify, writes of the last 24 h, and calls of the last 24 h and 7 days (count, ok rate, tiers, median ms). problems lists what needs a step, each with its next. Without site: every site with something on record. Use it when calls got slow or keep failing.",
+      inputSchema: { site: z.string().optional().describe("site name from list_sites") },
+      annotations: LOCAL_HINTS,
+    },
+    ({ site }: { site?: string }) =>
+      guard(async () => {
+        const found = site ? loadSite(site) : undefined;
+        if (site && !found) return reply({ ok: false, error: `no site "${site}"`, next: "list_sites" }, true);
+        const s = status(found?.site.name);
+        return reply({ ...s, problems: s.problems.map((p) => ({ ...p, next: mcpNext(p.next) })) });
+      }),
   );
 
   server.registerTool(

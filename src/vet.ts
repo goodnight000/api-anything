@@ -5,6 +5,7 @@
  */
 import { parse } from "tldts";
 import { siteOf } from "./domain.js";
+import { linkProblems } from "./links.js";
 import { literalCredentials, providerKeys, scanSecrets, signInFills } from "./secrets.js";
 import type { Operation, Readback, ReadbackRead, Request, Site } from "./spec.js";
 
@@ -58,6 +59,9 @@ export function badAddress(url: string): string | undefined {
 function addresses(op: Operation): [string, string][] {
   return [
     ["request", op.request.url],
+    ...op.slots.flatMap((s): [string, string][] =>
+      s.from ? [[`lookup for ${s.at.join(" > ")}`, s.from.request.url]] : [],
+    ),
     ["trigger", op.trigger.url],
     ...(op.trigger.softFrom ? ([["softFrom", op.trigger.softFrom]] as [string, string][]) : []),
     ...(op.trigger.steps ?? []).flatMap((s, i): [string, string][] =>
@@ -72,7 +76,13 @@ function regexes(op: Operation): [string, string][] {
       p.includes("~") ? [["pick", p.slice(p.indexOf("~") + 1)]] : [],
     ),
     ...(op.response.embedded ? ([["embedded", op.response.embedded.regex]] as [string, string][]) : []),
+    ...(op.paging?.next?.includes("~")
+      ? ([["paging next", op.paging.next.slice(op.paging.next.indexOf("~") + 1)]] as [string, string][])
+      : []),
     ...op.params.flatMap((p): [string, string][] => (p.pattern ? [[`param ${p.name} pattern`, p.pattern]] : [])),
+    ...(op.links ?? []).flatMap((l): [string, string][] =>
+      l.transform?.includes("~") ? [["link transform", l.transform.slice(l.transform.indexOf("~") + 1)]] : [],
+    ),
   ];
 }
 
@@ -241,9 +251,17 @@ export function pagingProblems(op: Operation): string[] {
   if (p.next !== undefined) {
     if (op.response.format === "html")
       out.push("paging next reads JSON (the answer, or JSON the page embeds), not HTML");
-    if (p.next.length > LIMITS.regex) out.push(`paging next is ${p.next.length} characters; at most ${LIMITS.regex}`);
-    else if (p.next.includes("[*]")) out.push(`paging next ${JSON.stringify(p.next)} names many values, not one value`);
-    else if (!ONE_VALUE_PATH.test(p.next)) out.push(`paging next ${JSON.stringify(p.next)} is not a path`);
+    // `path~regex`: the path is checked here, the regex with every other regex of the op (`regexes`)
+    const path = p.next.split("~")[0]!;
+    if (path.length > LIMITS.regex) out.push(`paging next is ${path.length} characters; at most ${LIMITS.regex}`);
+    else if (path.includes("[*]")) out.push(`paging next ${JSON.stringify(path)} names many values, not one value`);
+    else if (!ONE_VALUE_PATH.test(path)) out.push(`paging next ${JSON.stringify(path)} is not a path`);
+    if (path !== p.next)
+      try {
+        new RegExp(p.next.slice(path.length + 1));
+      } catch {
+        out.push(`paging next's regex after ~ is not a valid regex`);
+      }
   }
   return out;
 }
@@ -359,6 +377,12 @@ export function vetShared(site: Site, notes?: string): Vetted {
         ),
       );
     for (const problem of [...pagingProblems(op), ...readbackShape(op)]) errors.push(at(problem));
+    for (const problem of linkProblems(site, op)) errors.push(at(problem));
+    if ((op.links?.length ?? 0) > LIMITS.operations) errors.push(at("too many operation links"));
+    for (const link of op.links ?? []) {
+      long(at("link source"), link.from);
+      long(at("link transform"), link.transform);
+    }
     // the read a shared write's readback carries is sent with the caller's session like any read
     const rb = op.readback;
     if (rb && "read" in rb && !op.readOnly)
@@ -416,6 +440,19 @@ export function vetShared(site: Site, notes?: string): Vetted {
     const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
     for (const leaf of literalCredentials(op.request, pub))
       errors.push(at(`request ${leaf.at.join(" > ")} holds a literal credential`));
+    // a lookup is sent first with the caller's session: a read on the op's own host, credentials by ref only
+    for (const s of op.slots) {
+      if (!s.from) continue;
+      const where = `the lookup for ${s.at.join(" > ")}`;
+      if (s.from.request.method.toUpperCase() !== "GET")
+        errors.push(at(`${where} is a ${s.from.request.method}, not a GET`));
+      if (hostOf(s.from.request.url) !== hostOf(op.request.url))
+        errors.push(at(`${where} is not on the op's own host`));
+      if (!ONE_VALUE_PATH.test(s.path ?? ""))
+        errors.push(at(`${where} reads ${JSON.stringify(s.path)}, not one value`));
+      for (const leaf of literalCredentials(s.from.request, pub))
+        errors.push(at(`${where} ${leaf.at.join(" > ")} holds a literal credential`));
+    }
     for (const fill of signInFills(op.trigger.steps)) errors.push(at(`trigger ${fill}`));
     for (const name of pub)
       if (op.request.headers[name] !== undefined) {

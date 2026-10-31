@@ -20,30 +20,56 @@ export const RequestSchema = z.object({
   body: z.string().optional(),
 });
 
-export const SlotSchema = z
-  .object({
-    param: z.string().optional(),
-    ref: z
-      .string()
-      .regex(/^(cookie|session):.+/, "ref must be cookie:<name> or session:<name>")
-      .optional(),
-    /**
-     * a value the page makes for each request (an idempotency key from crypto.randomUUID()): a new one
-     * per call, the same on that call's retries, derived from the caller's idempotency key when given
-     */
-    gen: z.literal("uuid").optional(),
-    at: z.array(Step).min(1),
-    /** the leaf's text with `{param}` where the value goes (value is a substring of the leaf) */
-    template: z.string().optional(),
-    transform: z.enum(["strip-quotes", "url-decode"]).optional(),
-    /** with a template: how the value is escaped inside the leaf (see codec.ts Escape) */
-    escape: z.enum(["url", "json"]).optional(),
-  })
+const SlotFields = z.object({
+  param: z.string().optional(),
+  ref: z
+    .string()
+    .regex(/^(cookie|session):.+/, "ref must be cookie:<name> or session:<name>")
+    .optional(),
+  at: z.array(Step).min(1),
+  /** the leaf's text with `{param}` where the value goes (value is a substring of the leaf) */
+  template: z.string().optional(),
+  transform: z.enum(["strip-quotes", "url-decode"]).optional(),
+  /** with a template: how the value is escaped inside the leaf (see codec.ts Escape) */
+  escape: z.enum(["url", "json"]).optional(),
+});
+
+/** A derived slot's lookup: the earlier request of the page that answers with the value, filled from the op's params. */
+export const LookupSchema = z.object({
+  request: RequestSchema,
+  /** params of the op, by name, and cookie refs: a lookup is sent with whatever session the op's own request gets */
+  slots: z
+    .array(
+      SlotFields.refine(
+        (s) =>
+          (s.param !== undefined) !== (s.ref !== undefined) && (s.ref === undefined || s.ref.startsWith("cookie:")),
+        "a lookup's slot is a param or a cookie: ref",
+      ),
+    )
+    .default([]),
+});
+
+export const SlotSchema = SlotFields.extend({
+  /**
+   * a value the page makes for each request (an idempotency key from crypto.randomUUID()): a new one
+   * per call, the same on that call's retries, derived from the caller's idempotency key when given
+   */
+  gen: z.literal("uuid").optional(),
+  /** a value an earlier request looks up (a slug's id): sent first at tiers 1 and 2, its answer read at `path` */
+  from: LookupSchema.optional(),
+  /** with `from`: where the lookup's JSON answer holds the value (`product.id`) */
+  path: z.string().min(1).optional(),
+})
   .refine(
-    (s) => [s.param, s.ref, s.gen].filter((x) => x !== undefined).length === 1,
-    "a slot needs exactly one of param, ref or gen",
+    (s) => [s.param, s.ref, s.gen, s.from].filter((x) => x !== undefined).length === 1,
+    "a slot needs exactly one of param, ref or gen, or from for a derived slot",
   )
-  .refine((s) => s.gen === undefined || s.template === undefined, "a gen slot fills its whole leaf: no template");
+  .refine((s) => s.gen === undefined || s.template === undefined, "a gen slot fills its whole leaf: no template")
+  .refine((s) => (s.from === undefined) === (s.path === undefined), "a derived slot has both from and path")
+  .refine(
+    (s) => s.from === undefined || (s.template === undefined && s.transform === undefined && s.escape === undefined),
+    "a derived slot fills its whole leaf: no template, transform or escape",
+  );
 
 export const VolatileSchema = z.object({
   at: z.array(Step).min(1),
@@ -101,7 +127,12 @@ function validRegex(p: string): boolean {
   }
 }
 
-export const HtmlRecipeSchema = z.object({ items: z.string(), fields: z.record(z.string(), z.string()) });
+export const HtmlRecipeSchema = z.object({
+  items: z.string(),
+  fields: z.record(z.string(), z.string()),
+  /** the element a page with no results shows instead of the list; on the page, a call answers [] */
+  empty: z.string().optional(),
+});
 
 export const ResponseSchema = z.object({
   format: z.enum(["json", "html", "embedded"]).default("json"),
@@ -161,8 +192,17 @@ export const PagingSchema = z.object({
   /**
    * path in the whole answer (before `extract`; for `embedded`, the embedded JSON) to the next page's
    * cursor or number. Without it the pages are numbered and the answer says nothing about the next one.
+   * `path~regex` keeps what the regex's group 1 finds in the string there, as in `pick` (a next-page URL's
+   * `page`: `meta.next_page~[?&]page=([^&]*)`).
    */
-  next: z.string().min(1).optional(),
+  next: z
+    .string()
+    .min(1)
+    .refine(
+      (p) => !p.includes("~") || validRegex(p.slice(p.indexOf("~") + 1)),
+      "the regex after ~ in next must be valid",
+    )
+    .optional(),
 });
 
 /** the read's args */
@@ -205,6 +245,13 @@ export const ReadbackSchema = z.union([
   }),
 ]);
 
+/** A selected result item's field supplies an arg of another operation on this site. */
+export const OperationLinkSchema = z.object({
+  from: z.string().min(1),
+  to: z.object({ op: z.string().min(1), arg: z.string().min(1) }),
+  transform: z.string().min(1).optional(),
+});
+
 export const OperationSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -230,6 +277,7 @@ export const OperationSchema = z.object({
   paging: PagingSchema.optional(),
   /** a write's proof: a read run once after it is sent; finding it makes the call's `write` "applied" */
   readback: ReadbackSchema.optional(),
+  links: z.array(OperationLinkSchema).optional(),
   /**
    * Learning could not show these params change the answer: example 2, which gave them other values,
    * was answered with example 1's data. `publish` refuses while it is set; a `verify` clears it when
@@ -261,6 +309,7 @@ export const SiteSchema = z.object({
 
 export type Request = z.infer<typeof RequestSchema>;
 export type Slot = z.infer<typeof SlotSchema>;
+export type Lookup = z.infer<typeof LookupSchema>;
 export type Volatile = z.infer<typeof VolatileSchema>;
 export type Trigger = z.infer<typeof TriggerSchema>;
 export type Confirm = z.infer<typeof ConfirmSchema>;
@@ -273,6 +322,7 @@ export type Readback = z.infer<typeof ReadbackSchema>;
 export type ReadbackRef = Extract<Readback, { op: string }>;
 export type ReadbackRead = Extract<Readback, { read: unknown }>["read"];
 export type Operation = z.infer<typeof OperationSchema>;
+export type OperationLink = z.infer<typeof OperationLinkSchema>;
 export type Site = z.infer<typeof SiteSchema>;
 
 /** The name a readback's read goes by: the op it names, or the label of the one it carries. */

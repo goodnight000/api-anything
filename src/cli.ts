@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /** api-anything CLI. Compact JSON on stdout; every failure also prints one `next:` line on stderr. */
-import { readFileSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { z } from "zod";
+import { BATCH_CONCURRENCY, BATCH_MAX, type BatchItem, callReads } from "./batch.js";
 import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { verifySite } from "./checks.js";
 import { botWall, emptyResults, htmlFinds, loginPath, signInForm } from "./classify.js";
 import { launchOf, printConfig } from "./clients.js";
+import { describeOperation } from "./describe.js";
 import { type CallResult, call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
 import {
@@ -26,7 +28,7 @@ import {
 import { buildRequest, unknownArgs } from "./http.js";
 import { answerShare } from "./identity.js";
 import { AmbiguousProfile } from "./import.js";
-import { type Candidate, capturePages, pageUrls, rankCandidates } from "./learn.js";
+import { type Candidate, capturePages, matches, pageUrls, rankCandidates } from "./learn.js";
 import { learnSite } from "./learnsite.js";
 import {
   cookieNames,
@@ -39,9 +41,11 @@ import {
   windowRetry,
 } from "./login.js";
 import { type Outline, outline } from "./outline.js";
+import { pagingFlag, pagingHints } from "./paging.js";
 import { plan, uploadName } from "./publish.js";
 import { pull, RegistryError, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
+import { getResult, type ResultView, viewProblem } from "./results.js";
 import { captureLive, redact } from "./secrets.js";
 import { loadSession } from "./session.js";
 import { AGENTS, type Agent, askYesNo, setup, summary } from "./setup.js";
@@ -57,7 +61,8 @@ import {
   readbackName,
   TriggerStepSchema,
 } from "./spec.js";
-import { exportSite, listSites, loadHeals, loadSite, siteNotes, updateSite } from "./store.js";
+import { status } from "./status.js";
+import { exportSite, listSites, loadHeals, loadSite, siteNotes, updateSite, userSitesDir } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { readbackProblems, SHARED_NOTE } from "./vet.js";
 
@@ -112,7 +117,9 @@ const HELP: Record<string, string> = {
                embeds (a ready --embedded regex), and a repeated HTML list as a ready --html recipe
   Output: capture (the id), candidates, next (what to do). blocked: the bot challenge the site served.
   pageStatus: the page's own HTTP error, when a request it loaded is recommended all the same.
-  stopped: the requests the steps sent that were stopped without --write (method and path); nothing was sent.`,
+  stopped: the requests the steps sent that were stopped without --write (method and path); nothing was sent.
+  pages: lists the capture loaded two pages of (a "Show more" in --steps): the two requests, the paging
+  found (the param and where page 1's answer gives its value), and the add flags that learn the list.`,
   inspect: `api-anything inspect <captureId> [<requestId>] [--extract <path>] [--pick a,b] [--html <json>] [--embedded <regex>] [--outline] [--example k=v]
   No browser. Without a request id, lists every request in the capture. With one, shows its request and
   response through add's recipe flags, so a recipe is tried here first: --extract (also spelled --path),
@@ -120,6 +127,7 @@ const HELP: Record<string, string> = {
   list at a path is a result, and so is an --html items selector "<container> <item>" whose container
   is on the page with no item in it (data: [], with a note).
   --outline summarizes the response (as capture --outline does) instead of printing it.
+  Without a request id it also lists pages, as capture does.
   A request's URL and body show the run's cookie and storage values as refs ([cookie:x]), except
   one equal to an --example value.`,
   add: `api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [options]
@@ -142,7 +150,8 @@ const HELP: Record<string, string> = {
   --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
   --pick a,b.c,name=x.y  fields kept per item; name=path renames the key, name=path~regex keeps regex group 1
   --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages;
-                  "all:<css>[@attr]" returns every match as a list (genres, tags)
+                  "all:<css>[@attr]" returns every match as a list (genres, tags); "empty":"<css>" names the
+                  element a page with no results shows instead of the list, so such a page answers []
   --embedded <regex>  JSON inside the page: group 1 marks where the JSON value starts; then --extract
   --public <name,...>  a header, or a credential-like field such as api_key, whose value is the same for every
                   visitor (a web app's bearer): kept literal unless the value is in a cookie or the page's
@@ -159,21 +168,28 @@ const HELP: Record<string, string> = {
                   which a call returns as nextPage (hasMore false: the site said there is no next page).
                   Without =<path> the pages are numbered, and a call says nothing about the next one.
                   The param must be in the request: to page by a cursor, learn the op from the request
-                  that loads page 2 ("Show more"), so the cursor is a param
+                  that loads page 2 ("Show more"), so the cursor is a param. <path>~<regex> keeps the
+                  regex's group 1 from the string there (a next-page URL: meta.next_page~[?&]page=([^&#]*)).
+                  capture lists the pages it finds, and add warns when the capture shows this list pages
                   An op learned again keeps its params' allowed values and descriptions, its checks,
                   its paging and its readback.
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.
   replaced: an op of that name was learned again. unproven: example 2 was answered with example 1's
-  data, so nothing shows the server reads those params (publish refuses the op until it does).
+  data, or (example 2 changing several params of a read) one of them sent alone in example 1's args was,
+  so nothing shows the server reads those params (publish refuses the op until it does).
   An op whose captured response is a bot challenge, a sign-in page, a rate limit or a server failure
   is not saved.`,
-  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
+  call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--fields a,b] [--max-chars n] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
   Calls an operation: {ok, class, data, tier, healed?, heal?, ms, next?}; a failure also says retry
   (safe, after_wait, after_fix, no), retryAfterMs and nextCall, and a write says write (not_sent,
   not_applied, accepted, may_have_applied, applied: its readback found it). A paged read says
   nextPage (pass it as the op's paging param) and hasMore. A call that healed the op says how and
   what changed in its request in heal (undo: api-anything revert <site> <op>). --dry prints the
   request with credentials redacted.
+  --json -         read the args object from stdin (at most 4 MiB); k=v args override its keys
+  --fields a,b     project each extracted item (pick paths, including name=path); not site args
+  --max-chars n    data budget, 256 to 200000 JSON characters (default 20000)
+  A cut answer has resultId and more: retrieve it locally with api-anything result, not nextPage.
   --again          send a write refused as a duplicate (the same args within 10 minutes, and the
                     first may have gone through): only when the user checked the site
   --idempotency-key <k>  on the first call: a repeat of the write with the same key returns that
@@ -182,13 +198,37 @@ const HELP: Record<string, string> = {
                     3 minutes) or a block at every tier (10 minutes) calls answer without sending.
                     A forced call that succeeds ends the wait; one limited or blocked again starts
                     it over. A login for the site also ends the wait`,
-  verify: `api-anything verify [site]
-  Calls every read operation with its stored example args and its checks, healing as needed, and
-  judges each case: pass, fail, or inconclusive (a challenge, a sign-in page, a rate limit, or a server
-  that failed or could not be reached: it says nothing about the op). The outcomes are kept per op, for
-  publish. An op marked unproven loses the mark when two passing cases that differ only in its
-  unproven params answer differently. A paged read also asks for the page after its example's
-  ("next page"): an answer with only page 1's items again fails.`,
+  batch: `api-anything batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200] [--max-tier 1|2|3]
+  Read JSONL {id?, site, op, args?} from a file or stdin (the default), at most 4 MiB.
+  Write one JSONL {id, site, op, ...callResult} per line in input order. Missing ids are 1-based
+  line numbers. A malformed line answers input without echoing its contents. Empty input is empty.
+  Sequential by default; concurrency is across sites only, with the usual pacing and cool-downs.
+  --limit lowers the 200-line cap; oversized input is rejected before any calls. Sites must already
+  be installed (pull one first). Writes answer input: "writes are not batched". No caching.
+  Exit 0 if every item is ok, otherwise 1. Failures do not stop later items.`,
+  result: `api-anything result <resultId> [--offset n] [--fields a,b] [--max-chars n] [--format json]
+  Reads a kept answer locally, with no site request or spec change. offset is an item index.
+  Use the fields/maxChars/format in more to continue the same view. fields uses call's pick paths.
+  With --format json, data is a serialized-JSON fragment and offset counts characters: concatenate
+  fragments and JSON.parse once complete. This recovers oversized single items and objects.
+  Answers expire after 15 minutes, or sooner when 20 newer answers displace them.`,
+  verify: `api-anything verify [site ...] [--user] [--strict]
+  Calls every read operation with its stored example args and its checks, healing as needed (a stale
+  mark does not hold a heal back here), and judges each case: pass, fail, or inconclusive (a challenge,
+  a sign-in page, a rate limit, or a server that failed or could not be reached: it says nothing about
+  the op). The outcomes are kept per op, for publish, each case with since (when it began answering
+  this outcome); the output says which ops are newlyFailing, recovered, and failingSince when. A read
+  learned signed in is skipped ("needs login") while no login is on record for the site. A write is
+  never sent: it gets a preflight (its template builds from its example and the session, a missing
+  session value needs a trigger run, the login it was learned with against the jar now, how its
+  readback's own cases did, and how many of its writes in the ledger were sent and never confirmed).
+  An op marked unproven loses the mark when two passing cases that differ only in its unproven params
+  answer differently. A paged read also asks for the page after its example's ("next page"): an
+  answer with only page 1's items again fails. No site means every known site; --user means the
+  user's own (in ~/.api-anything/sites).
+  Exit 0: every counted case passed. 1: a case failed, or a site could not be verified. 2: nothing
+  failed and a case was inconclusive. --strict exits 1 for an inconclusive case, or a write whose
+  preflight is not ok; otherwise a preflight never sets the exit code.`,
   check: `api-anything check <site> <op> [k=v ...] --expect result|empty|input [--purpose <text>]
   Records a check on a read: args a human confirmed on the site, and what the site answers them with
   (result: data; empty: no data, the site's own no-results; input: the site refuses the args). verify
@@ -205,15 +245,25 @@ const HELP: Record<string, string> = {
   readback; remove one by editing the spec.`,
   sites: `api-anything sites
   Lists known sites (user specs in ~/.api-anything/sites win over bundled ones).`,
-  ops: `api-anything ops <site>
+  ops: `api-anything ops <site> [<op> --schema]
   Lists a site's operations and params (with each param's format), and the site's notes: caveats,
-  arg formats and login advice from <site>.md beside its spec.`,
+  arg formats and login advice from <site>.md beside its spec.
+  <op> --schema prints its portable contract: params as JSON Schema, output hints, and links.
+  No request is sent. Unknown output types stay unknown; values are never coerced.`,
   heal: `api-anything heal <site> <op> [k=v ...]
   Forces a heal (rescan, then recapture) even when the op is marked stale. Reads only.`,
   heals: `api-anything heals [site]
   Lists the last 20 heals and reverts (of one site, or all), newest first: when, which op, how (rescan,
   recapture, revert) and what changed in its request template, one line each, with {param} and
   cookie:/session: refs in place of values. A call that heals says the same in its heal field.`,
+  status: `api-anything status [site]
+  What this machine knows of each op's health, from local files only (nothing is sent): a site's
+  cool-down, an op's stale mark, the tier calls start at (remembered) beside the op's own (minTier),
+  its last heal, its last verify outcome, its writes of the last 24 h by what each did, and from the
+  call log (calls.jsonl, a week kept) the calls of the last 24 h and 7 days: count, ok rate, tiers,
+  heals, median ms, and the last call's class. degraded: the last 24 h ran at a higher tier, or with
+  an ok rate 20 points lower, than the 6 days before. problems lists each one with its next step.
+  Without a site: every site with something on record here.`,
   revert: `api-anything revert <site> <op>
   Puts back the op as it was before its last heal (heals.jsonl keeps it), and logs the revert; run it
   again to take back the heal before that. Refused when the op has no heal to take back, or changed
@@ -250,7 +300,7 @@ const HELP: Record<string, string> = {
   refuses an op holding a live cookie or session value, or failing its checks. --yes sends them, signed
   with this install's key; an op that needed a login or writes is reviewed before others get it.`,
   mcp: `api-anything mcp [--allow-writes] [--sites a,b] [--print-config] [--no-learn]
-  Serves list_sites, find_sites, list_operations, call_operation, get_job, login and learn_site over
+  Serves list_sites, find_sites, list_operations, call_operation, call_batch, get_result, get_job, site_status, login and learn_site over
   stdio MCP, and call_write_operation with --allow-writes. list_operations and call_operation pull a
   shared site an agent asks for, with its reads only: its writes need a human's api-anything pull. Its
   login only refreshes a session a human imported here. A call still running after about 25 s answers
@@ -290,7 +340,12 @@ const HELP: Record<string, string> = {
   --from <id> --from2 <id>   learn again from an earlier learn's captures, with no browser
   --fresh     learn the page even when a shared op answers for it (its data was not what you wanted)
   --pick-request <n>, --extract, --pick, --html, --embedded   choose the request and the recipe (see add)
-  Output: data, signature, chosen and alternatives (request and recipe), proof, shared; or data and reused.`,
+  --steps <json>  UI steps after load, as add's ({param} filled): a click on "Show more" loads page 2
+  --paging <param>[=<path>]  the list pages (see add). Without it, a list both runs load two pages of
+              is learned with the paging they show; a cursor param is then the op's own, never in --args.
+              Numbered pages without a cursor: put the page in --args, --args2 and --args3, and --paging page
+  Output: data, signature, chosen and alternatives (request and recipe), proof, shared; or data and reused.
+  paging, nextPage and hasMore: a list learned with its paging, and how to ask for the page after data.`,
 };
 
 const USAGE = `api-anything ${VERSION}: turn a website into operations an agent can call.
@@ -302,13 +357,15 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything capture <url> [--steps ...]
   api-anything add <site> <op> --trigger <url-template> --example k=v [--example2 k=v] [--write]
   api-anything call <site> <op> [k=v ...] [--allow-writes]
+  api-anything batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200]
+  api-anything result <resultId> [--offset n] [--fields a,b] [--max-chars n]
   api-anything inspect <captureId> [<requestId>]
   api-anything search <words|domain> | pull <site> | publish <site> [--yes]
   api-anything interface mcp|openapi <url>
   api-anything check <site> <op> [k=v ...] --expect result|empty|input
   api-anything readback <site> <write-op> <read-op> [k=v ...] [--find field=value]
-  api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site>
-  api-anything heals [site] | revert <site> <op>
+  api-anything verify [site ...] [--user] [--strict] | sites | ops <site> | heal <site> <op> | export <site>
+  api-anything heals [site] | revert <site> <op> | status [site]
   api-anything mcp [--allow-writes] [--sites a,b] [--print-config]
 
 api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
@@ -405,10 +462,16 @@ const OPTIONS = {
   "keep-examples": { type: "boolean" },
   extract: { type: "string" },
   pick: { type: "string" },
+  fields: { type: "string" },
+  "max-chars": { type: "string" },
+  offset: { type: "string" },
+  format: { type: "string" },
   html: { type: "string" },
   write: { type: "boolean" },
   description: { type: "string" },
   json: { type: "string" },
+  input: { type: "string" },
+  concurrency: { type: "string" },
   "allow-writes": { type: "boolean" },
   again: { type: "boolean" },
   "idempotency-key": { type: "string" },
@@ -418,10 +481,13 @@ const OPTIONS = {
   out: { type: "string" },
   force: { type: "boolean" },
   yes: { type: "boolean" },
+  user: { type: "boolean" },
+  strict: { type: "boolean" },
   window: { type: "boolean" },
   cookies: { type: "string" },
   profile: { type: "string" },
   outline: { type: "boolean" },
+  schema: { type: "boolean" },
   enum: { type: "string", multiple: true },
   min: { type: "string", multiple: true },
   max: { type: "string", multiple: true },
@@ -624,14 +690,18 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     )
     .find(Boolean);
   const page: ReturnType<typeof pageSays> = wall ? {} : pageSays(c, ranked, values);
-  const learn = html
-    ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
-    : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`;
+  const pages = pagesOf(c, values);
+  const learn = `${
+    html
+      ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
+      : `api-anything add <site> <op> --from ${c.id} --pick-request <id> --example k=v (api-anything inspect ${c.id} <id> shows a response)`
+  }${pages.length ? `; requests ${pages[0]!.requests.join(" and ")} are two pages of one list: to learn it with its paging, add ${pages[0]!.flags} with the other --example values` : ""}`;
   out({
     capture: c.id,
     finalUrl: c.finalUrl,
     requests: c.exchanges.length,
     candidates,
+    ...(pages.length ? { pages } : {}),
     ...(wall ? { blocked: wall } : {}),
     ...(page.status ? { pageStatus: page.status } : {}),
     ...(stopped.length ? { stopped } : {}),
@@ -683,6 +753,7 @@ function cmdInspect({ v, pos }: Parsed): number {
           : {}),
         ...(e.aborted ? { aborted: true } : {}),
       })),
+      ...withPages(pagesOf(c, Object.values(kv(v.example)).map(String))),
     });
     return 0;
   }
@@ -711,8 +782,9 @@ function cmdInspect({ v, pos }: Parsed): number {
     data = extract({ format: "html", html }, body, e.request.url);
     if (!(data as unknown[]).length) {
       // a results page with no results is an answer, as a call would give it; a selector that is not there is not
-      if (!emptyResults(body, html.items)) throw nothing(`the --html items selector "${html.items}" matched nothing`);
-      note = `no items: the container of "${html.items}" is on the page and empty, so this is a page with no results`;
+      const why = emptyResults(body, html);
+      if (!why) throw nothing(`the --html items selector "${html.items}" matched nothing`);
+      note = `no items: ${why}, so this is a page with no results`;
     } else if (!htmlFinds(html, data as Parameters<typeof htmlFinds>[1])) {
       const fields = Object.keys(html.fields).join(", ");
       throw nothing(
@@ -765,6 +837,20 @@ function cmdInspect({ v, pos }: Parsed): number {
 
 /** One shell word, quoted: a space, a quote or JSON in a hint's command pastes as a single argument. */
 const sh = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
+
+/**
+ * The lists capture `c` loaded two pages of (`pagingHints`), each with the add flags that learn the
+ * list from its second page. The cursor shows the run's live values as refs, as capture's URLs do.
+ */
+function pagesOf(c: CaptureFile, values: string[]) {
+  const live = captureLive(c, values);
+  return pagingHints(c.exchanges).map((h) => ({
+    requests: [h.previous, h.request],
+    paging: h.paging,
+    flags: `--from ${c.id} --pick-request ${h.request} --example ${sh(`${h.paging.param}=${redact(h.value, live, { named: true })}`)} --paging ${sh(pagingFlag(h.paging))}`,
+  }));
+}
+const withPages = (pages: ReturnType<typeof pagesOf>) => (pages.length ? { pages } : {});
 
 /**
  * The command that repeats how capture `c` was made, with the second example's values where the
@@ -875,6 +961,20 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     paging: pagingOf(v.paging),
   });
   const op = r.operation;
+  const c = v.from && !v.paging && !op.paging ? loadCapture(v.from) : undefined;
+  // the request learned, or the one before it, is one of two pages of a list the capture loaded
+  const paged =
+    c &&
+    pagesOf(c, Object.values(ex1)).find((pg) =>
+      pg.requests.some((id) => {
+        const e = c.exchanges.find((x) => x.id === id);
+        return e && matches(op.match, e.request);
+      }),
+    );
+  if (paged)
+    r.warnings.push(
+      `requests ${paged.requests.join(" and ")} of capture ${c!.id} are two pages of this list: to page it, add it again with ${paged.flags} and its other --example values`,
+    );
   out({
     ok: true,
     site,
@@ -898,14 +998,93 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
   return 0;
 }
 
+/** Bound input bytes before parsing; a JSON parser's error may quote a credential from stdin. */
+async function readInput(source = "-"): Promise<string> {
+  const stream = source === "-" ? process.stdin : createReadStream(source);
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of stream) {
+    const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += b.length;
+    if (bytes > 4 * 1024 * 1024) throw new Fail("input exceeds 4 MiB", `api-anything ${command} --help`);
+    chunks.push(b);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function cmdBatch({ v, pos }: Parsed): Promise<number> {
+  if (pos.length > 1 || (pos.length && pos[0] !== "-") || (v.input !== undefined && pos.length))
+    throw new Fail("pass --input <file> or -, not both", "api-anything batch --help");
+  const maxItems = positive(v.limit, "limit") ?? BATCH_MAX;
+  const concurrency = positive(v.concurrency, "concurrency") ?? 1;
+  if (maxItems > BATCH_MAX || concurrency > BATCH_CONCURRENCY)
+    throw new Fail("batch limits: --limit 1..200, --concurrency 1..4", "api-anything batch --help");
+  if (v["max-tier"] !== undefined && !/^[123]$/.test(v["max-tier"]))
+    throw new Fail("--max-tier must be 1, 2 or 3", "api-anything batch --help");
+  const text = await readInput(v.input);
+  const lines = text === "" ? [] : text.split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  if (lines.length > maxItems)
+    throw new Fail(`batch exceeds ${maxItems} lines; nothing was sent`, "split the input into smaller batches");
+  const items = lines.map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return null; // callReads gives this line an input result, without quoting its contents
+    }
+  }) as BatchItem[];
+  let code = 0;
+  for await (const r of callReads(items, {
+    maxItems,
+    concurrency,
+    maxTier: v["max-tier"] ? (Number(v["max-tier"]) as Tier) : undefined,
+  })) {
+    if (!out(r)) await new Promise<void>((resolve) => process.stdout.once("drain", resolve));
+    if (!r.ok) code = 1;
+  }
+  return code;
+}
+
+function callView(v: Parsed["v"]): ResultView {
+  const view = {
+    ...(v.fields !== undefined ? { fields: splitPick(v.fields) } : {}),
+    ...(v["max-chars"] !== undefined ? { maxChars: Number(v["max-chars"]) } : {}),
+  };
+  const problem = viewProblem(view);
+  if (problem) throw new Fail(problem, "use --fields a,b and --max-chars 256..200000");
+  return view;
+}
+
+async function cmdResult({ v, pos }: Parsed): Promise<number> {
+  if (pos.length !== 1) throw new Fail("expected <resultId>", "api-anything result --help");
+  if (v.format !== undefined && v.format !== "json")
+    throw new Fail("--format must be json", "api-anything result --help");
+  const r = getResult(pos[0]!, {
+    ...callView(v),
+    ...(v.offset !== undefined ? { offset: Number(v.offset) } : {}),
+    ...(v.format === "json" ? { format: "json" as const } : {}),
+  });
+  out(r);
+  if (!r.ok) process.stderr.write("next: check the resultId and continuation; expired results cannot be recovered\n");
+  return r.ok ? 0 : 1;
+}
+
 async function cmdCall({ v, pos }: Parsed): Promise<number> {
   const [site, name, ...rest] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything call --help");
   if (v["max-tier"] !== undefined && !/^[123]$/.test(v["max-tier"]))
     throw new Fail(`--max-tier must be 1, 2 or 3, got "${v["max-tier"]}"`, "pass --max-tier 1, 2 or 3");
+  const view = callView(v);
   let base: Record<string, unknown> = {};
   if (v.json) {
-    base = json(v.json, z.record(z.string(), z.unknown()), "json") ?? {};
+    if (v.json === "-") {
+      const text = await readInput();
+      try {
+        base = z.record(z.string(), z.unknown()).parse(JSON.parse(text));
+      } catch {
+        throw new Fail("--json - expects one JSON args object on stdin", "api-anything call --help");
+      }
+    } else base = json(v.json, z.record(z.string(), z.unknown()), "json") ?? {};
   }
   const args = { ...base, ...kv(rest) };
   // A shared site this machine lacks is fetched first, as MCP does: an agent with a shell finds it by name.
@@ -938,6 +1117,7 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     idempotencyKey: v["idempotency-key"],
     maxTier,
     ignoreCoolDown: v.force,
+    view,
   });
   out(pulled ? { ...r, pulled: site } : r);
   if (r.heal) process.stderr.write(healNote(site, name, r.heal));
@@ -966,6 +1146,11 @@ function cmdHeals({ pos }: Parsed): number {
   return 0;
 }
 
+function cmdStatus({ pos }: Parsed): number {
+  out(status(pos[0] ? requireSite(pos[0]).site.name : undefined));
+  return 0;
+}
+
 function cmdRevert({ pos }: Parsed): number {
   const [site, name] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything revert <site> <op>");
@@ -987,22 +1172,56 @@ function cmdRevert({ pos }: Parsed): number {
   }
 }
 
-async function cmdVerify({ pos }: Parsed): Promise<number> {
-  const names = pos[0] ? [requireSite(pos[0]).site.name] : listSites();
+/** The user's own specs: those in ~/.api-anything/sites, bundled and pulled ones aside. */
+function userSites(): string[] {
+  const dir = userSitesDir();
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.slice(0, -5))
+    .sort();
+}
+
+/**
+ * Exit 0 when every counted case passed, 1 when any failed (or a site could not be verified), 2 when
+ * the only non-passing cases were inconclusive. --strict exits 1 for an inconclusive case or a write
+ * whose preflight is not ok too; without it a preflight never sets the exit code, since nothing was
+ * sent to judge.
+ */
+async function cmdVerify({ v, pos }: Parsed): Promise<number> {
+  if (v.user && pos.length)
+    throw new Fail("--user takes no site names", "api-anything verify --user, or name the sites");
+  const names = pos.length ? pos.map((p) => requireSite(p).site.name) : v.user ? userSites() : listSites();
   const results: Record<string, unknown>[] = [];
   const proven: string[] = [];
+  const newlyFailing: string[] = [];
+  const recovered: string[] = [];
+  const failingSince: Record<string, string> = {};
   for (const name of names) {
     try {
-      const v = await verifySite(name);
-      results.push(...v.results.map((r) => ({ site: name, ...r, ok: "outcome" in r && r.outcome === "pass" })));
-      proven.push(...v.proven.map((op) => `${name}/${op}`));
+      const r = await verifySite(name);
+      results.push(
+        ...r.results.map((c) => ({
+          site: name,
+          ...c,
+          ok: "outcome" in c ? c.outcome === "pass" : "preflight" in c ? c.preflight.ok : false,
+        })),
+      );
+      proven.push(...r.proven.map((op) => `${name}/${op}`));
+      newlyFailing.push(...r.newlyFailing.map((op) => `${name}/${op}`));
+      recovered.push(...r.recovered.map((op) => `${name}/${op}`));
+      for (const [op, since] of Object.entries(r.failingSince)) failingSince[`${name}/${op}`] = since;
     } catch (e) {
       results.push({ site: name, ok: false, error: oneLine((e as Error).message) });
     }
   }
   const count = (o: string) => results.filter((r) => r.outcome === o).length;
-  const ok = results.every((r) => r.ok);
-  const own = pos[0] ? loadSite(pos[0]) : undefined;
+  const errors = results.filter((r) => r.error).length;
+  const unready = results.filter((r) => r.preflight && !r.ok).length;
+  const failed = count("fail") + errors > 0;
+  const inconclusive = count("inconclusive") > 0;
+  const ok = !failed && !inconclusive && (!v.strict || !unready);
+  const own = names.length === 1 ? loadSite(names[0]!) : undefined;
   // a site the user learned and just saw work is one others could use
   const share = ok && own?.source === "user" && !own.site.shared;
   out({
@@ -1012,20 +1231,30 @@ async function cmdVerify({ pos }: Parsed): Promise<number> {
       fail: count("fail"),
       inconclusive: count("inconclusive"),
       skipped: results.filter((r) => r.skipped).length,
+      preflight: results.filter((r) => r.preflight).length,
     },
     results,
     ...(proven.length ? { proven } : {}),
+    newlyFailing,
+    recovered,
+    failingSince,
     ...(share
       ? { next: `api-anything publish ${own.site.name} previews sharing it, so others need not learn it` }
       : {}),
   });
-  if (!ok)
+  if (failed)
     process.stderr.write(
-      count("fail")
-        ? "next: a failing case is a broken op or a wrong check: follow each failing case's own next hint once (change a check only when the site's own page answers its args the other way), then report what still fails\n"
-        : "next: an inconclusive case tested nothing: follow its next hint (login, or wait), then verify again\n",
+      "next: a failing case is a broken op or a wrong check: follow each failing case's own next hint once (change a check only when the site's own page answers its args the other way), then report what still fails\n",
     );
-  return ok ? 0 : 1;
+  else if (inconclusive)
+    process.stderr.write(
+      "next: an inconclusive case tested nothing: follow its next hint (login, or wait), then verify again\n",
+    );
+  else if (v.strict && unready)
+    process.stderr.write("next: a write's preflight found something a call would need first: follow its next hint\n");
+  if (failed) return 1;
+  if (inconclusive) return v.strict ? 1 : 2;
+  return v.strict && unready ? 1 : 0;
 }
 
 async function cmdCheck({ v, pos }: Parsed): Promise<number> {
@@ -1130,8 +1359,16 @@ function cmdSites(): number {
   return 0;
 }
 
-function cmdOps({ pos }: Parsed): number {
+function cmdOps({ pos, v }: Parsed): number {
   const { site } = requireSite(pos[0]);
+  if (v.schema) {
+    if (pos.length !== 2) throw new Fail("--schema needs <site> <op>", "api-anything ops <site> <op> --schema");
+    if (!site.operations.some((o) => o.name === pos[1]))
+      throw new Fail(`no operation "${pos[1]}" on ${site.name}`, `api-anything ops ${site.name}`);
+    out(describeOperation(site, pos[1]!));
+    return 0;
+  }
+  if (pos.length !== 1) throw new Fail("use <op> with --schema", `api-anything ops ${site.name} <op> --schema`);
   const notes = siteNotes(site.name);
   const about = (p: Operation["params"][number]) => [
     ...(p.description ? [p.description] : []),
@@ -1207,12 +1444,14 @@ async function cmdSearch({ pos }: Parsed): Promise<number> {
     ...(r.registryError ? { registryError: r.registryError } : {}),
     ...(r.matches.length ? { shared: SHARED_NOTE } : {}),
     next: !top
-      ? "nothing matched. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, search with that, which also finds unconfirmed ones; else learn it with api-anything learn"
+      ? "nothing matched. Broaden the query or check api-anything sites before learning. Words find only sites whose operations other installs confirmed: if you know the site's domain or a page URL, search with that, which also finds unconfirmed ones; else learn it with api-anything learn"
       : !top.operations.length && top.interfaces?.length
         ? `${top.domain} offers its own agent interface: ${top.interfaces.map((i) => `${i.kind} ${i.url}`).join(", ")}`
-        : top.installed
-          ? `check that ${top.domain} is the site meant, then api-anything ops ${top.site} lists its operations`
-          : `check that ${top.domain} is the site meant (a lookalike name can point elsewhere), then api-anything pull ${top.site} fetches it; read its warnings with the user before the first call`,
+        : r.matches.every((m) => m.unmatched.length)
+          ? `partial lexical matches, not guarantees for the unmatched constraints: check that ${top.domain} is the site meant, then api-anything ${top.installed ? "ops" : "pull"} ${top.site}; read its notes and warnings, then try the core capabilities or broaden the query before learning a new site`
+          : top.installed
+            ? `check that ${top.domain} is the site meant, then api-anything ops ${top.site} lists its operations`
+            : `check that ${top.domain} is the site meant (a lookalike name can point elsewhere), then api-anything pull ${top.site} fetches it; read its warnings with the user before the first call`,
   });
   return 0;
 }
@@ -1331,7 +1570,7 @@ async function cmdSetup({ v }: Parsed): Promise<number> {
   return r.ok ? 0 : 1;
 }
 
-async function cmdLearn({ v, pos }: Parsed): Promise<number> {
+async function cmdLearn({ v, pos, steps }: Parsed): Promise<number> {
   const trigger = pos[0];
   if (!trigger) throw new Fail("missing <trigger>", "api-anything learn --help");
   if ((v.from === undefined) !== (v.from2 === undefined))
@@ -1353,6 +1592,8 @@ async function cmdLearn({ v, pos }: Parsed): Promise<number> {
       ...(v.from && v.from2 ? { captures: [v.from, v.from2] as [string, string] } : {}),
       ...(v.fresh ? { fresh: true } : {}),
       ...(v.write ? { write: true } : {}),
+      ...(v.paging ? { paging: pagingOf(v.paging) } : {}),
+      ...(steps ? { steps } : {}),
     },
     { consent: process.stdin.isTTY && process.stderr.isTTY ? askYesNo : undefined },
   );
@@ -1414,14 +1655,20 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "paging",
     ],
   },
-  call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "force", "dry"] },
-  verify: { run: cmdVerify, flags: [] },
+  batch: { run: cmdBatch, flags: ["input", "concurrency", "limit", "max-tier"] },
+  call: {
+    run: cmdCall,
+    flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "force", "dry", "fields", "max-chars"],
+  },
+  result: { run: cmdResult, flags: ["offset", "fields", "max-chars", "format"] },
+  verify: { run: cmdVerify, flags: ["user", "strict"] },
   check: { run: cmdCheck, flags: ["expect", "purpose"] },
   readback: { run: cmdReadback, flags: ["find"] },
   sites: { run: cmdSites, flags: [] },
-  ops: { run: cmdOps, flags: [] },
+  ops: { run: cmdOps, flags: ["schema"] },
   heal: { run: cmdHeal, flags: [] },
   heals: { run: cmdHeals, flags: [] },
+  status: { run: cmdStatus, flags: [] },
   revert: { run: cmdRevert, flags: [] },
   export: { run: cmdExport, flags: ["out", "keep-examples", "force"] },
   search: { run: cmdSearch, flags: [] },
@@ -1448,6 +1695,8 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
       "from2",
       "fresh",
       "write",
+      "paging",
+      "steps",
     ],
   },
 };

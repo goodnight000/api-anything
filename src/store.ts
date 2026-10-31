@@ -1,16 +1,20 @@
 /**
  * Site specs (user dir, then pulled, then bundled), heal log, stale marks, remembered tiers, cool-downs,
- * the per-site send slots, and the write ledger.
+ * the per-site send slots, the write ledger, and the call log.
  */
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
+  closeSync,
   existsSync,
   linkSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -272,13 +276,27 @@ export function staleMark(site: string, op: string, now = Date.now()): StaleMark
   return m && m.until > now ? m : undefined;
 }
 
+const unkey = (k: string) => {
+  const i = k.indexOf("/");
+  return { site: k.slice(0, i), op: k.slice(i + 1) };
+};
+
 export function staleList(now = Date.now()): { site: string; op: string; until: number; reason: string }[] {
   return Object.entries(loadState().stale)
     .filter(([, m]) => m.until > now)
-    .map(([k, m]) => {
-      const i = k.indexOf("/");
-      return { site: k.slice(0, i), op: k.slice(i + 1), ...m };
-    });
+    .map(([k, m]) => ({ ...unkey(k), ...m }));
+}
+
+/** Every remembered escalation. */
+export function tierList(): { site: string; op: string; tier: 1 | 2 | 3 }[] {
+  return Object.entries(loadState().tier).map(([k, tier]) => ({ ...unkey(k), tier }));
+}
+
+/** Every cool-down that has not run out. */
+export function coolList(now = Date.now()): (CoolDown & { site: string })[] {
+  return Object.entries(loadState().cool)
+    .filter(([, c]) => c.until > now)
+    .map(([site, c]) => ({ site, ...c }));
 }
 
 /** The tier an op escalated to; undefined forgets it (the op's own minTier applies again). */
@@ -499,6 +517,111 @@ export function settleWrite(id: string, status: WriteStatus, outcome: { ok: bool
   }
 }
 
+/** The ledger's records, oldest first: of a site (and op) when named, since `since`; a corrupt ledger reads as empty. */
+export function loadWrites(o: { site?: string; op?: string; since?: number } = {}): WriteRecord[] {
+  let all: WriteRecord[];
+  try {
+    all = readJson<WriteRecord[]>(writesFile(), []);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(all)) return [];
+  return all.filter(
+    (r) =>
+      (o.site === undefined || r.site === o.site) &&
+      (o.op === undefined || r.op === o.op) &&
+      (o.since === undefined || r.at >= o.since),
+  );
+}
+
+/* --------------------------------------------------------------- call log */
+
+/**
+ * One finished call, in calls.jsonl, for `status`. Names, enums and numbers only: no args, data,
+ * reason or next, so nothing a site answered and nothing the caller typed is kept.
+ */
+export interface CallEntry {
+  site: string;
+  op: string;
+  class: string;
+  /** absent when nothing was sent (a cool-down's answer, refused input) */
+  tier?: 1 | 2 | 3;
+  ms: number;
+  healed?: true;
+  write?: WriteStatus;
+}
+export type CallRecord = CallEntry & { at: string };
+
+const KEEP_CALLS_MS = 7 * 24 * 60 * 60_000;
+// ~100 bytes a line: some 10,000 calls, a few a minute for a week
+const MAX_CALLS_BYTES = 1_000_000;
+const callsFile = () => join(home(), "calls.jsonl");
+
+const parseCalls = (text: string): CallRecord[] =>
+  text.split("\n").flatMap((l) => {
+    try {
+      const c = JSON.parse(l) as CallRecord;
+      return c && typeof c === "object" && typeof c.at === "string" ? [c] : [];
+    } catch {
+      return [];
+    }
+  });
+
+/** When the log's first line was written: a few bytes read, so each append can afford to ask. */
+function oldestCall(file: string): number | undefined {
+  const fd = openSync(file, "r");
+  try {
+    const buf = Buffer.alloc(80);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    const at = /"at":"([^"]+)"/.exec(buf.toString("utf8", 0, n))?.[1];
+    return at ? Date.parse(at) : undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Append one call. The file is rewritten only when it outgrows its cap or its first line is a day past
+ * the week kept, so a call pays for one short append. Never throws: the log is a hint, never the answer.
+ */
+export function appendCall(entry: CallEntry, now = Date.now()): void {
+  const file = callsFile();
+  try {
+    withLock(file, () => {
+      appendFileSync(file, `${JSON.stringify({ at: new Date(now).toISOString(), ...entry })}\n`, { mode: 0o600 });
+      const oldest = oldestCall(file);
+      const old = oldest !== undefined && now - oldest > KEEP_CALLS_MS + 24 * 60 * 60_000;
+      if (!old && statSync(file).size <= MAX_CALLS_BYTES) return;
+      let kept = parseCalls(readFileSync(file, "utf8"))
+        .filter((c) => now - Date.parse(c.at) < KEEP_CALLS_MS)
+        .map((c) => `${JSON.stringify(c)}\n`);
+      // still over the cap within the week: the newest half stays, so the next rewrite is far off
+      if (kept.join("").length > MAX_CALLS_BYTES) kept = kept.slice(-Math.floor(kept.length / 2));
+      writePrivate(file, kept.join(""));
+    });
+  } catch {
+    // a read-only home keeps no call log
+  }
+}
+
+/** The week's call log, oldest first; one site's or all. */
+export function loadCalls(site?: string, now = Date.now()): CallRecord[] {
+  let text: string;
+  try {
+    text = readFileSync(callsFile(), "utf8");
+  } catch {
+    return [];
+  }
+  return parseCalls(text).filter((c) => (!site || c.site === site) && now - Date.parse(c.at) < KEEP_CALLS_MS);
+}
+
+/**
+ * A write that was sent and whose landing nothing confirmed: accepted (its readback did not find it,
+ * or it has none), may_have_applied, or still "sending" (the process died mid-call).
+ */
+export const unconfirmedWrite = (r: WriteRecord) =>
+  r.status === "accepted" || r.status === "may_have_applied" || r.status === "sending";
+
 /* ----------------------------------------------------------------- export */
 
 /**
@@ -524,16 +647,26 @@ export function exportSite(
   const named: [string, string][] = [];
   const ips: string[] = [];
   spec.operations.forEach((op, i) => {
-    for (const slot of op.slots) {
-      const p = slot.param !== undefined ? op.params.find((x) => x.name === slot.param) : undefined;
-      if (!p) continue;
-      const typed = p.type !== "string" && slot.template === undefined && slot.at.at(-1)!.startsWith("json:");
-      try {
-        op.request = setAt(op.request, slot.at, typed ? null : (slot.template ?? `{${p.name}}`));
-      } catch {
-        /* position gone; leave it */
+    const strip = (request: Operation["request"], slots: Operation["slots"]) => {
+      const types = new Map(walk(request).map((l) => [JSON.stringify(l.at), l.type]));
+      for (const slot of slots) {
+        const p = slot.param !== undefined ? op.params.find((x) => x.name === slot.param) : undefined;
+        // a derived leaf holds what the example's lookup answered; every call looks it up again. It keeps
+        // its JSON type, which the value a call looks up is sent as.
+        const derived = () =>
+          types.get(JSON.stringify(slot.at)) === "number" ? 0 : slot.at[0]!.startsWith("path:") ? "0" : "";
+        if (!p && !slot.from) continue;
+        const typed = !!p && p.type !== "string" && slot.template === undefined && slot.at.at(-1)!.startsWith("json:");
+        try {
+          request = setAt(request, slot.at, p ? (typed ? null : (slot.template ?? `{${p.name}}`)) : derived());
+        } catch {
+          /* position gone; leave it */
+        }
       }
-    }
+      return request;
+    };
+    op.request = strip(op.request, op.slots);
+    for (const slot of op.slots) if (slot.from) slot.from.request = strip(slot.from.request, slot.from.slots);
     if (!o.keepExamples) for (const p of op.params) delete p.example;
     // a shape's keys can be user data; the picked fields' are in the pick already, and their types let
     // every caller of the copy tell a picked field that went
@@ -551,6 +684,14 @@ export function exportSite(
         `${where(leaf)} holds a literal credential (${n}); make it a session: ref, or list ${n} in the op's public names if the site ships it to everyone`,
       ]);
     }
+    op.slots.forEach((slot, j) => {
+      if (!slot.from) return;
+      for (const leaf of literalCredentials(slot.from.request, pub))
+        named.push([
+          `$.operations[${i}].slots[${j}].from.request`,
+          `$.operations[${i}].slots[${j}].from.request ${leaf.at.join(" > ")} holds a literal credential (${leafName(leaf.at)})`,
+        ]);
+    });
     for (const fill of signInFills(op.trigger.steps))
       named.push([`$.operations[${i}].trigger.steps`, `$.operations[${i}].trigger ${fill}`]);
     for (const leaf of walk(op.request)) {
