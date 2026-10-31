@@ -705,8 +705,35 @@ test("the shared rules check paging: a param of the read that goes in a slot, an
     ["many values", spec({}, { paging: { param: "q", next: "hits[*].cursor" } }), /paging next .* one value/],
     ["not a path", spec({}, { paging: { param: "q", next: "a..b" } }), /paging next "a\.\.b" is not a path/],
     ["long", spec({}, { paging: { param: "q", next: "a".repeat(201) } }), /paging next is 201 characters/],
+    [
+      "a regex past a path that is not one",
+      spec({}, { params: optional, paging: { param: "q", next: "a..b~page=(\\d+)" } }),
+      /paging next "a\.\.b" is not a path/,
+    ],
+    [
+      "a regex that backtracks",
+      spec({}, { params: optional, paging: { param: "q", next: "next~(a+)+$" } }),
+      /paging next regex \/\(a\+\)\+\$\/ nests a quantifier/,
+    ],
+    [
+      "a long regex",
+      spec({}, { params: optional, paging: { param: "q", next: `next~${"a".repeat(201)}` } }),
+      /paging next regex is 201 characters/,
+    ],
   ];
   for (const [what, s, re] of refused) assert.match(errors(s).join("\n"), re, what);
+});
+
+test("paging next may read the cursor out of a next-page URL (path~regex), as a pick does; the regex is checked", () => {
+  const optional = [{ name: "q", required: false }];
+  assert.deepEqual(
+    errors(spec({}, { params: optional, paging: { param: "q", next: "meta.next_page~[?&]page=([^&#]*)" } })),
+    [],
+  );
+  assert.throws(
+    () => spec({}, { params: optional, paging: { param: "q", next: "next~(" } }),
+    /regex after ~ in next must be valid/,
+  );
 });
 
 const postOp = (readback: Record<string, unknown>) => ({

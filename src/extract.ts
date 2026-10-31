@@ -130,11 +130,29 @@ export function splitPick(s: string): string[] {
   return out;
 }
 
+/** `path~regex` as its path and regex; the regex is everything after the first `~`. */
+export function splitRegex(p: string): { path: string; regex?: string } {
+  const cut = p.indexOf("~");
+  return cut < 0 ? { path: p } : { path: p.slice(0, cut), regex: p.slice(cut + 1) };
+}
+
 export function pickEntry(p: string): { name: string; path: string; re?: RegExp } {
   const [, name, rest] = /^([\w$-]+)=(.+)$/.exec(p) ?? [p, undefined, p];
-  const cut = rest.indexOf("~");
-  const path = cut < 0 ? rest : rest.slice(0, cut);
-  return { name: name ?? path, path, re: cut < 0 ? undefined : new RegExp(rest.slice(cut + 1)) };
+  const { path, regex } = splitRegex(rest);
+  return { name: name ?? path, path, re: regex === undefined ? undefined : new RegExp(regex) };
+}
+
+/** What `re`'s group 1 (or whole match) finds in a string; undefined for a non-string or no match. */
+const found = (v: unknown, re: RegExp) => {
+  const m = typeof v === "string" ? re.exec(v) : null;
+  return m ? (m[1] ?? m[0]) : undefined;
+};
+
+/** getPath, and with `path~regex` the part of the string there that the regex finds, as pick reads it. */
+export function getPathRegex(obj: unknown, p: string): unknown {
+  const { path, regex } = splitRegex(p);
+  const v = getPath(obj, path);
+  return regex === undefined ? v : found(v, new RegExp(regex));
 }
 
 /**
@@ -163,10 +181,7 @@ export function pick(value: unknown, paths: string[]): unknown {
     const out: Record<string, unknown> = {};
     for (const { name, steps, re } of named) {
       let v = atPath(item, steps);
-      if (re) {
-        const m = typeof v === "string" ? re.exec(v) : null;
-        v = m ? (m[1] ?? m[0]) : undefined;
-      }
+      if (re) v = found(v, re);
       if (v !== undefined) {
         if (name === "__proto__")
           Object.defineProperty(out, name, { value: v, enumerable: true, configurable: true, writable: true });
