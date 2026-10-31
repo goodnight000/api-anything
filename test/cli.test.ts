@@ -1130,6 +1130,84 @@ describe("checks: an op that must prove it works before it is shared", () => {
   });
 });
 
+describe("an --html recipe's empty selector: what a no-results page shows instead of the list", () => {
+  const items = '"items":"ul.users li.user","fields":{"name":"a.name"}';
+  const bare = `{${items}}`;
+  const told = `{${items},"empty":"p.no-results"}`;
+  before(async () => {
+    seed("cdir", {
+      url: `${fx.url}/dir?q=alice`,
+      exchanges: [await answered(1, "document", "/dir?q=alice"), await answered(2, "document", "/dir?q=nobody")],
+    });
+  });
+  const run = async (...args: string[]) => {
+    const r = await cli(...args);
+    return { ...r, out: JSON.parse(r.stdout) };
+  };
+
+  test("inspect: the page with the message is no results once the recipe names it; without it, a selector that matched nothing", async () => {
+    assert.equal((await run("inspect", "cdir", "2", "--html", bare)).code, 1);
+    const zero = await run("inspect", "cdir", "2", "--html", told);
+    assert.equal(zero.code, 0, zero.stdout);
+    assert.deepEqual(zero.out.data, []);
+    assert.match(zero.out.note, /"p\.no-results" is on the page, so this is a page with no results/);
+    // the hidden copy under a found list is not what the recipe is about
+    assert.deepEqual((await run("inspect", "cdir", "1", "--html", told)).out.data, [{ name: "alice" }]);
+  });
+
+  test("add takes it, a call for args with no match answers ok with [], and an empty check passes verify", async () => {
+    const without = await run(
+      "add",
+      "dir",
+      "find",
+      "--from",
+      "cdir",
+      "--pick-request",
+      "1",
+      "--example",
+      "q=alice",
+      "--html",
+      bare,
+    );
+    assert.equal(without.code, 0, without.stdout);
+    const none = await run("call", "dir", "find", "q=nobody");
+    assert.equal(none.out.class, "input", none.stdout);
+    assert.match(none.out.reason, /matched nothing/);
+    const check = await run("check", "dir", "find", "q=nobody", "--expect", "empty", "--purpose", "no such user");
+    assert.equal(check.code, 0, check.stdout);
+    const failed = await run("verify", "dir");
+    assert.equal(failed.code, 1, failed.stdout);
+    const fail = failed.out.results.find((r: { case: string }) => r.case === "check 1");
+    assert.equal(fail.outcome, "fail");
+    assert.match(fail.reason, /add find again with the same --html recipe plus "empty": "<css of that element>"/);
+
+    const told2 = await run(
+      "add",
+      "dir",
+      "find",
+      "--from",
+      "cdir",
+      "--pick-request",
+      "1",
+      "--example",
+      "q=alice",
+      "--html",
+      told,
+    );
+    assert.equal(told2.code, 0, told2.stdout);
+    assert.equal(
+      JSON.parse(readFileSync(join(HOME, "sites", "dir.json"), "utf8")).operations[0].response.html.empty,
+      "p.no-results",
+    );
+    const empty = await run("call", "dir", "find", "q=nobody");
+    assert.deepEqual([empty.out.ok, empty.out.class, empty.out.data], [true, "ok", []], empty.stdout);
+    assert.deepEqual((await run("call", "dir", "find", "q=bob")).out.data, [{ name: "bob" }]);
+    const verify = await run("verify", "dir");
+    assert.equal(verify.code, 0, verify.stdout);
+    assert.deepEqual(verify.out.counts, { pass: 2, fail: 0, inconclusive: 0, skipped: 0 });
+  });
+});
+
 describe("login from a cookies file", () => {
   const saved = process.env.API_ANYTHING_BROWSER;
   before(() => {

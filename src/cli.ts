@@ -58,6 +58,7 @@ import {
   readbackName,
   TriggerStepSchema,
 } from "./spec.js";
+import { status } from "./status.js";
 import { exportSite, listSites, loadHeals, loadSite, siteNotes, updateSite } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { readbackProblems, SHARED_NOTE } from "./vet.js";
@@ -143,7 +144,8 @@ const HELP: Record<string, string> = {
   --extract <path>  dot/bracket path into the response; [*] collects from every array item (sections[*].items)
   --pick a,b.c,name=x.y  fields kept per item; name=path renames the key, name=path~regex keeps regex group 1
   --html <json>   {"items":"<css>","fields":{"name":"<css>[@attr]"}} for server-rendered pages;
-                  "all:<css>[@attr]" returns every match as a list (genres, tags)
+                  "all:<css>[@attr]" returns every match as a list (genres, tags); "empty":"<css>" names the
+                  element a page with no results shows instead of the list, so such a page answers []
   --embedded <regex>  JSON inside the page: group 1 marks where the JSON value starts; then --extract
   --public <name,...>  a header, or a credential-like field such as api_key, whose value is the same for every
                   visitor (a web app's bearer): kept literal unless the value is in a cookie or the page's
@@ -165,7 +167,8 @@ const HELP: Record<string, string> = {
                   its paging and its readback.
   Output: preview (what a call returns, from the captured response), warnings (read them), captures.
   replaced: an op of that name was learned again. unproven: example 2 was answered with example 1's
-  data, so nothing shows the server reads those params (publish refuses the op until it does).
+  data, or (example 2 changing several params of a read) one of them sent alone in example 1's args was,
+  so nothing shows the server reads those params (publish refuses the op until it does).
   An op whose captured response is a bot challenge, a sign-in page, a rate limit or a server failure
   is not saved.`,
   call: `api-anything call <site> <op> [k=v ...] [--json <args-object>] [--allow-writes] [--again] [--idempotency-key <k>] [--max-tier 1|2|3] [--force] [--dry]
@@ -217,6 +220,14 @@ const HELP: Record<string, string> = {
   Lists the last 20 heals and reverts (of one site, or all), newest first: when, which op, how (rescan,
   recapture, revert) and what changed in its request template, one line each, with {param} and
   cookie:/session: refs in place of values. A call that heals says the same in its heal field.`,
+  status: `api-anything status [site]
+  What this machine knows of each op's health, from local files only (nothing is sent): a site's
+  cool-down, an op's stale mark, the tier calls start at (remembered) beside the op's own (minTier),
+  its last heal, its last verify outcome, its writes of the last 24 h by what each did, and from the
+  call log (calls.jsonl, a week kept) the calls of the last 24 h and 7 days: count, ok rate, tiers,
+  heals, median ms, and the last call's class. degraded: the last 24 h ran at a higher tier, or with
+  an ok rate 20 points lower, than the 6 days before. problems lists each one with its next step.
+  Without a site: every site with something on record here.`,
   revert: `api-anything revert <site> <op>
   Puts back the op as it was before its last heal (heals.jsonl keeps it), and logs the revert; run it
   again to take back the heal before that. Refused when the op has no heal to take back, or changed
@@ -253,7 +264,7 @@ const HELP: Record<string, string> = {
   refuses an op holding a live cookie or session value, or failing its checks. --yes sends them, signed
   with this install's key; an op that needed a login or writes is reviewed before others get it.`,
   mcp: `api-anything mcp [--allow-writes] [--sites a,b] [--print-config] [--no-learn]
-  Serves list_sites, find_sites, list_operations, call_operation, get_job, login and learn_site over
+  Serves list_sites, find_sites, list_operations, call_operation, get_job, site_status, login and learn_site over
   stdio MCP, and call_write_operation with --allow-writes. list_operations and call_operation pull a
   shared site an agent asks for, with its reads only: its writes need a human's api-anything pull. Its
   login only refreshes a session a human imported here. A call still running after about 25 s answers
@@ -311,7 +322,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything check <site> <op> [k=v ...] --expect result|empty|input
   api-anything readback <site> <write-op> <read-op> [k=v ...] [--find field=value]
   api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site>
-  api-anything heals [site] | revert <site> <op>
+  api-anything heals [site] | revert <site> <op> | status [site]
   api-anything mcp [--allow-writes] [--sites a,b] [--print-config]
 
 api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
@@ -715,8 +726,9 @@ function cmdInspect({ v, pos }: Parsed): number {
     data = extract({ format: "html", html }, body, e.request.url);
     if (!(data as unknown[]).length) {
       // a results page with no results is an answer, as a call would give it; a selector that is not there is not
-      if (!emptyResults(body, html.items)) throw nothing(`the --html items selector "${html.items}" matched nothing`);
-      note = `no items: the container of "${html.items}" is on the page and empty, so this is a page with no results`;
+      const why = emptyResults(body, html);
+      if (!why) throw nothing(`the --html items selector "${html.items}" matched nothing`);
+      note = `no items: ${why}, so this is a page with no results`;
     } else if (!htmlFinds(html, data as Parameters<typeof htmlFinds>[1])) {
       const fields = Object.keys(html.fields).join(", ");
       throw nothing(
@@ -967,6 +979,11 @@ function cmdHeals({ pos }: Parsed): number {
       ...(h.strategy !== "revert" && !previous ? { revertible: false } : {}),
     }));
   out({ ok: true, heals });
+  return 0;
+}
+
+function cmdStatus({ pos }: Parsed): number {
+  out(status(pos[0] ? requireSite(pos[0]).site.name : undefined));
   return 0;
 }
 
@@ -1434,6 +1451,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   ops: { run: cmdOps, flags: ["schema"] },
   heal: { run: cmdHeal, flags: [] },
   heals: { run: cmdHeals, flags: [] },
+  status: { run: cmdStatus, flags: [] },
   revert: { run: cmdRevert, flags: [] },
   export: { run: cmdExport, flags: ["out", "keep-examples", "force"] },
   search: { run: cmdSearch, flags: [] },

@@ -54,9 +54,13 @@ regex's group 1 finds (`publicId=navigationUrl~/in/([^/?]+)`), and `[*]` in a pa
 are used, so its params stay. From a capture made with other values, pass those with `--example`.
 For a server-rendered page, use
 `--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page.
+An `--html` recipe may add `"empty":"<css>"`, the element a page with no results shows instead of
+the list (`p.SearchResults-emptyContentMessage` on pkg.go.dev): a call whose items match nothing
+while that element is shown answers `data: []`.
 `inspect` accepts the same recipe flags (`--extract`, `--pick`, `--html`, `--embedded`), so you can
 try a recipe first: it exits non-zero when a path or selector finds nothing. An `--html` items
-container that is on the page and empty is a page with no results: `data: []`, with a `note`.
+container that is on the page and empty, or the recipe's `empty` element shown on it, is a page
+with no results: `data: []`, with a `note`.
 
 In `capture`'s output, `pageStatus` is the page's own HTTP error when a request it loaded is
 recommended all the same, and `blocked` is the bot challenge the site served.
@@ -69,7 +73,10 @@ second capture of the page, made with its values: `--from2 <capture2> --example2
 a server failure: log in (`api-anything login <site>`) or wait, then add again. When example 2 is
 answered with example 1's data, the op is saved with a warning and marked `unproven`: the server may
 not read those params at all (it goes by a cookie or the IP). Pick an example 2 that excludes
-something example 1 returned, such as another place or a filter value one of its rows fails.
+something example 1 returned, such as another place or a filter value one of its rows fails. When
+example 2 changes more than one param of a read, `add` also sends one read per changed param
+(example 1's args with only that value from example 2) and marks `unproven` only the params whose
+read answered example 1's data again: a `page` the server ignores is caught beside a `q` it reads.
 
 `--enum name=a,b,c` lists the values a param takes (the site's whole set, such as a picker's
 options), and `--min name=n` / `--max name=n` bound a numeric one. A call with another value is
@@ -168,6 +175,34 @@ Transport tiers, cheapest first. The lowest tier that worked is remembered for e
 | 2 | `fetch()` inside a real Chrome page on the site | tier 1 is `blocked` |
 | 3 | run the trigger in Chrome and read the site's own response | per-request signatures, a failed heal (reads only) |
 
+### Health: `api-anything status [site]`
+
+An op can keep working and still be in trouble: an escalation to tier 3 is remembered for good, so
+a read that took 4 ms can take 700 ms and a browser launch on every call while `ops` still says
+nothing. `status` shows what this machine knows of each op, from local files only. It sends
+nothing and needs no browser. Output is one line of JSON:
+
+- per site, `cooling` `{class, until, reason}` while calls answer without sending;
+- per op, `stale` `{until, reason}`, `tier` `{remembered, minTier}`, `lastHeal` `{at, strategy}`,
+  `lastVerify` `{at, outcome, current}` (`current: false`: the op changed after that verify),
+  `writes` (the ledger's writes of the last 24 h, counted by `accepted`, `applied`,
+  `mayHaveApplied`, `notApplied` and `notSent`), and `calls`: for the last `24h` and `7d`, the
+  count, the `ok` rate, the `tiers` that answered, `heals` and `medianMs`, and the `last` call's
+  class;
+- `degraded` on an op whose last 24 h ran mostly at a higher tier, or with an ok rate 20 points
+  lower, than the 6 days before (3 calls in each window at least);
+- `problems`, each `{site, op, problem, detail, next}`: `cooling`, `stale`, `escalated` (a read
+  remembered above its own tier; `next` calls it once with `--max-tier` at that tier, and an
+  answer there forgets the escalation), `degraded`, `failing` (the last call failed for a reason
+  other than its args), `verify` (the last verify on this version failed), `write` (a write may
+  have gone through). `next` is phrased as a call's `next`.
+
+With a site, every op is listed. Without one, only the sites with something on record here, and
+only the ops with something to say: a passing verify alone is not listed. The call history comes
+from `~/.api-anything/calls.jsonl`, one line per finished call: time, site, op, class, tier, ms,
+whether it healed and what a write did. It holds no args, no data and no reason text, and is kept a
+week.
+
 ## Logging in
 
 For sites that need an account, one command signs you in:
@@ -247,6 +282,7 @@ Chrome, Arc, Brave, Edge, Chromium and Firefox are supported on macOS and Linux.
 | `call_operation` | call a read; a write op is refused and nothing is sent | read-only, idempotent |
 | `call_write_operation` | call a write, with `again` and `idempotencyKey`; only with `--allow-writes` | destructive, not idempotent |
 | `get_job` | wait up to 25 s for a pending call's result | read-only |
+| `site_status` | what `api-anything status` prints, with each problem's `next` in MCP terms | read-only, local |
 | `login` | refresh a session from the profile chosen with the CLI, or open a window to sign in by hand | changes the local session only |
 
 - `--sites goodreads,hacker-news` also serves each operation of those sites as a tool of its own,
@@ -401,7 +437,11 @@ Known limits:
 - "Not found" is detected by replaying the op's example args, so a spec without examples reports
   missing data as `drift`. An empty result is `ok` with `[]` when the page shows it structurally:
   an empty JSON list at the extract path, or, for `--html`, an items selector written as
-  `"<container> <item>"` whose container is on the page with no item-tag element in it. A list
+  `"<container> <item>"` whose container is on the page with no item-tag element in it, or the
+  recipe's `empty` element shown on the page. A no-results page that drops the list and shows a
+  message instead needs `empty`; without it the call is `input` ("selector matched nothing", since
+  the example args still answer), and an `--expect empty` check fails with a reason that says so.
+  A message the site shows for another reason too (an error it styles the same way) reads as `[]`. A list
   that `--pick` empties (no item has a picked field), or `--html` items with none of their fields
   found, is missing data, not `[]`: the site may have renamed them. So is a picked field the op
   learned with a type (not `null`) that no item carries now, or none with that type: when the
@@ -424,8 +464,12 @@ Known limits:
 - Two examples that the site answers with the same data mark the op `unproven`, which may be a
   false alarm (two places with the same stores). `publish` refuses it until a re-add with a better
   example 2, or until `verify` sees two passing cases that differ only in those params answer
-  differently. A param the server ignores is not caught when the two answers differ for another
-  reason (a timestamp, a shuffled order).
+  differently. When example 2 changes several params of a tier-1 read, each is also sent alone in
+  example 1's args, so a param the server ignores beside one it reads is caught; one read per
+  changed param, at the site's pace. A param the server ignores is still not caught when the two
+  answers differ for another reason (a timestamp, a shuffled order), when the op needs a browser
+  (tier 3, whose per-param reads would not answer), or when example 2 changes only that param and
+  the two answers happen to differ anyway.
 - Chrome locks its profile to one process. An MCP server releases it after 3 s idle; another
   process waits up to 15 s for it, then fails with a hint.
 - Optional request structure (a reply block that only some calls have) needs a separate op.

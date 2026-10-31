@@ -304,6 +304,7 @@ describe("e2e", { skip: !browserAvailable() && "no Chromium browser installed" }
         "list_operations",
         "list_sites",
         "login",
+        "site_status",
       ]);
       assert.equal(tools.tools.find((t) => t.name === "call_operation")?.annotations?.readOnlyHint, true);
       // the agent is told which sites it can call before it picks web search

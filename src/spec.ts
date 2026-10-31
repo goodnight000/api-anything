@@ -101,7 +101,12 @@ function validRegex(p: string): boolean {
   }
 }
 
-export const HtmlRecipeSchema = z.object({ items: z.string(), fields: z.record(z.string(), z.string()) });
+export const HtmlRecipeSchema = z.object({
+  items: z.string(),
+  fields: z.record(z.string(), z.string()),
+  /** the element a page with no results shows instead of the list; on the page, a call answers [] */
+  empty: z.string().optional(),
+});
 
 export const ResponseSchema = z.object({
   format: z.enum(["json", "html", "embedded"]).default("json"),

@@ -210,6 +210,16 @@ async function runCases(name: string, op: Operation, opts: CallOptions): Promise
     const j = judgeCase(expect, r);
     if (j.outcome === "pass" && (j.got === "result" || j.got === "empty"))
       answers.push({ args, data: JSON.stringify(r.data ?? null) });
+    // A no-results page with no list to find empty (a message where the list was) reads as a selector
+    // that matched nothing: the recipe can name the message.
+    const unnamed =
+      expect === "empty" &&
+      j.outcome === "fail" &&
+      (j.got === "input" || j.got === "drift") &&
+      op.response.html &&
+      !op.response.html.empty
+        ? `; if the page says there are no results in an element of its own, add ${op.name} again with the same --html recipe plus "empty": "<css of that element>"`
+        : "";
     results.push({
       op: op.name,
       case: label,
@@ -218,7 +228,9 @@ async function runCases(name: string, op: Operation, opts: CallOptions): Promise
       ...(check ? { args: check.args, ...(check.purpose ? { purpose: check.purpose } : {}) } : {}),
       ...(r.tier ? { tier: r.tier } : {}),
       ...(r.healed ? { healed: true } : {}),
-      ...(j.outcome !== "pass" ? { reason: r.reason ?? `answered ${j.got}, expected ${expect}`, next: r.next } : {}),
+      ...(j.outcome !== "pass"
+        ? { reason: `${r.reason ?? `answered ${j.got}, expected ${expect}`}${unnamed}`, next: r.next }
+        : {}),
       ms: r.ms,
     });
     if (op.paging && label === "example") results.push(await nextPageCase(op, args, r, send));

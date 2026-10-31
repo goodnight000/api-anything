@@ -14,8 +14,8 @@ cookies stay on this machine, under `~/.api-anything` (`API_ANYTHING_HOME` overr
 catalog holds operations people's agents learned from public pages.
 
 Over MCP the agent has `find_sites`, `list_operations`, `call_operation`, `learn_site`, `list_sites`,
-`get_job` and `login`. With a shell, the CLI is `api-anything` (or `npx -y api-anything`): `search`, `ops`, `call`,
-`learn` and `sites` do the same, and its output is one line of JSON. A failure also prints a `next:`
+`get_job`, `site_status` and `login`. With a shell, the CLI is `api-anything` (or `npx -y api-anything`): `search`, `ops`, `call`,
+`learn`, `status` and `sites` do the same, and its output is one line of JSON. A failure also prints a `next:`
 line on stderr. `list_operations` gives each op's args as a JSON Schema (`inputSchema`).
 `call_operation` sends only reads; a server started with `--allow-writes` also has
 `call_write_operation`, the only tool that sends a write, which takes `again` and `idempotencyKey`. A
@@ -109,7 +109,8 @@ the user.
 4. No results look like this:
    - `ok: true` with `data: []` when the page shows it's empty: a JSON op's list at the extract
      path is empty, an `--embedded` op's extract resolves to `[]`, or an `--html` op whose items
-     selector is `"<container> <item>"` finds the container with no element of the item's tag in it.
+     selector is `"<container> <item>"` finds the container with no element of the item's tag in it,
+     or whose recipe's `empty` element is shown on the page.
    - Otherwise (the list or selector is simply missing) api-anything replays the op's example
      args once: if those still return data, the answer is `ok: false`, `class: "input"`, "no
      results for these args ... the operation works". Treat that as "nothing found" for these
@@ -245,7 +246,9 @@ don't capture pages the user didn't ask for.
    - For a server-rendered page, use
      `--html '{"items":"ul.results li.result","fields":{"title":"a","url":"a@href"}}'` or
      `--embedded '<regex>'`. Write `items` as `"<container> <item>"` when the results sit in a
-     stable container: a results page with the container and no items then reads as `[]`.
+     stable container: a results page with the container and no items then reads as `[]`. When
+     the no-results page drops the list and shows a message instead, add `"empty":"<css>"` naming
+     that message's element to the recipe (`inspect` a capture of such a page to find it).
    - A header that carries a public constant (a web app's shared bearer, the same for every
      visitor) can stay literal with `--public authorization`. Only do this when it is not the user's.
    - Check `preview` in the output: it is what a call returns, judged on the captured response. If

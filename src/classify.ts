@@ -1,7 +1,17 @@
 /** Classify every response, never by status code alone. See DESIGN.md "Failure classifier". */
 import { type HTMLElement, parse as parseHtml } from "node-html-parser";
 import { templateRefs } from "./codec.js";
-import { extract, extractEmbedded, extractHtml, getPath, inferShape, parseBody, pick, pickEntry } from "./extract.js";
+import {
+  extract,
+  extractEmbedded,
+  extractHtml,
+  getPath,
+  inferShape,
+  parseBody,
+  parseShown,
+  pick,
+  pickEntry,
+} from "./extract.js";
 import { siteOf } from "./session.js";
 import type { Operation, ResponseSpec } from "./spec.js";
 
@@ -207,20 +217,23 @@ function containerOf(selector: string): { container: string; item: string } | un
 }
 
 /**
- * A results page with no results: the items' container is on the page and holds nothing of the
- * items' tag (any element, when the selector names no tag). Items there under another class
- * are a renamed selector (drift), not zero results.
+ * Why this is a results page with no results, or undefined when nothing shows it is one: the recipe's
+ * `empty` element is shown on the page, or the items' container is on the page and holds nothing of
+ * the items' tag (any element, when the selector names no tag). Items there under another class are
+ * a renamed selector (drift), not zero results.
  */
-export function emptyResults(body: string, items: string): boolean {
-  const parts = containerOf(items);
-  if (!parts) return false;
+export function emptyResults(body: string, recipe: { items: string; empty?: string }): string | undefined {
   try {
+    // shown, as the items are: a no-results message a page keeps hidden under its list says nothing
+    if (recipe.empty && parseShown(body).querySelector(recipe.empty)) return `"${recipe.empty}" is on the page`;
+    const parts = containerOf(recipe.items);
+    if (!parts) return undefined;
     const box = parseHtml(body).querySelector(parts.container);
-    if (!box) return false;
+    if (!box) return undefined;
     const tag = /^[a-z][a-z0-9-]*/i.exec(parts.item)?.[0];
-    return !box.querySelector(tag ?? "*");
+    return box.querySelector(tag ?? "*") ? undefined : `the container of "${recipe.items}" is on the page and empty`;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -749,7 +762,7 @@ function classifyResponse(
     const items = extractHtml(body, op.response.html);
     if (htmlFinds(op.response.html, items)) return ok();
     if (loginPage(body)) return is("auth", "login page instead of content");
-    if (emptyResults(body, op.response.html.items)) return ok("no results");
+    if (emptyResults(body, op.response.html)) return ok("no results");
     const fields = Object.keys(op.response.html.fields).join(", ");
     return missing(
       items.length

@@ -33,6 +33,7 @@ import { registerLearn } from "./mcp-learn.js";
 import { type Pulled, pull, search } from "./registry.js";
 import { settle } from "./report.js";
 import { type Operation, type Paging, readbackName } from "./spec.js";
+import { status } from "./status.js";
 import { listSites, loadSite, siteNotes } from "./store.js";
 import { SHARED_NOTE } from "./vet.js";
 
@@ -672,6 +673,23 @@ export function createServer({
       const r = await jobs.wait(job, waitMs);
       return "result" in r ? r.result : pending(r.job);
     },
+  );
+
+  server.registerTool(
+    "site_status",
+    {
+      description:
+        "This machine's record of how a site's operations have been doing, from local files only (nothing is sent): a cool-down, stale marks, the tier calls start at beside the op's own, the last heal and verify, writes of the last 24 h, and calls of the last 24 h and 7 days (count, ok rate, tiers, median ms). problems lists what needs a step, each with its next. Without site: every site with something on record. Use it when calls got slow or keep failing.",
+      inputSchema: { site: z.string().optional().describe("site name from list_sites") },
+      annotations: LOCAL_HINTS,
+    },
+    ({ site }: { site?: string }) =>
+      guard(async () => {
+        const found = site ? loadSite(site) : undefined;
+        if (site && !found) return reply({ ok: false, error: `no site "${site}"`, next: "list_sites" }, true);
+        const s = status(found?.site.name);
+        return reply({ ...s, problems: s.problems.map((p) => ({ ...p, next: mcpNext(p.next) })) });
+      }),
   );
 
   server.registerTool(

@@ -74,6 +74,34 @@ describe("add: what it refuses to save, and what it doubts", () => {
     assert.deepEqual(loadSite("stores")!.site.operations[0]!.unproven, r.operation.unproven);
   });
 
+  test("example 2 changing two params: each is sent alone, and only the one that leaves the answer alone is unproven", async () => {
+    const from = { capture: await captureOf(fx, "/stores?city=Sydney&open=yes", "/api/stores?city=Sydney&open=yes") };
+    const from2 = await captureOf(fx, "/stores?city=Hobart&open=no", "/api/stores?city=Hobart&open=no");
+    const before = fx.calls.length;
+    const r = await addOperation({
+      site: "stores-filter",
+      op: "near",
+      examples: [
+        { city: "Sydney", open: "yes" },
+        { city: "Hobart", open: "no" },
+      ],
+      from,
+      from2,
+      response: { extract: "stores" },
+    });
+    // open=no answered one store to example 1's two, so the whole-answer check sees nothing
+    assert.deepEqual(r.operation.unproven?.params, ["city"]);
+    assert.match(r.operation.unproven!.reason, /example 1's args with only city=Hobart from example 2 was answered/);
+    const w = r.warnings.find((x) => /example 1's data/.test(x));
+    assert.ok(w, r.warnings.join(" | "));
+    assert.match(w, /may not read city from this request/);
+    assert.match(w, /example 2 whose city alone excludes something example 1 returned/);
+    // one tier-1 read per changed param, each example 1's args with that one value from example 2
+    const probes = fx.calls.slice(before).map((c) => c.path);
+    assert.deepEqual(probes.sort(), ["/api/stores?city=Hobart&open=yes", "/api/stores?city=Sydney&open=no"]);
+    assert.deepEqual(loadSite("stores-filter")!.site.operations[0]!.unproven, r.operation.unproven);
+  });
+
   test("examples answered with different data prove nothing is ignored: no mark", async () => {
     const r = await addOperation({
       site: "scoped",

@@ -4,7 +4,7 @@
  */
 import { join } from "node:path";
 import { atStep, browserAvailable, PageUnreachable, ProfileInUse, runTrigger, waitReport } from "./browser.js";
-import { botWall, type Class, judge, pickedShape } from "./classify.js";
+import { botWall, type Class, judge, type Observed, pickedShape } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { capOutput, extract } from "./extract.js";
@@ -780,17 +780,52 @@ function resolves(spec: ResponseSpec, body: string | undefined): boolean {
   }
 }
 
+/** The data the op's recipe reads from an answer, as JSON; undefined when it is no data, or empty. */
+function answerOf(op: Operation, r: Observed | undefined): string | undefined {
+  if (!r) return undefined;
+  const j = judge(op, r);
+  if (j.class !== "ok" || j.data === undefined || j.data === null || (Array.isArray(j.data) && !j.data.length))
+    return undefined;
+  return JSON.stringify(j.data);
+}
+
+const observed = (e: Exchange | undefined): Observed | undefined =>
+  e?.response
+    ? { status: e.response.status, headers: e.response.headers, body: e.response.body ?? "", url: e.request.url }
+    : undefined;
+
 /** Both runs answered, through the op's recipe, with the same data, and it is not empty. */
 function sameAnswer(op: Operation, run1: Exchange, run2: Exchange | undefined): boolean {
-  const data = (e: Exchange | undefined) => {
-    const r = e?.response;
-    if (!e || !r) return undefined;
-    const j = judge(op, { status: r.status, headers: r.headers, body: r.body ?? "", url: e.request.url });
-    return j.class === "ok" ? j.data : undefined;
-  };
-  const one = data(run1);
-  if (one === undefined || one === null || (Array.isArray(one) && !one.length)) return false;
-  return JSON.stringify(one) === JSON.stringify(data(run2));
+  const one = answerOf(op, observed(run1));
+  return one !== undefined && one === answerOf(op, observed(run2));
+}
+
+/**
+ * The params among `changed` whose value from example 2, sent alone in example 1's args, left the
+ * answer as example 1's: one tier-1 read per param, at the site's pace. A probe that does not answer
+ * ok says nothing, so its param is not named. Reads only: a write is never sent to learn it.
+ */
+async function ignoredAlone(
+  op: Operation,
+  ex1: Args,
+  ex2: Args,
+  changed: string[],
+  run1: Exchange,
+  session: Session,
+  opts: { site: string; fetchImpl?: typeof fetch },
+): Promise<string[]> {
+  const one = answerOf(op, observed(run1));
+  if (one === undefined) return [];
+  const ignored: string[] = [];
+  for (const k of changed) {
+    try {
+      const sent = await send(op, { ...ex1, [k]: ex2[k] }, session, opts);
+      if (answerOf(op, sent) === one) ignored.push(k);
+    } catch {
+      /* a probe that failed proves nothing */
+    }
+  }
+  return ignored;
 }
 
 function previewOf(data: unknown): AddResult["preview"] {
@@ -1141,14 +1176,31 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
 
   // The second run proves its args reach the request, not that the server reads them there.
   const changed = Object.keys(ex1).filter((k) => ex2?.[k] !== undefined && asText(ex2[k]) !== asText(ex1[k]));
-  if (ex2 && changed.length && operation.readOnly && sameAnswer(operation, learned.exchange, learned.exchange2)) {
-    const reason = `example 2 (${changed.map((k) => `${k}=${asText(ex2[k])}`).join(", ")}) was answered with example 1's data`;
-    operation = { ...operation, unproven: { params: changed, reason } };
-    warnings.push(
-      `${reason}: the server may not read ${changed.join(", ")} from this request (it may go by a cookie, the IP or the page it was loaded from). ` +
-        "If the two examples just have the same answer, add it again with an example 2 that excludes something example 1 returned (another place, a filter value one of its rows fails). " +
-        `Until then publish refuses ${operation.name}`,
-    );
+  if (ex2 && changed.length && operation.readOnly) {
+    const values = (ks: string[]) => ks.map((k) => `${k}=${asText(ex2[k])}`).join(", ");
+    let doubted: string[] = [];
+    let reason = "";
+    if (sameAnswer(operation, learned.exchange, learned.exchange2)) {
+      doubted = changed;
+      reason = `example 2 (${values(changed)}) was answered with example 1's data`;
+    } else if (changed.length > 1 && operation.minTier === 1) {
+      // Two answers that differ because one param changed hide another the server ignores (a `page`
+      // next to a `q`): each changed param is sent alone in example 1's args, and must change the answer by itself.
+      doubted = await ignoredAlone(operation, ex1, ex2, changed, learned.exchange, session, {
+        site: i.site,
+        fetchImpl: i.fetchImpl,
+      });
+      if (doubted.length)
+        reason = `example 1's args with only ${values(doubted)} from example 2 ${doubted.length > 1 ? "were" : "was"} answered with example 1's data`;
+    }
+    if (doubted.length) {
+      operation = { ...operation, unproven: { params: doubted, reason } };
+      warnings.push(
+        `${reason}: the server may not read ${doubted.join(", ")} from this request (it may go by a cookie, the IP or the page it was loaded from). ` +
+          `If the two examples just have the same answer, add it again with an example 2 whose ${doubted.join(", ")} alone excludes something example 1 returned (another place, a filter value one of its rows fails). ` +
+          `Until then publish refuses ${operation.name}`,
+      );
+    }
   }
 
   const again = captures[0] ?? i.from?.capture.id;
