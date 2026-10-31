@@ -593,7 +593,7 @@ export function appendCall(entry: CallEntry, now = Date.now()): void {
       writePrivate(file, kept.join(""));
     });
   } catch {
-    // ponytail: a read-only home keeps no call log
+    // a read-only home keeps no call log
   }
 }
 
