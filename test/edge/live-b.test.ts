@@ -227,6 +227,8 @@ describe("conditional request headers", () => {
         htmlDoc(url, "<ul><li class=r>playwright</li></ul>", 200, {
           "if-none-match": 'W/"25f941cd5c0f1f789be9542912883d9d"',
           "if-modified-since": "Sat, 26 Sep 2026 10:00:00 GMT",
+          "available-dictionary": ":LDc0b2iP+9RgaJH1dyRH56w7XULrnGMC7bMK1IrRL28=:",
+          "dictionary-id": '"d1"',
         }),
       ],
       examples: [{ q: "playwright" }],
@@ -237,6 +239,9 @@ describe("conditional request headers", () => {
     }).operation;
     assert.equal(op.request.headers["if-none-match"], undefined);
     assert.equal(op.request.headers["if-modified-since"], undefined);
+    // the learning browser's cached compression dictionary: a replay that names it may get a body it can't decode
+    assert.equal(op.request.headers["available-dictionary"], undefined);
+    assert.equal(op.request.headers["dictionary-id"], undefined);
   });
 
   describe("capture then add (the SKILL flow) on a site with stable ETags", {
