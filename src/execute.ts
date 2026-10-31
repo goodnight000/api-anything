@@ -114,6 +114,11 @@ export interface CallOptions {
   onAnswered?: (op: Operation) => void;
   /** send even while the site cools down after a rate limit or a block (CLI --force); only when the user asks. Succeeding ends it */
   ignoreCoolDown?: boolean;
+  /**
+   * @internal `verify`'s: heal a read that drifted even while it is marked stale or healed minutes ago,
+   * as `api-anything heal` does. The stored template is still sent first; only the guard is skipped
+   */
+  ignoreStale?: boolean;
 }
 
 export type { WriteStatus };
@@ -776,8 +781,9 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
   }
 
   let guard: string | undefined;
-  const stale = staleMark(ctx.site, op.name);
-  const healedAt = lastHealAt(ctx.site, op.name);
+  // verify is the explicit check: its drift heals (and a heal that saves clears the mark)
+  const stale = ctx.opts.ignoreStale ? undefined : staleMark(ctx.site, op.name);
+  const healedAt = ctx.opts.ignoreStale ? undefined : lastHealAt(ctx.site, op.name);
   if (stale) guard = `stale until ${new Date(stale.until).toISOString()}: ${stale.reason}`;
   else if (healedAt !== undefined && Date.now() - healedAt < HEAL_GUARD_MS) {
     const reason = `drifted again within 10 min of a heal (${a.reason})`;

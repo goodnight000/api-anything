@@ -1,16 +1,18 @@
 /**
  * Proof that an operation works: `verify` calls each read with its stored example and its checks,
  * judges every answer pass, fail or inconclusive, and keeps the outcomes per op, which `publish`
- * reads to refuse a spec whose checks fail.
+ * reads to refuse a spec whose checks fail. A write is never sent: its preflight says whether a
+ * call could send it now.
  */
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { asText } from "./codec.js";
+import { asText, templateRefs } from "./codec.js";
 import { type CallOptions, type CallResult, call } from "./execute.js";
+import { buildRequest } from "./http.js";
 import type { Evidence } from "./registry-api.js";
-import { home, readJson, safeName, writePrivate } from "./session.js";
+import { cookieValue, home, loadSession, loggedIn, readJson, type Session, safeName, writePrivate } from "./session.js";
 import { type Check, type Operation, OperationSchema, type Site } from "./spec.js";
-import { loadSite, updateSite } from "./store.js";
+import { loadSite, loadWrites, unconfirmedWrite, updateSite } from "./store.js";
 
 export type Outcome = "pass" | "fail" | "inconclusive";
 
@@ -29,6 +31,8 @@ export interface CaseResult {
   reason?: string;
   next?: string;
   ms?: number;
+  /** when this case began answering this outcome: carried from run to run while it stays the same */
+  since?: string;
 }
 
 interface OpRecord {
@@ -162,10 +166,37 @@ async function nextPageCase(
   return one;
 }
 
+/** How a readback's read did in the same run; "not run" when the readback carries its own read, which verify does not call. */
+export type ReadbackOutcome = Outcome | "skipped" | "not run";
+
+/** What a call of a write would meet before its send, with nothing sent. */
+export interface Preflight {
+  /** the request template fills from the op's example args and the session's values */
+  builds: boolean;
+  /** why it does not build, or what a call would need first */
+  reason?: string;
+  next?: string;
+  learnedLoggedIn: boolean;
+  /** whether the jar holds a live login cookie now, as a call checks before sending a write learned signed in */
+  loggedIn: boolean;
+  /** the read that proves the write landed, and how its own cases did in this run */
+  readback?: { op: string; outcome: ReadbackOutcome };
+  /** this op's writes in the ledger that were sent and nothing confirmed landed (accepted, may_have_applied, sending) */
+  unconfirmed: number;
+  /** every part a send needs is in place and the readback's cases pass */
+  ok: boolean;
+}
+
 export interface Verified {
-  results: (CaseResult | { op: string; skipped: string })[];
+  results: (CaseResult | { op: string; skipped: string } | { op: string; preflight: Preflight })[];
   /** ops whose `unproven` mark this run cleared: their cases answered differently for different args */
   proven: string[];
+  /** ops whose record now has a failing case, and had none before this run (or no record) */
+  newlyFailing: string[];
+  /** ops whose record had a failing case before this run, and now has a record with none */
+  recovered: string[];
+  /** per op with a failing case: when its earliest failing case began failing */
+  failingSince: Record<string, string>;
 }
 
 /**
@@ -236,18 +267,132 @@ const clean = (op: Operation, run: Run): run is Ran =>
 /** Whether any of `run`'s cases was sent: one the cool-down refused was not. */
 const sent = (run: Run | undefined): run is Ran => !!run && "from" in run && run.from.some((h) => h !== undefined);
 
+/** Each case's `since`: the record's, while its case of the same label answered the same outcome; else now. */
+function dated(prev: OpRecord | undefined, results: CaseResult[], at: string): CaseResult[] {
+  return results.map((r) => {
+    const was = prev?.results.find((p) => p.case === r.case);
+    return { ...r, since: was && was.outcome === r.outcome ? (was.since ?? prev!.at) : at };
+  });
+}
+
+const failing = (rec: OpRecord | undefined) => !!rec?.results.some((r) => r.outcome === "fail");
+
+const sessionOrNone = (site: string): Session | undefined => {
+  try {
+    return loadSession(site);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * A read learned signed in, with no login on record for the site (no login saved a source, and the
+ * jar holds no live login cookie): a call would answer auth without a re-import to fall back on.
+ */
+const needsLogin = (site: Site, op: Operation, s: Session | undefined) =>
+  op.learnedLoggedIn && !!s && !s.source && !loggedIn(s.cookies, site.loginCookies, s.guestCookies);
+
+/**
+ * What a call of the write would meet before its send: whether its template fills from its example
+ * args and the session (a `session:` value a trigger run has not captured, a cookie no login put in
+ * the jar), the login state a signed-in write is refused without, and how its readback's own cases
+ * did. Nothing is sent, and the built request is not kept: it holds the session's values.
+ */
+function preflight(site: Site, op: Operation, s: Session | undefined, readback: Preflight["readback"]): Preflight {
+  const session = s ?? { cookies: [], values: {} };
+  const problems: string[] = [];
+  const nexts: string[] = [];
+  const refs = new Set(
+    op.slots.flatMap((sl) => [
+      ...(sl.ref ? [sl.ref] : []),
+      ...(sl.template !== undefined ? templateRefs(sl.template) : []),
+    ]),
+  );
+  const host = new URL(op.request.url).hostname.toLowerCase();
+  for (const ref of refs) {
+    const key = ref.slice(ref.indexOf(":") + 1);
+    if (ref.startsWith("cookie:")) {
+      if (cookieValue(session.cookies, key, op.request.url) === undefined) {
+        problems.push(`cookie ${key} is not in the jar`);
+        nexts.push(`api-anything login ${site.name}`);
+      }
+    } else {
+      const bound = session.valueHosts?.[key];
+      if (session.values[key] === undefined || (bound !== undefined && bound !== host)) {
+        problems.push(`session value ${key} has not been captured`);
+        nexts.push(`needs a trigger run: a tier-3 call of a read on ${site.name} captures it`);
+      }
+    }
+  }
+  const example = exampleArgs(op);
+  let builds = false;
+  if (!example) {
+    const missing = op.params.filter((p) => p.required && p.example === undefined && p.default === undefined);
+    problems.push(`no example for ${missing.map((p) => p.name).join(", ")}`);
+  } else {
+    try {
+      buildRequest(op, example, session);
+      builds = true;
+    } catch (e) {
+      problems.push((e as Error).message);
+    }
+  }
+  const signedIn = loggedIn(session.cookies, site.loginCookies);
+  if (op.learnedLoggedIn && !signedIn) {
+    problems.push(
+      "learned signed in, and the jar holds no live login cookie: a call re-imports the browser's first, and sends nothing without one",
+    );
+    nexts.push(`api-anything login ${site.name}`);
+  }
+  if (readback && readback.outcome !== "pass")
+    problems.push(
+      `its readback ${readback.op} answered ${readback.outcome}, so a call could not prove the write landed`,
+    );
+  if (!s) problems.push("the session file cannot be read");
+  return {
+    builds,
+    ...(problems.length ? { reason: problems.join("; ") } : {}),
+    ...(nexts.length ? { next: [...new Set(nexts)].join("; ") } : {}),
+    learnedLoggedIn: op.learnedLoggedIn,
+    loggedIn: signedIn,
+    ...(readback ? { readback } : {}),
+    unconfirmed: loadWrites(site.name, op.name).filter(unconfirmedWrite).length,
+    ok: builds && !problems.length,
+  };
+}
+
+/** How a read's own cases did in this run, for the write it is the readback of. */
+function readbackOutcome(run: Run | undefined): ReadbackOutcome {
+  if (!run) return "not run";
+  if ("skipped" in run) return "skipped";
+  if (run.results.some((r) => r.outcome === "fail")) return "fail";
+  return run.results.every((r) => r.outcome === "pass") ? "pass" : "inconclusive";
+}
+
 /**
  * Run every read's example and checks, record the outcomes, and clear `unproven` where the answers
  * differ. Both only for an op whose cases were chosen from the version saved when verify ends and
  * whose every case that was sent answered from it: an op saved meanwhile by anything else (an `add`
  * in another process) gets neither, and loses the record it had. An op none of whose cases was sent
  * (the site cools down) keeps its record as it was, unless an earlier run of them answered unproved.
+ * A read that drifted heals even while marked stale: verify is the explicit check, so the mark is no
+ * reason to leave it broken (the stored template is still what is sent first). A read learned signed
+ * in is skipped while no login is on record, and a write gets a `preflight` in place of a call.
  */
 export async function verifySite(name: string, opts: CallOptions = {}): Promise<Verified> {
   const site = loadSite(name)?.site;
   if (!site) throw new Error(`no site "${name}"`);
+  opts = { ...opts, ignoreStale: true };
+  const session = sessionOrNone(name);
   const runs = new Map<string, Run>();
-  for (const op of site.operations) if (op.readOnly) runs.set(op.name, await runCases(name, op, opts));
+  for (const op of site.operations) {
+    if (!op.readOnly) continue;
+    if (needsLogin(site, op, session))
+      runs.set(op.name, {
+        skipped: `needs login: ${op.name} was learned signed in, and no login is on record for ${name}: api-anything login ${name}`,
+      });
+    else runs.set(op.name, await runCases(name, op, opts));
+  }
   // Cases that answered from another version than the one saved now (a heal part way through them,
   // or a save between them), or that were chosen from another (whose own checks may differ), prove no
   // one version: they all run once more, on the op as it is now, and that run is the one judged.
@@ -277,6 +422,7 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
     });
   const now = loadSite(name)?.site ?? site;
   const record = loadRecord(name);
+  const before = { ...record };
   const at = new Date().toISOString();
   for (const op of now.operations) {
     const run = runs.get(op.name);
@@ -284,17 +430,42 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
       if (unproved.has(op.name)) delete record[op.name];
       continue;
     }
-    if (clean(op, run)) record[op.name] = { hash: opHash(op), at, results: run.results };
+    if (clean(op, run)) record[op.name] = { hash: opHash(op), at, results: dated(before[op.name], run.results, at) };
     // a run that answered and proved no one version leaves no record, not an older one standing
     else delete record[op.name];
   }
   for (const k of Object.keys(record)) if (!now.operations.some((o) => o.name === k)) delete record[k];
   writePrivate(recordFile(name), JSON.stringify(record, null, 1));
+  const newlyFailing: string[] = [];
+  const recovered: string[] = [];
+  const failingSince: Record<string, string> = {};
+  for (const op of now.operations) {
+    const was = failing(before[op.name]);
+    const is = failing(record[op.name]);
+    if (is && !was) newlyFailing.push(op.name);
+    if (was && !is && record[op.name]) recovered.push(op.name);
+    if (is)
+      failingSince[op.name] = record[op.name]!.results.filter((r) => r.outcome === "fail")
+        .map((r) => r.since ?? at)
+        .sort()[0]!;
+  }
   const results = site.operations.flatMap((o): Verified["results"] => {
+    if (!o.readOnly) {
+      const rb = o.readback;
+      const readback = rb
+        ? "op" in rb
+          ? { op: rb.op, outcome: readbackOutcome(runs.get(rb.op)) }
+          : { op: rb.read.name, outcome: "not run" as const }
+        : undefined;
+      return [{ op: o.name, preflight: preflight(now, o, session, readback) }];
+    }
     const run = runs.get(o.name);
-    return !run ? [] : "skipped" in run ? [{ op: o.name, skipped: run.skipped }] : run.results;
+    if (!run) return [];
+    if ("skipped" in run) return [{ op: o.name, skipped: run.skipped }];
+    // the recorded cases carry `since`; a run that left no record is reported as it ran
+    return record[o.name]?.at === at ? record[o.name]!.results : run.results;
   });
-  return { results, proven };
+  return { results, proven, newlyFailing, recovered, failingSince };
 }
 
 /**
@@ -303,7 +474,13 @@ export async function verifySite(name: string, opts: CallOptions = {}): Promise<
  */
 export function recordCases(site: string, op: Operation, results: CaseResult[], evidence?: Proof): void {
   const record = loadRecord(site);
-  record[op.name] = { hash: opHash(op), at: new Date().toISOString(), results, ...(evidence ? { evidence } : {}) };
+  const at = new Date().toISOString();
+  record[op.name] = {
+    hash: opHash(op),
+    at,
+    results: dated(record[op.name], results, at),
+    ...(evidence ? { evidence } : {}),
+  };
   writePrivate(recordFile(site), JSON.stringify(record, null, 1));
 }
 

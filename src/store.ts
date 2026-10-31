@@ -499,6 +499,25 @@ export function settleWrite(id: string, status: WriteStatus, outcome: { ok: bool
   }
 }
 
+/** The ledger's records of a site's writes (of one op, when named), oldest first; a corrupt ledger reads as empty. */
+export function loadWrites(site: string, op?: string): WriteRecord[] {
+  let all: WriteRecord[];
+  try {
+    all = readJson<WriteRecord[]>(writesFile(), []);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(all)) return [];
+  return all.filter((r) => r.site === site && (op === undefined || r.op === op));
+}
+
+/**
+ * A write that was sent and whose landing nothing confirmed: accepted (its readback did not find it,
+ * or it has none), may_have_applied, or still "sending" (the process died mid-call).
+ */
+export const unconfirmedWrite = (r: WriteRecord) =>
+  r.status === "accepted" || r.status === "may_have_applied" || r.status === "sending";
+
 /* ----------------------------------------------------------------- export */
 
 /**
