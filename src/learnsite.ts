@@ -26,7 +26,7 @@ import {
 } from "./heal.js";
 import { buildRequest } from "./http.js";
 import { answerShare, loadSettings, QUESTION } from "./identity.js";
-import { type Args, capturePages, pageUrls, rankCandidates } from "./learn.js";
+import { type Args, capturePages, lookedUp, pageUrls, rankCandidates } from "./learn.js";
 import { resolveLoginTarget } from "./login.js";
 import { outline } from "./outline.js";
 import { pull, registryRequest, sharedName } from "./registry.js";
@@ -204,6 +204,27 @@ function suggest(e: Exchange, carries: string[], values: string[]): Pick<Choice,
       recipe: { embedded: { regex: block.regex }, ...(block.extract ? { extract: block.extract } : {}) },
       fields: block.fields,
     };
+  return undefined;
+}
+
+/**
+ * The best-ranked data request of a run that carries no example value but holds one an earlier request
+ * that carries them looked up (`lookedUp`), with what it looked up.
+ */
+function lookedUpData(run: CaptureFile, args: Args): { id: number; why: string } | undefined {
+  const pages = pageUrls(run.exchanges, capturePages(run));
+  const data = rankCandidates(run.exchanges, args, { pages }).filter(
+    (c) => !c.hits.length && c.status !== undefined && c.status >= 200 && c.status < 300 && c.size > 0,
+  );
+  for (const c of data) {
+    const e = run.exchanges.find((x) => x.id === c.id)!;
+    const [hit] = lookedUp(run.exchanges, e, args, pages);
+    if (hit)
+      return {
+        id: c.id,
+        why: `${hit.leaf.at.join(" > ")} is ${hit.path} in the answer of request ${hit.lookup.id} (GET ${new URL(hit.lookup.request.url).pathname}), which carries ${hit.params.join(", ")}`,
+      };
+  }
   return undefined;
 }
 
@@ -507,6 +528,26 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       page.status === 429 ? "the site is rate limiting: wait a few minutes, then learn again" : "check the trigger URL",
       { captures, nextCall: page.status === 429 ? { action: "retry" } : { action: "fix_args" } },
     );
+  // the data may be keyed by a value the page looked up (a slug's id): its request carries no example value
+  const derived = chosen ? undefined : lookedUpData(c1, input.args);
+  if (!chosen && derived) {
+    const e = exchange(derived.id)!;
+    const shown: Choice = {
+      request: e.id,
+      method: e.request.method,
+      url: shownUrl(e.request.url),
+      ...(e.response?.contentType ? { type: e.response.contentType.split(";")[0] } : {}),
+    };
+    return fail(
+      `no request in run 1 carries the example values in an answer that could be read, but request ${derived.id} takes a value an earlier request looked up: ${derived.why}`,
+      `learn again with captures (no browser), pickRequest ${derived.id} and a recipe (extract and pick) for its answer: the lookup is learned with it`,
+      {
+        alternatives: [shown, ...options.filter((x) => x.request !== e.id)].slice(0, 6),
+        captures,
+        nextCall: { action: "relearn", site, op },
+      },
+    );
+  }
   if (!chosen)
     return fail(
       "no request in run 1 carries the example values in an answer that could be read: the data may need a click, a login, or other example values",

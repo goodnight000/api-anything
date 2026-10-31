@@ -1638,6 +1638,7 @@ export async function healOperation(
       guestCookies: loadSession(site).guestCookies,
       public: op.public,
       established,
+      derived: op.slots.flatMap((s) => (s.from && s.path ? [{ at: s.at, path: s.path }] : [])),
     }));
   } catch (e) {
     return { outcome: "failed", attempt: last, fallback, reason: `re-learning failed: ${(e as Error).message}` };

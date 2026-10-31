@@ -350,4 +350,34 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
       [],
     );
   });
+
+  test("data keyed by an id the page looked up by the slug: named as such, then learned with its lookup", async () => {
+    stubShare((c) => ({ site: c.site, op: c.ops[0]!, shared: true, status: "candidate", hash: "h1" }));
+    const input = {
+      site: "fx",
+      op: "reviews",
+      trigger: `${fx.url}/p/{slug}`,
+      args: { slug: "blue-mug" },
+      args2: { slug: "red-kettle" },
+      args3: { slug: "green-plate" },
+    };
+    const auto = await learnSite(input, fast);
+    assert.equal(auto.ok, false, JSON.stringify(auto));
+    assert.match(auto.error ?? "", /takes a value an earlier request looked up: path:2 is product\.id/);
+    assert.doesNotMatch(auto.error ?? "", /a click, a login/);
+    const reviews = auto.alternatives![0]!;
+    assert.match(reviews.url, /\/api\/products\/4821\/reviews/);
+
+    const r = await learnSite(
+      { ...input, captures: auto.captures as [string, string], pickRequest: reviews.request, extract: "reviews" },
+      fast,
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.match(JSON.stringify(r.data), /Blue mug: holds up well/);
+    assert.equal(r.proof?.holdout.ok, true);
+    assert.equal(r.proof?.cleanReplay, "ok");
+    const slot = opOf("fx", "reviews").slots.find((s) => s.from);
+    assert.equal(slot?.path, "product.id");
+    assert.match(slot!.from!.request.url, /\/api\/resolve\?slug=blue-mug$/);
+  });
 });
