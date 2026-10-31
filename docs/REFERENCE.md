@@ -54,9 +54,13 @@ regex's group 1 finds (`publicId=navigationUrl~/in/([^/?]+)`), and `[*]` in a pa
 are used, so its params stay. From a capture made with other values, pass those with `--example`.
 For a server-rendered page, use
 `--html '{"items":"<css>","fields":{...}}'`, or `--embedded '<regex>'` for JSON inside the page.
+An `--html` recipe may add `"empty":"<css>"`, the element a page with no results shows instead of
+the list (`p.SearchResults-emptyContentMessage` on pkg.go.dev): a call whose items match nothing
+while that element is shown answers `data: []`.
 `inspect` accepts the same recipe flags (`--extract`, `--pick`, `--html`, `--embedded`), so you can
 try a recipe first: it exits non-zero when a path or selector finds nothing. An `--html` items
-container that is on the page and empty is a page with no results: `data: []`, with a `note`.
+container that is on the page and empty, or the recipe's `empty` element shown on it, is a page
+with no results: `data: []`, with a `note`.
 
 In `capture`'s output, `pageStatus` is the page's own HTTP error when a request it loaded is
 recommended all the same, and `blocked` is the bot challenge the site served.
@@ -69,7 +73,10 @@ second capture of the page, made with its values: `--from2 <capture2> --example2
 a server failure: log in (`api-anything login <site>`) or wait, then add again. When example 2 is
 answered with example 1's data, the op is saved with a warning and marked `unproven`: the server may
 not read those params at all (it goes by a cookie or the IP). Pick an example 2 that excludes
-something example 1 returned, such as another place or a filter value one of its rows fails.
+something example 1 returned, such as another place or a filter value one of its rows fails. When
+example 2 changes more than one param of a read, `add` also sends one read per changed param
+(example 1's args with only that value from example 2) and marks `unproven` only the params whose
+read answered example 1's data again: a `page` the server ignores is caught beside a `q` it reads.
 
 `--enum name=a,b,c` lists the values a param takes (the site's whole set, such as a picker's
 options), and `--min name=n` / `--max name=n` bound a numeric one. A call with another value is
@@ -383,7 +390,11 @@ Known limits:
 - "Not found" is detected by replaying the op's example args, so a spec without examples reports
   missing data as `drift`. An empty result is `ok` with `[]` when the page shows it structurally:
   an empty JSON list at the extract path, or, for `--html`, an items selector written as
-  `"<container> <item>"` whose container is on the page with no item-tag element in it. A list
+  `"<container> <item>"` whose container is on the page with no item-tag element in it, or the
+  recipe's `empty` element shown on the page. A no-results page that drops the list and shows a
+  message instead needs `empty`; without it the call is `input` ("selector matched nothing", since
+  the example args still answer), and an `--expect empty` check fails with a reason that says so.
+  A message the site shows for another reason too (an error it styles the same way) reads as `[]`. A list
   that `--pick` empties (no item has a picked field), or `--html` items with none of their fields
   found, is missing data, not `[]`: the site may have renamed them. So is a picked field the op
   learned with a type (not `null`) that no item carries now, or none with that type: when the
@@ -406,8 +417,12 @@ Known limits:
 - Two examples that the site answers with the same data mark the op `unproven`, which may be a
   false alarm (two places with the same stores). `publish` refuses it until a re-add with a better
   example 2, or until `verify` sees two passing cases that differ only in those params answer
-  differently. A param the server ignores is not caught when the two answers differ for another
-  reason (a timestamp, a shuffled order).
+  differently. When example 2 changes several params of a tier-1 read, each is also sent alone in
+  example 1's args, so a param the server ignores beside one it reads is caught; one read per
+  changed param, at the site's pace. A param the server ignores is still not caught when the two
+  answers differ for another reason (a timestamp, a shuffled order), when the op needs a browser
+  (tier 3, whose per-param reads would not answer), or when example 2 changes only that param and
+  the two answers happen to differ anyway.
 - Chrome locks its profile to one process. An MCP server releases it after 3 s idle; another
   process waits up to 15 s for it, then fails with a hint.
 - Optional request structure (a reply block that only some calls have) needs a separate op.

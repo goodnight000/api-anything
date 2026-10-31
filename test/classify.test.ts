@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classify, judge, type Observed } from "../src/classify.js";
+import { classify, emptyResults, judge, type Observed } from "../src/classify.js";
 import { type Operation, OperationSchema } from "../src/spec.js";
 
 const op = (over: Record<string, unknown> = {}): Operation =>
@@ -609,6 +609,29 @@ test("a list the pick empties is missing data, not 'no results'; html items with
   assert.equal(cls(embedded, html(200, '<script>x({data:[{"id":1}]})</script>')), "ok");
   assert.equal(cls(embedded, html(200, '<script>x({data:[{"uid":1}]})</script>')), "drift");
   assert.equal(cls(embedded, html(200, "<script>x({data:[]})</script>")), "ok");
+});
+
+test("an html recipe's empty selector: a no-results page with no list container answers [] when that element is shown", () => {
+  const recipe = { items: "ul.r li", fields: { t: ".title" } };
+  const message = html(200, '<html><body><h1>Search</h1><p class="none">No results</p></body></html>');
+  // without it, a page with neither list nor container is a selector that matched nothing
+  const bare = classify(op({ response: { format: "html", html: recipe } }), message);
+  assert.deepEqual([bare.class, bare.missing], ["drift", true]);
+  assert.match(bare.reason, /matched nothing/);
+  const told = op({ response: { format: "html", html: { ...recipe, empty: "p.none" } } });
+  assert.deepEqual(judge(told, message), { class: "ok", reason: "no results", data: [] });
+  // the message must be shown: one the page keeps hidden under a missing list says nothing
+  assert.equal(cls(told, html(200, '<html><body><p class="none" hidden>No results</p></body></html>')), "drift");
+  assert.equal(cls(told, html(200, '<html><body><p class="other">Moved</p></body></html>')), "drift");
+  // items on the page win over the message; a sign-in page is auth whatever it also shows
+  const rows = html(
+    200,
+    '<html><body><ul class="r"><li><span class="title">Dune</span></li></ul><p class="none"></p></body></html>',
+  );
+  assert.deepEqual(judge(told, rows).data, [{ t: "Dune" }]);
+  assert.deepEqual(emptyResults(message.body, { ...recipe, empty: "p.none" }), '"p.none" is on the page');
+  assert.equal(emptyResults(message.body, recipe), undefined);
+  assert.match(emptyResults('<ul class="r"></ul>', recipe)!, /container of "ul.r li" is on the page and empty/);
 });
 
 test("paging reads the next cursor from the whole answer, past extract and pick; a pick-emptied page is drift with none", () => {
