@@ -1034,8 +1034,9 @@ dropped. It runs in about linear time on 10k-member objects.
 
 A call-level `view: {fields?: string[], maxChars?: number}` comes after classification and the
 stored extraction/pick recipe, before the cap. It never changes the spec or the site's args.
-`fields` uses pick's paths and `name=path` (including its regex form), per item of a list or on
-an object. Unlike a stored pick, a view keeps an empty projected item as `{}`, so item indexes
+`fields` uses pick's paths and `name=path`, per item of a list or on an object. Its regex form
+(`path~regex`) is refused (`input`): the agent that names a view may be acting on page text, a
+pattern can backtrack for minutes on a kept answer, and nothing interrupts a running match. Unlike a stored pick, a view keeps an empty projected item as `{}`, so item indexes
 stay stable. It cannot recover fields the stored recipe already discarded. `maxChars` is an
 integer from 256 to 200,000 JSON characters, default 20,000; the cap is on `data`, not the result
 envelope.
@@ -1043,8 +1044,8 @@ envelope.
 When a view is cut, `results.ts` keeps the full extracted answer, before the call's view, in
 `API_ANYTHING_HOME/results.json` (otherwise `~/.api-anything/results.json`), atomically written
 under the store's lock with 0700 directories and 0600 files. Disk rather than MCP memory lets
-the next CLI process read the same answer. Only the newest 20 answers are kept, each for 15
-minutes from creation, with opaque random `resultId`s. Reads never extend the TTL; expired
+the next CLI process read the same answer. Only the newest 20 answers that fit 16 MiB together are kept (one
+larger alone is not kept, and evicts nothing), each for 15 minutes from creation, with opaque random `resultId`s. Reads never extend the TTL; expired
 records are inaccessible and removed on the next successful call or result-store access.
 The file can hold signed-in user data, just as `data` can: it is never a spec, heal log,
 write-ledger entry or report. A retention failure leaves the successful call successful but

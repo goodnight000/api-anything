@@ -144,9 +144,10 @@ function stepFor(cls: string, site: string, name: string, write: boolean): strin
   }
 }
 
+// as verify's exit code and search's local evidence read it: one case that tested nothing is no pass
 function verdict(results: { outcome: Outcome }[]): Outcome {
   if (results.some((r) => r.outcome === "fail")) return "fail";
-  return results.some((r) => r.outcome === "pass") ? "pass" : "inconclusive";
+  return results.length && results.every((r) => r.outcome === "pass") ? "pass" : "inconclusive";
 }
 
 /** Sites with anything on record here: a status of all 57 bundled sites would be mostly empty. */
