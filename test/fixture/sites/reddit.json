@@ -1,0 +1,18 @@
+[
+  {
+    "op": "search",
+    "args": { "query": "sqlite" },
+    "status": 200,
+    "contentType": "text/html; charset=utf-8",
+    "note": "recorded 2026-10-31, logged out, www.reddit.com/search/?q=sqlite; trimmed to two results, their class and tracking attributes removed",
+    "body": "<!DOCTYPE html><html><body><search-telemetry-tracker view-events=\"search/view/post\" data-testid=\"search-sdui-post\"><div data-testid=\"search-post-unit\"><search-telemetry-tracker click-events=\"search/click/post\"><h2><a data-testid=\"post-title\" href=\"/r/SQL/comments/1t787ah/how_far_did_you_go_with_sqlite/\" aria-label=\"How far did you go with SQLITE\"><faceplate-screen-reader-content>How far did you go with SQLITE</faceplate-screen-reader-content></a></h2></search-telemetry-tracker><div data-testid=\"sdui-post-unit\"><div><span><faceplate-hovercard data-id=\"community-hover-card\" label=\"r/SQL\"><a href=\"/r/SQL/\"><span>r/SQL</span></a></faceplate-hovercard><span>·</span><faceplate-timeago format=\"narrow\" ts=\"2026-05-08T13:36:55.471000+0000\"></faceplate-timeago></span></div><div data-testid=\"search-counter-row\"><span><faceplate-number number=\"12\" pretty></faceplate-number> votes</span><span>·</span><span><faceplate-number number=\"12\" pretty></faceplate-number> comments</span></div></div></div></search-telemetry-tracker><hr><search-telemetry-tracker view-events=\"search/view/post\" data-testid=\"search-sdui-post\"><div data-testid=\"search-post-with-content-preview\"><search-telemetry-tracker click-events=\"search/click/post\"><h2><a data-testid=\"post-title\" href=\"/r/Database/comments/1u93gvt/sql_is_dead_long_live_sql/\" aria-label=\"SQL is Dead, Long Live SQL\"><faceplate-screen-reader-content>SQL is Dead, Long Live SQL</faceplate-screen-reader-content></a></h2></search-telemetry-tracker><div data-testid=\"sdui-post-unit\"><div><span><faceplate-hovercard data-id=\"community-hover-card\" label=\"r/Database\"><a href=\"/r/Database/\"><span>r/Database</span></a></faceplate-hovercard><span>·</span><faceplate-timeago format=\"narrow\" ts=\"2026-06-18T11:17:06.488000+0000\"></faceplate-timeago></span></div><div data-testid=\"search-counter-row\"><span><faceplate-number number=\"1622\" pretty></faceplate-number> votes</span><span>·</span><span><faceplate-number number=\"352\" pretty></faceplate-number> comments</span></div></div></div></search-telemetry-tracker></body></html>"
+  },
+  {
+    "op": "hot",
+    "args": { "sub": "programming" },
+    "status": 200,
+    "contentType": "text/html; charset=utf-8",
+    "note": "recorded 2026-10-31, logged out, www.reddit.com/r/programming/hot/; trimmed to two posts and the attributes the recipe reads",
+    "body": "<!DOCTYPE html><html><body><shreddit-feed><article><shreddit-post permalink=\"/r/programming/comments/1xka27q/beating_the_compiler_at_signed_32bit_division/\" content-href=\"https://lemire.me/blog/2026/10/31/beating-the-compiler-at-signed-32-bit-division/\" comment-count=\"5\" created-timestamp=\"2026-10-31T13:20:28.533000+0000\" id=\"t3_1xka27q\" post-title=\"Beating the compiler at signed 32-bit division\" score=\"93\" subreddit-prefixed-name=\"r/programming\" author=\"alexeyr\"></shreddit-post></article><article><shreddit-post permalink=\"/r/programming/comments/1xjiofl/how_curl_was_accidentally_turingcomplete_for_nine/\" content-href=\"https://seriot.ch/computation/curl.html\" comment-count=\"23\" created-timestamp=\"2026-10-30T15:37:35.622000+0000\" id=\"t3_1xjiofl\" post-title=\"How curl was accidentally Turing-complete for nine months\" score=\"536\" subreddit-prefixed-name=\"r/programming\" author=\"Dull_Replacement8890\"></shreddit-post></article></shreddit-feed></body></html>"
+  }
+]

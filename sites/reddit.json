@@ -1,0 +1,161 @@
+{
+  "name": "reddit",
+  "displayName": "Reddit",
+  "baseUrl": "https://www.reddit.com",
+  "description": "Reddit, logged out: site-wide post search and a subreddit's hot feed, read from the pages reddit.com serves. Reddit challenges plain HTTP from many networks, so a first call can take the browser tier.",
+  "operations": [
+    {
+      "name": "search",
+      "description": "Search Reddit posts site-wide (reddit.com/search): the first page of matching posts, about 7, with subreddit, votes, comments and when each was posted.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.reddit.com/search/?q=linux%20kernel",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "query",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.reddit.com/search/?q={query}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.reddit.com",
+        "path": "/search/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "search-telemetry-tracker[view-events=\"search/view/post\"]",
+          "fields": {
+            "title": "a[data-testid=\"post-title\"]@aria-label",
+            "subreddit": "faceplate-hovercard[data-id=\"community-hover-card\"]@label",
+            "votes": "[data-testid=\"search-counter-row\"] > span:first-child faceplate-number@number",
+            "comments": "[data-testid=\"search-counter-row\"] > span:last-child faceplate-number@number",
+            "posted": "faceplate-timeago@ts",
+            "url": "a[data-testid=\"post-title\"]@href"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "example": "linux kernel",
+          "description": "Search text, as typed into reddit.com/search."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-10-31T20:54:55.206Z",
+      "checks": [
+        {
+          "args": {
+            "query": "rust async"
+          },
+          "expect": "result"
+        }
+      ]
+    },
+    {
+      "name": "hot",
+      "description": "One subreddit's hot feed (reddit.com/r/<sub>/hot): the first 10 or so posts, with author, score, comments, the linked URL and the permalink.",
+      "request": {
+        "method": "GET",
+        "url": "https://www.reddit.com/r/rust/hot/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "sub",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.reddit.com/r/{sub}/hot/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "www.reddit.com",
+        "path": "/r/*/hot/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "shreddit-post",
+          "fields": {
+            "title": "@post-title",
+            "subreddit": "@subreddit-prefixed-name",
+            "author": "@author",
+            "score": "@score",
+            "comments": "@comment-count",
+            "url": "@content-href",
+            "permalink": "@permalink",
+            "posted": "@created-timestamp",
+            "id": "@id"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "sub",
+          "type": "string",
+          "required": true,
+          "example": "rust",
+          "description": "Subreddit name without the r/ prefix, e.g. programming."
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "learnedAt": "2026-10-31T20:50:18.081Z",
+      "checks": [
+        {
+          "args": {
+            "sub": "sqlite"
+          },
+          "expect": "result"
+        }
+      ]
+    }
+  ]
+}
