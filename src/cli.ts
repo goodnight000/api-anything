@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** api-anything CLI. Compact JSON on stdout; every failure also prints one `next:` line on stderr. */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { z } from "zod";
@@ -57,7 +57,7 @@ import {
   readbackName,
   TriggerStepSchema,
 } from "./spec.js";
-import { exportSite, listSites, loadHeals, loadSite, siteNotes, updateSite } from "./store.js";
+import { exportSite, listSites, loadHeals, loadSite, siteNotes, updateSite, userSitesDir } from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { readbackProblems, SHARED_NOTE } from "./vet.js";
 
@@ -182,13 +182,23 @@ const HELP: Record<string, string> = {
                     3 minutes) or a block at every tier (10 minutes) calls answer without sending.
                     A forced call that succeeds ends the wait; one limited or blocked again starts
                     it over. A login for the site also ends the wait`,
-  verify: `api-anything verify [site]
-  Calls every read operation with its stored example args and its checks, healing as needed, and
-  judges each case: pass, fail, or inconclusive (a challenge, a sign-in page, a rate limit, or a server
-  that failed or could not be reached: it says nothing about the op). The outcomes are kept per op, for
-  publish. An op marked unproven loses the mark when two passing cases that differ only in its
-  unproven params answer differently. A paged read also asks for the page after its example's
-  ("next page"): an answer with only page 1's items again fails.`,
+  verify: `api-anything verify [site ...] [--user] [--strict]
+  Calls every read operation with its stored example args and its checks, healing as needed (a stale
+  mark does not hold a heal back here), and judges each case: pass, fail, or inconclusive (a challenge,
+  a sign-in page, a rate limit, or a server that failed or could not be reached: it says nothing about
+  the op). The outcomes are kept per op, for publish, each case with since (when it began answering
+  this outcome); the output says which ops are newlyFailing, recovered, and failingSince when. A read
+  learned signed in is skipped ("needs login") while no login is on record for the site. A write is
+  never sent: it gets a preflight (its template builds from its example and the session, a missing
+  session value needs a trigger run, the login it was learned with against the jar now, how its
+  readback's own cases did, and how many of its writes in the ledger were sent and never confirmed).
+  An op marked unproven loses the mark when two passing cases that differ only in its unproven params
+  answer differently. A paged read also asks for the page after its example's ("next page"): an
+  answer with only page 1's items again fails. No site means every known site; --user means the
+  user's own (in ~/.api-anything/sites).
+  Exit 0: every counted case passed. 1: a case failed, or a site could not be verified. 2: nothing
+  failed and a case was inconclusive. --strict exits 1 for an inconclusive case, or a write whose
+  preflight is not ok; otherwise a preflight never sets the exit code.`,
   check: `api-anything check <site> <op> [k=v ...] --expect result|empty|input [--purpose <text>]
   Records a check on a read: args a human confirmed on the site, and what the site answers them with
   (result: data; empty: no data, the site's own no-results; input: the site refuses the args). verify
@@ -307,7 +317,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything interface mcp|openapi <url>
   api-anything check <site> <op> [k=v ...] --expect result|empty|input
   api-anything readback <site> <write-op> <read-op> [k=v ...] [--find field=value]
-  api-anything verify [site] | sites | ops <site> | heal <site> <op> | export <site>
+  api-anything verify [site ...] [--user] [--strict] | sites | ops <site> | heal <site> <op> | export <site>
   api-anything heals [site] | revert <site> <op>
   api-anything mcp [--allow-writes] [--sites a,b] [--print-config]
 
@@ -418,6 +428,8 @@ const OPTIONS = {
   out: { type: "string" },
   force: { type: "boolean" },
   yes: { type: "boolean" },
+  user: { type: "boolean" },
+  strict: { type: "boolean" },
   window: { type: "boolean" },
   cookies: { type: "string" },
   profile: { type: "string" },
@@ -987,22 +999,56 @@ function cmdRevert({ pos }: Parsed): number {
   }
 }
 
-async function cmdVerify({ pos }: Parsed): Promise<number> {
-  const names = pos[0] ? [requireSite(pos[0]).site.name] : listSites();
+/** The user's own specs: those in ~/.api-anything/sites, bundled and pulled ones aside. */
+function userSites(): string[] {
+  const dir = userSitesDir();
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.slice(0, -5))
+    .sort();
+}
+
+/**
+ * Exit 0 when every counted case passed, 1 when any failed (or a site could not be verified), 2 when
+ * the only non-passing cases were inconclusive. --strict exits 1 for an inconclusive case or a write
+ * whose preflight is not ok too; without it a preflight never sets the exit code, since nothing was
+ * sent to judge.
+ */
+async function cmdVerify({ v, pos }: Parsed): Promise<number> {
+  if (v.user && pos.length)
+    throw new Fail("--user takes no site names", "api-anything verify --user, or name the sites");
+  const names = pos.length ? pos.map((p) => requireSite(p).site.name) : v.user ? userSites() : listSites();
   const results: Record<string, unknown>[] = [];
   const proven: string[] = [];
+  const newlyFailing: string[] = [];
+  const recovered: string[] = [];
+  const failingSince: Record<string, string> = {};
   for (const name of names) {
     try {
-      const v = await verifySite(name);
-      results.push(...v.results.map((r) => ({ site: name, ...r, ok: "outcome" in r && r.outcome === "pass" })));
-      proven.push(...v.proven.map((op) => `${name}/${op}`));
+      const r = await verifySite(name);
+      results.push(
+        ...r.results.map((c) => ({
+          site: name,
+          ...c,
+          ok: "outcome" in c ? c.outcome === "pass" : "preflight" in c ? c.preflight.ok : false,
+        })),
+      );
+      proven.push(...r.proven.map((op) => `${name}/${op}`));
+      newlyFailing.push(...r.newlyFailing.map((op) => `${name}/${op}`));
+      recovered.push(...r.recovered.map((op) => `${name}/${op}`));
+      for (const [op, since] of Object.entries(r.failingSince)) failingSince[`${name}/${op}`] = since;
     } catch (e) {
       results.push({ site: name, ok: false, error: oneLine((e as Error).message) });
     }
   }
   const count = (o: string) => results.filter((r) => r.outcome === o).length;
-  const ok = results.every((r) => r.ok);
-  const own = pos[0] ? loadSite(pos[0]) : undefined;
+  const errors = results.filter((r) => r.error).length;
+  const unready = results.filter((r) => r.preflight && !r.ok).length;
+  const failed = count("fail") + errors > 0;
+  const inconclusive = count("inconclusive") > 0;
+  const ok = !failed && !inconclusive && (!v.strict || !unready);
+  const own = names.length === 1 ? loadSite(names[0]!) : undefined;
   // a site the user learned and just saw work is one others could use
   const share = ok && own?.source === "user" && !own.site.shared;
   out({
@@ -1012,20 +1058,30 @@ async function cmdVerify({ pos }: Parsed): Promise<number> {
       fail: count("fail"),
       inconclusive: count("inconclusive"),
       skipped: results.filter((r) => r.skipped).length,
+      preflight: results.filter((r) => r.preflight).length,
     },
     results,
     ...(proven.length ? { proven } : {}),
+    newlyFailing,
+    recovered,
+    failingSince,
     ...(share
       ? { next: `api-anything publish ${own.site.name} previews sharing it, so others need not learn it` }
       : {}),
   });
-  if (!ok)
+  if (failed)
     process.stderr.write(
-      count("fail")
-        ? "next: a failing case is a broken op or a wrong check: follow each failing case's own next hint once (change a check only when the site's own page answers its args the other way), then report what still fails\n"
-        : "next: an inconclusive case tested nothing: follow its next hint (login, or wait), then verify again\n",
+      "next: a failing case is a broken op or a wrong check: follow each failing case's own next hint once (change a check only when the site's own page answers its args the other way), then report what still fails\n",
     );
-  return ok ? 0 : 1;
+  else if (inconclusive)
+    process.stderr.write(
+      "next: an inconclusive case tested nothing: follow its next hint (login, or wait), then verify again\n",
+    );
+  else if (v.strict && unready)
+    process.stderr.write("next: a write's preflight found something a call would need first: follow its next hint\n");
+  if (failed) return 1;
+  if (inconclusive) return v.strict ? 1 : 2;
+  return v.strict && unready ? 1 : 0;
 }
 
 async function cmdCheck({ v, pos }: Parsed): Promise<number> {
@@ -1415,7 +1471,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
     ],
   },
   call: { run: cmdCall, flags: ["json", "allow-writes", "again", "idempotency-key", "max-tier", "force", "dry"] },
-  verify: { run: cmdVerify, flags: [] },
+  verify: { run: cmdVerify, flags: ["user", "strict"] },
   check: { run: cmdCheck, flags: ["expect", "purpose"] },
   readback: { run: cmdReadback, flags: ["find"] },
   sites: { run: cmdSites, flags: [] },
