@@ -59,7 +59,7 @@
           "items": "div[data-component-type=s-search-result]",
           "fields": {
             "asin": "@data-asin",
-            "title": "h2",
+            "title": "h2.a-text-normal",
             "price": ".a-price .a-offscreen"
           }
         }
