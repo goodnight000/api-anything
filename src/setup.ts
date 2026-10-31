@@ -64,12 +64,19 @@ export function onPath(cmd: string): string | undefined {
   return undefined;
 }
 
+/**
+ * The agents installed here: the command on PATH, or a file the agent writes itself. A bare directory
+ * is no sign: one left behind (an uninstall, another tool's skills dir) would get a config the
+ * machine never runs.
+ */
 export function detect(): Agent[] {
+  const any = (...files: string[]) => files.some((f) => existsSync(f));
   const seen: Record<Agent, boolean> = {
-    "claude-code": !!onPath("claude") || existsSync(paths.claudeJson()) || existsSync(join(homedir(), ".claude")),
-    codex: !!onPath("codex") || existsSync(paths.codexHome()),
-    cursor: !!onPath("cursor") || existsSync(dirname(paths.cursorJson())),
-    "claude-desktop": existsSync(dirname(paths.desktopJson())),
+    "claude-code": !!onPath("claude") || any(paths.claudeJson()),
+    codex: !!onPath("codex") || any(paths.codexToml(), join(paths.codexHome(), "auth.json")),
+    // Cursor writes argv.json on first launch, Claude Desktop its config.json
+    cursor: !!onPath("cursor") || any(paths.cursorJson(), join(dirname(paths.cursorJson()), "argv.json")),
+    "claude-desktop": any(paths.desktopJson(), join(dirname(paths.desktopJson()), "config.json")),
   };
   return AGENTS.filter((a) => seen[a]);
 }

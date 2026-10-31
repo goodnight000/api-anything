@@ -244,9 +244,16 @@ test("the agents' own CLIs add the server when they are installed, and are not r
   assert.equal(cliLog().length, 2);
 });
 
-test("detect finds an agent by its config directory", () => {
-  mkdirSync(dirname(paths.cursorJson()), { recursive: true });
-  assert.deepEqual(detect(), ["cursor"]);
+test("detect finds an agent by a file it writes, never by a directory left behind", () => {
+  // empty directories: an uninstalled agent, or another tool's ~/.claude/skills
+  for (const d of [join(home, ".claude", "skills"), paths.codexHome(), dirname(paths.cursorJson())])
+    mkdirSync(d, { recursive: true });
+  mkdirSync(dirname(paths.desktopJson()), { recursive: true });
+  assert.deepEqual(detect(), []);
+  write(join(dirname(paths.cursorJson()), "argv.json"), "{}");
+  write(join(paths.codexHome(), "auth.json"), "{}");
+  write(join(dirname(paths.desktopJson()), "config.json"), "{}");
+  assert.deepEqual(detect(), ["codex", "cursor", "claude-desktop"]);
 });
 
 function cli(...args: string[]): Promise<{ code: number; out: Record<string, unknown>; stderr: string }> {
