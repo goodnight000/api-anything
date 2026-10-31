@@ -153,7 +153,7 @@ export function returnedFields(r: Pick<ResponseSpec, "format" | "pick" | "html" 
  * `name=path~regex` keeps the part of a string that the regex's group 1 (or whole match) finds
  * (`publicId=navigationUrl~/in/([^/?]+)`); a non-string or no match drops the field.
  */
-export function pick(value: unknown, paths: string[]): unknown {
+export function pick(value: unknown, paths: string[], keepEmpty = false): unknown {
   const named = paths.map((p) => {
     const entry = pickEntry(p);
     return { ...entry, steps: pathSteps(entry.path) };
@@ -177,7 +177,8 @@ export function pick(value: unknown, paths: string[]): unknown {
   };
   if (!Array.isArray(value)) return one(value);
   // an item with none of the fields (a shelf, an ad, a logo entity) is not a result: drop it, not {}
-  return value.map(one).filter((x) => !(x && typeof x === "object" && !Object.keys(x).length));
+  const items = value.map(one);
+  return keepEmpty ? items : items.filter((x) => !(x && typeof x === "object" && !Object.keys(x).length));
 }
 
 /** Attribute values that are addresses: a relative one needs the page's own address to be usable. */
@@ -368,11 +369,14 @@ function cut(v: unknown, budget: number, total = size(v)): unknown {
  * reads as "no results". Strings are cut as strings; objects stay objects (their biggest members
  * shortened, then trailing members dropped), never cut JSON text. The note says what was cut.
  */
-export function capOutput(value: unknown, maxChars = 20_000): { data: unknown; truncated?: string } {
+export function capOutput(
+  value: unknown,
+  maxChars = 20_000,
+  hint = "narrow with pick or extract",
+): { data: unknown; truncated?: string } {
   const total = size(value);
   if (total <= maxChars) return { data: value };
   const data = cut(value, maxChars, total) ?? null;
-  const hint = "narrow with pick or extract";
   if (Array.isArray(value)) {
     const n = (data as unknown[]).length;
     const whole = n > 0 && (data as unknown[])[n - 1] === value[n - 1];
