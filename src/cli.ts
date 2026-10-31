@@ -8,6 +8,7 @@ import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { verifySite } from "./checks.js";
 import { botWall, emptyResults, htmlFinds, loginPath, signInForm } from "./classify.js";
 import { launchOf, printConfig } from "./clients.js";
+import { describeOperation } from "./describe.js";
 import { type CallResult, call, heal, type Tier } from "./execute.js";
 import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
 import {
@@ -205,9 +206,11 @@ const HELP: Record<string, string> = {
   readback; remove one by editing the spec.`,
   sites: `api-anything sites
   Lists known sites (user specs in ~/.api-anything/sites win over bundled ones).`,
-  ops: `api-anything ops <site>
+  ops: `api-anything ops <site> [<op> --schema]
   Lists a site's operations and params (with each param's format), and the site's notes: caveats,
-  arg formats and login advice from <site>.md beside its spec.`,
+  arg formats and login advice from <site>.md beside its spec.
+  <op> --schema prints its portable contract: params as JSON Schema, output hints, and links.
+  No request is sent. Unknown output types stay unknown; values are never coerced.`,
   heal: `api-anything heal <site> <op> [k=v ...]
   Forces a heal (rescan, then recapture) even when the op is marked stale. Reads only.`,
   heals: `api-anything heals [site]
@@ -422,6 +425,7 @@ const OPTIONS = {
   cookies: { type: "string" },
   profile: { type: "string" },
   outline: { type: "boolean" },
+  schema: { type: "boolean" },
   enum: { type: "string", multiple: true },
   min: { type: "string", multiple: true },
   max: { type: "string", multiple: true },
@@ -1130,8 +1134,16 @@ function cmdSites(): number {
   return 0;
 }
 
-function cmdOps({ pos }: Parsed): number {
+function cmdOps({ pos, v }: Parsed): number {
   const { site } = requireSite(pos[0]);
+  if (v.schema) {
+    if (pos.length !== 2) throw new Fail("--schema needs <site> <op>", "api-anything ops <site> <op> --schema");
+    if (!site.operations.some((o) => o.name === pos[1]))
+      throw new Fail(`no operation "${pos[1]}" on ${site.name}`, `api-anything ops ${site.name}`);
+    out(describeOperation(site, pos[1]!));
+    return 0;
+  }
+  if (pos.length !== 1) throw new Fail("use <op> with --schema", `api-anything ops ${site.name} <op> --schema`);
   const notes = siteNotes(site.name);
   const about = (p: Operation["params"][number]) => [
     ...(p.description ? [p.description] : []),
@@ -1419,7 +1431,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   check: { run: cmdCheck, flags: ["expect", "purpose"] },
   readback: { run: cmdReadback, flags: ["find"] },
   sites: { run: cmdSites, flags: [] },
-  ops: { run: cmdOps, flags: [] },
+  ops: { run: cmdOps, flags: ["schema"] },
   heal: { run: cmdHeal, flags: [] },
   heals: { run: cmdHeals, flags: [] },
   revert: { run: cmdRevert, flags: [] },
