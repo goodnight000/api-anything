@@ -1177,8 +1177,13 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     }
   }
 
-  // The second run proves its args reach the request, not that the server reads them there.
-  const changed = Object.keys(ex1).filter((k) => ex2?.[k] !== undefined && asText(ex2[k]) !== asText(ex1[k]));
+  // The second run proves its args reach the request, not that the server reads them there. A cursor is
+  // the site's answer to an earlier page, not a param to prove: another run's cursor sent with example 1's
+  // args proves nothing, and its value must not reach the spec through a reason.
+  const cursor = (i.paging ?? old?.paging)?.next ? (i.paging ?? old?.paging)!.param : undefined;
+  const changed = Object.keys(ex1).filter(
+    (k) => k !== cursor && ex2?.[k] !== undefined && asText(ex2[k]) !== asText(ex1[k]),
+  );
   if (ex2 && changed.length && operation.readOnly) {
     const values = (ks: string[]) => ks.map((k) => `${k}=${asText(ex2[k])}`).join(", ");
     let doubted: string[] = [];
