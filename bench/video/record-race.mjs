@@ -1,25 +1,58 @@
-// Start both agents at the same moment on one task and keep what the video needs:
+// Record both agents on one task, simultaneously or with --sequential, and keep:
 // the browser agent's screen (Playwright's recordVideo) and a trimmed timeline of both runs.
-// Usage: node bench/video/record-race.mjs [--task flights-5]
+// Usage: node bench/video/record-race.mjs [--task flights-5] [--sequential] [--out <unused directory>]
 // Writes bench/video/raw/ (full logs, the .webm and timeline.json; not committed). Rename it to
 // raw-runN before the next race, then render the chosen run with render.mjs.
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { gradePopular, popularSnapshot } from "../popular.mjs";
 import { MODEL, runTrial, TASKS, toolCalls } from "../run-agents.mjs";
 
 const here = import.meta.dirname;
-const { values: v } = parseArgs({ options: { task: { type: "string", default: "flights-5" } } });
-const raw = join(here, "raw");
-rmSync(raw, { recursive: true, force: true });
+const { values: v } = parseArgs({
+  options: {
+    task: { type: "string", default: "flights-5" },
+    out: { type: "string", default: join(here, "raw") },
+    sequential: { type: "boolean", default: false },
+  },
+});
+const raw = resolve(v.out);
+if (existsSync(raw)) throw new Error("Recording directory already exists; choose a new --out");
 mkdirSync(join(raw, "footage"), { recursive: true });
 
 const logs = { browser: join(raw, "browser.jsonl"), api: join(raw, "api.jsonl") };
 const recordedAt = new Date().toISOString();
-const [browser, api] = await Promise.all([
-  runTrial(v.task, "browser", { log: logs.browser, video: join(raw, "footage") }),
-  runTrial(v.task, "api", { log: logs.api }),
-]);
+const truth = {};
+async function record(arm) {
+  const run = await runTrial(v.task, arm, {
+    log: logs[arm],
+    video: arm === "browser" ? join(raw, "footage") : undefined,
+    budget: 1,
+    timeoutMs: 4 * 60_000,
+  });
+  if (!run.result?.api_error && ["netflix-1", "ikea-5"].includes(v.task)) {
+    try {
+      truth[arm] = await popularSnapshot(v.task, join(raw, `${arm}-truth`));
+    } catch (e) {
+      truth[arm] = { error: String(e) };
+    }
+  }
+  writeFileSync(
+    join(raw, `${arm}-result.json`),
+    JSON.stringify(
+      { run, truth: truth[arm], grade: truth[arm] && gradePopular(v.task, run.result?.result, truth[arm]) },
+      null,
+      2,
+    ),
+  );
+  if (run.stopped || !run.result || run.result.api_error || !Number.isFinite(run.result.total_cost_usd))
+    throw new Error("Recording interrupted or spend unknown; keeping raw files and stopping");
+  return run;
+}
+const [browser, api] = v.sequential
+  ? [await record("browser"), await record("api")]
+  : await Promise.all([record("browser"), record("api")]);
 
 function preview(text) {
   try {
@@ -68,6 +101,9 @@ function summarize(arm, run) {
       turns: r.num_turns,
       answer: r.result,
       exit: run.code,
+      isError: r.is_error,
+      truth: truth[arm],
+      grade: truth[arm] && gradePopular(v.task, r.result, truth[arm]),
     },
   };
 }
@@ -78,6 +114,7 @@ writeFileSync(
   JSON.stringify(
     {
       recordedAt,
+      mode: v.sequential ? "sequential replay; clocks aligned for editing, not simultaneous" : "simultaneous",
       model: MODEL,
       task: v.task,
       prompt: TASKS[v.task],

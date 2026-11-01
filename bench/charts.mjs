@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 const repo = resolve(import.meta.dirname, "..");
 const res = join(repo, "bench/results", process.argv[2] ?? ""),
   media = join(repo, "docs/media");
-const draw = !process.argv[2] || process.argv[2] === "goodreads"; // `node bench/charts.mjs v0.1.0` only summarizes an older batch
+const draw = !process.argv[2] || ["goodreads", "popular-2026-10-31"].includes(process.argv[2]);
 const lines = (f) =>
   existsSync(f)
     ? readFileSync(f, "utf8")
@@ -61,9 +61,17 @@ function correct(task, answer, truth) {
   });
 }
 
-const trials = lines(join(res, "trials.jsonl")).map((t) => ({
+const rawTrials = lines(join(res, "trials.jsonl"));
+const popular = rawTrials.some((t) => ["netflix-1", "ikea-5"].includes(t.task)) ? await import("./popular.mjs") : null;
+const trials = rawTrials.map((t) => ({
   ...t,
-  correct: t.code === 0 && t.truth ? correct(t.task, t.answer ?? "", t.truth) : null,
+  correct: ["netflix-1", "ikea-5"].includes(t.task)
+    ? t.code !== 0 || t.isError
+      ? false
+      : popular.gradePopular(t.task, t.answer, t.truth).correct
+    : t.code === 0 && t.truth
+      ? correct(t.task, t.answer ?? "", t.truth)
+      : null,
 }));
 const transport = lines(join(res, "transport.jsonl"));
 const summary = { agents: {}, transport: {} };
@@ -72,14 +80,16 @@ for (const task of [...new Set(trials.map((t) => t.task))]) {
     const ts = trials.filter((t) => t.task === task && t.arm === arm);
     summary.agents[`${task}/${arm}`] = {
       attempts: ts.length,
-      completed: ts.filter((t) => t.code === 0).length,
-      failed: ts.filter((t) => t.code !== 0).length,
+      completed: ts.filter((t) => t.code === 0 && !t.isError).length,
+      failed: ts.filter((t) => t.code !== 0 || t.isError).length,
+      providerFailures: ts.filter((t) => t.apiError).length,
       graded: ts.filter((t) => t.correct !== null).length,
       ungraded: ts.filter((t) => t.correct === null).length,
       correct: ts.every((t) => t.correct !== null) ? ts.filter((t) => t.correct).length : "not graded",
       seconds: stats(ts.map((t) => t.wallMs / 1000)),
       costUsd: stats(ts.map((t) => t.costUsd)),
       tokens: stats(ts.map((t) => t.inTokens + t.outTokens)),
+      inputTokens: stats(ts.map((t) => t.inTokens)),
     };
   }
 }
@@ -171,7 +181,14 @@ function svg(w, h, body, c, desc) {
 
 mkdirSync(media, { recursive: true });
 const A = summary.agents,
-  taskLabel = { "flights-1": "1 date", "flights-5": "5 dates", "goodreads-1": "1 book", "goodreads-5": "5 books" };
+  taskLabel = {
+    "flights-1": "1 date",
+    "flights-5": "5 dates",
+    "goodreads-1": "1 book",
+    "goodreads-5": "5 books",
+    "netflix-1": "Netflix: 3 episodes",
+    "ikea-5": "IKEA: 5 stores",
+  };
 // one chart per results folder: flights in bench/results, goodreads in bench/results/goodreads
 const CHART = {
   "": {
@@ -183,6 +200,11 @@ const CHART = {
     file: "goodreads-benchmark",
     task: "Task: rating, ratings count and pages of 1 book and of 5 books on Goodreads (operations an agent explored).",
     check: "Every answer was checked against the rendered book page.",
+  },
+  "popular-2026-10-31": {
+    file: "popular-benchmark",
+    task: "Tasks: 3 Netflix episode runtimes; 5 IKEA store addresses.",
+    check: "Every answer was checked against a fresh rendered page. Two sites, five runs per arm and task.",
   },
 }[process.argv[2] ?? ""];
 const tasks = Object.keys(taskLabel).filter((t) => A[`${t}/api`]?.seconds.n);

@@ -1,0 +1,137 @@
+{
+  "agents": {
+    "netflix-1/browser": {
+      "attempts": 5,
+      "completed": 5,
+      "failed": 0,
+      "providerFailures": 0,
+      "graded": 5,
+      "ungraded": 0,
+      "correct": 5,
+      "seconds": {
+        "n": 5,
+        "median": 22.277,
+        "min": 15.707,
+        "max": 31.539
+      },
+      "costUsd": {
+        "n": 5,
+        "median": 0.043290800000000004,
+        "min": 0.042036199999999996,
+        "max": 0.0761472
+      },
+      "tokens": {
+        "n": 5,
+        "median": 44150,
+        "min": 33016,
+        "max": 44176
+      },
+      "inputTokens": {
+        "n": 5,
+        "median": 43800,
+        "min": 32711,
+        "max": 43890
+      }
+    },
+    "netflix-1/api": {
+      "attempts": 5,
+      "completed": 5,
+      "failed": 0,
+      "providerFailures": 0,
+      "graded": 5,
+      "ungraded": 0,
+      "correct": 5,
+      "seconds": {
+        "n": 5,
+        "median": 9.599,
+        "min": 7.681,
+        "max": 12.447
+      },
+      "costUsd": {
+        "n": 5,
+        "median": 0.0401974,
+        "min": 0.0399124,
+        "max": 0.06967480000000001
+      },
+      "tokens": {
+        "n": 5,
+        "median": 31510,
+        "min": 31493,
+        "max": 31562
+      },
+      "inputTokens": {
+        "n": 5,
+        "median": 31132,
+        "min": 31124,
+        "max": 31140
+      }
+    },
+    "ikea-5/browser": {
+      "attempts": 5,
+      "completed": 5,
+      "failed": 0,
+      "providerFailures": 0,
+      "graded": 5,
+      "ungraded": 0,
+      "correct": 5,
+      "seconds": {
+        "n": 5,
+        "median": 31.382,
+        "min": 29.1,
+        "max": 32.44
+      },
+      "costUsd": {
+        "n": 5,
+        "median": 0.0747034,
+        "min": 0.045973,
+        "max": 0.0811038
+      },
+      "tokens": {
+        "n": 5,
+        "median": 53196,
+        "min": 43347,
+        "max": 56977
+      },
+      "inputTokens": {
+        "n": 5,
+        "median": 52521,
+        "min": 42665,
+        "max": 56327
+      }
+    },
+    "ikea-5/api": {
+      "attempts": 5,
+      "completed": 5,
+      "failed": 0,
+      "providerFailures": 0,
+      "graded": 5,
+      "ungraded": 0,
+      "correct": 5,
+      "seconds": {
+        "n": 5,
+        "median": 18.051,
+        "min": 14.846,
+        "max": 34.137
+      },
+      "costUsd": {
+        "n": 5,
+        "median": 0.07125020000000001,
+        "min": 0.07085140000000001,
+        "max": 0.0712566
+      },
+      "tokens": {
+        "n": 5,
+        "median": 50479,
+        "min": 50460,
+        "max": 50482
+      },
+      "inputTokens": {
+        "n": 5,
+        "median": 49861,
+        "min": 49855,
+        "max": 49863
+      }
+    }
+  },
+  "transport": {}
+}

@@ -1,0 +1,30 @@
+{
+  "frozenAt": "2026-10-31T21:35:30.816Z",
+  "sourceHead": "c58f5a6f8e67b13bc511a41d6de44fc486782fcb",
+  "model": "claude-opus-5-5",
+  "node": "v25.1.0",
+  "claude": "2.1.316 (Claude Code)",
+  "chrome": "Google Chrome 156.0.8078.74",
+  "authentication": "user-provided local Claude CLI proxy; inherited environment; no session credentials imported",
+  "tasks": {
+    "netflix-1": "I'm deciding whether to start Stranger Things. Check Netflix's public page at https://www.netflix.com/title/80057281 and give me the first 3 episodes shown by default, with their exact episode titles and runtimes. Do not change the season. Reply only with a JSON array of 3 objects with keys \"title\" and \"minutes\" (a number).",
+    "ikea-5": "I'm planning IKEA visits in California. Look up the street address of each of these IKEA stores on IKEA's US website: Emeryville, East Palo Alto, West Sacramento, Costa Mesa, and San Diego. Reply only with a JSON array of 5 objects with keys \"store\" and \"address\". Include street, city, state and ZIP in each address."
+  },
+  "trialsPerArm": 5,
+  "armOrder": [
+    "browser",
+    "api"
+  ],
+  "trialBudgetUsd": 1,
+  "batchBudgetUsd": 25,
+  "memoryFreePercent": 57,
+  "sha256": {
+    "bench/run-agents.mjs": "ad73d4df44ec30ed7af179737d2655963c3f8e54b90ef34635eef78e84302de0",
+    "bench/popular.mjs": "b268c73171d8997dd168b3c624f8aa9736f246dfefaa0dd99765fffe4f739152",
+    "bench/results/popular-2026-10-31/protocol.md": "77f98681c78c01a8bd772cd7a1b3c044149efff9e2f22a1d23f3f8c2542af4a2",
+    "sites/netflix.json": "251fcbe65b3912b510c1104f5155dba6c2ec7c6eb438a46db9374f98b39b8d78",
+    "sites/ikea.json": "058d4295e403a8215f53081d13fa22800bbaf650b9a943492a66b2f0f7eb2d5c",
+    "dist/cli.js": "e372926fe4f2259974bdd43291206cc546f5025a351289ccd50342e80f876ea1",
+    "package-lock.json": "92b5cbb6e11bdda60c3e616f7225cffe715300da51f74e8640cffb4cbf62bc44"
+  }
+}

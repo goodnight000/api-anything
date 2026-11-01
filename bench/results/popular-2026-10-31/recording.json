@@ -1,0 +1,106 @@
+{
+  "recordedAt": "2026-10-31T21:48:01.833Z",
+  "model": "claude-opus-5-5",
+  "task": "netflix-1",
+  "mode": "sequential replay; clocks aligned for editing, not simultaneous",
+  "selectionReason": "Both tasks passed all trials. Netflix had non-overlapping timing ranges; IKEA had one slower API trial.",
+  "attempts": 1,
+  "rawDirectory": "bench/video/raw-popular-2026-10-31",
+  "timeline": "bench/video/raw-popular-2026-10-31/timeline.json",
+  "footage": [
+    {
+      "path": "bench/video/raw-popular-2026-10-31/footage/page@3d6bf17e1ab3962289f3de6937b12048.webm",
+      "sha256": "90b871242ad8d428714742422c83597dcfd44edfd374e99b92b456235a2df05d",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "vp8",
+            "width": 1280,
+            "height": 800
+          }
+        ],
+        "format": {
+          "duration": "17.640000",
+          "size": "3468420"
+        }
+      }
+    }
+  ],
+  "browser": {
+    "t": 28379,
+    "durationMs": 22171,
+    "costUsd": 0.0439586,
+    "turns": 4,
+    "answer": "```json\n[\n  {\"title\": \"Chapter One: The Vanishing of Will Byers\", \"minutes\": 49},\n  {\"title\": \"Chapter Two: The Weirdo on Maple Street\", \"minutes\": 56},\n  {\"title\": \"Chapter Three: Holly, Jolly\", \"minutes\": 52}\n]\n```",
+    "exit": 0,
+    "isError": false,
+    "truth": {
+      "startedAt": "2026-10-31T21:48:30.545Z",
+      "endedAt": "2026-10-31T21:48:32.318Z",
+      "source": "rendered Chrome DOM",
+      "rows": [
+        {
+          "title": "Chapter One: The Vanishing of Will Byers",
+          "minutes": 49,
+          "url": "https://www.netflix.com/title/80057281"
+        },
+        {
+          "title": "Chapter Two: The Weirdo on Maple Street",
+          "minutes": 56,
+          "url": "https://www.netflix.com/title/80057281"
+        },
+        {
+          "title": "Chapter Three: Holly, Jolly",
+          "minutes": 52,
+          "url": "https://www.netflix.com/title/80057281"
+        }
+      ]
+    },
+    "grade": {
+      "correct": true,
+      "matches": 3,
+      "required": 3
+    }
+  },
+  "api": {
+    "t": 11313,
+    "durationMs": 10360,
+    "costUsd": 0.040809,
+    "turns": 3,
+    "answer": "```json\n[{\"title\":\"Chapter One: The Vanishing of Will Byers\",\"minutes\":49},{\"title\":\"Chapter Two: The Weirdo on Maple Street\",\"minutes\":56},{\"title\":\"Chapter Three: Holly, Jolly\",\"minutes\":52}]\n```",
+    "exit": 0,
+    "isError": false,
+    "truth": {
+      "startedAt": "2026-10-31T21:48:53.451Z",
+      "endedAt": "2026-10-31T21:48:59.968Z",
+      "source": "rendered Chrome DOM",
+      "rows": [
+        {
+          "title": "Chapter One: The Vanishing of Will Byers",
+          "minutes": 49,
+          "url": "https://www.netflix.com/title/80057281"
+        },
+        {
+          "title": "Chapter Two: The Weirdo on Maple Street",
+          "minutes": 56,
+          "url": "https://www.netflix.com/title/80057281"
+        },
+        {
+          "title": "Chapter Three: Holly, Jolly",
+          "minutes": 52,
+          "url": "https://www.netflix.com/title/80057281"
+        }
+      ]
+    },
+    "grade": {
+      "correct": true,
+      "matches": 3,
+      "required": 3
+    }
+  },
+  "recordingSpendUsd": 0.0847676,
+  "benchmarkSpendUsd": 1.1635208000000001,
+  "totalModelSpendUsd": 1.2482884
+}
