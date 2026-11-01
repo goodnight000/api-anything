@@ -24,7 +24,11 @@ export const bundledSites = () =>
 /** What a packed file list lacks that an install needs, or ships that it must not. */
 export function packProblems(files: string[]): string[] {
   const has = new Set(files);
-  const need = ["package.json", "dist/cli.js", "dist/index.js", "dist/index.d.ts", SKILL];
+  // setup copies the skill folder whole: SKILL.md links into references/
+  const skill = readdirSync(join(ROOT, "skills", "api-anything"), { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile())
+    .map((e) => join(e.parentPath, e.name).slice(ROOT.length).split("\\").join("/"));
+  const need = ["package.json", "dist/cli.js", "dist/index.js", "dist/index.d.ts", SKILL, ...skill];
   return [
     ...need.filter((f) => !has.has(f)).map((f) => `missing ${f}`),
     ...bundledSites()

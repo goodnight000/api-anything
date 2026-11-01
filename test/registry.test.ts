@@ -1679,12 +1679,13 @@ test("search leaves out common words and labels a real capability's uncovered co
     .filter((f) => f.endsWith(".json"))
     .map((f) => ({ ...parseSite(JSON.parse(readFileSync(join(dir, f), "utf8"))), name: f.slice(0, -5) }));
   const top = async (q: string) => (await search(q, { local })).matches.map((m) => m.site);
-  for (const q of ["weather in paris", "the weather", "the best"]) assert.deepEqual(await top(q), [], q);
-  assert.deepEqual(await top("price of a hotel in rome"), ["trip"], "hotel lists now survive the other words");
+  for (const q of ["parking in paris", "the parking", "the best"]) assert.deepEqual(await top(q), [], q);
+  assert.deepEqual(await top("price of a hotel in rome"), ["booking"], "hotel search survives the other words");
   const hotel = (await search("price of a hotel in rome", { local })).matches[0]!;
-  assert.deepEqual(hotel.matched, ["hotel"]);
-  assert.deepEqual(hotel.unmatched, ["price", "rome"], "hotel lists do not promise pricing or a Rome route");
-  assert.deepEqual(await top("the best book ratings"), ["goodreads"]);
+  assert.deepEqual(hotel.matched, ["price", "hotel"]);
+  assert.deepEqual(hotel.unmatched, ["rome"], "a destination is an arg, not a capability");
+  assert.deepEqual(await top("book ratings"), ["goodreads", "toscrape"], '"book" is not a prefix match on "booking"');
+  assert.deepEqual(await top("the best book ratings"), ["goodreads", "toscrape"]);
   assert.deepEqual(await top("hacker news"), ["hacker-news"], "news keeps its s");
   // each op repeats the query's words: past the registry's cap, local scoring reads no more of them either
   const long = `book ratings ${Array.from({ length: 5000 }, (_, i) => `filler${i}`).join(" ")}`;
@@ -1850,7 +1851,7 @@ test("MCP: find_sites, then list_operations pulls the shared site, whose writes 
   share(shared);
   const { client, tool } = await mcp();
   try {
-    const f = await tool("find_sites", { query: "book ratings" });
+    const f = await tool("find_sites", { query: "bookshelf ratings" });
     assert.equal(f.matches[0].site, "bookshelf");
     assert.equal(f.matches[0].installed, false);
     assert.deepEqual(
@@ -1932,7 +1933,7 @@ test("MCP: call_operation on a site that is not installed pulls it for the agent
 test("MCP: find_sites with no match broadens discovery before learning, with an executable next call", async () => {
   const { client, tool } = await mcp();
   try {
-    const f = await tool("find_sites", { query: "weather in paris" });
+    const f = await tool("find_sites", { query: "parking in paris" });
     assert.deepEqual(f.matches, []);
     assert.deepEqual(f.nextCall, { tool: "list_sites", args: {} });
     assert.ok(Array.isArray(await tool(f.nextCall.tool, f.nextCall.args)));

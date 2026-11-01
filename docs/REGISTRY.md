@@ -13,8 +13,9 @@ using the tool; a person is asked only to share an operation that needed a login
 
 ## Setup
 
-`npx api-anything setup` finds the user's agents (Claude Code, Codex, Cursor, Claude Desktop),
-connects the MCP server to each (and the skill where the agent takes skills), checks for a Chromium
+`npx api-anything setup` finds the user's agents (Claude Code, Codex, Cursor, Claude Desktop, Gemini
+CLI, VS Code), connects the MCP server to each (and the skill where the agent takes skills), checks
+for a Chromium
 browser (needed only to learn sites), makes the install's key (`identity.ts`: an Ed25519 pair in
 `~/.api-anything/key.json`, 0600) and asks one question:
 

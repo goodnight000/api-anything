@@ -311,7 +311,7 @@ ${s.description ? `<p>${esc(s.description)}</p>` : ""}</a></li>`;
     : "Nothing is shared yet.";
   const body = `<h1>API Anything</h1>
 <p class="lede">${esc(TAGLINE)} It learns the requests a site's own pages make, then your agent calls them over MCP, the CLI or TypeScript and gets JSON back.</p>
-${extra.stats ? `${proofStrip(extra.stats)}\n` : ""}<p class="note">Set it up for your agents (Claude Code, Codex, Cursor, Claude Desktop):</p>
+${extra.stats ? `${proofStrip(extra.stats)}\n` : ""}<p class="note">Set it up for your agents (Claude Code, Codex, Cursor, Claude Desktop, Gemini CLI, VS Code):</p>
 ${command(esc(INSTALL))}
 <h2 id="sites">Shared sites</h2>
 <p class="note">Operations other installs learned. Each is checked by the installs that call it: live means installs other than its uploader confirmed it works.</p>

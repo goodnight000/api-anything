@@ -34,11 +34,13 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/clean.ts` | a call with no cookies or session values, over plain HTTP: whether an op is public |
 | `src/learnsite.ts` | `learn_site`: add's two runs with the user's args, the pick from the outline, a holdout call, a clean replay, then share |
 | `src/setup.ts` | `setup`: connect the MCP server and the skill to each agent, the key, the one question |
+| `src/skill.ts` | the skill folder's copies: install, the stamp, and refreshing an untouched older copy |
 | `src/login.ts`, `src/import.ts` | sign in by importing the everyday browser's cookies; re-import on `auth` |
 | `src/cli.ts`, `src/mcp.ts`, `src/mcp-learn.ts`, `src/index.ts` | entry points; `mcp-learn.ts` is the MCP `learn_site` tool |
 | `src/jobs.ts` | an MCP call still running at its deadline answers with a job; identical calls join it |
 | `src/clients.ts` | `mcp --print-config`: how each MCP client adds the server, with absolute paths |
 | `registry/` | the registry service: a Cloudflare Worker with D1 (docs/REGISTRY.md) |
+| `skills/api-anything/` | the agent skill: a short `SKILL.md` core, and `references/` for authoring and writes; it never restates a tool description or `--help` |
 
 ## Rules
 

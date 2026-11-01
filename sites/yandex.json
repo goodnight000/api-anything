@@ -1,0 +1,171 @@
+{
+  "name": "yandex",
+  "baseUrl": "https://yandex.ru",
+  "operations": [
+    {
+      "name": "getWeather",
+      "request": {
+        "method": "GET",
+        "url": "https://yandex.ru/pogoda/ru/%7Bcity%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "dpr": "1",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-arch": "\"x86\"",
+          "sec-ch-ua-bitness": "\"64\"",
+          "sec-ch-ua-full-version": "\"156.0.8078.74\"",
+          "sec-ch-ua-full-version-list": "\"Not:A-Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"156.0.8078.74\", \"Google Chrome\";v=\"156.0.8078.74\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-ua-wow64": "?0",
+          "sec-ch-viewport-height": "720",
+          "sec-ch-viewport-width": "1280",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "viewport-width": "1280"
+        }
+      },
+      "slots": [
+        {
+          "param": "city",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://yandex.ru/pogoda/ru/{city}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "yandex.ru",
+        "path": "/pogoda/ru/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "place": "h1",
+            "summary": "article > p",
+            "temperature": "[class*=\"AppFactTemperature_content\"]",
+            "condition": "[class*=\"AppFact_warning__first_text\"]",
+            "feelsLike": "[class*=\"AppFact_feels__base\"]",
+            "precipitation": "[class*=\"AppFact_warning__second\"]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "city",
+          "type": "string",
+          "required": true,
+          "example": "moscow",
+          "description": "the city slug Yandex Weather uses in its address, in Latin letters: moscow, saint-petersburg, kazan, novosibirsk, yekaterinburg",
+          "pattern": "[a-z0-9-]+",
+          "hint": "a Yandex Weather city slug, e.g. moscow"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "city": "zzqqxxnotacity"
+          },
+          "expect": "input"
+        }
+      ],
+      "description": "Current weather for a city from Yandex Weather (yandex.ru/pogoda): place, summary (one sentence with wind, pressure, humidity), temperature, condition, feelsLike and precipitation. Text is in Russian."
+    },
+    {
+      "name": "hourlyForecast",
+      "request": {
+        "method": "GET",
+        "url": "https://yandex.ru/pogoda/ru/%7Bcity%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "dpr": "1",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-arch": "\"x86\"",
+          "sec-ch-ua-bitness": "\"64\"",
+          "sec-ch-ua-full-version": "\"156.0.8078.74\"",
+          "sec-ch-ua-full-version-list": "\"Not:A-Brand\";v=\"8.0.0.0\", \"Chromium\";v=\"156.0.8078.74\", \"Google Chrome\";v=\"156.0.8078.74\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-model": "\"\"",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-ch-ua-platform-version": "\"10_15_7\"",
+          "sec-ch-ua-wow64": "?0",
+          "sec-ch-viewport-height": "720",
+          "sec-ch-viewport-width": "1280",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "viewport-width": "1280"
+        }
+      },
+      "slots": [
+        {
+          "param": "city",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://yandex.ru/pogoda/ru/{city}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "yandex.ru",
+        "path": "/pogoda/ru/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "li[class*=\"AppHourlyItem_container\"]",
+          "fields": {
+            "time": "time",
+            "temperature": "[class*=\"AppHourlyItem_main\"]",
+            "description": "p.visuallyHidden"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "city",
+          "type": "string",
+          "required": true,
+          "example": "moscow",
+          "description": "the city slug Yandex Weather uses in its address, in Latin letters: moscow, saint-petersburg, kazan, novosibirsk, yekaterinburg",
+          "pattern": "[a-z0-9-]+",
+          "hint": "a Yandex Weather city slug, e.g. moscow"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "description": "Hourly forecast for a city from Yandex Weather, from the current hour through the end of tomorrow (about 40 items): time (the city's local time; sunrise and sunset appear as extra items), temperature and description. Text is in Russian."
+    }
+  ],
+  "displayName": "Yandex Weather",
+  "description": "Yandex Weather (yandex.ru/pogoda), logged out: current weather and the hourly forecast for a city. Results are in Russian. Yandex web search and Yandex Market answer a SmartCaptcha to automated browsers, so they are not covered."
+}

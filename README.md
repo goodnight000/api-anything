@@ -99,8 +99,9 @@ One site, one model, a few dozen runs. [Method, raw numbers and limits](bench/RE
 npx -y api-anything setup
 ```
 
-It connects the MCP server to Claude Code, Codex, Cursor and Claude Desktop, adds the skill to the
-agents that take skills, and asks one question: help build the shared catalog? The default is yes.
+It connects the MCP server to Claude Code, Codex, Cursor, Claude Desktop, Gemini CLI and VS Code,
+adds the skill to the agents that take skills (a newer api-anything keeps it current), and asks one
+question: help build the shared catalog? The default is yes.
 Or paste this into your coding agent and let it do the setup:
 
 ```text
@@ -238,7 +239,8 @@ Find what other agents learned, use it at once, and share yours back after the s
 | `login` | refresh a session from the browser profile you chose, or open a window to sign in |
 
 Each answer is JSON text, and an object answer is also sent as `structuredContent`. To build
-operations by hand, an agent needs a shell and the [skill](skills/api-anything/SKILL.md).
+operations by hand, an agent needs a shell and the [skill](skills/api-anything/SKILL.md), whose
+[authoring reference](skills/api-anything/references/authoring.md) covers capture, add and verify.
 
 `call_operation` accepts a separate `view: {fields?, maxChars?}` (CLI `call --fields a,b
 --max-chars 4000`). A cut answer's `more` goes to `get_result` (CLI `result <resultId>`),
@@ -339,7 +341,7 @@ any browser is used.
 
 ### Or describe what you need
 
-Tell an agent what you want from a site. The [skill](skills/api-anything/SKILL.md) has it:
+Tell an agent what you want from a site. The [skill](skills/api-anything/references/authoring.md) has it:
 
 1. ask about whatever the request leaves unclear;
 2. propose operations as `name(inputs) -> fields`, and wait for your approval;
@@ -495,26 +497,28 @@ either: a trigger step that would type into a password or one-time-code field fa
 
 ## Sites in the catalog
 
-107 read operations across 55 sites, bundled with the package and served by the catalog. They cover
+139 read operations across 68 sites, bundled with the package and served by the catalog. They cover
 selected features, not whole sites. On 2026-10-31, called from an empty home with their examples, 97
-of the 99 that need no account answered with data. `api-anything ops <site>` lists each op's params
+of the 99 that needed no account in the first 55 sites answered with data, and `verify` passed for each
+of the 13 added since. `api-anything ops <site>` lists each op's params
 and caveats.
 
 | kind | sites |
 |---|---|
-| Search and social | `reddit` · `x` · `instagram` · `youtube` · `pinterest` · `hacker-news` · `bing` · `linkedin` (your account) |
-| Travel and places | `google-flights` · `airbnb` · `google-maps` · `trip` · `flixbus` · `megabus` · `jet2holidays` · `rightmove` |
+| Search and social | `reddit` · `x` · `instagram` · `tiktok` · `youtube` · `pinterest` · `hacker-news` · `habr` · `bing` · `wikipedia` · `linkedin` (your account) |
+| Travel and places | `google-flights` · `booking` · `airbnb` · `google-maps` · `trip` · `flixbus` · `megabus` · `jet2holidays` · `rightmove` |
 | Shopping | `amazon` · `ikea` · `nike` · `costco` · `apple` · `ulta` · `uniqlo` · `zalando` · `vinted` · `craigslist` · `gumtree` · `instacart` · `waitrose` · `aldi` · `auchan` |
-| Food | `mcdonalds` · `chownow` · `bbcgoodfood` · `dominos-au` (2 of 3 need an account) |
-| Books, film and games | `goodreads` · `rottentomatoes` · `netflix` · `disneyplus` · `justwatch` · `fandango` · `steam` · `google-play` |
-| Events and sport | `eventbrite` · `meetup` · `ticketmaster` · `flashscore` |
-| Learning and jobs | `coursera` · `edx` · `khan-academy` · `hays` · `workday` |
+| Food | `allrecipes` · `mcdonalds` · `chownow` · `bbcgoodfood` · `dominos-au` (2 of 3 need an account) |
+| Books, film and games | `goodreads` · `openlibrary` · `rottentomatoes` · `netflix` · `disneyplus` · `justwatch` · `fandango` · `steam` · `google-play` |
+| Events and sport | `espn` · `eventbrite` · `meetup` · `ticketmaster` · `flashscore` |
+| Learning and jobs | `coursera` · `edx` · `khan-academy` · `lever` · `hh` (Russia) · `hays` · `workday` |
 | Markets and health | `nasdaq` · `tradingview` · `healthline` |
+| Developers and data | `github` · `huggingface` · `toscrape` (a scraping sandbox) · `yandex` (weather) |
 
 Known gaps: `google-flights.priceCalendar` answers an internal error since Google changed it, and
 `aldi.applianceDetails`'s example product is gone. `dominos-au` came in through `publish` from a
 contributor. `goodreads` was built by the explorer above. `reddit` was the site agents asked for
-most. Everything agents share after this lands in the
+most, and `booking`, `tiktok` and `yandex` were near the top of the asked-for list the catalog keeps. Everything agents share after this lands in the
 [catalog](https://api-anything-registry.forth-site.workers.dev) first.
 
 ## Help build it
@@ -546,7 +550,7 @@ npm run smoke:pack         # pack, install the tarball in a temp dir, run its CL
 ## Limits
 
 - Calls run on your machine, your network and your sessions. The catalog is a directory of specs,
-  not a hosted API, and it's young: 55 sites today.
+  not a hosted API, and it's young: 68 sites today.
 - It knows only the operations someone taught it, not every feature of every site.
 - `learn_site` learns from one page load per value, from a URL template. A site whose data appears
   only after clicks or typing, or only on in-app navigation, needs the CLI's `capture` and `add`
