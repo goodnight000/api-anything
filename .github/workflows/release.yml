@@ -2,7 +2,8 @@ name: Release
 
 # Publishes to npm when a v* tag is pushed, through npm trusted publishing: npm checks this workflow's
 # OIDC identity against the trusted publisher set on the package, so no token is stored anywhere and
-# the release carries provenance. Run it by hand (workflow_dispatch) for a dry run that publishes nothing.
+# the release carries provenance, then lists the version on the official MCP Registry. Run it by hand
+# (workflow_dispatch) for a dry run that publishes nothing.
 on:
   push:
     tags: ["v*"]
@@ -10,7 +11,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # the OIDC token npm exchanges for a one-time publish credential
+  id-token: write # the OIDC token npm and the MCP Registry exchange for a one-time publish credential
 
 concurrency:
   group: release
@@ -32,7 +33,7 @@ jobs:
       # trusted publishing needs npm 11.5.1 or newer
       - run: npm install -g npm@11
       - run: npm ci
-      - name: The tag names the version in package.json
+      - name: The tag names the version in package.json and server.json
         if: github.event_name == 'push'
         run: |
           version=$(node -p 'require("./package.json").version')
@@ -40,6 +41,55 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match package.json version $version"
             exit 1
           fi
+          listed=$(node -p 'const s = require("./server.json"); s.version + " " + s.packages[0].version')
+          if [ "$listed" != "$version $version" ]; then
+            echo "::error::server.json lists $listed, package.json is $version"
+            exit 1
+          fi
       # prepublishOnly runs check and lint; CI ran the tests on this commit before it was tagged
       # a dry run unless a tag push started it (an empty string is false in an expression, so test the inverse)
       - run: npm publish ${{ github.event_name != 'push' && '--dry-run' || '' }}
+
+  # The official MCP Registry lists server.json. It accepts a version only once npm serves that
+  # version with the same mcpName, so this runs after publish, signed in with this workflow's OIDC
+  # token (GitHub sign-in grants the io.github.goodnight000/ namespace; no secret is stored). A job of
+  # its own, so a failed listing can be re-run without publishing to npm again.
+  mcp-registry:
+    needs: publish
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Wait until npm serves the published version
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          want=$(node -p 'require("./package.json").mcpName')
+          for _ in $(seq 1 30); do
+            if [ "$(npm view "api-anything@$version" mcpName 2>/dev/null)" = "$want" ]; then exit 0; fi
+            sleep 10
+          done
+          echo "::error::npm does not serve api-anything@$version with mcpName $want after 5 minutes"
+          exit 1
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Download mcp-publisher, verified by its Sigstore bundle
+        env:
+          MCP_PUBLISHER_VERSION: v1.8.7
+        run: |
+          set -euo pipefail
+          archive="mcp-publisher_linux_amd64.tar.gz"
+          base="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" "$base/$archive"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive.sigstore.json" "$base/$archive.sigstore.json"
+          cosign verify-blob \
+            --bundle "$RUNNER_TEMP/$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$RUNNER_TEMP/$archive"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" mcp-publisher
+      - name: Publish server.json to the MCP Registry
+        run: |
+          "$RUNNER_TEMP/mcp-publisher" login github-oidc
+          "$RUNNER_TEMP/mcp-publisher" publish

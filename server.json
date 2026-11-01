@@ -1,0 +1,52 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.goodnight000/api-anything",
+  "title": "API Anything",
+  "description": "Call websites as APIs: a shared catalog of operations learned from each site's own requests.",
+  "websiteUrl": "https://api-anything-registry.forth-site.workers.dev",
+  "repository": {
+    "url": "https://github.com/goodnight000/api-anything",
+    "source": "github",
+    "id": "1390721556"
+  },
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/goodnight000/api-anything/main/docs/media/logo.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": ["any"]
+    }
+  ],
+  "version": "0.3.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "api-anything",
+      "version": "0.3.2",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "API_ANYTHING_HOME",
+          "description": "Directory for learned sites, sessions and settings. Defaults to ~/.api-anything.",
+          "format": "filepath",
+          "isRequired": false
+        },
+        {
+          "name": "API_ANYTHING_BROWSER",
+          "description": "Chromium browser used to learn sites and for the browser tier, by name (brave) or path. Defaults to Google Chrome.",
+          "format": "string",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,12 +1,14 @@
 {
   "name": "api-anything",
-  "description": "api-anything: learn operations from websites' browser traffic and call them from your agent.",
+  "description": "API Anything: call websites as APIs from your agent, from a shared catalog of operations agents learned.",
   "owner": { "name": "Tianjun Zheng", "url": "https://github.com/goodnight000" },
   "plugins": [
     {
       "name": "api-anything",
       "source": "./",
-      "description": "The api-anything skill plus its MCP server: find_sites, list_operations, call_operation, learn_site and the rest."
+      "description": "The api-anything skill plus its MCP server: find_sites, list_operations, call_operation, learn_site and the rest.",
+      "category": "data",
+      "tags": ["mcp", "web", "api", "scraping"]
     }
   ]
 }
