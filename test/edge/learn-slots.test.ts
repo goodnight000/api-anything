@@ -1240,17 +1240,19 @@ test("a cookie holding the site's own origin refuses no add or export, and any o
     assert.deepEqual(exportSite(site).secrets, [], site);
   }
 
-  // a setting the origin holds (the page keeps its host) stays one through the add, a cookie re-import and a retry
+  // page storage keeping the site's own host is its address, not a session value: no ref, through the add,
+  // a cookie re-import and a retry
   const lastPage = here("__ps_lu", encodeURIComponent("http://127.0.0.1/"));
   const hostAdd = () =>
     add("issue27-host", xhr({ url: `${local}?q=kittens&host=127.0.0.1` }), [lastPage], { host: "127.0.0.1" });
-  await hostAdd();
-  assert.deepEqual(loadSession("issue27-host").kinds, { "op/host": "setting" });
+  const noHostRef = (op: { slots: { ref?: string }[] }) =>
+    assert.ok(!op.slots.some((s) => s.ref === "session:op/host"));
+  noHostRef((await hostAdd()).operation);
+  assert.equal(loadSession("issue27-host").kinds?.["op/host"], undefined);
   // the saved operation's origin is the site's own from now on, for every write
   assert.deepEqual(loadSession("issue27-host").origins, ["http://127.0.0.1"]);
   saveSession("issue27-host", { ...loadSession("issue27-host"), cookies: [lastPage] });
-  assert.deepEqual(loadSession("issue27-host").kinds, { "op/host": "setting" });
-  await hostAdd();
+  noHostRef((await hostAdd()).operation);
   assert.deepEqual(exportSite("issue27-host").secrets, []);
 
   // a URL that carries more than the origin is still a credential: its copy becomes a ref

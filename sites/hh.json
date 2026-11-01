@@ -1,0 +1,196 @@
+{
+  "name": "hh",
+  "baseUrl": "https://hh.ru",
+  "operations": [
+    {
+      "name": "searchVacancies",
+      "request": {
+        "method": "GET",
+        "url": "https://hh.ru/search/vacancy?text=%7Btext%7D&area=%7Barea%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "text",
+          "at": [
+            "query:text"
+          ]
+        },
+        {
+          "param": "area",
+          "at": [
+            "query:area"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://hh.ru/search/vacancy?text={text}&area={area}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "hh.ru",
+        "path": "/search/vacancy"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "vacancyId=url~/vacancy/(\\d+)",
+          "title",
+          "employer",
+          "address",
+          "salary",
+          "experience"
+        ],
+        "html": {
+          "items": "[data-qa=\"vacancy-serp__results\"] [data-qa=\"vacancy-serp__vacancy\"]",
+          "fields": {
+            "title": "[data-qa=\"serp-item__title-text\"]",
+            "url": "a[data-qa=\"serp-item__title\"]@href",
+            "employer": "[data-qa=\"vacancy-serp__vacancy-employer-text\"]",
+            "address": "[data-qa=\"vacancy-serp__vacancy-address\"]",
+            "salary": "span:has(> data)",
+            "experience": "[data-qa^=\"vacancy-serp__vacancy-work-experience\"]"
+          },
+          "empty": "[data-qa=\"empty-vacancy-search-block\"]"
+        }
+      },
+      "params": [
+        {
+          "name": "text",
+          "type": "string",
+          "required": true,
+          "example": "python",
+          "description": "search words, in Russian or English, e.g. \"python\" or \"бухгалтер\""
+        },
+        {
+          "name": "area",
+          "type": "string",
+          "required": false,
+          "example": "1",
+          "default": "113",
+          "pattern": "\\d+",
+          "hint": "a numeric hh.ru area id, e.g. 1 (Moscow)",
+          "description": "hh.ru region id: 113 Russia (default), 1 Moscow, 2 Saint Petersburg, 88 Kazan, 4 Novosibirsk, 3 Yekaterinburg"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "text": "повар",
+            "area": "2"
+          },
+          "expect": "result",
+          "purpose": "area=2 (Saint Petersburg) drops the Moscow rows of the example"
+        },
+        {
+          "args": {
+            "text": "zzqqxxwvnothing",
+            "area": "1"
+          },
+          "expect": "empty"
+        }
+      ],
+      "links": [
+        {
+          "from": "vacancyId",
+          "to": {
+            "op": "getVacancy",
+            "arg": "vacancyId"
+          }
+        }
+      ],
+      "description": "Search hh.ru job vacancies by keywords in one region: the first page of results (up to 20), with vacancyId, title, employer, address, salary and experience. Results are in Russian, as the site shows them."
+    },
+    {
+      "name": "getVacancy",
+      "request": {
+        "method": "GET",
+        "url": "https://hh.ru/vacancy/%7BvacancyId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "vacancyId",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://hh.ru/vacancy/{vacancyId}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "hh.ru",
+        "path": "/vacancy/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "title": "[data-qa=\"vacancy-title\"]",
+            "salary": "[data-qa^=\"vacancy-salary\"]",
+            "employer": "[data-qa=\"vacancy-company-name\"]",
+            "experience": "[data-qa=\"vacancy-experience\"]",
+            "employment": "[data-qa=\"common-employment-text\"]",
+            "workFormats": "[data-qa=\"work-formats-text\"]",
+            "address": "[data-qa=\"vacancy-view-raw-address\"]",
+            "skills": "all:[data-qa=\"skills-element\"]",
+            "description": "[data-qa=\"vacancy-description\"]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "vacancyId",
+          "type": "string",
+          "required": true,
+          "example": "138480763",
+          "description": "hh.ru vacancy id, from searchVacancies",
+          "pattern": "\\d+",
+          "hint": "a numeric hh.ru vacancy id, e.g. 138480763"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "description": "One vacancy page: title, salary, employer, experience, employment, workFormats, address, skills (list) and description (plain text). Text is in Russian, or the language the employer wrote it in."
+    }
+  ],
+  "displayName": "hh.ru",
+  "description": "hh.ru (HeadHunter), the largest Russian job board, logged out: vacancy search by keywords and region, and one vacancy's details. Results are in Russian."
+}

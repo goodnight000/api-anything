@@ -1,0 +1,85 @@
+{
+  "name": "habr",
+  "baseUrl": "https://habr.com",
+  "operations": [
+    {
+      "name": "getArticle",
+      "request": {
+        "method": "GET",
+        "url": "https://habr.com/ru/amp/publications/%7BarticleId%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "articleId",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://habr.com/ru/amp/publications/{articleId}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "habr.com",
+        "path": "/ru/amp/publications/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "body",
+          "fields": {
+            "title": "article.tm-article h2.tm-article-title a",
+            "author": "article.tm-article .tm-user-info__username",
+            "published": "article.tm-article .tm-user-meta__date@title",
+            "hubs": "all:article.tm-article .tm-article-hubs__link",
+            "tags": "all:.tm-article__tags a[href*=\"search\"]",
+            "text": "#post-content-body"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "articleId",
+          "type": "string",
+          "required": true,
+          "example": "541600",
+          "description": "Habr publication id, the number in a habr.com/ru/articles/<id>/, /ru/news/<id>/ or /ru/companies/<company>/articles/<id>/ link",
+          "pattern": "\\d+",
+          "hint": "a numeric Habr publication id, e.g. 541600"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "description": "One Habr article or news item by id (company blogs included), read from its AMP page: title, author (login), published (ISO time), hubs (list), tags (list) and text (plain text of the body, cut at the output cap). Short posts (/ru/posts/<id>/) have no AMP page and answer as not found. Text is in the language the author wrote in, usually Russian.",
+      "checks": [
+        {
+          "args": {
+            "articleId": "999999999"
+          },
+          "expect": "input",
+          "purpose": "an id with no publication answers 404"
+        }
+      ]
+    }
+  ],
+  "displayName": "Habr",
+  "description": "Habr (habr.com), the Russian-language IT community, logged out: one article or news item by id. Results are in Russian."
+}

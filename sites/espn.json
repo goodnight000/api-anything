@@ -1,0 +1,228 @@
+{
+  "name": "espn",
+  "baseUrl": "https://www.espn.com",
+  "operations": [
+    {
+      "name": "scoreboard",
+      "request": {
+        "method": "GET",
+        "url": "https://www.espn.com/%7Bleague%7D/scoreboard/_/date/%7Bdate%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "league",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "date",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.espn.com/{league}/scoreboard/_/date/{date}"
+      },
+      "match": {
+        "path": "/*/scoreboard/_/date/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "page.content.scoreboard.evts",
+        "pick": [
+          "gameId=id",
+          "date",
+          "status=status.detail",
+          "state=status.state",
+          "team1=competitors[0].displayName",
+          "team1Abbrev=competitors[0].abbrev",
+          "team1Score=competitors[0].score",
+          "team1Home=competitors[0].isHome",
+          "team2=competitors[1].displayName",
+          "team2Abbrev=competitors[1].abbrev",
+          "team2Score=competitors[1].score",
+          "venue=vnue.fullName",
+          "note"
+        ],
+        "embedded": {
+          "regex": "window\\['__espnfitt__'\\]=(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "league",
+          "type": "string",
+          "required": true,
+          "example": "nba",
+          "enum": [
+            "nfl",
+            "nba",
+            "mlb",
+            "nhl",
+            "wnba",
+            "college-football",
+            "mens-college-basketball",
+            "womens-college-basketball"
+          ],
+          "description": "the league as ESPN names it in its URLs"
+        },
+        {
+          "name": "date",
+          "type": "string",
+          "required": true,
+          "example": "20261030",
+          "pattern": "\\d{8}",
+          "hint": "YYYYMMDD",
+          "description": "the day, YYYYMMDD, in US Eastern time as ESPN groups games"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "league": "nba",
+            "date": "20260801"
+          },
+          "expect": "empty",
+          "purpose": "an offseason day has no games"
+        }
+      ],
+      "description": "A league's games on one day, from ESPN's scoreboard page: gameId, date (UTC start), status (\"Final\", \"3:47 - 4th\", \"11/1 - 1:00 PM EST\"), state (pre, in or post), both teams with names, abbreviations and scores, team1Home, venue and note (a series or tournament label, when there is one). An empty list means no games that day.",
+      "links": [
+        {
+          "from": "gameId",
+          "to": {
+            "op": "getGame",
+            "arg": "gameId"
+          }
+        }
+      ]
+    },
+    {
+      "name": "getGame",
+      "request": {
+        "method": "GET",
+        "url": "https://www.espn.com/%7Bleague%7D/game/_/gameId/%7BgameId%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "league",
+          "at": [
+            "path:0"
+          ]
+        },
+        {
+          "param": "gameId",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.espn.com/{league}/game/_/gameId/{gameId}"
+      },
+      "match": {
+        "path": "/*/game/_/gameId/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html; charset=utf-8",
+        "extract": "page.content.gamepackage",
+        "pick": [
+          "gameId=gmStrp.gid",
+          "date=gmStrp.dt",
+          "status=gmStrp.status.det",
+          "home=prsdTms.home.displayName",
+          "homeScore=prsdTms.home.score",
+          "homeLinescores=prsdTms.home.linescores[*].displayValue",
+          "homeRecord=prsdTms.home.recordTotal",
+          "away=prsdTms.away.displayName",
+          "awayScore=prsdTms.away.score",
+          "awayLinescores=prsdTms.away.linescores[*].displayValue",
+          "awayRecord=prsdTms.away.recordTotal",
+          "venue=gmInfo.loc",
+          "attendance=gmInfo.attnd",
+          "leaderStats=gmLdrs.ldrs[*].name",
+          "homeLeaders=gmLdrs.ldrs[*].players.home.nameFull",
+          "homeLeaderValues=gmLdrs.ldrs[*].players.home.primaryStatValue",
+          "awayLeaders=gmLdrs.ldrs[*].players.away.nameFull",
+          "awayLeaderValues=gmLdrs.ldrs[*].players.away.primaryStatValue",
+          "headline=gmStry.hdln",
+          "recap=gmStry.desc"
+        ],
+        "embedded": {
+          "regex": "window\\['__espnfitt__'\\]=(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "league",
+          "type": "string",
+          "required": true,
+          "example": "nba",
+          "enum": [
+            "nfl",
+            "nba",
+            "mlb",
+            "nhl",
+            "wnba",
+            "college-football",
+            "mens-college-basketball",
+            "womens-college-basketball"
+          ],
+          "description": "the league as ESPN names it in its URLs; the same league scoreboard was called with"
+        },
+        {
+          "name": "gameId",
+          "type": "string",
+          "required": true,
+          "example": "401909277",
+          "pattern": "\\d+",
+          "hint": "a numeric ESPN game id",
+          "description": "ESPN game id, from scoreboard"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "description": "One game's page: status, home and away teams with score, per-period linescores and record, venue, attendance, the leaders in each stat category (leaderStats, with the home and away player and value at the same index) and the story headline and recap. Before a game starts there is no score, and the leaders are season leaders."
+    }
+  ],
+  "displayName": "ESPN",
+  "description": "ESPN scores, logged out: a league's games on a day and one game's score, linescores, leaders and recap, for the NFL, NBA, MLB, NHL, WNBA and college football and basketball."
+}

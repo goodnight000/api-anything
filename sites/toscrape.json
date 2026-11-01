@@ -1,0 +1,317 @@
+{
+  "name": "toscrape",
+  "displayName": "toscrape.com scraping sandbox",
+  "baseUrl": "https://books.toscrape.com",
+  "description": "The toscrape.com scraping sandbox, read from its server-rendered pages: books.toscrape.com (a fake bookstore: a category's books and a book's details) and quotes.toscrape.com (quotes by tag and an author's bio).",
+  "operations": [
+    {
+      "name": "listCategoryBooks",
+      "description": "Books in a books.toscrape.com category, first page (up to 20): bookId, title, price, star rating and availability",
+      "links": [
+        {
+          "from": "bookId",
+          "to": {
+            "op": "getBook",
+            "arg": "bookId"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "https://books.toscrape.com/catalogue/category/books/%7Bcategory%7D/index.html",
+        "headers": {
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "category",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://books.toscrape.com/catalogue/category/books/{category}/index.html"
+      },
+      "match": {
+        "method": "GET",
+        "host": "books.toscrape.com",
+        "path": "/catalogue/category/books/*/index.html"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "pick": [
+          "bookId=url~catalogue/([^/]+)/index\\.html",
+          "title",
+          "price",
+          "rating=rating~star-rating (\\w+)",
+          "availability"
+        ],
+        "html": {
+          "items": "ol.row li",
+          "fields": {
+            "title": "h3 a@title",
+            "url": "h3 a@href",
+            "price": "p.price_color",
+            "rating": "p.star-rating@class",
+            "availability": "p.availability"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "category",
+          "type": "string",
+          "required": true,
+          "example": "mystery_3",
+          "description": "category slug with its number, as in the category URL: mystery_3, travel_2, poetry_23, science-fiction_16",
+          "pattern": "[a-z0-9-]+_\\d+",
+          "hint": "slug_number, e.g. mystery_3"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "getBook",
+      "description": "One book on books.toscrape.com by bookId: title, price, availability, stock count, star rating, category, UPC and description",
+      "request": {
+        "method": "GET",
+        "url": "https://books.toscrape.com/catalogue/%7BbookId%7D/index.html",
+        "headers": {
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "bookId",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://books.toscrape.com/catalogue/{bookId}/index.html"
+      },
+      "match": {
+        "method": "GET",
+        "host": "books.toscrape.com",
+        "path": "/catalogue/*/index.html"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html",
+        "pick": [
+          "title",
+          "price",
+          "availability",
+          "inStock=availability~\\((\\d+) available\\)",
+          "rating=rating~star-rating (\\w+)",
+          "category",
+          "upc",
+          "description"
+        ],
+        "html": {
+          "items": "body",
+          "fields": {
+            "title": "article.product_page h1",
+            "price": "article.product_page p.price_color",
+            "availability": "article.product_page p.availability",
+            "rating": "article.product_page p.star-rating@class",
+            "description": "#product_description + p",
+            "upc": "table tr:nth-child(1) td",
+            "category": "ul.breadcrumb li:nth-child(3) a"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "bookId",
+          "type": "string",
+          "required": true,
+          "example": "sharp-objects_997",
+          "description": "book slug with its number, as in the book URL: sharp-objects_997, a-light-in-the-attic_1000",
+          "pattern": "[a-z0-9-]+_\\d+",
+          "hint": "slug_number, e.g. sharp-objects_997"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "bookId": "zzqq-nothing_1"
+          },
+          "expect": "input",
+          "purpose": "an unknown book id is a 404"
+        }
+      ]
+    },
+    {
+      "name": "quotesByTag",
+      "description": "Quotes with a tag on quotes.toscrape.com, first page (up to 10): text, author, authorId and all the quote's tags",
+      "links": [
+        {
+          "from": "authorId",
+          "to": {
+            "op": "getAuthor",
+            "arg": "authorId"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "https://quotes.toscrape.com/tag/%7Btag%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "tag",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://quotes.toscrape.com/tag/{tag}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "quotes.toscrape.com",
+        "path": "/tag/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "text",
+          "author",
+          "authorId=authorUrl~/author/([^/?#]+)",
+          "tags"
+        ],
+        "html": {
+          "items": "div.col-md-8 div.quote",
+          "fields": {
+            "text": "span.text",
+            "author": "small.author",
+            "authorUrl": "span a@href",
+            "tags": "all:a.tag"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "tag",
+          "type": "string",
+          "required": true,
+          "example": "love",
+          "description": "a quote tag, lowercase as in the tag URL: love, humor, inspirational, life, books"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "tag": "zzqqxxnothing"
+          },
+          "expect": "empty",
+          "purpose": "a tag no quote has answers an empty list"
+        }
+      ]
+    },
+    {
+      "name": "getAuthor",
+      "description": "An author's bio on quotes.toscrape.com by authorId: name, birth date, birthplace and description",
+      "request": {
+        "method": "GET",
+        "url": "https://quotes.toscrape.com/author/%7BauthorId%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "authorId",
+          "at": [
+            "path:1"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://quotes.toscrape.com/author/{authorId}/"
+      },
+      "match": {
+        "method": "GET",
+        "host": "quotes.toscrape.com",
+        "path": "/author/*/"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "html": {
+          "items": "div.author-details",
+          "fields": {
+            "name": "h3.author-title",
+            "born": "span.author-born-date",
+            "bornLocation": "span.author-born-location",
+            "description": "div.author-description"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "authorId",
+          "type": "string",
+          "required": true,
+          "example": "Albert-Einstein",
+          "description": "author slug as in the author URL, case-sensitive: Albert-Einstein, Jane-Austen, Mark-Twain"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    }
+  ]
+}

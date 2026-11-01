@@ -1,0 +1,290 @@
+{
+  "name": "huggingface",
+  "displayName": "Hugging Face",
+  "baseUrl": "https://huggingface.co",
+  "description": "Hugging Face Hub: search models and datasets the way the site's model and dataset lists do, and read one model's record (task, license, size, downloads). Public, logged out.",
+  "operations": [
+    {
+      "name": "searchModels",
+      "description": "Search models by name, as typed into the Filter by name box on huggingface.co/models (trending order, up to 30): id (\"owner/name\"), author, name, task, downloads, likes, lastModified and gated.",
+      "links": [
+        {
+          "from": "author",
+          "to": {
+            "op": "getModel",
+            "arg": "author"
+          }
+        },
+        {
+          "from": "name",
+          "to": {
+            "op": "getModel",
+            "arg": "name"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "https://huggingface.co/models-json?sort=trending&search=%7Bq%7D&withCount=true",
+        "headers": {
+          "accept": "*/*",
+          "referer": "https://huggingface.co/models",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:search"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://huggingface.co/models",
+        "steps": [
+          {
+            "action": "wait",
+            "ms": 3000
+          },
+          {
+            "action": "fill",
+            "selector": "input[placeholder=\"Filter by name\"]",
+            "value": "{q}"
+          },
+          {
+            "action": "wait",
+            "ms": 3000
+          }
+        ]
+      },
+      "match": {
+        "path": "/models-json"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "models",
+        "pick": [
+          "id",
+          "author",
+          "name=id~/(.+)$",
+          "task=pipeline_tag",
+          "downloads",
+          "likes",
+          "lastModified",
+          "gated"
+        ],
+        "shape": {
+          "models[].author": "string",
+          "models[].downloads": "number",
+          "models[].gated": "boolean",
+          "models[].id": "string",
+          "models[].lastModified": "string",
+          "models[].likes": "number",
+          "models[].pipeline_tag": "null"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "whisper",
+          "description": "words in the model id"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "zzqqxxwvnothingmatch"
+          },
+          "expect": "empty",
+          "purpose": "a name nothing matches reads as an empty list"
+        }
+      ]
+    },
+    {
+      "name": "getModel",
+      "description": "One model's record: id, author, task, library, license, parameters (from its safetensors files), downloads, likes, createdAt, lastModified, gated and tags.",
+      "request": {
+        "method": "GET",
+        "url": "https://huggingface.co/api/models/%7Bauthor%7D/%7Bname%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "author",
+          "at": [
+            "path:2"
+          ]
+        },
+        {
+          "param": "name",
+          "at": [
+            "path:3"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://huggingface.co/api/models/{author}/{name}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "huggingface.co",
+        "path": "/api/models/*/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": ".",
+        "pick": [
+          "id",
+          "author",
+          "task=pipeline_tag",
+          "library=library_name",
+          "license=cardData.license",
+          "parameters=safetensors.total",
+          "downloads",
+          "likes",
+          "createdAt",
+          "lastModified",
+          "gated",
+          "tags"
+        ]
+      },
+      "params": [
+        {
+          "name": "author",
+          "type": "string",
+          "required": true,
+          "example": "openai",
+          "description": "the owner (user or organization): the part of the model id before \"/\""
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "example": "whisper-large-v3",
+          "description": "the model name: the part of the model id after \"/\""
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "searchDatasets",
+      "description": "Search datasets by name, as typed into the Filter by name box on huggingface.co/datasets (trending order, up to 30): id, author, downloads, likes, lastModified, gated, rows and modalities.",
+      "request": {
+        "method": "GET",
+        "url": "https://huggingface.co/datasets-json?sort=trending&search=%7Bq%7D&withCount=true",
+        "headers": {
+          "accept": "*/*",
+          "referer": "https://huggingface.co/datasets",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:search"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://huggingface.co/datasets",
+        "steps": [
+          {
+            "action": "wait",
+            "ms": 3000
+          },
+          {
+            "action": "fill",
+            "selector": "input[placeholder=\"Filter by name\"]",
+            "value": "{q}"
+          },
+          {
+            "action": "wait",
+            "ms": 3000
+          }
+        ]
+      },
+      "match": {
+        "path": "/datasets-json"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8",
+        "extract": "datasets",
+        "pick": [
+          "id",
+          "author",
+          "downloads",
+          "likes",
+          "lastModified",
+          "gated",
+          "rows=datasetsServerInfo.numRows",
+          "modalities=datasetsServerInfo.modalities"
+        ],
+        "shape": {
+          "datasets[].author": "string",
+          "datasets[].downloads": "number",
+          "datasets[].gated": "boolean",
+          "datasets[].id": "string",
+          "datasets[].lastModified": "string",
+          "datasets[].datasetsServerInfo.numRows": "null",
+          "datasets[].datasetsServerInfo.modalities": "null",
+          "datasets[].likes": "number"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "squad",
+          "description": "words in the dataset id"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "zzqqxxwvnothingmatch"
+          },
+          "expect": "empty",
+          "purpose": "a name nothing matches reads as an empty list"
+        }
+      ]
+    }
+  ]
+}
