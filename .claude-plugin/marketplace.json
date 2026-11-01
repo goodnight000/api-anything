@@ -6,7 +6,7 @@
     {
       "name": "api-anything",
       "source": "./",
-      "description": "The api-anything MCP server (find_sites, call_operation, learn_site and more) and the skill that teaches Claude to find, call, learn and repair website operations.",
+      "description": "The api-anything skill plus its MCP server: find_sites, list_operations, call_operation, learn_site and the rest.",
       "category": "data",
       "tags": ["mcp", "web", "api", "scraping"]
     }

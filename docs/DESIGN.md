@@ -1852,9 +1852,29 @@ independent alternative.
     flags given, and `API_ANYTHING_HOME`/`API_ANYTHING_BROWSER` when set: a client started from the
     Dock or a menu may not get the shell's PATH (an nvm node) or its variables. Gemini CLI reads the
     command as a positional of its own, so its args follow `--` there and none is read as its flag.
-- **Skill** `skills/api-anything/SKILL.md`: the create loop (capture → add → call → verify), the
-  strict failure loop (follow `next` at most once, then stop and report), and the safety rules.
-- **Claude Code plugin** manifest (skill + MCP), plus copy-paste install lines for Codex and other agents.
+  - The server instructions also carry the skill's core in brief (find, call, learn on a miss, check
+    the domain, follow `next` once, writes only on request), for a client that loads no skill
+    (Claude Desktop takes skills only as an upload); every session pays for them, so they stay a few
+    sentences.
+- **Skill** `skills/api-anything/`: `SKILL.md` is the core an agent loads whenever a request is about
+  a website: the find, call, learn loop, the few result fields the agent must tell the user about,
+  the strict failure loop (follow `next` at most once, then stop and report), and the safety rules.
+  It is loaded whole, so a test caps it, and it restates nothing the agent already sees: the tool
+  descriptions, a failure's `next` and `--help` carry the detail and can't drift from the code. Two
+  branches sit in `references/`, each linked with the condition for reading it: authoring with the
+  CLI (capture → add → call → verify), and writes. A test holds that every link resolves. `setup`
+  copies the folder to
+  `~/.claude/skills` (Claude Code) and `~/.agents/skills` (Codex, Cursor, Gemini CLI, VS Code) and
+  records where (`skill.ts`). Each copy carries a stamp, `.api-anything.json`: the version and a hash
+  of the files. Since the server runs through `npx -y api-anything`, it is always the latest release
+  while a copy is not, so any CLI start (the server's included) replaces a recorded copy that an
+  older version wrote and nobody edited. An edited copy, a link, a newer version's copy, and a
+  same-version copy with other files (a checkout beside a release) are left alone. A copy from before
+  stamps is backed up to `~/.api-anything/skill-backups/`, never beside it, where an agent walking
+  its skills folder would load the backup as a second skill. An install with its own
+  `API_ANYTHING_HOME` refreshes only the copies its own setup recorded.
+- **Claude Code plugin** manifest (skill + MCP), its version held equal to the package's by a test,
+  plus copy-paste install lines for Codex and other agents.
 - Library: `import { call, callReads, closeBrowser } from "api-anything"`. `callReads(items, opts)`
   is an async iterable of `BatchResult`; `BatchItem` and `BatchOptions` are exported too. It takes
   an array of at most 200 items, `maxItems` to lower that cap, `concurrency` (default 1, at most 4),

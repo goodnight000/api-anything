@@ -158,8 +158,9 @@ export function matchQuery(e: SearchEntry, query: string): QueryMatch & { score:
   const signatures = opWords(e.operations.map((o) => o.op).join(" "));
   return coverage(query, (w) =>
     Math.max(
-      hit(w, name, 10, 6),
-      hit(w, title, 6, 3),
+      // a short word inside a longer name is usually another word ("book" in "booking")
+      hit(w, name, 10, 6, 5),
+      hit(w, title, 6, 3, 5),
       hit(w, about, 2, 1, 5),
       hit(w, signatures, 4, 2, 5),
       hit(w, descriptions, 1, 0.5, 5),

@@ -283,19 +283,34 @@ export function originsOf(urls: readonly (string | undefined)[]): Set<string> {
   return origins;
 }
 
+/** A browser's User-Agent kept in page storage: a learned request sends the same header anyway. */
+const BROWSER_UA = /^Mozilla\/5\.0 \([^)]+\) \S/;
+
 /**
  * The session without the values that are one of the origins of `urls` (`https://www.x.test/`, the
- * last page an analytics cookie kept), raw, unquoted or URL-decoded. A spec spells the host it
- * sends to and opens, so such a value carries nothing the spec does not hold already, wherever a
- * copy of it is: it is no credential to look for, and nothing to make a ref of.
+ * last page an analytics cookie kept), one of their hosts or parent domains (`www.x.test`,
+ * `.x.test`), or a browser's User-Agent, raw, unquoted or URL-decoded. A spec spells the host it
+ * sends to and opens, and sends the browser's headers, so such a value carries nothing the spec does
+ * not hold already, wherever a copy of it is: it is no credential to look for, and nothing to make a
+ * ref of. A URL with a path, query or fragment is still looked for: a reset link carries a token.
  */
 export function besideOrigins<S extends Pick<Session, "cookies" | "values">>(
   session: S,
   urls: readonly (string | undefined)[],
 ): S {
   const origins = originsOf(urls);
+  // a host the spec spells, or a parent domain of one (a cookie's `.x.test` copied into its value)
+  const hosts = new Set<string>();
+  for (const o of origins) {
+    const host = new URL(o).hostname;
+    const labels = host.split(".");
+    if (ipAddress(host.replace(/^\[|\]$/g, ""))) hosts.add(host);
+    else for (let i = 0; i < labels.length - 1; i++) hosts.add(labels.slice(i).join("."));
+  }
   const own = (v: string) =>
-    [v, v.replace(/^"|"$/g, ""), pctDecode(v, false)].some((f) => origins.has(f.replace(/\/$/, "")));
+    [v, v.replace(/^"|"$/g, ""), pctDecode(v, false)].some(
+      (f) => origins.has(f.replace(/\/$/, "")) || hosts.has(f.replace(/^\./, "").toLowerCase()) || BROWSER_UA.test(f),
+    );
   return {
     ...session,
     cookies: session.cookies.filter((c) => !own(c.value)),

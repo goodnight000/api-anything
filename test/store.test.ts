@@ -237,11 +237,21 @@ test("secret scan: a live value that is the spec's own origin is not looked for;
   // ...and the same as a session value
   const values = { "op/last": "https://www.x.test/", "op/token": T };
   assert.deepEqual(besideOrigins({ cookies: [], values }, [url]).values, { "op/token": T });
+  // the spec's host or a parent domain of it (a cookie's domain copied into a value), and a browser's
+  // User-Agent kept in page storage: the spec spells the host and sends the browser's headers
+  const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0";
+  for (const v of ["www.x.test", ".x.test", "x.test", "X.TEST", UA])
+    assert.deepEqual(held(v, { host: "www.x.test", ua: UA }), [], v);
+  assert.deepEqual(
+    besideOrigins({ cookies: [], values: { "op/domain": ".x.test", "op/ua": UA, "op/token": T } }, [url]).values,
+    { "op/token": T },
+  );
 
   // any other URL is looked for, wherever it is copied
   const flagged = "$.ctx holds the live cookie __ps_lu";
   for (const v of [
     "https://k7qm9xlp.x.test/", // another host: a capability host is no origin the spec spells
+    "k7qm9xlp.x.test", // ...nor as a bare host
     "https://www.x.test:8443/", // another port
     `https://www.x.test/reset/${T}/`, // a path
     "https://www.x.test/?token=abc123", // a query

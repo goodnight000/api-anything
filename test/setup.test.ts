@@ -14,6 +14,11 @@ import { detect, guiServer, paths, SERVER, setup } from "../src/setup.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SKILL = readFileSync(join(ROOT, "skills", "api-anything", "SKILL.md"), "utf8");
+/** A whole copy of the skill folder at `dir`: its SKILL.md and the references it points at. */
+const skillAt = (dir: string) => {
+  assert.equal(read(join(dir, "SKILL.md")), SKILL, dir);
+  assert.ok(existsSync(join(dir, "references", "writes.md")), `${dir} has its references`);
+};
 const saved = { HOME: process.env.HOME, PATH: process.env.PATH, AA: process.env.API_ANYTHING_HOME };
 let home: string;
 let bin: string;
@@ -49,15 +54,19 @@ function seed() {
   write(paths.cursorJson(), JSON.stringify({ mcpServers: { cursorThing: { command: "x", args: ["y"] } } }, null, 2));
   write(paths.desktopJson(), JSON.stringify({ mcpServers: { fs: { command: "fs-mcp" } }, theme: "dark" }));
   write(paths.codexToml(), 'model = "o3"\n\n[mcp_servers.context7]\ncommand = "npx"\nargs = ["-y", "context7"]\n');
+  write(paths.geminiJson(), JSON.stringify({ theme: "GitHub", mcpServers: { gh: { command: "gh-mcp" } } }));
+  write(paths.vscodeJson(), JSON.stringify({ servers: { fetch: { type: "stdio", command: "uvx" } }, inputs: [] }));
   return {
     claude: read(paths.claudeJson()),
     cursor: read(paths.cursorJson()),
     desktop: read(paths.desktopJson()),
     codex: read(paths.codexToml()),
+    gemini: read(paths.geminiJson()),
+    vscode: read(paths.vscodeJson()),
   };
 }
 
-const ALL = ["claude-code", "codex", "cursor", "claude-desktop"] as const;
+const ALL = ["claude-code", "codex", "cursor", "claude-desktop", "gemini", "vscode"] as const;
 
 /** An executable named `name` in the test's PATH. */
 function fakeExe(name: string) {
@@ -115,12 +124,25 @@ test("setup adds the server to each agent's config, keeps every other entry, and
   assert.equal(read(`${paths.cursorJson()}.bak-api-anything`), before.cursor);
   assert.equal(read(`${paths.desktopJson()}.bak-api-anything`), before.desktop);
   assert.equal(read(`${paths.codexToml()}.bak-api-anything`), before.codex);
+  // Gemini CLI starts from the shell; VS Code is a GUI app, and keeps its servers under `servers`
+  const gemini = json(paths.geminiJson());
+  assert.equal(gemini.theme, "GitHub");
+  assert.deepEqual(gemini.mcpServers, { gh: { command: "gh-mcp" }, "api-anything": SERVER });
+  const vscode = json(paths.vscodeJson());
+  assert.deepEqual(vscode.inputs, []);
+  assert.deepEqual(vscode.servers, {
+    fetch: { type: "stdio", command: "uvx" },
+    "api-anything": { type: "stdio", ...gui },
+  });
+  assert.equal(read(`${paths.geminiJson()}.bak-api-anything`), before.gemini);
+  assert.equal(read(`${paths.vscodeJson()}.bak-api-anything`), before.vscode);
 
-  assert.equal(read(paths.claudeSkill()), SKILL);
-  assert.equal(read(paths.codexSkill()), SKILL);
+  skillAt(paths.claudeSkill());
+  skillAt(paths.agentsSkill());
+  // Codex, Cursor, Gemini CLI and VS Code share ~/.agents/skills; Claude Desktop takes skills by upload only
   assert.deepEqual(
     r.agents.map((a) => a.skill),
-    ["installed", "installed", undefined, undefined],
+    ["installed", "installed", "unchanged", undefined, "unchanged", "unchanged"],
   );
   assert.equal(loadSettings().share, true);
   assert.ok(existsSync(join(home, ".api-anything", "key.json")));
@@ -130,17 +152,26 @@ test("setup adds the server to each agent's config, keeps every other entry, and
 test("setup run again changes nothing", async () => {
   seed();
   await setup({ agents: [...ALL], share: true });
-  const files = [paths.claudeJson(), paths.cursorJson(), paths.desktopJson(), paths.codexToml(), paths.claudeSkill()];
+  const files = [
+    paths.claudeJson(),
+    paths.cursorJson(),
+    paths.desktopJson(),
+    paths.codexToml(),
+    paths.geminiJson(),
+    paths.vscodeJson(),
+    join(paths.claudeSkill(), "SKILL.md"),
+    join(paths.claudeSkill(), ".api-anything.json"),
+  ];
   const after1 = files.map(read);
   const askedAt = loadSettings().askedAt;
   const r = await setup({ agents: [...ALL] });
   assert.deepEqual(
     r.agents.map((a) => a.mcp),
-    ["unchanged", "unchanged", "unchanged", "unchanged"],
+    ALL.map(() => "unchanged"),
   );
   assert.deepEqual(
     r.agents.map((a) => a.skill),
-    ["unchanged", "unchanged", undefined, undefined],
+    ["unchanged", "unchanged", "unchanged", undefined, "unchanged", "unchanged"],
   );
   assert.deepEqual(files.map(read), after1);
   assert.equal("created" in r.key && r.key.created, false);
@@ -165,13 +196,29 @@ test("an api-anything entry that is already there, set up another way, is left a
   assert.equal(existsSync(`${paths.cursorJson()}.bak-api-anything`), false);
 });
 
-test("an old copy of the skill is backed up, then replaced", async () => {
-  write(paths.claudeSkill(), "old skill");
+test("an old copy of the skill is backed up under ~/.api-anything, then replaced whole", async () => {
+  write(join(paths.claudeSkill(), "SKILL.md"), "old skill");
+  write(join(paths.claudeSkill(), "notes.md"), "a file the package no longer ships");
   write(paths.claudeJson(), JSON.stringify({ mcpServers: { "api-anything": SERVER } }));
   const r = await setup({ agents: ["claude-code"], share: false });
   assert.equal(r.agents[0]!.skill, "updated");
-  assert.equal(read(paths.claudeSkill()), SKILL);
-  assert.equal(read(`${paths.claudeSkill()}.bak-api-anything`), "old skill");
+  skillAt(paths.claudeSkill());
+  assert.equal(existsSync(join(paths.claudeSkill(), "notes.md")), false);
+  // not beside the copy: an agent walking its skills folder would load a backup as a second skill
+  const saved = r.agents[0]!.skillBackup!;
+  assert.ok(saved.startsWith(join(home, ".api-anything")), saved);
+  assert.equal(read(join(saved, "SKILL.md")), "old skill");
+  assert.equal(read(join(saved, "notes.md")), "a file the package no longer ships");
+  assert.deepEqual(json(join(home, ".api-anything", "skills.json")).dirs, [paths.claudeSkill()]);
+});
+
+test("a config that can't be edited still leaves the skill installed", async () => {
+  write(paths.vscodeJson(), '{\n  // my servers\n  "servers": {}\n}\n');
+  const r = await setup({ agents: ["vscode"], share: false });
+  assert.equal(r.agents[0]!.mcp, "failed");
+  assert.equal(r.agents[0]!.skill, "installed");
+  skillAt(paths.agentsSkill());
+  assert.equal(read(paths.vscodeJson()), '{\n  // my servers\n  "servers": {}\n}\n');
 });
 
 test("--dry-run says what would change and changes nothing", async () => {
@@ -183,26 +230,43 @@ test("--dry-run says what would change and changes nothing", async () => {
     [
       ["would add", "would install"],
       ["would add", "would install"],
+      ["would add", "would install"],
       ["would add", undefined],
-      ["would add", undefined],
+      ["would add", "would install"],
+      ["would add", "would install"],
     ],
   );
   assert.deepEqual(
-    [read(paths.claudeJson()), read(paths.cursorJson()), read(paths.desktopJson()), read(paths.codexToml())],
-    [before.claude, before.cursor, before.desktop, before.codex],
+    [
+      read(paths.claudeJson()),
+      read(paths.cursorJson()),
+      read(paths.desktopJson()),
+      read(paths.codexToml()),
+      read(paths.geminiJson()),
+      read(paths.vscodeJson()),
+    ],
+    [before.claude, before.cursor, before.desktop, before.codex, before.gemini, before.vscode],
   );
-  for (const f of [paths.claudeSkill(), paths.codexSkill(), `${paths.claudeJson()}.bak-api-anything`])
+  for (const f of [paths.claudeSkill(), paths.agentsSkill(), `${paths.claudeJson()}.bak-api-anything`])
     assert.equal(existsSync(f), false, f);
   assert.equal(existsSync(join(home, ".api-anything")), false, "no key, no settings");
   assert.deepEqual(r.key, { file: join(home, ".api-anything", "key.json"), wouldCreate: true });
 });
 
 /** A fake agent CLI: logs its argv, and adds the entry where the real one would. */
-function fakeCli(name: "claude" | "codex") {
-  const add =
-    name === "claude"
-      ? `const f=path.join(process.env.HOME,".claude.json");const c=fs.existsSync(f)?JSON.parse(fs.readFileSync(f,"utf8")):{};c.mcpServers={...c.mcpServers,"api-anything":{type:"stdio",command:"npx",args:["-y","api-anything","mcp"],env:{}}};fs.writeFileSync(f,JSON.stringify(c));`
-      : `const f=path.join(process.env.HOME,".codex","config.toml");fs.mkdirSync(path.dirname(f),{recursive:true});fs.appendFileSync(f,'[mcp_servers.api-anything]\\ncommand = "npx"\\nargs = ["-y", "api-anything", "mcp"]\\n');`;
+function fakeCli(name: "claude" | "codex" | "gemini" | "code") {
+  const json = (file: string, key: string, entry: string) =>
+    `const f=${JSON.stringify(file)};fs.mkdirSync(path.dirname(f),{recursive:true});const c=fs.existsSync(f)?JSON.parse(fs.readFileSync(f,"utf8").replace(/^\\s*\\/\\/.*$/gm,"")):{};c.${key}={...c.${key},"api-anything":${entry}};fs.writeFileSync(f,JSON.stringify(c));`;
+  const add = {
+    claude: json(
+      paths.claudeJson(),
+      "mcpServers",
+      `{type:"stdio",command:"npx",args:["-y","api-anything","mcp"],env:{}}`,
+    ),
+    codex: `const f=path.join(process.env.HOME,".codex","config.toml");fs.mkdirSync(path.dirname(f),{recursive:true});fs.appendFileSync(f,'[mcp_servers.api-anything]\\ncommand = "npx"\\nargs = ["-y", "api-anything", "mcp"]\\n');`,
+    gemini: json(paths.geminiJson(), "mcpServers", `{command:"npx",args:["-y","api-anything","mcp"]}`),
+    code: json(paths.vscodeJson(), "servers", `JSON.parse(process.argv[3])`),
+  }[name];
   const file = join(bin, name);
   writeFileSync(
     file,
@@ -244,16 +308,60 @@ test("the agents' own CLIs add the server when they are installed, and are not r
   assert.equal(cliLog().length, 2);
 });
 
+test("Gemini CLI and VS Code: their own CLIs add the server, and a config with comments is read as text", async () => {
+  fakeCli("gemini");
+  fakeCli("code");
+  fakeExe("npx");
+  fakeExe("node");
+  assert.deepEqual(detect(), ["gemini", "vscode"]);
+  const r = await setup({ share: false });
+  assert.deepEqual(
+    r.agents.map((a) => [a.agent, a.mcp, a.via, a.skill]),
+    [
+      ["gemini", "added", "cli", "installed"],
+      ["vscode", "added", "cli", "unchanged"],
+    ],
+  );
+  const gui = { type: "stdio", command: join(bin, "npx"), args: SERVER.args, env: { PATH: `${bin}:/usr/bin:/bin` } };
+  assert.deepEqual(cliLog(), [
+    ["gemini", "mcp", "add", "--scope", "user", "api-anything", "npx", "--", "-y", "api-anything", "mcp"],
+    ["code", "--add-mcp", JSON.stringify({ name: "api-anything", ...gui })],
+  ]);
+  const again = await setup({ share: false });
+  assert.deepEqual(
+    again.agents.map((a) => a.mcp),
+    ["unchanged", "unchanged"],
+  );
+
+  // VS Code's mcp.json may hold comments: the entry is found in the text, and only `code` adds one
+  write(paths.vscodeJson(), '{\n  // mine\n  "servers": { "api-anything": { "command": "x" } }\n}\n');
+  assert.equal((await setup({ agents: ["vscode"], share: false })).agents[0]!.mcp, "kept");
+  write(paths.vscodeJson(), '{\n  // mine\n  "servers": {}\n}\n');
+  assert.deepEqual(
+    (await setup({ agents: ["vscode"], share: false })).agents.map((a) => [a.mcp, a.via]),
+    [["added", "cli"]],
+  );
+  assert.equal(cliLog().length, 3);
+});
+
 test("detect finds an agent by a file it writes, never by a directory left behind", () => {
   // empty directories: an uninstalled agent, or another tool's ~/.claude/skills
-  for (const d of [join(home, ".claude", "skills"), paths.codexHome(), dirname(paths.cursorJson())])
+  for (const d of [
+    join(home, ".claude", "skills"),
+    paths.codexHome(),
+    dirname(paths.cursorJson()),
+    dirname(paths.geminiJson()),
+    dirname(paths.vscodeJson()),
+  ])
     mkdirSync(d, { recursive: true });
   mkdirSync(dirname(paths.desktopJson()), { recursive: true });
   assert.deepEqual(detect(), []);
   write(join(dirname(paths.cursorJson()), "argv.json"), "{}");
   write(join(paths.codexHome(), "auth.json"), "{}");
   write(join(dirname(paths.desktopJson()), "config.json"), "{}");
-  assert.deepEqual(detect(), ["codex", "cursor", "claude-desktop"]);
+  write(paths.geminiJson(), "{}");
+  write(join(dirname(paths.vscodeJson()), "globalStorage", "storage.json"), "{}");
+  assert.deepEqual(detect(), ["codex", "cursor", "claude-desktop", "gemini", "vscode"]);
 });
 
 function cli(...args: string[]): Promise<{ code: number; out: Record<string, unknown>; stderr: string }> {

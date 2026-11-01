@@ -1,0 +1,252 @@
+{
+  "name": "openlibrary",
+  "displayName": "Open Library",
+  "baseUrl": "https://openlibrary.org",
+  "description": "Open Library (the Internet Archive's book catalog): book search from the site's search page, and a work's or an author's record from the site's own JSON. Public, logged out.",
+  "operations": [
+    {
+      "name": "searchBooks",
+      "description": "Search books by title, author or subject, from the site's search page (page 1, up to 20 works): workId, title, author (list), authorId (the first author), firstPublished (\"First published in 1969\") and editions (\"92 editions\").",
+      "links": [
+        {
+          "from": "workId",
+          "to": {
+            "op": "getWork",
+            "arg": "workId"
+          }
+        },
+        {
+          "from": "authorId",
+          "to": {
+            "op": "getAuthor",
+            "arg": "authorId"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "https://openlibrary.org/search?q=%7Bq%7D&mode=everything",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://openlibrary.org/search?q={q}&mode=everything"
+      },
+      "match": {
+        "method": "GET",
+        "host": "openlibrary.org",
+        "path": "/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=utf-8",
+        "pick": [
+          "workId=url~/works/(OL\\d+W)",
+          "title",
+          "author",
+          "authorId=authorUrl~/authors/(OL\\d+A)",
+          "firstPublished",
+          "editions"
+        ],
+        "html": {
+          "items": "ul.list-books li.searchResultItem",
+          "fields": {
+            "title": "a.results",
+            "url": "a.results@href",
+            "author": "all:span.bookauthor a",
+            "authorUrl": "span.bookauthor a@href",
+            "firstPublished": "span.resultDetails span",
+            "editions": "span.resultDetails a"
+          },
+          "empty": "p.search-no-direct-match__message"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "the left hand of darkness",
+          "description": "title, author or subject words"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "zzqqxxwvnothingmatch"
+          },
+          "expect": "empty",
+          "purpose": "a query nothing matches reads as an empty list"
+        }
+      ]
+    },
+    {
+      "name": "getWork",
+      "description": "One work (a book across all its editions): workId, title, description, authorIds (\"/authors/OL31353A\" keys), subjects, subjectPlaces and coverId.",
+      "request": {
+        "method": "GET",
+        "url": "https://openlibrary.org/works/%7BworkId%7D.json",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "workId",
+          "at": [
+            "path:1"
+          ],
+          "template": "{workId}.json"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://openlibrary.org/works/{workId}.json"
+      },
+      "match": {
+        "method": "GET",
+        "host": "openlibrary.org",
+        "path": "/works/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": ".",
+        "pick": [
+          "workId=key~/works/(OL\\d+W)",
+          "title",
+          "description",
+          "authorIds=authors[*].author.key",
+          "subjects",
+          "subjectPlaces=subject_places",
+          "coverId=covers[0]"
+        ]
+      },
+      "params": [
+        {
+          "name": "workId",
+          "type": "string",
+          "required": true,
+          "example": "OL59800W",
+          "description": "Open Library work id, from searchBooks",
+          "pattern": "OL\\d+W",
+          "hint": "a work id like OL59800W"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "workId": "OL999999999W"
+          },
+          "expect": "input",
+          "purpose": "a work id that does not exist answers 404, read as input"
+        }
+      ]
+    },
+    {
+      "name": "getAuthor",
+      "description": "One author: authorId, name, birthDate, deathDate, bio and alternateNames.",
+      "request": {
+        "method": "GET",
+        "url": "https://openlibrary.org/authors/%7BauthorId%7D.json",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "authorId",
+          "at": [
+            "path:1"
+          ],
+          "template": "{authorId}.json"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://openlibrary.org/authors/{authorId}.json"
+      },
+      "match": {
+        "method": "GET",
+        "host": "openlibrary.org",
+        "path": "/authors/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": ".",
+        "pick": [
+          "authorId=key~/authors/(OL\\d+A)",
+          "name",
+          "birthDate=birth_date",
+          "deathDate=death_date",
+          "bio",
+          "alternateNames=alternate_names"
+        ]
+      },
+      "params": [
+        {
+          "name": "authorId",
+          "type": "string",
+          "required": true,
+          "example": "OL31353A",
+          "description": "Open Library author id, from searchBooks (or the last part of a getWork authorIds key)",
+          "pattern": "OL\\d+A",
+          "hint": "an author id like OL31353A"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    }
+  ]
+}

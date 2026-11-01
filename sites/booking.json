@@ -1,0 +1,397 @@
+{
+  "name": "booking",
+  "baseUrl": "https://www.booking.com",
+  "operations": [
+    {
+      "name": "searchHotels",
+      "request": {
+        "method": "GET",
+        "url": "https://www.booking.com/searchresults.html?ss=%7Bdestination%7D&checkin=%7Bcheckin%7D&checkout=%7Bcheckout%7D&group_adults=%7Badults%7D&no_rooms=1&group_children=0",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "ect": "4g",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "destination",
+          "at": [
+            "query:ss"
+          ]
+        },
+        {
+          "param": "checkin",
+          "at": [
+            "query:checkin"
+          ]
+        },
+        {
+          "param": "checkout",
+          "at": [
+            "query:checkout"
+          ]
+        },
+        {
+          "param": "adults",
+          "at": [
+            "query:group_adults"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.booking.com/searchresults.html?ss={destination}&checkin={checkin}&checkout={checkout}&group_adults={adults}&no_rooms=1&group_children=0"
+      },
+      "match": {
+        "path": "/searchresults.html"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html;charset=utf-8",
+        "pick": [
+          "name",
+          "country=url~/hotel/([a-z]{2})/",
+          "hotel=url~/hotel/[a-z]{2}/([^.?/]+)\\.html",
+          "location",
+          "distance",
+          "price",
+          "rating=score~Scored ([\\d.]+)",
+          "reviews=score~([\\d,]+) review",
+          "room"
+        ],
+        "html": {
+          "items": "[data-testid=\"property-card\"]",
+          "fields": {
+            "name": "[data-testid=\"title\"]",
+            "url": "a[data-testid=\"title-link\"]@href",
+            "location": "[data-testid=\"address-link\"]",
+            "distance": "[data-testid=\"distance\"]",
+            "price": "[data-testid=\"price-and-discounted-price\"]",
+            "score": "[data-testid=\"review-score\"]",
+            "room": "[data-testid=\"recommended-units\"] h4"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "destination",
+          "type": "string",
+          "required": true,
+          "example": "Lisbon",
+          "description": "a city, region, landmark or hotel name"
+        },
+        {
+          "name": "checkin",
+          "type": "string",
+          "required": true,
+          "example": "2027-10-13",
+          "description": "check-in date, today or later",
+          "pattern": "\\d{4}-\\d{2}-\\d{2}",
+          "hint": "YYYY-MM-DD"
+        },
+        {
+          "name": "checkout",
+          "type": "string",
+          "required": true,
+          "example": "2027-10-15",
+          "description": "check-out date, after checkin",
+          "pattern": "\\d{4}-\\d{2}-\\d{2}",
+          "hint": "YYYY-MM-DD"
+        },
+        {
+          "name": "adults",
+          "type": "string",
+          "required": false,
+          "example": "2",
+          "default": "2",
+          "min": 1,
+          "max": 30,
+          "description": "number of adult guests (one room, no children)"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "description": "Search stays in a destination for dates: the first page of results (about 25) in Booking.com's default order (which mixes in sponsored stays), with name, country and hotel (the URL parts getHotel and getRooms take), location, distance, price (total for the stay, before some taxes), rating (out of 10), reviews and the suggested room.",
+      "links": [
+        {
+          "from": "country",
+          "to": {
+            "op": "getHotel",
+            "arg": "country"
+          }
+        },
+        {
+          "from": "hotel",
+          "to": {
+            "op": "getHotel",
+            "arg": "hotel"
+          }
+        },
+        {
+          "from": "country",
+          "to": {
+            "op": "getRooms",
+            "arg": "country"
+          }
+        },
+        {
+          "from": "hotel",
+          "to": {
+            "op": "getRooms",
+            "arg": "hotel"
+          }
+        }
+      ]
+    },
+    {
+      "name": "getHotel",
+      "request": {
+        "method": "GET",
+        "url": "https://www.booking.com/hotel/%7Bcountry%7D/%7Bhotel%7D.html",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "ect": "4g",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "country",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "hotel",
+          "at": [
+            "path:2"
+          ],
+          "template": "{hotel}.html"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.booking.com/hotel/{country}/{hotel}.html"
+      },
+      "match": {
+        "path": "/hotel/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "pick": [
+          "name",
+          "address=address~^(.*?)(?:(?:Very )?[A-Z]?[a-z]+ location – rated.*)?$",
+          "latlng",
+          "rating=score~^([\\d.]+)",
+          "reviews=score~([\\d,]+) review",
+          "subscores",
+          "facilities",
+          "description",
+          "checkIn=policies~Check-in(From [\\d:]+(?: [AP]M)?(?: to [\\d:]+(?: [AP]M)?)?|Until [\\d:]+(?: [AP]M)?)",
+          "checkOut=policies~Check-out((?:From [\\d:]+(?: [AP]M)? )?(?:to|Until) [\\d:]+(?: [AP]M)?)"
+        ],
+        "html": {
+          "items": "html",
+          "fields": {
+            "name": "h1.pp-header__title",
+            "address": "[data-testid=\"PropertyHeaderAddressDesktop-wrapper\"]",
+            "latlng": "#map_trigger_header_pin@data-atlas-latlng",
+            "score": "[data-testid=\"review-score-component\"]",
+            "subscores": "all:[data-testid=\"review-subscore\"] > span",
+            "facilities": "all:.hp--popular_facilities [data-testid=\"property-most-popular-facilities-wrapper\"] li",
+            "description": "[data-testid=\"property-description\"]",
+            "policies": "[data-testid=\"HouseRules-wrapper\"] [data-testid=\"property-section--content\"]"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "country",
+          "type": "string",
+          "required": true,
+          "example": "pt",
+          "pattern": "[a-z]{2}",
+          "hint": "two lowercase letters, as in the hotel URL",
+          "description": "the country part of the hotel URL (/hotel/<country>/<hotel>.html), from searchHotels"
+        },
+        {
+          "name": "hotel",
+          "type": "string",
+          "required": true,
+          "example": "santa-justa",
+          "pattern": "[A-Za-z0-9_-]+",
+          "hint": "the slug from the hotel URL",
+          "description": "the hotel part of the hotel URL (/hotel/<country>/<hotel>.html), from searchHotels"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "description": "One property's page without dates: name, address, latlng (\"lat,lng\"), rating (out of 10), reviews, subscores (one string per category), the most popular facilities, the description, checkIn and checkOut times."
+    },
+    {
+      "name": "getRooms",
+      "request": {
+        "method": "GET",
+        "url": "https://www.booking.com/hotel/%7Bcountry%7D/%7Bhotel%7D.html?checkin=%7Bcheckin%7D&checkout=%7Bcheckout%7D&group_adults=%7Badults%7D&no_rooms=1&group_children=0",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "ect": "4g",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "country",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "checkin",
+          "at": [
+            "query:checkin"
+          ]
+        },
+        {
+          "param": "checkout",
+          "at": [
+            "query:checkout"
+          ]
+        },
+        {
+          "param": "adults",
+          "at": [
+            "query:group_adults"
+          ]
+        },
+        {
+          "param": "hotel",
+          "at": [
+            "path:2"
+          ],
+          "template": "{hotel}.html"
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.booking.com/hotel/{country}/{hotel}.html?checkin={checkin}&checkout={checkout}&group_adults={adults}&no_rooms=1&group_children=0"
+      },
+      "match": {
+        "path": "/hotel/*/*"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "pick": [
+          "roomId=blockId~^(\\d+)_",
+          "room",
+          "maxPeople=maxPeople~(\\d+)",
+          "price",
+          "taxes",
+          "conditions",
+          "left"
+        ],
+        "html": {
+          "items": "#hprt-table tbody tr.js-rt-block-row",
+          "fields": {
+            "blockId": "@data-block-id",
+            "room": ".hprt-roomtype-icon-link",
+            "maxPeople": ".hprt-table-cell-occupancy .bui-u-sr-only",
+            "price": ".bui-price-display__value .prco-valign-middle-helper",
+            "taxes": ".hptr-taxinfo-block",
+            "conditions": "all:.hprt-conditions-bui > li",
+            "left": ".only_x_left"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "country",
+          "type": "string",
+          "required": true,
+          "example": "pt",
+          "pattern": "[a-z]{2}",
+          "hint": "two lowercase letters, as in the hotel URL",
+          "description": "the country part of the hotel URL (/hotel/<country>/<hotel>.html), from searchHotels"
+        },
+        {
+          "name": "hotel",
+          "type": "string",
+          "required": true,
+          "example": "santa-justa",
+          "pattern": "[A-Za-z0-9_-]+",
+          "hint": "the slug from the hotel URL",
+          "description": "the hotel part of the hotel URL (/hotel/<country>/<hotel>.html), from searchHotels"
+        },
+        {
+          "name": "checkin",
+          "type": "string",
+          "required": true,
+          "example": "2027-10-13",
+          "description": "check-in date, today or later",
+          "pattern": "\\d{4}-\\d{2}-\\d{2}",
+          "hint": "YYYY-MM-DD"
+        },
+        {
+          "name": "checkout",
+          "type": "string",
+          "required": true,
+          "example": "2027-10-15",
+          "description": "check-out date, after checkin",
+          "pattern": "\\d{4}-\\d{2}-\\d{2}",
+          "hint": "YYYY-MM-DD"
+        },
+        {
+          "name": "adults",
+          "type": "string",
+          "required": false,
+          "example": "2",
+          "default": "2",
+          "min": 1,
+          "max": 30,
+          "description": "number of adult guests (one room, no children)"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "description": "A property's rooms and rates for dates and guests: one row per rate, with roomId, room (named on a room's first rate only), maxPeople, price (total for the stay), taxes (what the price excludes), conditions (meals, cancellation, prepayment) and left (scarcity note, when shown)."
+    }
+  ],
+  "displayName": "Booking.com",
+  "description": "Booking.com stays, logged out: search a destination for dates, a property's details, and its rooms and rates for dates."
+}
