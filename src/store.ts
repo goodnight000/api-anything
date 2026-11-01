@@ -537,7 +537,7 @@ export function loadWrites(o: { site?: string; op?: string; since?: number } = {
 /* --------------------------------------------------------------- call log */
 
 /**
- * One finished call, in calls.jsonl, for `status`. Names, enums and numbers only: no args, data,
+ * One finished call, in calls.jsonl, for `status` and `stats`. Names, enums and numbers only: no args, data,
  * reason or next, so nothing a site answered and nothing the caller typed is kept.
  */
 export interface CallEntry {
@@ -552,8 +552,12 @@ export interface CallEntry {
 }
 export type CallRecord = CallEntry & { at: string };
 
-const KEEP_CALLS_MS = 7 * 24 * 60 * 60_000;
-// ~100 bytes a line: some 10,000 calls, a few a minute for a week
+/** how long the log keeps a call: `stats` reports up to this far back */
+export const KEEP_CALLS_DAYS = 30;
+const KEEP_CALLS_MS = KEEP_CALLS_DAYS * 24 * 60 * 60_000;
+/** what `loadCalls` returns unless asked for more: `status` reads a week */
+const WEEK_MS = 7 * 24 * 60 * 60_000;
+// ~100 bytes a line: some 10,000 calls, a few an hour for 30 days or a few a minute for a week
 const MAX_CALLS_BYTES = 1_000_000;
 const callsFile = () => join(home(), "calls.jsonl");
 
@@ -604,15 +608,16 @@ export function appendCall(entry: CallEntry, now = Date.now()): void {
   }
 }
 
-/** The week's call log, oldest first; one site's or all. */
-export function loadCalls(site?: string, now = Date.now()): CallRecord[] {
+/** The call log's last week (or `withinMs`, up to the 30 days kept), oldest first; one site's or all. */
+export function loadCalls(site?: string, now = Date.now(), withinMs = WEEK_MS): CallRecord[] {
   let text: string;
   try {
     text = readFileSync(callsFile(), "utf8");
   } catch {
     return [];
   }
-  return parseCalls(text).filter((c) => (!site || c.site === site) && now - Date.parse(c.at) < KEEP_CALLS_MS);
+  const within = Math.min(withinMs, KEEP_CALLS_MS);
+  return parseCalls(text).filter((c) => (!site || c.site === site) && now - Date.parse(c.at) < within);
 }
 
 /**

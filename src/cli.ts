@@ -62,8 +62,18 @@ import {
   readbackName,
   TriggerStepSchema,
 } from "./spec.js";
+import { card, stats } from "./stats.js";
 import { status } from "./status.js";
-import { exportSite, listSites, loadHeals, loadSite, siteNotes, updateSite, userSitesDir } from "./store.js";
+import {
+  exportSite,
+  KEEP_CALLS_DAYS,
+  listSites,
+  loadHeals,
+  loadSite,
+  siteNotes,
+  updateSite,
+  userSitesDir,
+} from "./store.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { readbackProblems, SHARED_NOTE } from "./vet.js";
 
@@ -261,10 +271,19 @@ const HELP: Record<string, string> = {
   What this machine knows of each op's health, from local files only (nothing is sent): a site's
   cool-down, an op's stale mark, the tier calls start at (remembered) beside the op's own (minTier),
   its last heal, its last verify outcome, its writes of the last 24 h by what each did, and from the
-  call log (calls.jsonl, a week kept) the calls of the last 24 h and 7 days: count, ok rate, tiers,
+  call log (calls.jsonl, 30 days kept) the calls of the last 24 h and 7 days: count, ok rate, tiers,
   heals, median ms, and the last call's class. degraded: the last 24 h ran at a higher tier, or with
   an ok rate 20 points lower, than the 6 days before. problems lists each one with its next step.
   Without a site: every site with something on record here.`,
+  stats: `api-anything stats [--days n] [--card]
+  What this machine's calls did, from the local call log only (nothing is sent): calls, okRate, sent
+  (calls that sent a request), tiers (1 is plain HTTP, 2 and 3 use Chrome), plainHttp (share of sent
+  calls at tier 1), sites, ops, topSites, medianMs (of sent calls), heals and writes. saved estimates
+  the browser-agent time the calls stood in for: each ok call that sent a request counts as 2.5 s,
+  less its own time (bench/ measured about 3.2 s a call on Google Flights, more on Goodreads); its
+  assumption field says so. window.firstCall: the oldest call in the window.
+  --days   the window, 1 to 30 (the log keeps 30 days); default 30
+  --card   print a few plain lines to paste into a post instead of JSON`,
   revert: `api-anything revert <site> <op>
   Puts back the op as it was before its last heal (heals.jsonl keeps it), and logs the revert; run it
   again to take back the heal before that. Refused when the op has no heal to take back, or changed
@@ -370,6 +389,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything readback <site> <write-op> <read-op> [k=v ...] [--find field=value]
   api-anything verify [site ...] [--user] [--strict] | sites | ops <site> | heal <site> <op> | export <site>
   api-anything heals [site] | revert <site> <op> | status [site]
+  api-anything stats [--days n] [--card]
   api-anything mcp [--allow-writes] [--sites a,b] [--print-config]
 
 api-anything <command> --help for details. Data lives in ~/.api-anything (API_ANYTHING_HOME overrides).`;
@@ -512,6 +532,8 @@ const OPTIONS = {
   find: { type: "string" },
   sites: { type: "string" },
   "print-config": { type: "boolean" },
+  days: { type: "string" },
+  card: { type: "boolean" },
 } as const;
 
 /** What a command gets: the flags, the positionals after the command name, and the parsed --steps. */
@@ -1155,6 +1177,20 @@ function cmdStatus({ pos }: Parsed): number {
   return 0;
 }
 
+function cmdStats({ v, pos }: Parsed): number {
+  if (pos.length) throw new Fail(`stats takes no site (got "${pos[0]}")`, "api-anything stats [--days n] [--card]");
+  const days = v.days === undefined ? KEEP_CALLS_DAYS : Number(v.days);
+  if (!Number.isInteger(days) || days < 1 || days > KEEP_CALLS_DAYS)
+    throw new Fail(
+      `--days must be a whole number from 1 to ${KEEP_CALLS_DAYS} (the call log keeps ${KEEP_CALLS_DAYS} days), got "${v.days}"`,
+      `api-anything stats --days ${KEEP_CALLS_DAYS}`,
+    );
+  const s = stats(days);
+  if (v.card) process.stdout.write(card(s));
+  else out(s);
+  return 0;
+}
+
 function cmdRevert({ pos }: Parsed): number {
   const [site, name] = pos;
   if (!site || !name) throw new Fail("missing <site> <op>", "api-anything revert <site> <op>");
@@ -1673,6 +1709,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   heal: { run: cmdHeal, flags: [] },
   heals: { run: cmdHeals, flags: [] },
   status: { run: cmdStatus, flags: [] },
+  stats: { run: cmdStats, flags: ["days", "card"] },
   revert: { run: cmdRevert, flags: [] },
   export: { run: cmdExport, flags: ["out", "keep-examples", "force"] },
   search: { run: cmdSearch, flags: [] },

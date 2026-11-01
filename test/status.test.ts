@@ -105,27 +105,29 @@ test("a finished call appends one line of names, enums and numbers: never its ar
   );
 });
 
-test("the call log drops entries past the week and keeps under its cap, without a rewrite per call", () => {
+test("the call log drops entries past 30 days and keeps under its cap, without a rewrite per call", () => {
   const e: CallEntry = { site: "s", op: "o", class: "ok", tier: 1, ms: 5 };
   const now = Date.now();
   const line = (at: number) => `${JSON.stringify({ at: new Date(at).toISOString(), ...e })}\n`;
   const file = join(home, "calls.jsonl");
 
-  // six days old: inside the week, so the append leaves the file as it was and adds one line
-  writeFileSync(file, line(now - 6 * DAY));
+  // 29 days old: inside the 30 days kept, so the append leaves the file as it was and adds one line
+  writeFileSync(file, line(now - 29 * DAY));
   appendCall(e, now);
-  assert.equal(callsText(), line(now - 6 * DAY) + line(now));
+  assert.equal(callsText(), line(now - 29 * DAY) + line(now));
 
-  // a line a day past the week: the file is rewritten without it
-  writeFileSync(file, line(now - 9 * DAY) + line(now - 2 * DAY));
+  // a line a day past the 30 days: the file is rewritten without it
+  writeFileSync(file, line(now - 32 * DAY) + line(now - 2 * DAY));
   appendCall(e, now);
   assert.equal(callsText(), line(now - 2 * DAY) + line(now));
   assert.equal(loadCalls(undefined, now).length, 2);
-  // read with a window of its own, the log still keeps out what is past the week
-  writeFileSync(file, line(now - 7.5 * DAY) + line(now - DAY));
+  // read without a window of its own, the log gives status the last week; asked, up to the 30 days
+  writeFileSync(file, line(now - 30.5 * DAY) + line(now - 7.5 * DAY) + line(now - DAY));
   assert.equal(loadCalls(undefined, now).length, 1);
+  assert.equal(loadCalls(undefined, now, 30 * DAY).length, 2);
+  assert.equal(loadCalls(undefined, now, 90 * DAY).length, 2, "never past the 30 days kept");
 
-  // over the cap within the week: the newest half stays
+  // over the cap within the 30 days: the newest half stays
   writeFileSync(file, Array.from({ length: 16_000 }, (_, i) => line(now - DAY + i)).join(""));
   assert.ok(statSync(file).size > 1_000_000);
   appendCall({ ...e, op: "newest" }, now);
