@@ -84,7 +84,7 @@ export function gradePopular(task, answer, truth) {
   let rows;
   try {
     rows = JSON.parse(
-      (answer ?? "")
+      (typeof answer === "string" ? answer : "")
         .trim()
         .replace(/^```(?:json)?\s*\n?/, "")
         .replace(/\n?```$/, ""),
@@ -97,7 +97,8 @@ export function gradePopular(task, answer, truth) {
   if (task === "netflix-1") {
     const matches = truth.rows.filter(
       (expected, i) =>
-        normalize(rows[i]?.title?.replace(/^\d+\.\s*/, "")) === normalize(expected.title) &&
+        typeof rows[i]?.title === "string" &&
+        normalize(rows[i].title.replace(/^\d+\.\s*/, "")) === normalize(expected.title) &&
         rows[i]?.minutes === expected.minutes,
     ).length;
     return { correct: matches === 3, matches, required: 3 };

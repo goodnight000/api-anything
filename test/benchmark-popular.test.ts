@@ -46,6 +46,15 @@ test("Netflix grading requires every episode and runtime in displayed order", ()
   );
   assert.equal(grade("netflix-1", [rows[0], rows[0], rows[0]], rows).correct, false);
   assert.equal(grade("netflix-1", "Unavailable", rows).correct, false);
+  assert.equal(
+    grade(
+      "netflix-1",
+      rows.map((r, i) => ({ ...r, title: i === 0 ? 1 : r.title })),
+      rows,
+    ).correct,
+    false,
+    "a non-string title is a wrong answer, not a crash",
+  );
   assert.equal(grade("netflix-1", rows).correct, null);
 });
 
