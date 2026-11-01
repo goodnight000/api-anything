@@ -21,6 +21,7 @@ import { networksOf, sha256Hex, signatureHeaders, signer } from "./auth.js";
 import { catalog, confirmed, entryOf, search } from "./catalog.js";
 import { CSP, homePage, sitemap, sitePage } from "./pages.js";
 import { nextStatus, type Thresholds, thresholds, toArchive } from "./rules.js";
+import { community, countCalls, forgetCalls, publicStats } from "./stats.js";
 import {
   addSite,
   addVersion,
@@ -30,6 +31,7 @@ import {
   claimsOf,
   count,
   type D1Database,
+  demandFor,
   demandList,
   facts,
   failedOn,
@@ -51,6 +53,7 @@ import {
   seedSite,
   setStatus,
   siteOps,
+  sitesOn,
   touchKey,
   touchOk,
   unverified,
@@ -71,6 +74,7 @@ import {
   type Upload,
   versionHash,
 } from "./upload.js";
+import { cleanDomain, WANTED_INDEX_NETWORKS, wantedPage } from "./wanted.js";
 
 export interface Env {
   DB: D1Database;
@@ -267,9 +271,15 @@ async function searchApi(c: Ctx) {
 
 const DEMAND_DAYS = 30;
 
+const demandSince = (c: Ctx) => new Date(c.now - DEMAND_DAYS * DAY).toISOString();
+
 async function demandApi(c: Ctx) {
-  const since = new Date(c.now - DEMAND_DAYS * DAY).toISOString();
-  return json({ demand: await demandList(c.env.DB, since, 50) });
+  return json({ demand: await demandList(c.env.DB, demandSince(c), 50) });
+}
+
+/** Aggregate counts only: no key, no network hash. */
+async function statsApi(c: Ctx) {
+  return json(await publicStats(c.env.DB, await catalog(c.env.DB), c.now, demandSince(c)));
 }
 
 async function siteApi(c: Ctx, name: string) {
@@ -499,12 +509,17 @@ async function reports(c: Ctx) {
   const versions = new Map((await versionsIn(db, [...new Set(list.data.map((r) => r.hash))])).map((v) => [v.hash, v]));
   const known: Report[] = list.data.filter((r) => versions.has(r.hash));
   if (known.length)
-    await db.batch(
-      known.flatMap((r) => [
+    await db.batch([
+      ...known.flatMap((r) => [
         putReport(db, { ...r, key, network, at: now }),
         ...(r.outcome === "ok" ? [touchOk(db, r.hash, key, now)] : []),
       ]),
-    );
+      ...countCalls(
+        db,
+        c.now,
+        known.map((r) => r.outcome),
+      ),
+    ]);
   for (const v of versions.values()) await recompute(c, v);
   await touchKey(db, key, now, 0, known.length);
   return json({ accepted: known.length, ignored: list.data.length - known.length });
@@ -585,15 +600,18 @@ async function home(c: Ctx) {
   const sites = await catalog(c.env.DB);
   const q = c.url.searchParams.get("q")?.trim();
   // a site nobody but its uploader vouched for may say it is any brand: it is reached by name or domain only
-  if (!q)
+  if (!q) {
+    const demand = (await demandList(c.env.DB, demandSince(c), 10)).filter((d) => cleanDomain(d.domain));
+    // the strip is only shown when its counts are; the page never fails for it
+    const by = await community(c.env.DB).catch(() => undefined);
+    const stats = by && (await publicStats(c.env.DB, sites, c.now, demandSince(c), by).catch(() => undefined));
     return html(
-      homePage(
-        sites.filter(confirmed),
-        c.url.origin,
-        undefined,
-        await demandList(c.env.DB, new Date(c.now - DEMAND_DAYS * DAY).toISOString(), 10),
-      ),
+      homePage(sites.filter(confirmed), c.url.origin, undefined, demand, {
+        ...(stats ? { stats } : {}),
+        ...(by ? { community: by.sites } : {}),
+      }),
     );
+  }
   const byName = new Map(sites.map((s) => [s.name, s]));
   const found = search(sites, q, 20).map((m) => byName.get(m.name)!);
   return html(homePage(found, c.url.origin, q));
@@ -602,15 +620,37 @@ async function home(c: Ctx) {
 async function landing(c: Ctx, name: string) {
   const [site] = await catalog(c.env.DB, undefined, name);
   if (!site) return html(homePage([], c.url.origin, name), 404);
-  return html(sitePage(site, c.url.origin));
+  const by = await community(c.env.DB, name);
+  return html(
+    sitePage(site, c.url.origin, {
+      byInstall: by.sites.has(name),
+      opsByInstalls: site.operations.filter((o) => by.hashes.has(o.hash)).length,
+    }),
+  );
+}
+
+/**
+ * A domain agents asked for that no site covers. Only a clean registrable domain still in demand has a
+ * page: anything else is a 404, so no input makes a page. Once a site covers it, its page takes over.
+ */
+async function wanted(c: Ctx, domain: string) {
+  if (!cleanDomain(domain)) throw new HttpError(404, "no wanted page for that domain");
+  for (const name of await sitesOn(c.env.DB, domain))
+    if ((await catalog(c.env.DB, undefined, name)).length)
+      return new Response(null, { status: 301, headers: { location: `/sites/${encodeURIComponent(name)}` } });
+  const networks = await demandFor(c.env.DB, domain, demandSince(c));
+  if (!networks) throw new HttpError(404, "no wanted page for that domain");
+  return html(wantedPage({ domain, networks }, c.url.origin, DEMAND_DAYS));
 }
 
 async function sitemapXml(c: Ctx) {
   const sites = await catalog(c.env.DB);
+  const demand = await demandList(c.env.DB, demandSince(c), 50);
   return new Response(
     sitemap(
       sites.filter(confirmed).map((s) => s.name),
       c.url.origin,
+      demand.filter((d) => d.networks >= WANTED_INDEX_NETWORKS && cleanDomain(d.domain)).map((d) => d.domain),
     ),
     { headers: { "content-type": "application/xml; charset=utf-8" } },
   );
@@ -622,11 +662,14 @@ type Handler = (c: Ctx, param: string) => Promise<Response>;
 /** What a route takes before its body is read: a signature, the maintainer's token, or nothing. */
 type Auth = "signed" | "admin" | undefined;
 const NAME = "([a-z0-9][a-z0-9._-]{0,63})";
+/** the shape of a wanted page's domain; the handler checks it is a clean registrable domain */
+const DOMAIN = "([a-z0-9][a-z0-9.-]{0,252})";
 const ROUTES: [method: string, path: RegExp, handler: Handler, auth?: Auth, maxBody?: number][] = [
   ["GET", /^\/v1\/search$/, searchApi],
   ["GET", new RegExp(`^/v1/sites/${NAME}$`), siteApi],
   ["GET", /^\/v1\/index$/, indexApi],
   ["GET", /^\/v1\/demand$/, demandApi],
+  ["GET", /^\/v1\/stats$/, statsApi],
   ["GET", /^\/v1\/verify-jobs$/, verifyJobs, "signed"],
   ["POST", /^\/v1\/versions$/, upload, "signed"],
   ["POST", /^\/v1\/reports$/, reports, "signed"],
@@ -637,6 +680,7 @@ const ROUTES: [method: string, path: RegExp, handler: Handler, auth?: Auth, maxB
   ["POST", /^\/v1\/admin\/seed$/, adminSeed, "admin", MAX_SEED],
   ["GET", /^\/$/, home],
   ["GET", new RegExp(`^/sites/${NAME}/?$`), landing],
+  ["GET", new RegExp(`^/wanted/${DOMAIN}/?$`), wanted],
   ["GET", /^\/sitemap\.xml$/, sitemapXml],
 ];
 
@@ -669,7 +713,9 @@ interface EdgeCache {
 const edgeCache = () => (globalThis as { caches?: { default?: EdgeCache } }).caches?.default;
 
 /** Public reads, the same for every unsigned caller: cached 60 s by URL. */
-const CACHED = new RegExp(`^/(v1/search|v1/sites/${NAME}|v1/index|v1/demand|sites/${NAME}/?|sitemap\\.xml)?$`);
+const CACHED = new RegExp(
+  `^/(v1/search|v1/sites/${NAME}|v1/index|v1/demand|v1/stats|sites/${NAME}/?|wanted/${DOMAIN}/?|sitemap\\.xml)?$`,
+);
 const CACHE_SECONDS = 60;
 
 function cacheable(request: Request): boolean {
@@ -727,6 +773,7 @@ export default {
       new Date(now - 30 * DAY).toISOString(),
     );
     await forgetDemand(env.DB, new Date(now - 90 * DAY).toISOString());
+    await forgetCalls(env.DB, now - 90 * DAY);
     await recountAll(env.DB, cutoff, new Date(now).toISOString());
     console.log(`archived ${gone.length} versions`);
   },

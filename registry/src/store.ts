@@ -547,6 +547,27 @@ export async function demandList(
   return results;
 }
 
+/** How many networks asked for `domain` since `since`; 0 once a site covers it. */
+export const demandFor = async (db: D1Database, domain: string, since: string) =>
+  (
+    await db
+      .prepare(
+        `SELECT COUNT(*) AS networks FROM demand WHERE domain = ? AND at >= ?
+         AND NOT EXISTS (SELECT 1 FROM sites s WHERE s.domain = ?)`,
+      )
+      .bind(domain, since, domain)
+      .first<{ networks: number }>()
+  )?.networks ?? 0;
+
+/** The names of the sites on `domain`, seeded ones first. */
+export const sitesOn = async (db: D1Database, domain: string) =>
+  (
+    await db
+      .prepare("SELECT name FROM sites WHERE domain = ? ORDER BY first_uploader <> 'seed', name")
+      .bind(domain)
+      .all<{ name: string }>()
+  ).results.map((r) => r.name);
+
 export const forgetDemand = (db: D1Database, before: string) =>
   db.prepare("DELETE FROM demand WHERE at < ?").bind(before).run();
 
