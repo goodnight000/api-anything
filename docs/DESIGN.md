@@ -903,9 +903,18 @@ either, so none of them is kept. A call log is something an agent reads too. Wit
 recorded a call that worked, so an op that still answers but 150 times slower (a remembered
 escalation to tier 3) or that fails `auth` on every call left no trace. The log is appended under
 its lock and rewritten only when it passes 1 MB, or when its first line is more than a day past the
-7 days kept. The rewrite keeps the week, and the newest half of it if that is still over 1 MB. A
+30 days kept. The rewrite keeps the 30 days, and the newest half of them if that is still over 1 MB. A
 home that cannot be written keeps no log, and the call's answer is the same. Nothing in it leaves
 the machine: `report.ts` does not read it.
+
+`api-anything stats [--days n] [--card]` totals the log over up to the 30 days kept: calls, ok rate,
+tiers, sites, median ms of the calls that sent a request, heals and writes. It sends nothing. When
+API Anything works its results go to an agent, so nobody sees it; `--card` prints those totals in a
+few lines to paste into a post. Its `saved` is an estimate and carries its assumption: each ok call
+that sent a request stands in for 2.5 s of an agent driving a browser, less the call's own time. The
+benchmark measured about 3.2 s a call (Google Flights, 5 dates: 41.6 s with a browser against 21.1
+s over 10 calls of about 1.2 s) and more on Goodreads. Not on MCP: a tool costs every agent tokens,
+and this one answers a person, not a task.
 
 `api-anything status [site]` (MCP `site_status`) reads it with the rest of the home: the state's
 cool-downs, stale marks and remembered tiers, the heal log, verify's record and the write ledger

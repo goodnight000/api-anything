@@ -286,8 +286,38 @@ nothing and needs no browser. Output is one line of JSON:
 With a site, every op is listed. Without one, only the sites with something on record here, and
 only the ops with something to say: a passing verify alone is not listed. The call history comes
 from `~/.api-anything/calls.jsonl`, one line per finished call: time, site, op, class, tier, ms,
-whether it healed and what a write did. It holds no args, no data and no reason text, and is kept a
-week.
+whether it healed and what a write did. It holds no args, no data and no reason text, and is kept 30
+days (`status` reads the last 7).
+
+### Usage: `api-anything stats [--days n] [--card]`
+
+Results go to your agent, so when API Anything works you never see it. `stats` totals what this
+machine's calls did over the last 30 days (`--days 1` to `30`), from the same call log. It sends
+nothing. Output is one line of JSON: `calls`, `okRate`, `sent` (calls that sent a request; a
+cool-down's answer or refused args send none), `tiers` (tier 1 is plain HTTP), `plainHttp` (the
+share of sent calls at tier 1), `sites`, `ops`, `topSites` (the 5 most called, each with its
+`okRate`), `medianMs` of the sent calls, `heals` (calls that repaired a drifted request), `writes`,
+and `window` `{days, since, until, firstCall}`.
+
+`saved` is an estimate, and says so in its `assumption` field. Each ok call that sent a request
+counts as 2.5 s of an agent driving a browser, less the call's own time, and a call slower than that
+counts for nothing. The figure sits below what [the benchmark](../bench/README.md) measured. On
+Google Flights (5 dates) the browser agent took 41.6 s and the API Anything agent took 21.1 s over 10
+calls of about 1.2 s each, which is about 3.2 s of browser time per call. On Goodreads (5 books) the
+times were 182.5 s and 30.5 s. That is one model on two sites, so `saved` is not a measurement of
+your calls.
+
+`--card` prints a few plain lines to paste into a post instead of the JSON:
+
+```text
+API Anything, last 30 days
+1,240 calls to 9 sites, 97% ok, 92% over plain HTTP with no browser
+median call 472 ms, 5 calls repaired after the site changed
+about 38 min of browser-agent time saved (estimate: 2.5 s per ok call, less the call's own time)
+top: goodreads 512, google-flights 301, reddit 188, youtube 120, hackernews 64
+npx -y api-anything setup
+github.com/goodnight000/api-anything
+```
 
 ## Logging in
 
