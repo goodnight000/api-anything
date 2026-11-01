@@ -17,20 +17,31 @@ it finds:
 
 | agent | how | skill |
 |---|---|---|
-| Claude Code | `claude mcp add --scope user api-anything -- npx -y api-anything mcp`, else `~/.claude.json` `mcpServers` | `~/.claude/skills/api-anything/SKILL.md` |
-| Codex | `codex mcp add api-anything -- npx -y api-anything mcp`, else `~/.codex/config.toml` `[mcp_servers.api-anything]` | `~/.agents/skills/api-anything/SKILL.md` |
-| Cursor | `~/.cursor/mcp.json` `mcpServers` | none |
-| Claude Desktop | `claude_desktop_config.json` `mcpServers` (macOS: `~/Library/Application Support/Claude/`, Linux: `~/.config/Claude/`, Windows: `%APPDATA%\Claude\`) | none |
+| Claude Code | `claude mcp add --scope user api-anything -- npx -y api-anything mcp`, else `~/.claude.json` `mcpServers` | `~/.claude/skills/api-anything/` |
+| Codex | `codex mcp add api-anything -- npx -y api-anything mcp`, else `~/.codex/config.toml` `[mcp_servers.api-anything]` | `~/.agents/skills/api-anything/` |
+| Cursor | `~/.cursor/mcp.json` `mcpServers` | `~/.agents/skills/api-anything/` |
+| Claude Desktop | `claude_desktop_config.json` `mcpServers` (macOS: `~/Library/Application Support/Claude/`, Linux: `~/.config/Claude/`, Windows: `%APPDATA%\Claude\`) | none: it takes skills only as an upload in its settings |
+| Gemini CLI | `gemini mcp add --scope user api-anything npx -- -y api-anything mcp`, else `~/.gemini/settings.json` `mcpServers` | `~/.agents/skills/api-anything/` |
+| VS Code | `code --add-mcp '{...}'`, else the user `mcp.json` `servers` (macOS: `~/Library/Application Support/Code/User/`, Linux: `~/.config/Code/User/`, Windows: `%APPDATA%\Code\User\`) | `~/.agents/skills/api-anything/` |
 
-Cursor and Claude Desktop are apps that start with a minimal PATH, where an `npx` from nvm or
-Homebrew is not found. For those two, the entry names npx by its absolute path (the one on setup's
+Cursor, Claude Desktop and VS Code are apps that start with a minimal PATH, where an `npx` from nvm
+or Homebrew is not found. For those, the entry names npx by its absolute path (the one on setup's
 PATH, else the one beside the node running setup) and sets `"env": {"PATH": "<node's directory>:/usr/bin:/bin"}`
 so npx finds node. After a Node upgrade that moves npx, delete that entry and run setup again.
 
+The skill is a folder: a short `SKILL.md` the agent loads when a request is about a website, and two
+references it reads only when it needs them (turning a site into an API with the CLI, and writes).
+The server's own instructions carry the same rules in brief, for a client that loads no skill.
+
 - An `api-anything` entry that is already there is left as it is, even when it differs (an older
   `api-anything mcp` entry, or one with `--allow-writes`). Other entries are never changed.
-- A config file is copied to `<file>.bak-api-anything` before api-anything first edits it. An older
-  copy of the skill is backed up the same way, then replaced.
+- A config file is copied to `<file>.bak-api-anything` before api-anything first edits it. A copy of
+  the skill that was edited, or predates this, is backed up to `~/.api-anything/skill-backups/`,
+  then replaced.
+- The server runs through `npx -y api-anything`, so it is always the latest release. Whenever the
+  CLI or the server starts, it replaces a skill copy setup installed that an older version wrote and
+  nobody edited since (each copy carries a stamp, `.api-anything.json`). An edited copy, a link, or
+  a copy from a newer version is left alone.
 - It checks for a Chromium browser, makes this install's key (`~/.api-anything/key.json`, mode 0600),
   and asks whether to help build the shared catalog. The answer is kept in
   `~/.api-anything/settings.json`; until it is given, nothing is shared or reported. Without setup
@@ -45,7 +56,7 @@ Flags:
 | `--yes` | answers the question yes without asking |
 | `--no-share` | answers it no |
 | `--share-only` | with `--yes` or `--no-share`: records the answer and changes nothing else (the way to turn sharing on or off later) |
-| `--agents claude-code,codex,cursor,claude-desktop` | connects these agents only, found or not |
+| `--agents claude-code,codex,cursor,claude-desktop,gemini,vscode` | connects these agents only, found or not |
 
 Without a terminal (an agent running it) and without `--yes` or `--no-share`, the question is not
 asked and nothing is shared. Running setup again changes only what is missing.
@@ -73,8 +84,11 @@ To run from a checkout instead: `npm ci`, then `npm run cli -- <command>` (for e
 | `find_sites` | searches the shared catalog and this machine's sites by words, a domain or a URL |
 | `list_operations` | an operation's params and returned fields, and the site's notes; fetches a shared site on first use |
 | `call_operation` | calls a read; fetches a shared site on first use |
+| `call_batch` | up to 20 reads of installed sites, in order |
 | `call_write_operation` | calls a write; only on a server started with `--allow-writes` |
 | `get_job` | the result of a call still running after about 25 s |
+| `get_result` | the rest of a cut answer, from this machine |
+| `site_status` | this machine's record of a site's calls, heals and cool-downs |
 | `learn_site` | learns, proves and shares a read nobody shared yet, and answers the user's request |
 | `list_sites`, `login` | what is installed; refresh a session the user imported |
 
@@ -106,8 +120,8 @@ api-anything learn 'https://lobste.rs/domains/{domain}' \
 
 ## Other clients and flags
 
-`setup` covers Claude Code, Codex, Cursor and Claude Desktop. For any other client (Gemini CLI,
-VS Code), or when a client can't find `api-anything` or `node`, print its entry with absolute paths:
+`setup` covers Claude Code, Codex, Cursor, Claude Desktop, Gemini CLI and VS Code. For any other
+client, or when a client can't find `api-anything` or `node`, print its entry with absolute paths:
 
 ```sh
 api-anything mcp --print-config

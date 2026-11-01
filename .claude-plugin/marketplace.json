@@ -6,7 +6,7 @@
     {
       "name": "api-anything",
       "source": "./",
-      "description": "The api-anything skill plus its MCP server (list_sites, list_operations, call_operation, login)."
+      "description": "The api-anything skill plus its MCP server: find_sites, list_operations, call_operation, learn_site and the rest."
     }
   ]
 }

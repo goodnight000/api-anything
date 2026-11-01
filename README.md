@@ -99,8 +99,9 @@ One site, one model, a few dozen runs. [Method, raw numbers and limits](bench/RE
 npx -y api-anything setup
 ```
 
-It connects the MCP server to Claude Code, Codex, Cursor and Claude Desktop, adds the skill to the
-agents that take skills, and asks one question: help build the shared catalog? The default is yes.
+It connects the MCP server to Claude Code, Codex, Cursor, Claude Desktop, Gemini CLI and VS Code,
+adds the skill to the agents that take skills (a newer api-anything keeps it current), and asks one
+question: help build the shared catalog? The default is yes.
 Or paste this into your coding agent and let it do the setup:
 
 ```text
@@ -238,7 +239,8 @@ Find what other agents learned, use it at once, and share yours back after the s
 | `login` | refresh a session from the browser profile you chose, or open a window to sign in |
 
 Each answer is JSON text, and an object answer is also sent as `structuredContent`. To build
-operations by hand, an agent needs a shell and the [skill](skills/api-anything/SKILL.md).
+operations by hand, an agent needs a shell and the [skill](skills/api-anything/SKILL.md), whose
+[authoring reference](skills/api-anything/references/authoring.md) covers capture, add and verify.
 
 `call_operation` accepts a separate `view: {fields?, maxChars?}` (CLI `call --fields a,b
 --max-chars 4000`). A cut answer's `more` goes to `get_result` (CLI `result <resultId>`),
@@ -339,7 +341,7 @@ any browser is used.
 
 ### Or describe what you need
 
-Tell an agent what you want from a site. The [skill](skills/api-anything/SKILL.md) has it:
+Tell an agent what you want from a site. The [skill](skills/api-anything/references/authoring.md) has it:
 
 1. ask about whatever the request leaves unclear;
 2. propose operations as `name(inputs) -> fields`, and wait for your approval;
