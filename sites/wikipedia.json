@@ -1,0 +1,233 @@
+{
+  "name": "wikipedia",
+  "displayName": "Wikipedia",
+  "baseUrl": "https://en.wikipedia.org",
+  "description": "English Wikipedia: search-box title suggestions, full-text article search, and an article's summary (lead text, short description, link), through the requests the site's own pages make. Public, logged out.",
+  "operations": [
+    {
+      "name": "searchArticles",
+      "description": "Article titles matching what is typed into the search box (prefix match, top 10): id (page id), key (the title as it appears in the URL), title and description (the article's short description, when it has one).",
+      "links": [
+        {
+          "from": "key",
+          "to": {
+            "op": "getSummary",
+            "arg": "title"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikipedia.org/w/rest.php/v1/search/title?q=%7Bq%7D&limit=10",
+        "headers": {
+          "referer": "https://en.wikipedia.org/wiki/Main_Page",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "accept": "application/json",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikipedia.org/wiki/Main_Page",
+        "steps": [
+          {
+            "action": "click",
+            "selector": "input[name=search]"
+          },
+          {
+            "action": "fill",
+            "selector": "input[name=search]",
+            "value": "{q}"
+          },
+          {
+            "action": "wait",
+            "ms": 2500
+          }
+        ]
+      },
+      "match": {
+        "path": "/w/rest.php/v1/search/title"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json",
+        "extract": "pages",
+        "pick": [
+          "id",
+          "key",
+          "title",
+          "description"
+        ],
+        "shape": {
+          "pages[].id": "number",
+          "pages[].key": "string",
+          "pages[].title": "string",
+          "pages[].description": "string"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "octopus",
+          "description": "title words, as typed into the search box"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false
+    },
+    {
+      "name": "getSummary",
+      "description": "One article's summary: title, description (short description), extract (the plain-text lead, usually its first paragraph), pageid, url, lastModified and type (\"standard\", or \"disambiguation\" for a page listing meanings).",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikipedia.org/api/rest_v1/page/summary/%7Btitle%7D",
+        "headers": {
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\""
+        }
+      },
+      "slots": [
+        {
+          "param": "title",
+          "at": [
+            "path:4"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikipedia.org/api/rest_v1/page/summary/{title}"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wikipedia.org",
+        "path": "/api/rest_v1/page/summary/*"
+      },
+      "response": {
+        "format": "json",
+        "contentType": "application/json; charset=utf-8; profile=\"https://www.mediawiki.org/wiki/Specs/Summary/1.5.0\"",
+        "extract": ".",
+        "pick": [
+          "title",
+          "description",
+          "extract",
+          "pageid",
+          "url=content_urls.desktop.page",
+          "lastModified=timestamp",
+          "type"
+        ]
+      },
+      "params": [
+        {
+          "name": "title",
+          "type": "string",
+          "required": true,
+          "example": "Octopus",
+          "description": "article title as in its URL (spaces also work): the key from searchArticles"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "title": "Zzqqxx_no_such_page_xyz"
+          },
+          "expect": "input",
+          "purpose": "a missing page is refused as input, not drift"
+        }
+      ]
+    },
+    {
+      "name": "searchText",
+      "description": "Full-text search of articles (main namespace), the site's Special:Search results page: up to 20 hits with title, url, snippet (text around the match) and size (\"43 KB (4,432 words) – <time of last edit>\").",
+      "request": {
+        "method": "GET",
+        "url": "https://en.wikipedia.org/w/index.php?search=%7Bq%7D&title=Special:Search&profile=advanced&fulltext=1&ns0=1",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "q",
+          "at": [
+            "query:search"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://en.wikipedia.org/w/index.php?search={q}&title=Special:Search&profile=advanced&fulltext=1&ns0=1"
+      },
+      "match": {
+        "method": "GET",
+        "host": "en.wikipedia.org",
+        "path": "/w/index.php"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html; charset=UTF-8",
+        "html": {
+          "items": "ul.mw-search-results li.mw-search-result",
+          "fields": {
+            "title": "div.mw-search-result-heading a",
+            "url": "div.mw-search-result-heading a@href",
+            "snippet": "div.searchresult",
+            "size": "div.mw-search-result-data"
+          },
+          "empty": "p.mw-search-nonefound"
+        }
+      },
+      "params": [
+        {
+          "name": "q",
+          "type": "string",
+          "required": true,
+          "example": "bioluminescent squid",
+          "description": "words to find anywhere in article text"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "q": "zzqqxxwvnothingmatch"
+          },
+          "expect": "empty",
+          "purpose": "a query nothing matches reads as an empty list"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,195 @@
+{
+  "name": "allrecipes",
+  "baseUrl": "https://www.allrecipes.com",
+  "operations": [
+    {
+      "name": "searchRecipes",
+      "request": {
+        "method": "GET",
+        "url": "https://www.allrecipes.com/search?q=%7Bquery%7D",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "query",
+          "at": [
+            "query:q"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.allrecipes.com/search?q={query}"
+      },
+      "match": {
+        "path": "/search"
+      },
+      "response": {
+        "format": "html",
+        "contentType": "text/html;charset=utf-8",
+        "pick": [
+          "title",
+          "recipeId=url~/recipe/(\\d+)/",
+          "slug=url~/recipe/\\d+/([^/]+)/",
+          "url",
+          "ratings=ratings~([\\d,]+)",
+          "tag"
+        ],
+        "html": {
+          "items": ".mntl-search-results__list a.mntl-document-card",
+          "fields": {
+            "title": "span.card__title-text",
+            "url": "@href",
+            "ratings": ".mm-recipes-card-meta__rating-count-number",
+            "tag": ".card__content@data-tag"
+          }
+        }
+      },
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "example": "chicken curry",
+          "description": "dish, ingredient or keyword words"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "checks": [
+        {
+          "args": {
+            "query": "qxzvwkjplm"
+          },
+          "expect": "input",
+          "purpose": "a query nothing matches: the site answers 404"
+        }
+      ],
+      "description": "Search recipes by keywords: the first page of results (about 24), which mixes recipes with articles, galleries and category pages. Recipes have recipeId and slug (what getRecipe takes); the others have only title, url and tag. ratings is the rating count; tag is the result's category label.",
+      "links": [
+        {
+          "from": "recipeId",
+          "to": {
+            "op": "getRecipe",
+            "arg": "recipeId"
+          }
+        },
+        {
+          "from": "slug",
+          "to": {
+            "op": "getRecipe",
+            "arg": "slug"
+          }
+        }
+      ]
+    },
+    {
+      "name": "getRecipe",
+      "request": {
+        "method": "GET",
+        "url": "https://www.allrecipes.com/recipe/%7BrecipeId%7D/%7Bslug%7D/",
+        "headers": {
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-US,en;q=0.9",
+          "priority": "u=0, i",
+          "sec-ch-ua": "\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"macOS\"",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+        }
+      },
+      "slots": [
+        {
+          "param": "recipeId",
+          "at": [
+            "path:1"
+          ]
+        },
+        {
+          "param": "slug",
+          "at": [
+            "path:2"
+          ]
+        }
+      ],
+      "volatile": [],
+      "trigger": {
+        "url": "https://www.allrecipes.com/recipe/{recipeId}/{slug}/"
+      },
+      "match": {
+        "path": "/recipe/*/*"
+      },
+      "response": {
+        "format": "embedded",
+        "contentType": "text/html;charset=utf-8",
+        "pick": [
+          "name",
+          "author=author[0].name",
+          "description",
+          "rating=aggregateRating.ratingValue",
+          "ratingCount=aggregateRating.ratingCount",
+          "prepTime",
+          "cookTime",
+          "totalTime",
+          "servings=recipeYield",
+          "cuisine=recipeCuisine",
+          "category=recipeCategory",
+          "ingredients=recipeIngredient",
+          "instructions=recipeInstructions[*].text",
+          "calories=nutrition.calories",
+          "protein=nutrition.proteinContent",
+          "carbs=nutrition.carbohydrateContent",
+          "fat=nutrition.fatContent"
+        ],
+        "embedded": {
+          "regex": "allrecipes-schema[^>]*application/ld\\+json[^>]*>\\s*\\[\\s*(\\{)"
+        }
+      },
+      "params": [
+        {
+          "name": "recipeId",
+          "type": "string",
+          "required": true,
+          "example": "15156",
+          "description": "the number in the recipe URL (/recipe/<recipeId>/<slug>/), from searchRecipes",
+          "pattern": "\\d+",
+          "hint": "a numeric recipe id"
+        },
+        {
+          "name": "slug",
+          "type": "string",
+          "required": true,
+          "example": "easy-chicken-curry",
+          "description": "the name part of the recipe URL (/recipe/<recipeId>/<slug>/), from searchRecipes; the page answers 404 for a wrong slug",
+          "pattern": "[a-z0-9-]+",
+          "hint": "the lowercase slug from the recipe URL"
+        }
+      ],
+      "readOnly": true,
+      "minTier": 1,
+      "learnedLoggedIn": false,
+      "description": "One recipe from its schema.org data: name, author, description, rating (out of 5) and ratingCount, prepTime/cookTime/totalTime (ISO 8601 durations, \"PT40M\"), servings, cuisine and category (lists), ingredients and instructions (lists), and calories, protein, carbs and fat per serving."
+    }
+  ],
+  "displayName": "Allrecipes",
+  "description": "Allrecipes recipes, logged out: keyword search and a recipe's ingredients, steps, times, rating and nutrition."
+}
