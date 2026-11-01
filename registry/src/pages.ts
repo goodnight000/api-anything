@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import type { ServedOp, ServedSite, Status } from "../../src/registry-api.js";
 import { summarize } from "../../src/search.js";
 import type { Operation } from "../../src/spec.js";
+import type { PublicStats } from "./stats.js";
 
 const REPO = "goodnight000/api-anything";
 const INSTALL = "npx -y api-anything setup";
@@ -162,7 +163,8 @@ pre code{background:none;padding:0;border-radius:0}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 8px;padding:0;list-style:none}
 .chips li{font-size:14px;background:var(--code);border-radius:999px;padding:2px 12px}
 .h{display:inline-block;font-size:12.5px;font-weight:600;border-radius:999px;padding:1px 9px;white-space:nowrap}
-.h.ok{color:var(--ok);background:var(--ok-bg)}.h.bad{color:var(--bad);background:var(--bad-bg)}.h.mixed{color:var(--mixed);background:var(--mixed-bg)}.h.none{color:var(--muted);background:var(--none-bg)}
+.h.ok{color:var(--ok);background:var(--ok-bg)}.h.bad{color:var(--bad);background:var(--bad-bg)}.h.mixed{color:var(--mixed);background:var(--mixed-bg)}.h.none{color:var(--muted);background:var(--none-bg)}.h.comm{color:var(--accent);background:var(--code)}
+.proof{font-size:15px;font-weight:600;color:var(--fg);margin:0 0 22px}
 small{color:var(--muted);font-size:13px}
 form.search{display:flex;gap:8px}
 input[type=search]{flex:1;min-width:0;font:inherit;font-size:17px;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;outline:none}
@@ -210,7 +212,22 @@ export const CSP = `default-src 'none'; style-src 'unsafe-inline'; img-src data:
 // docs/media/logo.svg, made by docs/media/draw.mjs: the favicon and the header's mark
 const ICON = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="API Anything"><style>@media (prefers-color-scheme: dark){.mark{stroke:#ecebe6}}</style><path class="mark" d="M32,9L32,55M12.1,20.5L51.9,43.5M12.1,43.5L51.9,20.5" fill="none" stroke="#0b0b0b" stroke-width="10" stroke-linecap="round"/></svg>')}`;
 
-function layout(o: { title: string; description: string; url: string; body: string; noindex?: boolean }) {
+/**
+ * Structured data for search engines. A `application/ld+json` block is data, never run, so `script-src`
+ * does not apply to it; `<`, `>` and `&` are written as JSON escapes so no string can close the element.
+ */
+export const jsonLd = (data: unknown) =>
+  `<script type="application/ld+json">${JSON.stringify(data).replace(/[<>&\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)}</script>`;
+
+export function layout(o: {
+  title: string;
+  description: string;
+  url: string;
+  body: string;
+  noindex?: boolean;
+  /** escaped markup for the head: jsonLd's */
+  head?: string;
+}) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -220,12 +237,16 @@ ${o.noindex ? '<meta name="robots" content="noindex">\n' : ""}<title>${esc(o.tit
 <meta name="description" content="${esc(o.description)}">
 <link rel="canonical" href="${esc(o.url)}">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="API Anything">
 <meta property="og:title" content="${esc(o.title)}">
 <meta property="og:description" content="${esc(o.description)}">
 <meta property="og:url" content="${esc(o.url)}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="${esc(o.title)}">
+<meta name="twitter:description" content="${esc(o.description)}">
 <link rel="icon" href="${ICON}">
 <style>${CSS}</style>
-</head>
+${o.head ? `${o.head}\n` : ""}</head>
 <body>
 <header class="top"><div class="wrap"><a class="brand" href="/"><img src="${ICON}" width="22" height="22" alt="">API Anything</a><nav><a href="/#sites">Sites</a><a href="https://github.com/${REPO}">GitHub</a></nav></div></header>
 <main><div class="wrap">
@@ -238,10 +259,34 @@ ${o.body}
 `;
 }
 
-const command = (text: string) =>
+/** A copyable block of `text`, which is escaped already. */
+export const command = (text: string) =>
   `<div class="cmd"><pre><code>${text}</code></pre><button class="copy" type="button" data-copy>Copy</button></div>`;
 
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+export const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+
+export const plural = (n: number, one: string, many = `${one}s`) =>
+  `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
+
+/** An op's name as words, for titles: `searchBooks` is "search books". An op named by its fingerprint has none. */
+const opWords = (name: string) =>
+  /^op_[0-9a-f]{8}$/.test(name)
+    ? undefined
+    : name
+        .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+        .replace(/[_-]+/g, " ")
+        .toLowerCase()
+        .trim();
+
+const proofStrip = (s: PublicStats) =>
+  `<p class="proof">${[
+    `${plural(s.installs.last7Days, "install")} active this week`,
+    `${plural(s.calls.last7Days, "call")} this week`,
+    `${plural(s.community.sites, "site")} taught by the community`,
+  ].join(" · ")}</p>`;
+
+const COMMUNITY =
+  '<span class="h comm" title="first shared by an API Anything install, not the maintainers">taught by an install</span>';
 
 /* ------------------------------------------------------------------ pages */
 
@@ -251,12 +296,14 @@ export function homePage(
   origin: string,
   query?: string,
   demand: { domain: string; networks: number }[] = [],
+  extra: { stats?: PublicStats; community?: Set<string> } = {},
 ): string {
   const rows = sites.map((s) => {
     const h = summary(s);
     const n = s.operations.length;
+    const taught = extra.community?.has(s.name) ? ` ${COMMUNITY}` : "";
     return `<li><a href="/sites/${encodeURIComponent(s.name)}">
-<div class="row"><strong>${esc(titleOf(s))}</strong><span class="meta">${n} operation${n === 1 ? "" : "s"} <span class="h ${h.tone}">${esc(h.label)}</span></span></div>
+<div class="row"><strong>${esc(titleOf(s))}</strong><span class="meta">${n} operation${n === 1 ? "" : "s"}${taught} <span class="h ${h.tone}">${esc(h.label)}</span></span></div>
 ${s.description ? `<p>${esc(s.description)}</p>` : ""}</a></li>`;
   });
   const none = query
@@ -264,7 +311,7 @@ ${s.description ? `<p>${esc(s.description)}</p>` : ""}</a></li>`;
     : "Nothing is shared yet.";
   const body = `<h1>API Anything</h1>
 <p class="lede">${esc(TAGLINE)} It learns the requests a site's own pages make, then your agent calls them over MCP, the CLI or TypeScript and gets JSON back.</p>
-<p class="note">Set it up for your agents (Claude Code, Codex, Cursor, Claude Desktop):</p>
+${extra.stats ? `${proofStrip(extra.stats)}\n` : ""}<p class="note">Set it up for your agents (Claude Code, Codex, Cursor, Claude Desktop):</p>
 ${command(esc(INSTALL))}
 <h2 id="sites">Shared sites</h2>
 <p class="note">Operations other installs learned. Each is checked by the installs that call it: live means installs other than its uploader confirmed it works.</p>
@@ -275,7 +322,7 @@ ${
   demand.length
     ? `<h2 id="wanted">Asked for, not shared yet</h2>
 <p class="note">Sites agents looked for in the last 30 days that nobody has shared, by how many networks asked. Teaching one to your agent shares it with all of them.</p>
-<ul class="wanted">${demand.map((d) => `<li><span>${esc(d.domain)}</span><span class="meta">${d.networks} network${d.networks === 1 ? "" : "s"}</span></li>`).join("")}</ul>`
+<ul class="wanted">${demand.map((d) => `<li><a href="/wanted/${encodeURIComponent(d.domain)}">${esc(d.domain)}</a><span class="meta">${plural(d.networks, "network")}</span></li>`).join("")}</ul>`
     : ""
 }`;
   return layout({
@@ -283,10 +330,24 @@ ${
     description: `${TAGLINE} Shared, unofficial APIs for ${sites.slice(0, 6).map(titleOf).join(", ")} and more.`,
     url: `${origin}/`,
     body,
+    head: jsonLd({ "@context": "https://schema.org", "@type": "WebSite", name: "API Anything", url: `${origin}/` }),
   });
 }
 
-export function sitePage(s: ServedSite, origin: string): string {
+/** Who shared a site: whether an install first shared it, and how many of its served ops installs uploaded. */
+export interface Provenance {
+  byInstall: boolean;
+  opsByInstalls: number;
+}
+
+function provenanceNote(p: Provenance, n: number): string {
+  const ops = p.opsByInstalls;
+  if (p.byInstall)
+    return `${COMMUNITY} First shared by an API Anything install, not by the maintainers${ops < n ? `; ${ops} of its ${plural(n, "operation")} came from installs` : ""}.`;
+  return `Seeded by the maintainers${ops ? `; ${ops} of its ${plural(n, "operation")} came from installs` : ""}.`;
+}
+
+export function sitePage(s: ServedSite, origin: string, provenance?: Provenance): string {
   const title = titleOf(s);
   const rows = s.operations.map((o) => {
     const sum = summarize(o.operation);
@@ -301,13 +362,43 @@ export function sitePage(s: ServedSite, origin: string): string {
   const h = summary(s);
   const opNames = s.operations.map((o) => o.operation.name).join(", ");
   const description = clip(
-    `Unofficial ${title} API for your agent${s.description ? `: ${s.description}` : "."} Operations: ${opNames}.`,
+    `Unofficial ${title} API for AI agents${s.description ? `: ${s.description}` : "."} Operations: ${opNames}. Call ${s.domain} from Claude Code, Codex, Cursor or any MCP client and get JSON back.`,
     300,
   );
+  // live ops first: what the title promises should work
+  const ranked = [...s.operations].sort((a, b) => Number(b.status === "live") - Number(a.status === "live"));
+  const words = [...new Set(ranked.flatMap((o) => opWords(o.operation.name) ?? []))].join(", ");
+  const pageTitle = words
+    ? `${title} API for AI agents: ${clip(words, 60)} | API Anything`
+    : `${title} API for AI agents (unofficial) | API Anything`;
+  const url = `${origin}/sites/${encodeURIComponent(s.name)}`;
+  const structured = jsonLd({
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebAPI",
+        name: `${title} API (unofficial)`,
+        description,
+        url,
+        documentation: url,
+        isAccessibleForFree: true,
+        about: { "@type": "WebSite", name: title, url: `https://${s.domain}` },
+        provider: { "@type": "Organization", name: "API Anything", url: `https://github.com/${REPO}` },
+      },
+      {
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          { "@type": "ListItem", position: 1, name: "API Anything", item: `${origin}/` },
+          { "@type": "ListItem", position: 2, name: `${title} API`, item: url },
+        ],
+      },
+    ],
+  });
   const body = `<h1>${esc(title)} API<span class="tag">unofficial</span></h1>
 ${s.description ? `<p class="lede">${esc(s.description)}</p>` : ""}
 <ul class="chips" aria-label="Domain"><li>${esc(s.domain)}</li></ul>
 <p class="note"><span class="h ${h.tone}">${esc(h.label)}</span> ${s.operations.length} operation${s.operations.length === 1 ? "" : "s"}, checked by the installs that call them.</p>
+${provenance ? `<p class="note">${provenanceNote(provenance, s.operations.length)}</p>` : ""}
 <h2>Try it</h2>
 <p class="note">Set up API Anything for your agents:</p>
 ${command(esc(INSTALL))}
@@ -325,17 +416,23 @@ ${s.notes ? `<h2>Notes</h2>\n<div class="notes">${markdown(s.notes)}</div>` : ""
 <p>Each operation is a request learned from ${esc(title)}'s own web pages: API Anything replays it over plain HTTP and falls back to a browser when it must. <a href="/v1/sites/${encodeURIComponent(s.name)}">Read them as JSON</a>.</p>
 <p><a href="/">← All shared sites</a></p>`;
   return layout({
-    title: `${title} API (unofficial), via API Anything`,
+    title: pageTitle,
     description,
-    url: `${origin}/sites/${encodeURIComponent(s.name)}`,
+    url,
     body,
+    head: structured,
     // a site nobody else confirmed may say it is any brand: no search engine should list it
     noindex: !s.operations.some((o) => o.status === "live"),
   });
 }
 
-export function sitemap(names: string[], origin: string): string {
-  const urls = ["/", ...names.map((n) => `/sites/${encodeURIComponent(n)}`)];
+/** The home page, each confirmed site's page, and each indexable wanted page (`wanted`: their domains). */
+export function sitemap(names: string[], origin: string, wanted: string[] = []): string {
+  const urls = [
+    "/",
+    ...names.map((n) => `/sites/${encodeURIComponent(n)}`),
+    ...wanted.map((d) => `/wanted/${encodeURIComponent(d)}`),
+  ];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${urls.map((u) => `<url><loc>${esc(`${origin}${u}`)}</loc></url>`).join("\n")}
