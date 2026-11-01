@@ -345,7 +345,9 @@ export function createServer({
     return "result" in r ? r.result : pending(r.job);
   };
 
-  // without naming the sites up front, an agent asked "what does Goodreads rate X?" reaches for web search
+  // Without naming the sites up front, an agent asked "what does Goodreads rate X?" reaches for web search.
+  // The rest is the skill's core in brief, for clients that load no skill (Claude Desktop) and pay for it
+  // in every session.
   const server = new McpServer(
     { name: "api-anything", version: VERSION },
     {
@@ -353,6 +355,10 @@ export function createServer({
         `Calls these websites' own data requests directly, usually over plain HTTP: ${listSites().join(", ")}. ` +
         "When the user wants data from one of them, prefer list_operations then call_operation over web search or a browser. " +
         "For any other website, find_sites first: someone may have shared it, and list_operations then fetches it. " +
+        "When nothing fits, learn_site learns it in one call: the page URL with {param} placeholders, the user's values, and two other public values you choose. " +
+        "Check a match's domain is the site the user means, and that data answers what they asked. " +
+        "On a failure, follow next at most once, then stop and report class, reason and next. " +
+        "Send a write only when the user asked for that exact action, and never ask for a password. " +
         UNTRUSTED_NOTE,
     },
   );

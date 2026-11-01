@@ -90,7 +90,8 @@ working tree and the full history on every pull request, a fork's included. The 
 test that needs a provider-key shape should build it at run time rather than add an exception.
 The `CI` job passes only when every other job did, so it is the one to require.
 
-To release, a maintainer bumps `version` in `package.json` in a pull request, merges it once CI is
+To release, a maintainer bumps `version` in `package.json` and `.claude-plugin/plugin.json` (a test
+holds them equal) in a pull request, merges it once CI is
 green, then tags that commit and pushes the tag (`git tag -a v0.4.0 -m "api-anything 0.4.0" &&
 git push origin v0.4.0`). `.github/workflows/release.yml` publishes it to npm through trusted
 publishing: no npm token exists, and the package carries provenance. Running that workflow by hand

@@ -29,10 +29,10 @@ npx -y api-anything setup --yes        # or --no-share
 ```
 
 It connects the MCP server to every agent it finds on this machine (Claude Code, Codex, Cursor,
-Claude Desktop), installs the skill for the agents that take one, checks for a Chromium browser and
-makes the install's key. It leaves other MCP entries alone and backs up each config file before its
-first edit. It prints JSON on stdout and a short summary on stderr. To see what it would change
-first, run it with `--dry-run`.
+Claude Desktop, Gemini CLI, VS Code), installs the skill for the agents that take one, checks for a
+Chromium browser and makes the install's key. It leaves other MCP entries alone and backs up each
+config file before its first edit. It prints JSON on stdout and a short summary on stderr. To see
+what it would change first, run it with `--dry-run`.
 
 If the output has `"ok":false`, show the user the agent whose `mcp` is `failed` and its `error`.
 
