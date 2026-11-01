@@ -141,6 +141,26 @@ test("refresh keeps a copy the user edited, one from a newer version, and a link
   assert.equal(read(join(home, "checkout", "SKILL.md")), "a checkout");
 });
 
+test("refresh keeps a copy the user added a link to, and setup backs the link up before replacing it", () => {
+  const dir = skillDirs.claude();
+  copyFrom(dir, "0.0.1", { "SKILL.md": "old" });
+  write(join(home, "notes.md"), "the user's own notes");
+  symlinkSync(join(home, "notes.md"), join(dir, "custom.md"));
+  mkdirSync(join(dir, "references"), { recursive: true });
+  symlinkSync(join(home, "elsewhere"), join(dir, "references", "more"));
+  recordSkillDirs([dir]);
+  assert.deepEqual(
+    refreshSkills().map((r) => [r.skill, r.skillNote]),
+    [["kept", "edited since api-anything installed it"]],
+  );
+  assert.equal(read(join(dir, "custom.md")), "the user's own notes");
+  const r = installSkill(dir, { mode: "setup" });
+  assert.equal(r?.skill, "updated");
+  assert.ok(r?.skillBackup, "a copy with a link the user added is backed up");
+  assert.equal(read(join(r.skillBackup, "custom.md")), "the user's own notes");
+  isPackage(dir);
+});
+
 test("refresh leaves a same-version copy with other files: a checkout's and a release's never trade places", () => {
   const dir = skillDirs.claude();
   copyFrom(dir, PKG.version, { "SKILL.md": "a checkout's edit" });

@@ -6,7 +6,17 @@
  * `refreshSkills` brings untouched copies up to date whenever the CLI or the server starts.
  */
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,15 +52,21 @@ interface Stamp {
   hash: string;
 }
 
-/** Every file under `dir` by its path relative to it, with / separators; the stamp is left out. */
+/**
+ * Every entry under `dir` by its path relative to it, with / separators; the stamp is left out. Anything
+ * that is not a plain file or folder (a link the user added) counts by its target, so the hash sees it
+ * as an edit and a refresh never deletes it.
+ */
 function filesOf(dir: string): Map<string, string> {
   const files = new Map<string, string>();
   const walk = (d: string) => {
     for (const e of readdirSync(d, { withFileTypes: true })) {
       const p = join(d, e.name);
+      const rel = relative(dir, p).split(sep).join("/");
       if (e.isDirectory()) walk(p);
-      else if (e.isFile() && !(d === dir && e.name === STAMP))
-        files.set(relative(dir, p).split(sep).join("/"), readFileSync(p, "utf8"));
+      else if (e.isFile()) {
+        if (!(d === dir && e.name === STAMP)) files.set(rel, readFileSync(p, "utf8"));
+      } else files.set(rel, `\0${e.isSymbolicLink() ? `link ${readlinkSync(p)}` : "special"}`);
     }
   };
   walk(dir);
