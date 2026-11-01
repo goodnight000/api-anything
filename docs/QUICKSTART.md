@@ -120,6 +120,11 @@ them. A client started from the Dock or a menu may not get your shell's `PATH`, 
 `api-anything`, or a `node` installed with nvm, is not found there. `API_ANYTHING_HOME` and
 `API_ANYTHING_BROWSER` are copied into the entry when you have them set.
 
+In Claude Code, the repository also installs as a plugin (the MCP server and the skill, without
+setup's other steps): `/plugin marketplace add goodnight000/api-anything`, then
+`/plugin install api-anything@api-anything`. For the Vercel AI SDK, LangChain.js, the OpenAI Agents
+SDK and other frameworks, see [INTEGRATIONS.md](INTEGRATIONS.md).
+
 `api-anything mcp --sites goodreads,hacker-news` also serves each operation of those sites as a tool
 of its own (`goodreads__searchBooks`), with its arguments' schema, so the agent skips
 `list_operations`. Each one adds to the tool list the client sends with every request, so name only

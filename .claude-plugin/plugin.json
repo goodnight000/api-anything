@@ -1,12 +1,13 @@
 {
   "name": "api-anything",
-  "version": "0.2.0",
-  "description": "Learn reusable operations from a website's browser traffic and call them over MCP. Replays over HTTP, with browser fallback and bounded repair.",
+  "displayName": "API Anything",
+  "version": "0.3.2",
+  "description": "Call websites as APIs from Claude Code. Finds an operation in a shared catalog or learns it from the site's own requests, calls it over plain HTTP, and repairs it when the site changes. Adds the api-anything MCP server and skill.",
   "author": { "name": "Tianjun Zheng", "url": "https://github.com/goodnight000" },
   "homepage": "https://github.com/goodnight000/api-anything",
   "repository": "https://github.com/goodnight000/api-anything",
   "license": "MIT",
-  "keywords": ["api", "mcp", "browser", "reverse-engineering", "self-healing"],
+  "keywords": ["api", "mcp", "web-data", "scraping", "browser", "reverse-engineering", "self-healing"],
   "mcpServers": {
     "api-anything": { "command": "npx", "args": ["-y", "api-anything", "mcp"] }
   }
