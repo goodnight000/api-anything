@@ -20,8 +20,8 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
-function seed(calls: (Omit<CallRecord, "at"> & { ago: number })[]): void {
-  const lines = calls.map(({ ago, ...c }) => JSON.stringify({ at: new Date(NOW - ago).toISOString(), ...c }));
+function seed(calls: (Omit<CallRecord, "at"> & { ago: number })[], now = NOW): void {
+  const lines = calls.map(({ ago, ...c }) => JSON.stringify({ at: new Date(now - ago).toISOString(), ...c }));
   writeFileSync(join(home, "calls.jsonl"), `${lines.join("\n")}\nnot json\n`);
 }
 
@@ -119,7 +119,8 @@ function cli(...args: string[]): Promise<{ code: number; stdout: string; stderr:
 }
 
 test("the CLI prints the JSON, or the card with --card, and refuses a window the log does not keep", async () => {
-  seed([{ ago: 60_000, site: "goodreads", op: "searchBooks", class: "ok", tier: 1, ms: 400 }]);
+  // the spawned CLI windows by its own clock, not NOW
+  seed([{ ago: 60_000, site: "goodreads", op: "searchBooks", class: "ok", tier: 1, ms: 400 }], Date.now());
   const json = await cli("stats");
   assert.equal(json.code, 0, json.stderr);
   const s = JSON.parse(json.stdout);
