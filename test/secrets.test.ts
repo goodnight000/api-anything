@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { captureLive, liveIn, OMITTED, REDACTED, redact, scanSecrets, signInFills } from "../src/secrets.js";
+import {
+  borderlineCredentials,
+  captureLive,
+  liveIn,
+  OMITTED,
+  REDACTED,
+  redact,
+  scanSecrets,
+  signInFills,
+} from "../src/secrets.js";
 import type { Session } from "../src/session.js";
 
 const TOKEN = "Tk4Rf9Lp2Wq7Zx3Nm8Vb";
@@ -396,4 +405,30 @@ test("scanSecrets takes no ordinary text for a part of a cookie: an address, the
   const kept = { ...op("www.shop.test", "lanterns"), request: { url: `https://www.shop.test/api?q=x&t=${TICKET}` } };
   assert.equal(scanSecrets(kept, jarOf(enc(JSON.stringify({ t: TICKET })))).secrets.length, 1);
   assert.equal(scanSecrets(op("www.shop.test", uuid), jarOf(uuid)).secrets.length > 0, true, "a whole cookie");
+});
+
+test("the strict pass reports the values the scan deliberately lets through, and never a normal one", () => {
+  const req = (headers: Record<string, string>) => ({ method: "GET", url: "https://x.test/a", headers });
+  const spec = {
+    operations: [
+      {
+        name: "op",
+        request: req({
+          "x-session-id": "12345",
+          "x-auth-token": "plain",
+          "x-api-key": "plainword",
+          authorization: `Bearer ${TOKEN}`,
+          accept: "application/json",
+        }),
+        slots: [],
+      },
+    ],
+  };
+  const found = borderlineCredentials(spec as never);
+  assert.ok(found.some((f) => /a number under x-session-id/.test(f)), found.join("\n"));
+  assert.ok(found.some((f) => /5 characters under x-auth-token/.test(f)), found.join("\n"));
+  assert.ok(found.some((f) => /plain-looking value under x-api-key/.test(f)), found.join("\n"));
+  // a live credential is the ordinary scan's refusal, not a borderline report
+  assert.ok(!found.some((f) => /authorization/.test(f)), found.join("\n"));
+  assert.ok(!found.some((f) => /accept/.test(f)), found.join("\n"));
 });

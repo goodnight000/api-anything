@@ -281,6 +281,7 @@ export function plan(
     consent?: boolean;
     as?: string;
     guest?: readonly string[];
+    strict?: boolean;
   } = {},
 ): Plan {
   name = safeName(name);
@@ -290,7 +291,7 @@ export function plan(
   for (const n of wanted)
     if (!r.site.operations.some((op) => op.name === n)) throw new Error(`no operation "${n}" on ${name}`);
   // the learner arranges the param examples to be ones the user chose to share (learnsite.ts)
-  const ex = exportSite(name, { keepExamples: true });
+  const ex = exportSite(name, { keepExamples: true, strict: o.strict });
   // The user's own notes go only with their yes; without it, only notes that came from the registry
   const notes = o.consent ? siteNotes(name) : siteNotes(name, { from: "registry" });
   const session = loadSession(name);
