@@ -31,10 +31,24 @@ export function proxyConfig(env: NodeJS.ProcessEnv = process.env): ProxyConfig |
   }
   if (url.protocol !== "http:" && url.protocol !== "https:")
     throw new Error(`API_ANYTHING_PROXY must be an http:// or https:// proxy, not ${url.protocol}//${url.host}`);
+  try {
+    decodeURIComponent(url.username);
+    decodeURIComponent(url.password);
+  } catch {
+    throw new Error(`API_ANYTHING_PROXY's credentials for ${url.host} are not validly percent-encoded`);
+  }
   const noProxy = (env.API_ANYTHING_NO_PROXY ?? "")
     .split(/[\s,]+/)
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
+  // what tier 1 cannot match the way Chrome would is refused, so the two never route a host differently
+  const odd = noProxy.find(
+    (e) => e !== LOOPBACK && e !== "*" && (e.includes("/") || e.replace(/^\*\./, "").includes("*")),
+  );
+  if (odd)
+    throw new Error(
+      `API_ANYTHING_NO_PROXY entry ${odd} is not supported: use host names (a.com covers its subdomains), host:port, IP addresses or *`,
+    );
   return { url, noProxy };
 }
 
@@ -42,7 +56,7 @@ const LOOPBACK = "<-loopback>";
 
 /** Chrome's own default, kept for tier 1 too: a proxy cannot reach this machine's loopback. */
 function loopback(host: string): boolean {
-  return host === "localhost" || host.endsWith(".localhost") || /^127\./.test(host) || host === "[::1]";
+  return host === "localhost" || host.endsWith(".localhost") || /^127\.\d+\.\d+\.\d+$/.test(host) || host === "[::1]";
 }
 
 /** Host and port of one NO_PROXY entry: `.a.com` and `*.a.com` are `a.com`, which covers its subdomains. */
@@ -90,7 +104,9 @@ export function bypassList(noProxy: string[]): string {
 /** Playwright's `proxy` launch option, or undefined when no proxy is set or every host bypasses it. */
 export function browserProxy(cfg: ProxyConfig | undefined = proxyConfig()): LaunchOptions["proxy"] {
   if (!cfg || cfg.noProxy.includes("*")) return undefined;
-  const bypass = bypassList(cfg.noProxy);
+  // Playwright adds <-loopback> (loopback through the proxy) unless the list names a loopback host
+  const direct = cfg.noProxy.includes(LOOPBACK) ? [] : ["localhost", "127.0.0.1", "[::1]"];
+  const bypass = [bypassList(cfg.noProxy), ...direct].filter(Boolean).join(",");
   return {
     server: `${cfg.url.protocol}//${cfg.url.host}`,
     ...(bypass ? { bypass } : {}),
@@ -131,7 +147,19 @@ async function dispatcherFor(cfg: ProxyConfig) {
   if (agent?.href === cfg.url.href) return agent;
   const { ProxyAgent, fetch } = await import("undici");
   // built from our variable alone: undici's own reading of HTTPS_PROXY is never used, and nothing is global
-  agent = { href: cfg.url.href, dispatcher: new ProxyAgent({ uri: cfg.url.href }), fetch };
+  // proxyTunnel false: a plain-http request goes to the proxy whole, as Chrome sends it (a stock Squid
+  // refuses CONNECT to port 80); a session never goes that way (`refuseCleartext`). The token is ours,
+  // since undici sends none for a username with an empty password.
+  const { username, password } = cfg.url;
+  const token = username
+    ? `Basic ${Buffer.from(`${decodeURIComponent(username)}:${decodeURIComponent(password)}`).toString("base64")}`
+    : undefined;
+  const uri = `${cfg.url.protocol}//${cfg.url.host}`;
+  agent = {
+    href: cfg.url.href,
+    dispatcher: new ProxyAgent({ uri, proxyTunnel: false, ...(token ? { token } : {}) }),
+    fetch,
+  };
   return agent;
 }
 

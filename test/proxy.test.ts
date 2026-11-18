@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { after, afterEach, before, describe, test } from "node:test";
 import { browserAvailable, closeBrowser, openBrowser } from "../src/browser.js";
 import { call } from "../src/execute.js";
-import { send } from "../src/http.js";
+import { RedirectRefused, send } from "../src/http.js";
 import { guestCookieNames } from "../src/login.js";
 import {
   browserProxy,
@@ -40,6 +40,18 @@ describe("proxy config", () => {
       undefined,
     );
     assert.equal(proxied("https://a.com/", undefined), false);
+  });
+
+  test("NO_PROXY entries tier 1 cannot match as Chrome would, and undecodable credentials, are refused", () => {
+    for (const e of ["10.0.0.0/8", "*corp.com", "a.*.com"])
+      assert.throws(() => cfg("http://p:1", e), new RegExp(`entry ${e.replace(/[.*]/g, "\\$&")} is not supported`));
+    assert.doesNotThrow(() => cfg("http://p:1", "*.corp.com,*,<-loopback>"));
+    assert.throws(
+      () => proxyConfig({ API_ANYTHING_PROXY: "http://u:p%zz@h.example:1" }),
+      (e: Error) => /not validly percent-encoded/.test(e.message) && !e.message.includes("p%zz"),
+    );
+    // a name that starts with 127 is no loopback address
+    assert.equal(proxied("http://127.example.com/", cfg("http://p:1")), true);
   });
 
   test("an unusable value is refused without quoting its credentials", () => {
@@ -83,11 +95,16 @@ describe("proxy config", () => {
     );
     assert.deepEqual(browserProxy(cfg("http://us%40r:p%3Ass@p.example:3128", "a.com")), {
       server: "http://p.example:3128",
-      bypass: "a.com,*.a.com",
+      bypass: "a.com,*.a.com,localhost,127.0.0.1,[::1]",
       username: "us@r",
       password: "p:ss",
     });
-    assert.deepEqual(browserProxy(cfg("https://p.example")), { server: "https://p.example" });
+    assert.deepEqual(browserProxy(cfg("https://p.example")), {
+      server: "https://p.example",
+      bypass: "localhost,127.0.0.1,[::1]",
+    });
+    // <-loopback> asked for: no loopback host is named, so it goes through
+    assert.equal(browserProxy(cfg("http://p:1", "<-loopback>"))?.bypass, "<-loopback>");
     assert.equal(browserProxy(cfg("http://p:1", "*")), undefined);
     assert.equal(browserProxy(undefined), undefined);
   });
@@ -119,6 +136,11 @@ describe("site traffic through a local proxy", () => {
     const hits: IncomingMessage[] = [];
     const server = createServer((req, res) => {
       hits.push(req);
+      if (req.url === "/redirect") {
+        res.writeHead(302, { location: "/landed", "set-cookie": "sid=1; Path=/" });
+        res.end();
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json", "set-cookie": "visitor=1; Path=/" });
       res.end(JSON.stringify({ ok: true, path: req.url }));
     });
@@ -163,8 +185,47 @@ describe("site traffic through a local proxy", () => {
     const r = await send(op(), { q: "b" }, none, { site: "px", minIntervalMs: 0 });
     assert.equal(r.status, 200);
     assert.deepEqual(JSON.parse(r.body), { ok: true, path: "/api/items?q=b" });
-    assert.deepEqual(proxy.seen, [{ method: "CONNECT", target: target(), authorized: true }]);
+    // plain http goes to the proxy whole, as Chrome sends it: a stock Squid refuses CONNECT to port 80
+    assert.deepEqual(proxy.seen, [{ method: "GET", target: `${site.url}/api/items?q=b`, authorized: true }]);
     assert.equal(site.hits.length, 1);
+  });
+
+  test("a username with an empty password (an API-key proxy) still authenticates at tier 1", async () => {
+    const keyed = await startProxy({ user: "APIKEY", pass: "" });
+    try {
+      process.env.API_ANYTHING_PROXY = `http://APIKEY:@127.0.0.1:${keyed.port}`;
+      process.env.API_ANYTHING_NO_PROXY = "<-loopback>";
+      assert.equal((await send(op(), { q: "b" }, none, { site: "px", minIntervalMs: 0 })).status, 200);
+      assert.deepEqual(
+        keyed.seen.map((s) => s.authorized),
+        [true],
+      );
+    } finally {
+      await keyed.close();
+    }
+  });
+
+  test("a redirect whose next hop would carry a cookie over plain http is refused as the redirect's, after the first was sent", async () => {
+    use();
+    const redirecting = OperationSchema.parse({
+      name: "go",
+      readOnly: false,
+      request: { method: "POST", url: `${site.url}/redirect`, headers: {}, body: "a=1" },
+      slots: [],
+      trigger: { url: `${site.url}/` },
+      params: [],
+    });
+    await assert.rejects(
+      () => send(redirecting, {}, none, { site: "px", minIntervalMs: 0 }),
+      (e: Error) =>
+        e instanceof RedirectRefused &&
+        !(e instanceof CleartextRefused) &&
+        /not following the HTTP 302/.test(e.message),
+    );
+    assert.deepEqual(
+      site.hits.map((h) => h.url),
+      ["/redirect"],
+    );
   });
 
   test("a host in API_ANYTHING_NO_PROXY, and every catalog-style plain fetch, go direct", async () => {
@@ -217,7 +278,7 @@ describe("site traffic through a local proxy", () => {
   test("login's signed-out probe goes through the proxy too", async () => {
     use();
     assert.deepEqual(await guestCookieNames(`${site.url}/`), ["visitor"]);
-    assert.deepEqual(proxy.seen, [{ method: "CONNECT", target: target(), authorized: true }]);
+    assert.deepEqual(proxy.seen, [{ method: "GET", target: `${site.url}/`, authorized: true }]);
   });
 
   test("the browser goes through the proxy too", {
@@ -238,6 +299,35 @@ describe("site traffic through a local proxy", () => {
       JSON.stringify(proxy.seen),
     );
     assert.ok(site.hits.some((h) => h.url === "/page"));
+  });
+
+  test("the browser stops a plain-http request through the proxy that would carry the profile's cookies", {
+    skip: !browserAvailable() && "no Chromium browser installed",
+  }, async () => {
+    use();
+    await closeBrowser();
+    const ctx = await openBrowser({ profileDir: mkdtempSync(join(HOME, "profile-")) });
+    await ctx.addCookies([{ name: "sid", value: "S", domain: "127.0.0.1", path: "/" }]);
+    const page = await ctx.newPage();
+    await assert.rejects(() => page.goto(`${site.url}/held`), /ERR_ACCESS_DENIED|ERR_FAILED/);
+    await page.close();
+    await closeBrowser();
+    assert.ok(!proxy.seen.some((s) => s.target.includes("/held")), JSON.stringify(proxy.seen));
+    assert.ok(!site.hits.some((h) => h.url === "/held"));
+  });
+
+  test("with no <-loopback>, the browser calls a loopback site directly, as tier 1 does", {
+    skip: !browserAvailable() && "no Chromium browser installed",
+  }, async () => {
+    use("u:hunter22", "");
+    await closeBrowser();
+    const ctx = await openBrowser({ profileDir: mkdtempSync(join(HOME, "profile-")) });
+    const page = await ctx.newPage();
+    assert.equal((await page.goto(`${site.url}/direct`))?.status(), 200);
+    await page.close();
+    await closeBrowser();
+    assert.deepEqual(proxy.seen, []);
+    assert.ok(site.hits.some((h) => h.url === "/direct"));
   });
 });
 

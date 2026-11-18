@@ -1217,7 +1217,10 @@ not a way past a bot wall: a wall seen through a proxy still answers `blocked`, 
   the guest-cookie probe of `login`/`share` and the browserless rescan use `siteFetch` (undici's own
   `fetch` with a `ProxyAgent`, imported only when a proxy is set; never Node's built-in `fetch` with an
   npm-undici dispatcher, which breaks when the two versions drift, and never `setGlobalDispatcher`,
-  which would route registry traffic too). Chrome gets Playwright's `proxy` launch option, so tiers 2
+  which would route registry traffic too). A plain-http request goes to the proxy whole
+  (`proxyTunnel: false`), as Chrome sends it: a stock Squid refuses CONNECT to port 80. The proxy's
+  credentials go as our own `Proxy-Authorization`, so a username with an empty password (an API-key
+  proxy) works at tier 1 as in Chrome. Chrome gets Playwright's `proxy` launch option, so tiers 2
   and 3, learning, heals' recaptures and `login --window` leave from the same address. The 32 MiB
   body cap applies on the proxied path as on the direct one.
 - `API_ANYTHING_NO_PROXY`: comma- or space-separated. `a.com`, `.a.com` and `*.a.com` each cover
@@ -1225,15 +1228,25 @@ not a way past a bot wall: a wall seen through a proxy still answers `blocked`, 
   Chrome's bypass list reads `a.com` as that host alone, so each entry is given to it as the host and
   `*.` its subdomains. Loopback (`localhost`, `127.0.0.0/8`, `[::1]`) bypasses the proxy at every tier,
   Chrome's own default; the entry `<-loopback>`, Chrome's token for it, sends loopback through too.
+  (Playwright sends loopback through unless the list names a loopback host, so Chrome's list always
+  names `localhost,127.0.0.1,[::1]` without `<-loopback>`.) An entry tier 1 cannot match the way
+  Chrome would (a CIDR range, a `*` inside a name) is refused when the variable is read, so the two
+  never route a host differently.
 - The private-address guard still runs before every request and redirect hop of a public-only op,
   but with a proxy set it only covers what this machine's DNS returns: `badAddress` already refuses
   IP literals and single-label names, and a public name the proxy's resolver maps to an address on
   its own network is not caught. A proxy you do not run sees every host you call.
 - Plain http through the proxy would show it the session: over https it sees only the host. A
   proxied `http://` request that carries a session (a Cookie header, a resolving `cookie:` or
-  `session:` ref, for tier 3 a jar holding the site's cookies; on every redirect hop too) is refused
-  before anything is sent, `error` with nothing sent and a `next` naming `API_ANYTHING_NO_PROXY`.
-  Shared specs are https-only already; this covers local ones.
+  `session:` ref; for tier 3, any address its trigger opens while the jar holds the site's cookies)
+  is refused before anything is sent: `error` with nothing sent and a `next` naming
+  `API_ANYTHING_NO_PROXY`. At tiers 1 and 2 every redirect hop is checked too, and a hop refused
+  this way is the redirect's refusal (`RedirectRefused`): the request before it was sent, so a
+  write's state says so. In Chrome, a route registered when the context opens (so after every run's
+  own guard has passed the request on) aborts a proxied plain-http request the profile holds cookies
+  for, whatever opened it: a step, a link, learning, a recapture. Playwright routes only a request's
+  first URL, so a redirect Chrome follows to plain http is not stopped. Shared specs are https-only
+  already; this covers local ones.
 - The proxy is shown as `host:port` only. An error through it names the proxy that way, with its URL
   and credentials taken out of anything undici says.
 

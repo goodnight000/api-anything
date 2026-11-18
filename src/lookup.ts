@@ -2,11 +2,13 @@
  * Derived slots (DESIGN.md "Request template"): the lookup a call sends before the op's own request
  * at tiers 1 and 2, whose JSON answer holds the value (a slug's numeric id).
  */
+
 import { BudgetSpent } from "./budget.js";
 import { type Class, judge, type Observed } from "./classify.js";
 import { asText, setAt, walk } from "./codec.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { AddressRefused, ReadWrites, RedirectRefused, type SendOptions, type Sent, send } from "./http.js";
+import { CleartextRefused } from "./proxy.js";
 import type { Session } from "./session.js";
 import type { Lookup, Operation } from "./spec.js";
 import { DERIVED_VALUE, graphqlDocuments, writesGraphql } from "./vet.js";
@@ -81,7 +83,13 @@ export async function derive(op: Operation, fetchOne: (lookup: Operation) => Pro
       try {
         r = await fetchOne(l);
       } catch (e) {
-        if (e instanceof AddressRefused || e instanceof BudgetSpent || e instanceof ReadWrites) throw e;
+        if (
+          e instanceof AddressRefused ||
+          e instanceof BudgetSpent ||
+          e instanceof ReadWrites ||
+          e instanceof CleartextRefused
+        )
+          throw e;
         const reason = `${where}: ${(e as Error).message.split("\n")[0]}`;
         throw new LookupFailed(
           { class: "error", reason, ...(e instanceof RedirectRefused ? {} : { server: true }) },
