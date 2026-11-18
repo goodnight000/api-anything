@@ -282,6 +282,7 @@ export function findSitesSchema(): JsonSchema {
   return object({
     matches: { type: "array", items: match },
     registryError: str,
+    retryAfterMs: num,
     localOnly: str,
     notSent: str,
     shared: str,
