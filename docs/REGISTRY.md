@@ -542,9 +542,15 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
   subscriber holds a /48 or more). A report batch costs one per report and never less than one, so an
   empty batch, which still records its key, is not free. A key first seen less than an hour ago uploads at most 5 versions
   (`NEW_KEY_UPLOADS`). A circuit breaker caps uploads at 300 an hour across all keys
-  (`UPLOADS_PER_HOUR_ALL`). Every limit answers 429 with Retry-After.
+  (`UPLOADS_PER_HOUR_ALL`). A search carries no key and reads the catalog, so it is limited per
+  subscriber before any D1 read: an IPv4 address, or an IPv6 /48, as a salted hash. The limit is a
+  Workers Rate Limiting binding (`SEARCH_LIMITER` in `registry/wrangler.jsonc`), which counts in memory
+  in each Cloudflare location and writes nothing, so it is about 60 a minute, not exact. Without the
+  binding (local dev, tests) search is unlimited. Every limit answers 429 with Retry-After; a search's
+  is 60 s, the binding's period, and `find_sites` passes it on as `retryAfterMs`.
 - Public reads (`/v1/search`, `/v1/sites/:name`, `/v1/index`, `/v1/demand`, `/v1/stats`, `/`,
-  `/sites/:name`, `/wanted/:domain`, `/sitemap.xml`) are cached for 60 s at the edge, keyed by URL. A signed read skips the cache, since it may include the
+  `/sites/:name`, `/wanted/:domain`, `/sitemap.xml`) are cached for 60 s at the edge, keyed by URL. The
+  cache is read before the search limit, so a search it answers is never counted. A signed read skips the cache, since it may include the
   signer's own `review` versions. Cloudflare documents the Cache API as working for a Worker on a custom
   domain; nothing here relies on it caching on the `*.workers.dev` host. The limits hold without it, and
   the stats' install funnel is kept in `snapshots` anyway, since counting it reads every key.
@@ -595,5 +601,5 @@ minutes.
 
 About the caller, the registry keeps its reports, keyed by install key and time, and nothing else:
 no account, no IP address (a network is a salted hash, used to count distinct networks and for rate
-limits), no search words. Workers observability logs are off (`registry/wrangler.jsonc`), so request
+limits; the search limit's salted hash of an address or /48 lives only in the rate limiter's memory), no search words. Workers observability logs are off (`registry/wrangler.jsonc`), so request
 URLs, and the queries in them, are not stored.

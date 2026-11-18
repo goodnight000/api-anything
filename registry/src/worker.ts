@@ -19,7 +19,7 @@ import {
 import { domainOf } from "../../src/search.js";
 import type { Operation } from "../../src/spec.js";
 import { badAddress, interfaceAddress, MAX_INTERFACE_URL, uploadProblems } from "../../src/vet.js";
-import { networksOf, sha256Hex, signatureHeaders, signer } from "./auth.js";
+import { networksOf, searcherOf, sha256Hex, signatureHeaders, signer } from "./auth.js";
 import { catalog, confirmed, entryOf, search } from "./catalog.js";
 import { CSP, homePage, sitemap, sitePage } from "./pages.js";
 import { nextStatus, type Thresholds, thresholds, toArchive } from "./rules.js";
@@ -80,10 +80,17 @@ import {
 } from "./upload.js";
 import { cleanDomain, WANTED_INDEX_NETWORKS, wantedPage } from "./wanted.js";
 
+/** A Workers Rate Limiting binding: an approximate count per Cloudflare location, kept in memory. */
+export interface RateLimiter {
+  limit(o: { key: string }): Promise<{ success: boolean }>;
+}
+
 export interface Env {
   DB: D1Database;
   ADMIN_TOKEN?: string;
   SALT?: string;
+  /** registry/wrangler.jsonc's `ratelimits`; absent (local dev, tests), search is unlimited */
+  SEARCH_LIMITER?: RateLimiter;
   /** thresholds (rules.ts), e.g. PROMOTE_KEYS */
   [threshold: string]: unknown;
 }
@@ -95,6 +102,8 @@ const HOUR = 3_600_000;
 const MAX_BODY = 256 * 1024;
 const MAX_SEED = 1024 * 1024;
 const MAX_REPORTS = 50;
+/** the SEARCH_LIMITER period in registry/wrangler.jsonc: the binding does not say when its window ends */
+const SEARCH_PERIOD_SECONDS = 60;
 
 class HttpError extends Error {
   constructor(
@@ -242,7 +251,21 @@ async function judge(db: D1Database, t: Thresholds, at: number, v: VersionRow, f
 
 /* ------------------------------------------------------------------ reads */
 
+/**
+ * Search takes no key and reads the catalog from D1, so it is limited per subscriber before anything is
+ * read. The limiter counts in memory, so a refused search writes nothing either.
+ */
+async function limitSearch(c: Ctx) {
+  const limiter = c.env.SEARCH_LIMITER;
+  if (!limiter) return;
+  if (!(await limiter.limit({ key: await searcherOf(c.request, salt(c)) })).success)
+    throw new HttpError(429, "too many searches from this address; try again in a minute", undefined, {
+      "retry-after": String(SEARCH_PERIOD_SECONDS),
+    });
+}
+
 async function searchApi(c: Ctx) {
+  await limitSearch(c);
   const q = c.url.searchParams.get("q")?.trim();
   if (!q) throw new HttpError(400, "search takes q: words, a domain or a URL");
   if (q.length > MAX_SEARCH_QUERY) throw new HttpError(400, `q is longer than ${MAX_SEARCH_QUERY} characters`);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { prefixOf } from "../src/auth.js";
+import { prefixOf, subscriberOf } from "../src/auth.js";
 import { byRank, degraded, type Facts, nextStatus, promoted, thresholds, toArchive } from "../src/rules.js";
 
 const t = thresholds({});
@@ -108,6 +108,15 @@ test("an IP's network is its /24 or /32", () => {
   assert.equal(prefixOf("2001:db8:1::1"), "2001:db8");
   assert.equal(prefixOf("2001:db9::1"), "2001:db9");
   assert.equal(prefixOf(""), "unknown");
+});
+
+test("a searcher is its IPv4 address or its IPv6 /48", () => {
+  assert.equal(subscriberOf("203.0.113.9"), "203.0.113.9");
+  assert.equal(subscriberOf("::ffff:203.0.113.9"), "203.0.113.9");
+  assert.equal(subscriberOf("2001:db8:abcd:12::1"), "2001:db8:abcd::/48");
+  assert.equal(subscriberOf("2001:0DB8:ABCD:ffff:1:2:3:4"), "2001:db8:abcd::/48");
+  assert.equal(subscriberOf("2001:db8::1"), "2001:db8:0::/48");
+  assert.equal(subscriberOf(""), "unknown");
 });
 
 test("archive: stale candidates and degraded versions, and a degraded one a newer live version replaced; never a live one", () => {
