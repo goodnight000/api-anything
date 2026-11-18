@@ -64,7 +64,9 @@ The captured timedtext requests returned empty bodies, so no transcript operatio
 Re-probed 2026-11-04 (issue #105): the watch page's caption tracks carry `exp=xpe` and answer
 empty without the web player's proof-of-origin token. Only the Android app's player request
 returns tracks that answer plain HTTP, and the shared rules refuse what that op would need. See
-`docs/research/youtube-captions.md` for the evidence and the tier-3 route still to try.
+`docs/research/youtube-captions.md` for the evidence. The tier-3 route (turn captions on in the
+page, capture the player's own fetch) was tried on 2026-11-05: the trigger works, but the player's
+fetch answered empty on that network too, so there is still no answer to build an op from.
 The watch page exposed one comment in JSON-LD, not a top-comment list with reply counts, so no
 comments operation was added.
 A live stream's search view count is in another field. Some channel upload cards omit view and
