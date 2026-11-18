@@ -59,3 +59,38 @@ reliably (the CC button, or the `c` key on the player), whether the captured ans
 all (the earlier empty bodies may have been the player's preload), and whether tiers 1 and 2 ever
 answer, since `pot` and the signed URL are per page load. If they never do, the op is tier 3 on
 every call, which no bundled op is today.
+
+## Tier-3 run, 2026-11-05 (Swiss network, guest profile)
+
+The "Not tried" route, tried on a second network: headless Chromium 153.0.8010.12
+(`chrome-headless-shell` and a headed full-Chromium run agree), ephemeral profiles, about thirty
+requests, read-only.
+
+- **A trigger step can turn captions on.** Opening the watch page, clicking the player to start
+  it, then clicking the player's subtitles button lands the pointer event on the button and the
+  player answers by fetching its caption track. The button selector used is the stable class
+  `ytp-subtitles-button`, not the localized aria-label, so it works in any locale. The `c` key on
+  the player was unreliable in headless. A European consent wall can appear one to three seconds
+  after the page load; it is not part of the trigger, and a profile that has accepted it once no
+  longer shows it.
+- **The captured answer is the body the player gets.** The empty bodies of 2026-11-01 and
+  2026-11-04 were not only the player's preload: on this network the player's own on-demand fetch
+  after the toggle answered 200 with an empty body, content-type text/html, with no pot parameter
+  in the URL, and in-page fetches of the watch page's own signed `baseUrl` answered empty in every
+  variant (as signed, with vtt, json3, rvft or srv3, and without the signature). Where the page's
+  player sees an empty track, the op answers missing; where the player gets cues, the capture
+  holds them.
+- **What answers from this network.** The newer Android client (`20.09.37`) still answered the
+  player request from here. Its track URL bakes in `fmt=srv3`, which answers the cues (469 B for
+  `jNQXAC9IVRw`, 3877 B for `dQw4w9WgXcQ`) as srv3 XML to a plain GET and to a page-context fetch
+  alike, within its signature window; the same URL asked for vtt, json3 or rvft answered 200
+  empty. The 11-04 machine's older client appended `&fmt=vtt` to a track URL carrying no baked
+  fmt and got WebVTT, so which fmts answer depends on the network's cohort, not on the client
+  alone. Sustained probing of `timedtext` from one address ended in 429 "Sorry..." pages.
+
+No op was bundled from this run. On both networks tried so far the player's own caption fetch
+answered 200 with an empty body, so a `captions` op's example and held-out check would fail
+`verify` wherever it has run. What is still missing is a run on a network where the web player
+gets cues, captured with `api-anything add youtube ...` or `learn_site` so the stored request is
+the player's XHR (`sec-fetch-mode: cors`) and the fixture is a trimmed copy of its `json3` body
+(`{"wireMagic":"pb3","events":[{"tStartMs":...,"segs":[{"utf8":...}]}]}`), not a converted one.

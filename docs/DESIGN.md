@@ -2667,4 +2667,5 @@ it, so the ladder can send and heal that request. For YouTube captions, the prob
 web player's token, and that only the Android app's player request answers plain HTTP. That request
 needs a POST lookup and a whole signed URL as a derived value, which the shared rules refuse, and no
 page sends it, so it could not heal either. The route that fits is a tier-3 op that turns captions on
-in the page and captures the page's own request; it is not built yet.
+in the page and captures the page's own request. Its trigger was found (2026-11-05, same file), but
+the player's fetch answered empty on every network tried, so it is not built yet.
