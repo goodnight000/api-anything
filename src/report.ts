@@ -6,6 +6,7 @@
  */
 import type { CallResult } from "./execute.js";
 import { loadSettings } from "./identity.js";
+import { siteFetch } from "./proxy.js";
 import { registryRequest, upgradeBundled } from "./registry.js";
 import type { Outcome, Report } from "./registry-api.js";
 import type { Operation } from "./spec.js";
@@ -112,7 +113,7 @@ export function afterCall(
           const { healBack } = await import("./share.js");
           await healBack(site, op.name, version.hash, {
             ...o,
-            fetchImpl: withSignal(o.fetchImpl ?? fetch, signal),
+            fetchImpl: withSignal(o.fetchImpl ?? siteFetch, signal),
             signal,
           });
         });

@@ -267,5 +267,8 @@ The server holds your signed-in sessions, so it is guarded like a key to them:
 - **Bounded input and work.** JSON bodies are capped at 1 MB, a batch at 20 calls, and the calls
   running at once at `--max-concurrent` (8). An idle socket is closed after 120 seconds. A
   request the server cannot read is a 400; no request stops the server.
+- **Egress through a proxy.** Set `API_ANYTHING_PROXY` (and `API_ANYTHING_NO_PROXY`) to send site
+  calls through an egress gateway; registry traffic stays direct. See "Through an outbound proxy"
+  in [REFERENCE.md](REFERENCE.md).
 - **Shared specs are data.** The OpenAPI document and the answers carry site text. Treat it the
   way the MCP server does: as data from the website, never as instructions.

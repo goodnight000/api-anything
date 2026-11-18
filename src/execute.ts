@@ -41,11 +41,13 @@ import {
   BadHeader,
   BodyTooLarge,
   buildRequest,
+  carriesSessionRefs,
   holdsRef,
   nextHop,
   pace,
   ReadWrites,
   RedirectRefused,
+  refuseCleartextHop,
   refusePrivate,
   refusePrivateHop,
   requestArgs,
@@ -56,6 +58,7 @@ import {
 import { loadSettings, localOnly, localOnlyOff } from "./identity.js";
 import { LockBusy } from "./lock.js";
 import { derive, LookupFailed, sendDerived } from "./lookup.js";
+import { CleartextRefused, refuseCleartext } from "./proxy.js";
 import { projectView, type ResultCursor, type ResultView, resultView, viewProblem } from "./results.js";
 import { SealError } from "./seal.js";
 import { redact } from "./secrets.js";
@@ -712,6 +715,18 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       // An arg that would make the page another address: the caller's to fix, before any pacing, budget or browser.
       const refused = triggerRefusal(op.trigger, ctx.args);
       if (refused) return { tier, class: "input", reason: `not opening ${op.name}'s page: ${refused}`, unsent: true };
+      // Every address the trigger opens: the profile's cookies for the site are the session file's
+      // (exported after every run). Where Chrome goes from there (a redirect, a link) is its own.
+      if (!bareCall(ctx, op)) {
+        const t = fillTrigger(op.trigger, ctx.args);
+        const held = loadSession(ctx.site).cookies.length > 0;
+        for (const u of [
+          t.url,
+          t.softFrom,
+          ...(t.steps ?? []).map((s) => (s.action === "goto" ? (s.value ?? s.selector) : "")),
+        ])
+          if (u) refuseCleartext(new URL(u, t.url).href, held);
+      }
       // For a write this is the UI sending it: the one attempt.
       await pace(ctx.site, ctx.opts.minIntervalMs, ctx.budget);
       const run = await runOpTrigger(ctx.site, op, ctx.args);
@@ -797,6 +812,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         const req = buildRequest(o, ctx.args, session, ctx.gen);
         // the page's fetch goes only to public addresses, as tier 1 does (tier 3 is not covered)
         if (guarded) await refusePrivate(o, req.url);
+        const carries = !none && (session.cookies.length > 0 || carriesSessionRefs(o, session));
+        refuseCleartext(req.url, carries);
         const { cookie: _jar, ...headers } = req.headers; // the page sends the profile's own cookies
         return pageFetch({
           origin: new URL(req.url).origin,
@@ -814,6 +831,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
           redirect: async (from, status, location, taken) => {
             const next = nextHop(o, session, from, status, location, taken);
             if (guarded) await refusePrivateHop(next, status);
+            refuseCleartextHop(next.url, carries, status);
             return next;
           },
         });
@@ -897,6 +915,16 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         reason: e.message,
         unsent: true,
         hint: "do not retry: a read never sends a GraphQL mutation; tell the user",
+        step: "report",
+      };
+    // plain http through API_ANYTHING_PROXY would show the proxy this session: nothing was sent
+    if (e instanceof CleartextRefused)
+      return {
+        tier,
+        class: "error",
+        reason: e.message,
+        unsent: true,
+        hint: "do not retry: tell the user the site is plain http and API_ANYTHING_PROXY is set, so its cookies would cross the proxy readable; they can add the host to API_ANYTHING_NO_PROXY",
         step: "report",
       };
     // a public-only op names an address on this machine or the local network: nothing was sent, and no tier sends it

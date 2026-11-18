@@ -9,6 +9,7 @@ import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import type { BrowserContext, Cookie, chromium, Dialog, Frame, Page, Request, Response, Route } from "playwright-core";
 import { botWall } from "./classify.js";
 import { MAX_BODY_BYTES } from "./http.js";
+import { browserProxy, proxied } from "./proxy.js";
 import { SIGN_IN_AUTOCOMPLETE, SIGN_IN_REFUSAL } from "./secrets.js";
 import { home, siteOf, writePrivate } from "./session.js";
 import type { Request as Hop } from "./spec.js";
@@ -251,6 +252,7 @@ export function openBrowser({
   const ctx = (async () => {
     if (prev) await closeContext(prev.ctx);
     if (headless) headlessUA ??= await headlessUserAgent();
+    const proxy = browserProxy();
     const c = await launch(profileDir, {
       executablePath: browserChoice()?.bin,
       headless,
@@ -260,7 +262,10 @@ export function openBrowser({
       serviceWorkers: "block",
       // Playwright's own SIGTERM handler keeps the process alive; Chrome exits with its pipe anyway.
       handleSIGTERM: false,
+      // API_ANYTHING_PROXY: tiers 2 and 3, learning and `login --window` leave from the address tier 1 uses
+      proxy,
     });
+    if (proxy) await guardCleartext(c);
     c.on("close", () => {
       if (current?.ctx === ctx) current = undefined;
     });
@@ -271,6 +276,21 @@ export function openBrowser({
     if (current?.ctx === ctx) current = undefined;
   });
   return ctx;
+}
+
+/**
+ * With a proxy, a plain-http request through it that would carry the profile's cookies is stopped:
+ * the proxy would read them. Registered first, so it runs after every run's own guard has passed the
+ * request on. A redirect's later hops are not routed (Playwright routes a request's first URL only).
+ */
+async function guardCleartext(c: BrowserContext): Promise<void> {
+  await c.route(
+    (u) => u.protocol === "http:" && proxied(u.href),
+    async (route) => {
+      if ((await c.cookies(route.request().url())).length) return route.abort("accessdenied");
+      return route.fallback();
+    },
+  );
 }
 
 async function closeContext(ctx: Promise<BrowserContext>): Promise<void> {

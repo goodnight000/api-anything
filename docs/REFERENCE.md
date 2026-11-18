@@ -318,6 +318,22 @@ Transport tiers, cheapest first. The lowest tier that worked is remembered for e
 | 2 | `fetch()` inside a real Chrome page on the site | tier 1 is `blocked` |
 | 3 | run the trigger in Chrome and read the site's own response | per-request signatures, a failed heal (reads only) |
 
+### Through an outbound proxy
+
+On a network that requires a proxy, or for `serve` behind an egress gateway, set:
+
+```sh
+export API_ANYTHING_PROXY=http://user:pass@proxy.internal:3128   # http:// or https://
+export API_ANYTHING_NO_PROXY=intranet.example.com,10.0.0.5        # optional; a name covers its subdomains
+```
+
+Every tier goes through it: tier 1, the browser tiers, learning and `login --window`. Registry
+traffic (`pull`, `search`, sharing) goes direct, and `HTTPS_PROXY`/`NO_PROXY` are not read, so a
+proxy you set for other tools changes nothing here. Loopback always goes direct. A site served over
+plain `http://` is refused through the proxy when the call would carry your session, since the
+proxy could read its cookies; add the host to `API_ANYTHING_NO_PROXY` to call it directly. A proxy
+does not get a call past a bot wall: a site that blocks you still answers `blocked`.
+
 ### Health: `api-anything status [site]`
 
 An op can keep working and still be in trouble: an escalation to tier 3 is remembered for good, so
@@ -392,6 +408,9 @@ api-anything login linkedin.com
 ```
 
 The target can be a site name (`linkedin`), a domain (`linkedin.com`, `www.linkedin.com`) or a URL.
+(Calling through `API_ANYTHING_PROXY`? Imported cookies came from your own address, and some sites
+bind a session to it, so a proxied call may answer `auth`. `login <site> --window` signs in through
+the proxy instead.)
 By default this **imports** the site's cookies from your everyday browser — you are almost always
 already signed in there, so there is no password to type and no 2FA or captcha to redo. It prints
 the browser profile it used, with the profile's display name and Google account, and the cookie
