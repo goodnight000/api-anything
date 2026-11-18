@@ -129,6 +129,18 @@ test("query: a written value always decodes back to itself, and the bytes it sha
     setAt(r, ["query:v"], "(a:urn:x:2,b:List((c)),q:hello world,e:€1)").url,
     "https://a.com/s?v=(a:urn%3Ax%3A2,b:List(%28c%29),q:hello+world,e:%E2%82%AC1)&z=1",
   );
+  // an empty or new value is judged by the whole query, but none of its bytes are copied in: no other pair's & or =
+  assert.equal(
+    setAt(get("https://a.com/s?q=&page=2&size=10"), ["query:q"], "q=&page=2&size=999").url,
+    "https://a.com/s?q=q%3D%26page%3D2%26size%3D999&page=2&size=10",
+  );
+  assert.equal(
+    setAt(get("https://a.com/s?page=2&size=10"), ["query:q"], "x&size=10").url,
+    "https://a.com/s?page=2&size=10&q=x%26size%3D10",
+  );
+  // a character that grows when upper-cased (ß) does not shift where an escape is looked for
+  assert.equal(setAt(get("https://a.com/%C3%9Fx%2Fy"), ["path:0"], "a/b").url, "https://a.com/a%2Fb");
+  assert.equal(setAt(get("https://a.com/ßx%2Fy"), ["path:0"], "a/b").url, "https://a.com/a%2Fb");
   // a capture that does not decode still decides the characters by its own bytes, as before
   assert.equal(setAt(get("https://a.com/s?v=%zz:a"), ["query:v"], "b:c").url, "https://a.com/s?v=b:c");
 });
