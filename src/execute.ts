@@ -47,6 +47,7 @@ import {
   pace,
   ReadWrites,
   RedirectRefused,
+  refuseCleartextHop,
   refusePrivate,
   refusePrivateHop,
   requestArgs,
@@ -714,9 +715,18 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       // An arg that would make the page another address: the caller's to fix, before any pacing, budget or browser.
       const refused = triggerRefusal(op.trigger, ctx.args);
       if (refused) return { tier, class: "input", reason: `not opening ${op.name}'s page: ${refused}`, unsent: true };
-      // the profile's cookies for the site are the session file's (exported after every run)
-      if (!bareCall(ctx, op))
-        refuseCleartext(fillTrigger(op.trigger, ctx.args).url, loadSession(ctx.site).cookies.length > 0);
+      // Every address the trigger opens: the profile's cookies for the site are the session file's
+      // (exported after every run). Where Chrome goes from there (a redirect, a link) is its own.
+      if (!bareCall(ctx, op)) {
+        const t = fillTrigger(op.trigger, ctx.args);
+        const held = loadSession(ctx.site).cookies.length > 0;
+        for (const u of [
+          t.url,
+          t.softFrom,
+          ...(t.steps ?? []).map((s) => (s.action === "goto" ? (s.value ?? s.selector) : "")),
+        ])
+          if (u) refuseCleartext(new URL(u, t.url).href, held);
+      }
       // For a write this is the UI sending it: the one attempt.
       await pace(ctx.site, ctx.opts.minIntervalMs, ctx.budget);
       const run = await runOpTrigger(ctx.site, op, ctx.args);
@@ -821,7 +831,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
           redirect: async (from, status, location, taken) => {
             const next = nextHop(o, session, from, status, location, taken);
             if (guarded) await refusePrivateHop(next, status);
-            refuseCleartext(next.url, carries);
+            refuseCleartextHop(next.url, carries, status);
             return next;
           },
         });
