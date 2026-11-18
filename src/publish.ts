@@ -10,7 +10,17 @@ import { slugOf } from "./domain.js";
 import { sharedName } from "./registry.js";
 import type { Evidence, SiteContext, VersionUpload } from "./registry-api.js";
 import { hostsOf, summarize } from "./search.js";
-import { besideOrigins, credentialsOf, ipIn, liveIn, opUrls, ownTexts, pctDecode, scanSecrets } from "./secrets.js";
+import {
+  besideOrigins,
+  borderlineCredentials,
+  credentialsOf,
+  ipIn,
+  liveIn,
+  opUrls,
+  ownTexts,
+  pctDecode,
+  scanSecrets,
+} from "./secrets.js";
 import { accountCookies, loadSession, type Session, safeName, siteOf } from "./session.js";
 import type { Operation, Site } from "./spec.js";
 import { bundledDir, exportSite, loadSite, siteNotes } from "./store.js";
@@ -249,6 +259,8 @@ export interface OpPlan {
   /** each one refuses the upload */
   errors: string[];
   personal: string[];
+  /** with `strict`: what `borderlineCredentials` reports of the operation uploaded, for a human to check */
+  borderline: string[];
 }
 
 export interface Plan {
@@ -270,7 +282,8 @@ export interface Plan {
 /**
  * The uploads of `ops` (all of the site's when empty), with the export's stripping and scans, the shared
  * rules, a live-secret scan no `public` name waives over the exact bytes sent, and the privacy checks.
- * `guest`: the cookie names a signed-out visit of the site is given now (`isPublic`).
+ * `guest`: the cookie names a signed-out visit of the site is given now (`isPublic`). `strict`: each op's
+ * `borderline`, in the warnings too.
  */
 export function plan(
   name: string,
@@ -291,7 +304,7 @@ export function plan(
   for (const n of wanted)
     if (!r.site.operations.some((op) => op.name === n)) throw new Error(`no operation "${n}" on ${name}`);
   // the learner arranges the param examples to be ones the user chose to share (learnsite.ts)
-  const ex = exportSite(name, { keepExamples: true, strict: o.strict });
+  const ex = exportSite(name, { keepExamples: true });
   // The user's own notes go only with their yes; without it, only notes that came from the registry
   const notes = o.consent ? siteNotes(name) : siteNotes(name, { from: "registry" });
   const session = loadSession(name);
@@ -329,6 +342,8 @@ export function plan(
     const upload: VersionUpload = { site: context, operation, ...(o.parent ? { parent: o.parent } : {}), evidence };
     const vet = vetShared({ ...ex.spec, operations: [operation] }, notes);
     for (const w of vet.warnings) warnings.add(w);
+    const borderline = o.strict ? borderlineCredentials({ operations: [operation] }, live) : [];
+    for (const w of borderline) warnings.add(w);
     const fit = readbackProblems(r.site, mine).map((m) => `${n}: ${m}`);
     const bytes = JSON.stringify(upload);
     // `public` keeps a shared bearer out of the shape heuristics, never out of this: a value this
@@ -360,6 +375,7 @@ export function plan(
           : []),
       ],
       personal: personal(upload),
+      borderline,
     };
   });
   return {

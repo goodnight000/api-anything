@@ -334,8 +334,9 @@ const HELP: Record<string, string> = {
   export: `api-anything export <site> [--out <file>] [--keep-examples] [--force] [--strict-scan]
   Writes a shareable spec: examples and response shapes stripped, and refused if a live cookie or
   session value is inside. --keep-examples keeps param examples you confirmed are public (so verify works).
-  --strict-scan also reports the borderline values the scan knowingly lets through (a short or plain
-  value under a credential-like name); it reports, it does not refuse.`,
+  --strict-scan also warns of leaves the scan lets through that may still be a credential: a copy of a
+  live value under 6 characters, a number or a too-plain value under a credential-like name, text beside
+  a param there. It names places and lengths, never values, and refuses nothing.`,
   search: `api-anything search <words | domain | url>
   Finds sites someone already turned into operations: the shared registry and the specs on this
   machine, best match first, each op with its params and its status in the registry. Words match a
@@ -361,9 +362,10 @@ const HELP: Record<string, string> = {
   can call them instead of learning the site again. Without --yes it only previews: exactly what each
   upload sends, what was stripped, the warnings, and what may be yours (an email, an account id, a
   literal typed into the page). The param examples are sent: they must be values anyone may see. It
-  refuses an op holding a live cookie or session value, or failing its checks. --strict-scan adds the
-  borderline values the scan knowingly lets through. --yes sends them, signed
-  with this install's key; an op that needed a login or writes is reviewed before others get it.`,
+  refuses an op holding a live cookie or session value, or failing its checks. --strict-scan adds what
+  export --strict-scan warns of, to the warnings and, with --yes, to each op's outcome (borderline).
+  --yes sends them, signed with this install's key; an op that needed a login or writes is reviewed
+  before others get it.`,
   mcp: `api-anything mcp [--allow-writes] [--sites a,b] [--print-config [--pin]] [--no-learn]
   Serves list_sites, find_sites, list_operations, call_operation, call_batch, get_result, get_job, site_status, login and learn_site over
   stdio MCP, and call_write_operation with --allow-writes. list_operations and call_operation pull a
@@ -1758,7 +1760,7 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
   const shared = await shareOps(
     site.name,
     p.ops.map((o) => o.op),
-    { evidence: {}, consent: true },
+    { evidence: {}, consent: true, strict: v["strict-scan"] },
   );
   const ok = shared.every((s) => s.shared);
   out({

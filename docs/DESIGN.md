@@ -376,7 +376,16 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    for a credential-like one); beside a param under a name that is not per-session, a token with separators in it or
    around it in the same piece (a JWT's dots, standard base64's `+` and `/`, `auth=<token>` after other text) or under
    16 characters; and a credential no rule recognizes (not a cookie, not stored, not named like one, not issued by an
-   earlier answer). Export scans a
+   earlier answer). `export --strict-scan` and `publish --strict-scan` report those of these shapes a reader of one
+   leaf at a time can see, each by the rule the leaf misses, and refuse nothing: a whole leaf equal to a cookie or a
+   credential's session value under 6 characters; a number under a per-session or credential-like name; text under a
+   per-session name under 8 characters; text under a credential-like name that is not random-looking, however long;
+   and, beside a param under either kind of name, text that rule does not refuse (under 8 characters for a per-session
+   name, no unbroken random-looking run of 16 or more for a credential-like one). A name the op lists as public is skipped: a human
+   vouched for it. A report names the leaf's place, its name and a length, never its value, and `publish --yes` carries
+   each op's reports into that op's outcome (`borderline`), from the plan that sends. The pass does not see a credential
+   split across two leaves, a copy behind more encoding, a copy of a short value inside longer text, a cookie the jar
+   does not hold, text beside a param under a name of neither kind, or a credential no rule recognizes. Export scans a
    spec again, by name and by shape, before it is shared. At call time a `cookie:` ref takes the
    cookie sent to the request URL, else one of the same registrable domain (by the Public Suffix
    List, private section included: co.uk, github.io and run.app are suffixes) that is not HttpOnly,
@@ -1423,6 +1432,8 @@ heuristics. It also refuses any literal the learner would have made a ref (a ses
 header, a random value under a credential's name), and warns about a literal IP address (a client
 `remoteHost` the page reported), whole or inside a longer leaf (`ip:port`, an x-forwarded-for list,
 `ip=` text; a version string after a letter or `/`, or one ending in `.0`, is not one). Names an op lists in `public` are allowed.
+`--strict-scan` adds warnings of the leaves the scan lets through that may still be a credential
+(`borderlineCredentials`; the shapes and their rules are under the scan, above). It refuses nothing.
 
 ## Sharing specs (`registry.ts`, `share.ts`, `publish.ts`, `report.ts`, `background.ts`, `vet.ts`)
 
