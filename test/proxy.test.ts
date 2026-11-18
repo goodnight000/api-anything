@@ -326,7 +326,9 @@ describe("site traffic through a local proxy", () => {
     assert.equal((await page.goto(`${site.url}/direct`))?.status(), 200);
     await page.close();
     await closeBrowser();
-    assert.deepEqual(proxy.seen, []);
+    // Chrome's own background calls (time, updates) may use the proxy; the loopback site never does
+    const host = new URL(site.url).host;
+    assert.ok(!proxy.seen.some((s) => s.target.includes(host)), JSON.stringify(proxy.seen));
     assert.ok(site.hits.some((h) => h.url === "/direct"));
   });
 });
