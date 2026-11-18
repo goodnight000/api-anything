@@ -9,6 +9,7 @@ import { isIP } from "node:net";
 import { join } from "node:path";
 import { z } from "zod";
 import { loadRecord, opHash } from "./checks.js";
+import { retryAfter } from "./classify.js";
 import { loadSettings, localOnly, localOnlyOff, signedHeaders } from "./identity.js";
 import {
   MAX_SEARCH_QUERY,
@@ -41,6 +42,8 @@ export class RegistryError extends Error {
   constructor(
     message: string,
     readonly status?: number,
+    /** a 429's Retry-After, in ms */
+    readonly retryAfterMs?: number,
   ) {
     super(message);
   }
@@ -106,7 +109,12 @@ export async function registryRequest<T>(
   if (!res.ok) {
     const e = body as { error?: unknown; reasons?: unknown };
     const why = [e.error, ...(Array.isArray(e.reasons) ? e.reasons : [])].filter((x) => typeof x === "string");
-    throw new RegistryError(`${url} answered ${res.status}${why.length ? `: ${why.join("; ")}` : ""}`, res.status);
+    const wait = res.status === 429 ? retryAfter(Object.fromEntries(res.headers)).ms : undefined;
+    throw new RegistryError(
+      `${url} answered ${res.status}${why.length ? `: ${why.join("; ")}` : ""}`,
+      res.status,
+      wait,
+    );
   }
   return body as T;
 }
@@ -632,14 +640,21 @@ const localFound = (s: Site): Found => ({
  * The sites that answer a query, best first: the registry's matches merged with the specs on this machine
  * (a site learned here and never shared is found too; the local copy wins). The registry is sent
  * `registryQuery` of it, and is not asked when that is nothing. A registry that cannot be
- * reached leaves the local ones, with the reason in `registryError`. A registry match that breaks the
+ * reached leaves the local ones, with the reason in `registryError`; one that rate-limited the search
+ * says how long to wait in `retryAfterMs`. A registry match that breaks the
  * limits is dropped, not the rest. Local-only mode searches this machine alone and says so in `localOnly`.
  * `notSent` says when the registry was sent only part of the query, or was not asked: its side of the answer is then partial.
  */
 export async function search(
   query: string,
   o: { limit?: number; local?: Site[] } = {},
-): Promise<{ matches: Found[]; registryError?: string; localOnly?: string; notSent?: string }> {
+): Promise<{
+  matches: Found[];
+  registryError?: string;
+  retryAfterMs?: number;
+  localOnly?: string;
+  notSent?: string;
+}> {
   const limit = o.limit ?? 5;
   const offline = localOnly();
   // read before the cut below: the start of a cut address can spell another host
@@ -648,6 +663,7 @@ export async function search(
   query = query.trim().slice(0, MAX_SEARCH_QUERY);
   let remote: z.infer<typeof SearchMatchSchema>[] = [];
   let registryError: string | undefined;
+  let retryAfterMs: number | undefined;
   if (asked?.sent !== undefined)
     try {
       const r = await registryRequest<{ matches?: unknown }>(
@@ -664,6 +680,8 @@ export async function search(
       });
     } catch (e) {
       registryError = (e as Error).message;
+      // the registry's own limits always send Retry-After; a 429 without one is told to wait a minute
+      if (e instanceof RegistryError && e.status === 429) retryAfterMs = e.retryAfterMs ?? 60_000;
     }
   const local = o.local ?? localSites();
   const installed = new Set(local.map((s) => s.name));
@@ -734,6 +752,7 @@ export async function search(
   return {
     matches,
     ...(registryError ? { registryError } : {}),
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
     ...(offline
       ? {
           localOnly: `searched this machine only: this install is local-only, so the shared catalog was not asked (${localOnlyOff()})`,

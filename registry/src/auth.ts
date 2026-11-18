@@ -61,6 +61,15 @@ export async function signer(request: Request, body: Uint8Array<ArrayBuffer>, no
   return { error: "the signature does not match the request" };
 }
 
+/** An IPv6 address's eight groups, `::` expanded and leading zeros dropped. */
+function groupsOf(ip: string): string[] {
+  const [head = "", tail] = ip.toLowerCase().split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const groups = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t];
+  return groups.map((g) => g.replace(/^0+(?=.)/, ""));
+}
+
 /**
  * An IP's /24 (v4) or /32 (v6); a v4-mapped v6 address is read as v4. A /32 is an ISP's allocation: one
  * subscriber gets a /48 or more, so a /48 lets one host rotate through 65536 networks.
@@ -69,15 +78,21 @@ export function prefixOf(ip: string): string {
   const v4 = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(ip);
   if (v4) return `${v4[1]}.${v4[2]}.${v4[3]}`;
   if (!ip.includes(":")) return "unknown";
-  const [head = "", tail] = ip.toLowerCase().split("::");
-  const h = head ? head.split(":") : [];
-  const t = tail ? tail.split(":") : [];
-  const groups = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t];
-  return groups
-    .slice(0, 2)
-    .map((g) => g.replace(/^0+(?=.)/, ""))
-    .join(":");
+  return groupsOf(ip).slice(0, 2).join(":");
 }
+
+/**
+ * One subscriber: an IPv4 address whole, an IPv6 address's /48; a v4-mapped v6 address is read as v4.
+ * Narrower than `prefixOf`, which would let one subscriber spend a whole ISP's searches.
+ */
+export function subscriberOf(ip: string): string {
+  const v4 = /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(ip);
+  if (v4) return v4[1]!;
+  if (!ip.includes(":")) return "unknown";
+  return `${groupsOf(ip).slice(0, 3).join(":")}::/48`;
+}
+
+const salted = async (salt: string, s: string) => (await sha256Hex(`${salt}\n${s}`)).slice(0, 32);
 
 /**
  * The request's networks, hashed with the salt: `network` (its ASN, else its IP prefix) is what promotion
@@ -85,8 +100,10 @@ export function prefixOf(ip: string): string {
  */
 export async function networksOf(request: Request, salt: string): Promise<{ network: string; prefix: string }> {
   const asn = (request as Request & { cf?: { asn?: number } }).cf?.asn;
-  const ip = `ip:${prefixOf(request.headers.get("cf-connecting-ip") ?? "")}`;
-  const hash = async (s: string) => (await sha256Hex(`${salt}\n${s}`)).slice(0, 32);
-  const prefix = await hash(ip);
-  return { network: asn ? await hash(`asn:${asn}`) : prefix, prefix };
+  const prefix = await salted(salt, `ip:${prefixOf(request.headers.get("cf-connecting-ip") ?? "")}`);
+  return { network: asn ? await salted(salt, `asn:${asn}`) : prefix, prefix };
 }
+
+/** The request's subscriber (`subscriberOf`), hashed with the salt: what the search limit counts. */
+export const searcherOf = (request: Request, salt: string) =>
+  salted(salt, `sub:${subscriberOf(request.headers.get("cf-connecting-ip") ?? "")}`);

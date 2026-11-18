@@ -1679,7 +1679,8 @@ their hosts.
 **Search.** `api-anything search <words | domain | url>` and MCP `find_sites` ask `GET /v1/search`
 and merge the answer with the specs on this machine (the user's, pulled and bundled) as `installed`,
 the local copy winning, so a site learned here and never shared is found too; a registry that cannot
-be reached leaves the local ones with a `registryError`. The registry is sent no more of the query than
+be reached leaves the local ones with a `registryError`, and one that rate-limited the search adds
+`retryAfterMs` (its Retry-After), with a `next` that says to wait that long and search again. The registry is sent no more of the query than
 it reads (`registryQuery`), token by token. A word goes as typed: letters and digits of any script, a
 hyphen or an apostrophe only inside it, less the punctuation around it. Every other token is read as an
 address, after its percent-encoding, a `key=` or `key:` before it, a scheme (whole or missing a slash),

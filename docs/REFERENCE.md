@@ -83,7 +83,8 @@ Each search op, and each op in `pull <site>` output, separates evidence:
 
 An installed copy keeps its params and descriptions without losing the registry's health. Health
 describes the registry version, which may differ from the local one. An unreachable registry leaves
-local matches with `registryError` and unknown registry health. No probes run, and no tier or latency
+local matches with `registryError` and unknown registry health; a registry that rate-limited the
+search adds `retryAfterMs`, the wait before searching again. No probes run, and no tier or latency
 is inferred: the Worker does not store aggregates for them. The registry is sent plain words and
 public domains only (see "What leaves your machine"): when part of the query was not sent, or the
 registry was not asked because none of it could be, the answer has a `notSent` note saying so, and

@@ -14,6 +14,10 @@
       "migrations_dir": "migrations"
     }
   ],
+  // GET /v1/search, per IPv4 address or IPv6 /48 (salted hash; worker.ts limitSearch). Counted in memory
+  // per Cloudflare location, so approximate; period is 10 or 60 s, and worker.ts SEARCH_PERIOD_SECONDS
+  // is the Retry-After it answers. namespace_id is any positive integer unique within the account.
+  "ratelimits": [{ "name": "SEARCH_LIMITER", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } }],
   // daily: archive what nobody called successfully in 30 days, delete what was archived 30 days ago, recount;
   // every minute: recount the versions a report found held back (worker.ts EVERY_MINUTE)
   "triggers": { "crons": ["17 3 * * *", "* * * * *"] },

@@ -256,7 +256,7 @@ export function emptyResults(body: string, recipe: { items: string; empty?: stri
 export const MAX_RETRY_AFTER_MS = 24 * 3600_000;
 
 /** " (retry after 120 s)" and its wait in ms, from a Retry-After header in seconds or as an HTTP date. */
-function retryAfter(headers: Record<string, string>, now = Date.now()): { text: string; ms?: number } {
+export function retryAfter(headers: Record<string, string>, now = Date.now()): { text: string; ms?: number } {
   const v = headers["retry-after"]?.trim();
   if (!v) return { text: "" };
   const wait = (ms: number) => Math.min(Math.max(0, ms), MAX_RETRY_AFTER_MS);

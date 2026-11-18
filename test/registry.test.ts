@@ -2326,6 +2326,29 @@ test("search still answers from this machine when the registry does not", async 
   assert.match((await search("x")).registryError ?? "", /answered no matches/);
 });
 
+test("a rate-limited search says how long to wait, and MCP find_sites tells the agent to wait, not to learn", async () => {
+  const limited = { status: 429, body: '{"error":"too many searches"}', headers: { "retry-after": "42" } };
+  fake.raw.set("/v1/search?q=parking%20in%20paris&limit=5", limited);
+  fake.raw.set("/v1/search?q=nodate&limit=5", { ...limited, headers: {} });
+  const r = await search("parking in paris");
+  assert.equal(r.retryAfterMs, 42_000);
+  assert.match(r.registryError ?? "", /answered 429: too many searches/);
+  assert.equal((await search("nodate")).retryAfterMs, 60_000, "a 429 with no Retry-After waits a minute");
+  const { client, tool } = await mcp();
+  try {
+    const f = await tool("find_sites", { query: "parking in paris" });
+    assert.deepEqual(f.matches, []);
+    assert.equal(f.retryAfterMs, 42_000);
+    assert.match(f.next, /wait retryAfterMs \(about 42 s\), then find_sites again/);
+    assert.doesNotMatch(f.next, /Broaden the query/);
+    assert.deepEqual(f.nextCall, { tool: "find_sites", args: { query: "parking in paris" } });
+  } finally {
+    await client.close();
+  }
+  fake.raw.clear();
+  assert.equal((await search("parking in paris")).retryAfterMs, undefined, "any other answer has none");
+});
+
 test("search leaves out common words and labels a real capability's uncovered constraints", async () => {
   const dir = fileURLToPath(BUNDLED);
   const local = readdirSync(dir)
