@@ -158,18 +158,85 @@ function decode(raw: string, plusIsSpace: boolean): string {
   }
 }
 
-/** Percent-encode like the original raw text did: chars it left literal stay literal, and vice versa. */
-function encodeLike(value: string, original: string, plusIsSpace: boolean): string {
-  const out = encodeURIComponent(value)
-    .replace(/%([0-7][0-9A-F])/g, (m, hex: string) => {
-      const ch = String.fromCharCode(parseInt(hex, 16));
-      return !"%&=#+ ".includes(ch) && original.includes(ch) ? ch : m;
-    })
-    .replace(/[!'()*~]/g, (ch) => {
-      const pct = `%${ch.charCodeAt(0).toString(16).toUpperCase()}`;
-      return original.toUpperCase().includes(pct) ? pct : ch;
-    });
-  return plusIsSpace && original.includes("+") ? out.replace(/%20/g, "+") : out;
+/** Raw text cut into pieces that each decode to one character; undefined when it does not decode. */
+function units(raw: string, plusIsSpace: boolean): { raw: string; text: string }[] | undefined {
+  const out: { raw: string; text: string }[] = [];
+  for (let i = 0; i < raw.length; ) {
+    if (raw[i] === "%") {
+      const lead = parseInt(raw.slice(i + 1, i + 3), 16);
+      const bytes = lead < 0x80 ? 1 : lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : 2;
+      const piece = raw.slice(i, i + 3 * bytes);
+      try {
+        out.push({ raw: piece, text: decodeURIComponent(piece) });
+      } catch {
+        return undefined;
+      }
+      i += piece.length;
+    } else {
+      const ch = String.fromCodePoint(raw.codePointAt(i)!);
+      out.push({ raw: ch, text: plusIsSpace && ch === "+" ? " " : ch });
+      i += ch.length;
+    }
+  }
+  return out;
+}
+
+/** Whether the raw text nearest the splice wrote ch percent-encoded: inside the replaced text, else the closer side. */
+function encodedNearby(ch: string, replaced: string, left: string, right: string): boolean | undefined {
+  const hex = ch.charCodeAt(0).toString(16).padStart(2, "0");
+  // either case of the escape, found in s itself: upper-casing s would move its indexes (ß is SS)
+  const at = (s: string) => [...s.matchAll(new RegExp(`%${hex}`, "gi"))].map((m) => m.index);
+  const lastOf = (s: string) => Math.max(s.lastIndexOf(ch), ...at(s));
+  const firstOf = (s: string) => {
+    const [a, b = -1] = [s.indexOf(ch), at(s)[0]];
+    return a < 0 ? b : b < 0 ? a : Math.min(a, b);
+  };
+  const formAt = (s: string, i: number) => s[i] === "%";
+  if (lastOf(replaced) >= 0) return formAt(replaced, lastOf(replaced));
+  const l = lastOf(left);
+  const r = firstOf(right);
+  if (l < 0 && r < 0) return undefined;
+  if (r < 0 || (l >= 0 && left.length - l <= r)) return formAt(left, l);
+  return formAt(right, r);
+}
+
+/**
+ * Percent-encode value like the original raw text did. What value shares with the original's decoded
+ * text at either end keeps the original's bytes; each character in between is written the way the
+ * original wrote it nearest the splice (a Rest.li `urn%3Ali%3A...` keeps its colons encoded while the
+ * `(key:value)` colons around it stay literal). `own`: original is the value's own raw text; otherwise
+ * (a new key, an empty value judged by the whole query) its bytes only decide each character, so no
+ * `&` or `=` of other pairs is copied in.
+ */
+function encodeLike(value: string, original: string, plusIsSpace: boolean, own = true): string {
+  // text that does not decode keeps none of its bytes, but they still decide each character
+  const decoded = own ? units(original, plusIsSpace) : undefined;
+  const us = decoded ?? [];
+  let a = 0;
+  let start = 0;
+  while (a < us.length && value.startsWith(us[a]!.text, start)) start += us[a++]!.text.length;
+  let b = us.length;
+  let end = value.length;
+  while (b > a && end - us[b - 1]!.text.length >= start && value.endsWith(us[b - 1]!.text, end))
+    end -= us[--b]!.text.length;
+  const join = (from: number, to: number) =>
+    us
+      .slice(from, to)
+      .map((u) => u.raw)
+      .join("");
+  const [left, replaced, right] = [join(0, a), decoded ? join(a, b) : original, join(b, us.length)];
+  let middle = "";
+  for (const ch of value.slice(start, end)) {
+    const plain = encodeURIComponent(ch);
+    if (ch === " ") middle += plusIsSpace && original.includes("+") ? "+" : "%20";
+    else if (ch.charCodeAt(0) >= 0x80 || "%&=#+".includes(ch)) middle += plain;
+    else if (plain === ch && !"!'()*~".includes(ch)) middle += ch;
+    else {
+      const encoded = encodedNearby(ch, replaced, left, right) ?? plain !== ch;
+      middle += encoded ? `%${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}` : ch;
+    }
+  }
+  return left + middle + right;
 }
 
 /* ------------------------------------------------------------ root layers */
@@ -220,10 +287,11 @@ function setPair(raw: string, key: string, value: string, n = 0): string {
   const pairs = parsePairs(raw);
   const idx = nthPair(pairs, key, n);
   if (idx < 0) {
-    parts.push(`${encodeURIComponent(key)}=${encodeLike(value, raw, true)}`);
+    parts.push(`${encodeURIComponent(key)}=${encodeLike(value, raw, true, false)}`);
   } else {
     const p = pairs[idx]!;
-    parts[idx] = `${p.rawKey}=${encodeLike(value, p.rawValue || raw, true)}`;
+    parts[idx] =
+      `${p.rawKey}=${p.rawValue ? encodeLike(value, p.rawValue, true) : encodeLike(value, raw, true, false)}`;
   }
   return parts.join("&");
 }

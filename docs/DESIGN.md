@@ -85,6 +85,13 @@ where a repeated key is, or holds, a param, a session reference or a volatile an
 those is a constant and is sent as captured, byte for byte (`{"limit":1,"limit":2}`). Header names are lower-cased when a spec is parsed.
 Filling decodes only the layers a slot touches, sets the value, and re-encodes only those layers.
 Untouched bytes stay identical, so RestLi parens, key order and the exact encoding survive.
+Inside a percent-encoded leaf (a path segment, a query or form value) the same holds per
+character: the text a new value shares with the captured value at either end keeps the capture's
+bytes, and each character in between is encoded the way the capture wrote that character nearest
+the splice, inside the text it replaces first. A Rest.li `(jobPosting:urn%3Ali%3Afsd_jobPosting%3A123,count:15)`
+filled with another id keeps the URN's `%3A` while its own `:` separators stay literal (seen: one
+rule for the whole value sent the URN's colons literal and LinkedIn answered 400). A character
+the capture never wrote is encoded as `encodeURIComponent` would.
 A value written to a `path:<i>` step stays one segment of the address: `.` and `..` are refused
 before anything is sent (`input`), since percent-encoding leaves dots alone and a URL parser drops
 such a segment, `..` with the one before it (seen: `DELETE /api/projects/p1/tokens/{id}` with the id

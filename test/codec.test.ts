@@ -79,6 +79,72 @@ test("RestLi parens and colons stay literal when the site left them literal", ()
   assert.equal(setAt(enc, ["query:v"], "(b)").url, "https://a.com/?v=%28b%29");
 });
 
+test("a URN's encoded colons stay encoded inside Rest.li variables whose own colons are literal (#144)", () => {
+  const op = OperationSchema.parse({
+    name: "getJob",
+    readOnly: true,
+    request: {
+      method: "GET",
+      url: "https://www.linkedin.com/voyager/api/graphql?variables=(jobPosting:urn%3Ali%3Afsd_jobPosting%3A123,start:10,count:15)&queryId=q.1",
+      headers: {},
+    },
+    slots: [
+      { param: "id", at: ["query:variables"], template: "(jobPosting:urn:li:fsd_jobPosting:{id},start:10,count:15)" },
+    ],
+    trigger: { url: "https://www.linkedin.com/jobs" },
+    params: [{ name: "id" }],
+  });
+  assert.equal(
+    buildRequest(op, { id: "4087" }, { cookies: [], values: {} }).url,
+    "https://www.linkedin.com/voyager/api/graphql?variables=(jobPosting:urn%3Ali%3Afsd_jobPosting%3A4087,start:10,count:15)&queryId=q.1",
+  );
+  // a whole URN param inside List(...): the replaced text's own colons were encoded, so the new ones are
+  const list = get("https://a.com/g?variables=(companies:List(urn%3Ali%3Afsd_company%3A1),count:5)");
+  for (const [urn, raw] of [
+    ["urn:li:fsd_company:99", "urn%3Ali%3Afsd_company%3A99"],
+    ["urn:li:member:7", "urn%3Ali%3Amember%3A7"],
+  ])
+    assert.equal(
+      setAt(list, ["query:variables"], `(companies:List(${urn}),count:5)`).url,
+      `https://a.com/g?variables=(companies:List(${raw}),count:5)`,
+    );
+});
+
+test("query: a written value always decodes back to itself, and the bytes it shares with the capture are the capture's", () => {
+  const raw = "(a:urn%3Ax%3A1,b:List(%28c%29),q:hello+world,e:%E2%82%AC1)";
+  const r = get(`https://a.com/s?v=${raw}&z=1`);
+  assert.equal(setAt(r, ["query:v"], getAt(r, ["query:v"])).url, `https://a.com/s?v=${raw}&z=1`, "unchanged value");
+  for (const v of [
+    "(a:urn:x:2,b:List((c)),q:hello world,e:€1)",
+    "(a:urn:x:1,b:List((d)),q:hi there,e:€2)",
+    "x & y = 100% #1 +more",
+    "",
+    "€:€",
+  ]) {
+    const u = setAt(r, ["query:v"], v).url;
+    assert.equal(new URL(u).searchParams.get("v"), v, u);
+    assert.ok(u.endsWith("&z=1"), u);
+  }
+  assert.equal(
+    setAt(r, ["query:v"], "(a:urn:x:2,b:List((c)),q:hello world,e:€1)").url,
+    "https://a.com/s?v=(a:urn%3Ax%3A2,b:List(%28c%29),q:hello+world,e:%E2%82%AC1)&z=1",
+  );
+  // an empty or new value is judged by the whole query, but none of its bytes are copied in: no other pair's & or =
+  assert.equal(
+    setAt(get("https://a.com/s?q=&page=2&size=10"), ["query:q"], "q=&page=2&size=999").url,
+    "https://a.com/s?q=q%3D%26page%3D2%26size%3D999&page=2&size=10",
+  );
+  assert.equal(
+    setAt(get("https://a.com/s?page=2&size=10"), ["query:q"], "x&size=10").url,
+    "https://a.com/s?page=2&size=10&q=x%26size%3D10",
+  );
+  // a character that grows when upper-cased (ß) does not shift where an escape is looked for
+  assert.equal(setAt(get("https://a.com/%C3%9Fx%2Fy"), ["path:0"], "a/b").url, "https://a.com/a%2Fb");
+  assert.equal(setAt(get("https://a.com/ßx%2Fy"), ["path:0"], "a/b").url, "https://a.com/a%2Fb");
+  // a capture that does not decode still decides the characters by its own bytes, as before
+  assert.equal(setAt(get("https://a.com/s?v=%zz:a"), ["query:v"], "b:c").url, "https://a.com/s?v=b:c");
+});
+
 test("X-like variables JSON in the query: set one leaf, keep key order and other params", () => {
   const variables = '{"screen_name":"nasa","withSafetyMode":true,"count":20}';
   const features = '{"a":true,"b":false}';
