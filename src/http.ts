@@ -6,6 +6,7 @@ import * as zlib from "node:zlib";
 import type { SendBudget } from "./budget.js";
 import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
 import { matches } from "./learn.js";
+import { refuseCleartext, siteFetch } from "./proxy.js";
 import { cookieHeaderFor, cookieValue, insecureSet, parseSetCookie, type Session } from "./session.js";
 import type { Match, Operation, Param, Request } from "./spec.js";
 import { reserveSend } from "./store.js";
@@ -553,6 +554,12 @@ export function nextHop(
   return { url: next.href, method, headers, body };
 }
 
+/** Whether a request of `op` built from `session` holds one of its values: a `cookie:` or `session:` ref that resolves. */
+export function carriesSessionRefs(op: Operation, session: Session): boolean {
+  const held = session.cookies.length > 0 || Object.keys(session.values ?? {}).length > 0;
+  return held && op.slots.some((s) => s.ref || (s.template !== undefined && templateRefs(s.template).length > 0));
+}
+
 /** Send the filled template. Redirects are followed by hand, each hop decided by `nextHop`. */
 export async function send(
   op: Operation,
@@ -571,10 +578,12 @@ export async function send(
   let jar = session.cookies;
   const setCookies: StoredCookie[] = [];
   let redirected: boolean | undefined;
+  const refs = carriesSessionRefs(op, session);
   try {
     for (let hops = 0; ; hops++) {
       const { url, ...init } = hop;
-      const res = await (opts.fetchImpl ?? fetch)(url, { ...init, redirect: "manual", signal });
+      refuseCleartext(url, refs || !!hop.headers.cookie);
+      const res = await (opts.fetchImpl ?? siteFetch)(url, { ...init, redirect: "manual", signal });
       for (const line of res.headers.getSetCookie?.() ?? []) {
         const c = parseSetCookie(line, url);
         // a plain-http answer is whatever the network returned: it cannot touch a Secure cookie

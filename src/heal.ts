@@ -40,6 +40,7 @@ export { unplaced };
 
 import type { NextAction } from "./execute.js";
 import { standIn } from "./paging.js";
+import { siteFetch } from "./proxy.js";
 import { readSealed, SealError, writeSealed } from "./seal.js";
 import { besideOrigins, credentialsOf, leafName, opUrls, scanSecrets, signInFills } from "./secrets.js";
 import {
@@ -1692,7 +1693,7 @@ export async function rescan(
   site: string,
   op: Operation,
   args: Args,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = siteFetch,
 ): Promise<{ operation: Operation; diff: string } | undefined> {
   if (!op.volatile.length || triggerRefusal(op.trigger, args)) return undefined;
   const session = loadSession(site);

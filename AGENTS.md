@@ -20,6 +20,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/deadline.ts` | the time limit on reading an answer and on testing a call's args: synchronous work stopped from outside (Node's `vm` timeout); Node only, so no module the registry Worker bundles imports it |
 | `src/http.ts` | tier 1: fill the template, send with Node fetch |
 | `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login |
+| `src/proxy.ts` | `API_ANYTHING_PROXY`: site traffic through an outbound proxy, the same rules for tier 1 (`siteFetch`) and Chrome; catalog traffic never |
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |
 | `src/execute.ts` | `call()`: the tier ladder, classifier actions, heal guards, write rules |
 | `src/seal.ts` | AES-256-GCM sealing of session and capture files; the data key from the OS store or `API_ANYTHING_KEY`; the no-key fallback |

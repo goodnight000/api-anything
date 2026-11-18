@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { cleanCall } from "./clean.js";
 import { loadSettings, localOnly } from "./identity.js";
+import { siteFetch } from "./proxy.js";
 import { registryRequest } from "./registry.js";
 import { type ServedSite, type VerifyJob, versionHashText } from "./registry-api.js";
 import { flushReports, outcomeOf, queueReport, withSignal } from "./report.js";
@@ -86,7 +87,7 @@ export async function verifyCandidates(
       // a site that said stop (a limit, a block) is left alone here too
       if (!c?.op.readOnly || c.op.minTier > 1 || cooling(c.site)) continue;
       if (!spend(o.now ?? new Date())) break;
-      const fetchImpl = o.fetchImpl ?? fetch;
+      const fetchImpl = o.fetchImpl ?? siteFetch;
       const r = await cleanCall(c.op, job.args ?? {}, {
         site: c.site,
         fetchImpl: o.signal ? withSignal(fetchImpl, o.signal) : fetchImpl,

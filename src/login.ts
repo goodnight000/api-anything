@@ -19,6 +19,7 @@ import {
   profileLabel,
 } from "./import.js";
 import { profileSignedIn } from "./profile-state.js";
+import { siteFetch } from "./proxy.js";
 import {
   type ImportApproval,
   loadSession,
@@ -150,7 +151,7 @@ const PROBE_UA =
  */
 export async function guestCookieNames(
   url: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = siteFetch,
   refuse?: (url: string) => Promise<string | undefined>,
 ): Promise<string[] | undefined> {
   const site = siteOf(new URL(url).hostname.toLowerCase());

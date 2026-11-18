@@ -9,6 +9,7 @@ import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import type { BrowserContext, Cookie, chromium, Dialog, Frame, Page, Request, Response, Route } from "playwright-core";
 import { botWall } from "./classify.js";
 import { MAX_BODY_BYTES } from "./http.js";
+import { browserProxy } from "./proxy.js";
 import { SIGN_IN_AUTOCOMPLETE, SIGN_IN_REFUSAL } from "./secrets.js";
 import { home, siteOf, writePrivate } from "./session.js";
 import type { Request as Hop } from "./spec.js";
@@ -260,6 +261,8 @@ export function openBrowser({
       serviceWorkers: "block",
       // Playwright's own SIGTERM handler keeps the process alive; Chrome exits with its pipe anyway.
       handleSIGTERM: false,
+      // API_ANYTHING_PROXY: tiers 2 and 3, learning and `login --window` leave from the address tier 1 uses
+      proxy: browserProxy(),
     });
     c.on("close", () => {
       if (current?.ctx === ctx) current = undefined;
