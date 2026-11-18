@@ -5,7 +5,7 @@
  */
 import { getAt, type Leaf, type Step, walk } from "./codec.js";
 import type { Session } from "./session.js";
-import type { Request } from "./spec.js";
+import type { Request, Site } from "./spec.js";
 import type { CaptureResult, StoredCookie, TriggerStep } from "./types.js";
 
 export const SESSION_HEADER =
@@ -49,6 +49,97 @@ export function literalCredentials(req: Request, pub: Set<string>): Leaf[] {
       !pub.has(leafName(l.at).toLowerCase()) &&
       isCredential(leafName(l.at), l.value),
   );
+}
+
+/**
+ * What `--strict-scan` reports: the leaves of a copy about to be shared that the scan lets through and
+ * that may still be a credential (docs/DESIGN.md, the shapes after "It does not prove a spec holds no
+ * credential"). Each test is the rule the leaf misses: a whole leaf equal to a live value of `session`
+ * shorter than the 6 characters copies are looked for from; a number under a per-session or
+ * credential-like name, since only text is judged by its name; text under a per-session name shorter
+ * than the 8 its rule starts at; text under a credential-like name that is not random-looking; and
+ * text beside a param under either kind of name that learning's rule for it does not refuse. A name
+ * the op lists as public is one a human vouched for. Report-only: each message names a place, a name
+ * and a length, never a value.
+ */
+export function borderlineCredentials(
+  spec: Pick<Site, "operations">,
+  session: Pick<Session, "cookies" | "values">,
+): string[] {
+  const short = new Map<string, string>();
+  const live = (label: string, v: string) => {
+    for (const f of [v, v.replace(/^"|"$/g, ""), pctDecode(v, false)])
+      if (f && f.length < 6 && !short.has(f)) short.set(f, label);
+  };
+  for (const c of session.cookies) live(`cookie ${c.name}`, c.value);
+  for (const [k, v] of Object.entries(session.values)) live(`session value ${k}`, v);
+  const out: string[] = [];
+  const check = (req: Request, slots: readonly Slotted[], pub: Set<string>, where: string) => {
+    const slotAt = new Map(slots.map((s) => [JSON.stringify(s.at), s]));
+    for (const l of walk(req)) {
+      if (l.container || !l.value || l.type === "boolean" || l.type === "null") continue;
+      const name = leafName(l.at);
+      const place = `${where} ${l.at.join(" > ")}`;
+      const perSession = SESSION_FIELD.test(name) || SESSION_HEADER.test(name);
+      const named = (perSession || credentialName(name)) && !pub.has(name.toLowerCase());
+      // refused already, as a literal credential (`literalCredentials`); at a param's slot the text is its template
+      if (named && l.type === "string" && isCredential(name, l.value)) continue;
+      const slot = slotAt.get(JSON.stringify(l.at));
+      if (slot) {
+        // what a slot holds is filled at call time; only a param's template keeps literal text
+        if (!named || slot.param === undefined || slot.template === undefined) continue;
+        const pieces = besideHoles(slot.template);
+        const text = pieces.join("");
+        const token = pieces.some((p) => opaqueToken(p.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "")));
+        if (/[A-Za-z0-9]/.test(text) && !token)
+          out.push(
+            `${place} keeps ${text.length} characters beside a param under ${name}: ${perSession ? "text under a per-session name is refused from 8" : "only an unbroken random-looking run of 16 or more there is refused"}`,
+          );
+        continue;
+      }
+      const copy = short.get(l.value);
+      if (copy)
+        out.push(
+          `${place} equals the live ${copy}, ${l.value.length} characters: copies are looked for from 6 characters`,
+        );
+      if (!named) continue;
+      if (l.type === "number")
+        out.push(
+          `${place} holds a number under ${name}, ${l.value.length} characters: only text is judged by its name`,
+        );
+      else if (perSession)
+        out.push(
+          `${place} holds ${l.value.length} characters under ${name}: the rule for a per-session name starts at 8`,
+        );
+      else
+        out.push(
+          `${place} holds ${l.value.length} characters under ${name} that are not random-looking: the rule for a credential-like name takes only those (16 or more characters, two character classes, 3 bits each)`,
+        );
+    }
+  };
+  for (const op of spec.operations) {
+    const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
+    check(op.request, op.slots, pub, `op ${op.name} request`);
+    op.slots.forEach((slot, j) => {
+      if (slot.from) check(slot.from.request, slot.from.slots, pub, `op ${op.name} slots[${j}] lookup`);
+    });
+  }
+  return [...new Set(out)];
+}
+
+type Slotted = { at: Step[]; param?: string; template?: string };
+
+/**
+ * The literal text of a slot's template between its holes, `{{` and `}}` read as braces. Cut where
+ * the holes are, not on a marker character: the leaf's own text may hold any character, a NUL too.
+ */
+export function besideHoles(template: string): string[] {
+  const pieces = [""];
+  template.split(/(\{\{|\}\}|\{[^{}]+\})/).forEach((part, i) => {
+    if (i % 2 && part !== "{{" && part !== "}}") pieces.push("");
+    else pieces[pieces.length - 1] += i % 2 ? part.charAt(0) : part;
+  });
+  return pieces;
 }
 
 export const URLISH = /^[a-z][a-z0-9+.-]*:\/\//i;

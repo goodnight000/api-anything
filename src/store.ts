@@ -25,6 +25,7 @@ import { type Leaf, setAt, walk } from "./codec.js";
 import { LockBusy } from "./lock.js";
 import {
   besideOrigins,
+  borderlineCredentials,
   credentialsOf,
   ipIn,
   leafName,
@@ -712,11 +713,11 @@ export const unconfirmedWrite = (r: WriteRecord) =>
  * A shareable copy: example values stripped from the stored request (param slots become `{name}`,
  * or null in a typed JSON leaf) and from params (unless `keepExamples`: a human confirmed they
  * are public), response shapes dropped (their keys can be user data), then scanned against this
- * machine's live session.
+ * machine's live session. `strict` adds what `borderlineCredentials` reports to the warnings.
  */
 export function exportSite(
   name: string,
-  o: { keepExamples?: boolean } = {},
+  o: { keepExamples?: boolean; strict?: boolean } = {},
 ): { spec: Site; secrets: string[]; warnings: string[] } {
   const r = loadSite(name);
   if (!r) throw new Error(`no site "${name}"`);
@@ -789,8 +790,10 @@ export function exportSite(
     }
   });
   const own = [spec.baseUrl, ...spec.operations.flatMap(opUrls)];
-  const scan = scanSecrets(spec, credentialsOf(besideOrigins(loadSession(name), own)), allowed);
+  const live = credentialsOf(besideOrigins(loadSession(name), own));
+  const scan = scanSecrets(spec, live, allowed);
+  const borderline = o.strict ? borderlineCredentials(spec, live) : [];
   // one finding per place: the exact live hit already names it
   const more = named.filter(([p]) => !scan.secrets.some((s) => s.startsWith(`${p} `))).map(([, why]) => why);
-  return { spec, secrets: [...scan.secrets, ...more], warnings: [...scan.warnings, ...ips] };
+  return { spec, secrets: [...scan.secrets, ...more], warnings: [...scan.warnings, ...ips, ...borderline] };
 }

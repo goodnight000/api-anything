@@ -830,6 +830,13 @@ shared or reported, and the catalog still works for reads. [How the catalog work
   may be yours, such as an email or an account id. Nothing is sent until `--yes`.
 - It refuses a spec holding a live cookie or session value, a provider API key, an op whose recorded
   checks fail, and an op marked `unproven`. The catalog runs the same rules again on every upload.
+- The scan is partial: a short, numeric or plain-looking credential can get past it. `--strict-scan`
+  on `export` or `publish` also warns of those leaves (a copy of a live value under 6 characters, a
+  number or too-plain text under a credential-like name, text beside a param there), naming the
+  place and a length, never the value. It refuses nothing; with `publish --yes` each op's outcome
+  carries its reports as `borderline`. It cannot see a credential split across leaves or behind more
+  than three layers of encoding. The rules: [DESIGN.md](DESIGN.md), "It does not prove a spec holds
+  no credential".
 - A param can declare an `enum`, a `min` or a `max`. A call outside them is `input`, and nothing is sent.
 - A pulled spec is someone else's. A session value goes only back to the host it came from, an
   unconfirmed candidate runs with none of your cookies, and its writes still need `--allow-writes`.
@@ -842,6 +849,7 @@ api-anything pull goodreads             # checked against the shared rules first
 api-anything check hn-demo links domain=arxiv.org --expect result  # confirmed on the site
 api-anything verify hn-demo                                         # pass, fail or inconclusive
 api-anything publish hn-demo                                        # preview only
+api-anything publish hn-demo --strict-scan                          # and warn of borderline values
 api-anything publish hn-demo --yes                                  # upload, signed by this install
 ```
 

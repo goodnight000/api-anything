@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { captureLive, liveIn, OMITTED, REDACTED, redact, scanSecrets, signInFills } from "../src/secrets.js";
+import {
+  borderlineCredentials,
+  captureLive,
+  literalCredentials,
+  liveIn,
+  OMITTED,
+  REDACTED,
+  redact,
+  scanSecrets,
+  signInFills,
+} from "../src/secrets.js";
 import type { Session } from "../src/session.js";
 
 const TOKEN = "Tk4Rf9Lp2Wq7Zx3Nm8Vb";
@@ -396,4 +406,117 @@ test("scanSecrets takes no ordinary text for a part of a cookie: an address, the
   const kept = { ...op("www.shop.test", "lanterns"), request: { url: `https://www.shop.test/api?q=x&t=${TICKET}` } };
   assert.equal(scanSecrets(kept, jarOf(enc(JSON.stringify({ t: TICKET })))).secrets.length, 1);
   assert.equal(scanSecrets(op("www.shop.test", uuid), jarOf(uuid)).secrets.length > 0, true, "a whole cookie");
+});
+
+test("the strict pass reports each shape the scan lets through, at its rule's boundary, and never a value", () => {
+  const op = (name: string, request: Record<string, unknown>, more: Record<string, unknown> = {}) => ({
+    name,
+    request: { method: "GET", url: "https://x.test/a", headers: {}, ...request },
+    slots: [],
+    ...more,
+  });
+  // a param's leaf in a shared copy holds its template (exportSite)
+  const beside = (name: string, header: string, template: string) =>
+    op(name, { headers: { [header]: template } }, { slots: [{ param: "q", at: [`header:${header}`], template }] });
+  const lookup = { method: "GET", url: "https://x.test/id", headers: { "x-csrf-token": "Zq4p" } };
+  const spec = {
+    operations: [
+      // a number: only text is judged by its name
+      op("num", { method: "POST", body: '{"session_id":123456789,"api_key":4815162342,"page":2}' }),
+      op("digits", { url: "https://x.test/a?session_id=123456789" }),
+      // a per-session name: its rule starts at 8 characters
+      op("at5", { url: "https://x.test/a?at=qzxvw" }),
+      op("at6", { url: "https://x.test/a?at=qzxvwk" }),
+      op("at7", { url: "https://x.test/a?at=qzxvwkj" }),
+      op("at8", { url: "https://x.test/a?at=qzxvwkjh" }),
+      // a credential-like name: random-looking takes 16+ characters, two classes, 3 bits each
+      op("plain", { headers: { "x-api-key": "correcthorsebatterystaple" } }),
+      // built from TOKEN, so the secret scan in CI finds no key-shaped literal
+      op("random15", { headers: { "x-api-key": TOKEN.slice(0, 15) } }),
+      op("random16", { headers: { "x-api-key": TOKEN.slice(0, 16) } }),
+      // a copy of a live value: looked for from 6 characters
+      op("copy5", { url: "https://x.test/a?v=Qx7zP" }),
+      op("copy6", { url: "https://x.test/a?v=Jm2wLk" }),
+      op("stored4", { method: "POST", body: '{"w":"Pw3x"}' }),
+      // beside a param: under a per-session name refused from 8, under a credential-like one as a token
+      // (learning) or when the whole text is random-looking (a literal credential)
+      beside("token7", "x-csrf-token", "{q}.Wk3"),
+      beside("token8", "x-csrf-token", "{q}.Wk3r"),
+      beside("key15", "x-api-key", "{q} Hy6tR2mV9cX4bN1"),
+      beside("key16", "x-api-key", "{q} Hy6tR2mV9cX4bN1z"),
+      beside("keyDots", "x-api-key", "{q} eyJhbGci.eyJzdWIi.Sg4kPq"),
+      beside("keyRandom", "x-api-key", "{q}.Hy6tR2mV9cX4bN1"),
+      beside("plainParam", "x-search", "kittens {q}"),
+      // a lookup's request is read too
+      op("lookup", {}, { slots: [{ at: ["query:id"], path: "id", from: { request: lookup, slots: [] } }] }),
+      // none of these: a vouched name, an ordinary header, the ordinary scan's own refusal
+      op("vouched", { headers: { "x-api-key": "correcthorsebatterystaple" } }, { public: ["x-api-key"] }),
+      op("ordinary", { headers: { accept: "application/json", authorization: `Bearer ${TOKEN}` } }),
+    ],
+  };
+  const cookie = (name: string, value: string) => ({
+    name,
+    value,
+    domain: "x.test",
+    path: "/",
+    expires: -1,
+    httpOnly: false,
+    secure: false,
+  });
+  const session: Session = { cookies: [cookie("pref", "Qx7zP"), cookie("lang", "Jm2wLk")], values: { theme: "Pw3x" } };
+  const found = borderlineCredentials(spec as never, session);
+  const of = (name: string) => found.filter((f) => f.startsWith(`op ${name} `));
+  const reported = (name: string, why: RegExp) => assert.match(of(name).join("\n"), why, found.join("\n"));
+  const silent = (name: string) => assert.deepEqual(of(name), [], name);
+
+  reported("num", /json:\/session_id holds a number under session_id, 9 characters/);
+  reported("num", /json:\/api_key holds a number under api_key, 10 characters/);
+  assert.equal(of("num").length, 2, "a number under an ordinary name is none");
+  silent("digits");
+  reported("at5", /query:at holds 5 characters under at: the rule for a per-session name starts at 8/);
+  reported("at6", /holds 6 characters under at:/);
+  reported("at7", /holds 7 characters under at:/);
+  silent("at8");
+  reported("plain", /holds 25 characters under x-api-key that are not random-looking/);
+  reported("random15", /holds 15 characters under x-api-key that are not random-looking/);
+  silent("random16");
+  reported("copy5", /query:v equals the live cookie pref, 5 characters/);
+  silent("copy6");
+  reported("stored4", /json:\/w equals the live session value theme, 4 characters/);
+  reported(
+    "token7",
+    /header:x-csrf-token keeps 4 characters beside a param under x-csrf-token: text under a per-session name is refused from 8/,
+  );
+  silent("token8");
+  reported("key15", /keeps 16 characters beside a param under x-api-key: only an unbroken random-looking run of 16/);
+  silent("key16"); // learning refuses an op with a token beside its param
+  reported("keyDots", /keeps 25 characters beside a param under x-api-key/);
+  silent("keyRandom");
+  silent("plainParam");
+  reported("lookup", /^op lookup slots\[0\] lookup header:x-csrf-token holds 4 characters under x-csrf-token/);
+  silent("vouched");
+  silent("ordinary");
+
+  // what the strict pass leaves out at a boundary, the ordinary scan refuses
+  const named = (name: string) => spec.operations.find((o) => o.name === name)!;
+  for (const n of ["digits", "at8", "random16", "token8", "keyRandom"])
+    assert.equal(literalCredentials(named(n).request as never, new Set()).length, 1, n);
+  assert.deepEqual(scanSecrets(named("copy6"), session).secrets, ["$.request.url holds the live cookie lang"]);
+
+  // places, names and lengths: no value, whole or in part, in any message
+  const values = [
+    "123456789",
+    "4815162342",
+    "qzxvw",
+    "correcthorse",
+    "Tk4Rf9Lp2Wq7Zx3",
+    "Qx7zP",
+    "Wk3",
+    "Hy6tR2mV9cX4bN1",
+    "eyJhbGci",
+    "Sg4kPq",
+    "Zq4p",
+    "Pw3x",
+  ];
+  for (const f of found) for (const v of values) assert.ok(!f.includes(v), `${v} in: ${f}`);
 });

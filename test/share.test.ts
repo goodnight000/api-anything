@@ -734,6 +734,37 @@ test("publish previews each upload, what may be yours and the warnings, and --ye
   assert.match(String(unknown.out.error), /no operation "nosuch" on demo/);
 });
 
+test("publish --strict-scan warns in the preview, and --yes carries each op's reports from the plan that sends", async () => {
+  const headers = { "x-csrf-token": "Zq4p" };
+  saveSite(site({ request: { method: "GET", url: "https://www.example.com/api/search?q=kittens", headers } }));
+  const report = /^op search request header:x-csrf-token holds 4 characters under x-csrf-token/;
+  assert.ok(
+    exportSite("demo", { strict: true }).warnings.some((w) => report.test(w)),
+    "export --strict-scan",
+  );
+  assert.ok(!exportSite("demo").warnings.some((w) => report.test(w)), "export");
+  const preview = await cli("publish", "demo", "--strict-scan");
+  assert.equal(preview.code, 0, JSON.stringify(preview.out));
+  assert.ok(
+    (preview.out.warnings as unknown as string[]).some((w) => report.test(w)),
+    JSON.stringify(preview.out),
+  );
+  const plain = await cli("publish", "demo");
+  assert.ok(!(plain.out.warnings as unknown as string[]).some((w) => report.test(w)), "no flag, no report");
+
+  const sent = await cli("publish", "demo", "--strict-scan", "--yes");
+  assert.equal(sent.code, 0, JSON.stringify(sent.out));
+  const [one] = sent.out.shared as unknown as { op: string; shared: boolean; borderline?: string[] }[];
+  assert.equal(one!.shared, true);
+  assert.equal(one!.borderline?.length, 1, JSON.stringify(one));
+  assert.match(one!.borderline![0]!, report);
+  assert.ok(!JSON.stringify(sent.out).includes("Zq4p"), "a report names the place, never the value");
+  assert.equal(uploads().length, 1);
+
+  const again = await cli("publish", "demo", "--yes");
+  assert.equal((again.out.shared as unknown as { borderline?: string[] }[])[0]!.borderline, undefined);
+});
+
 /* ------------------------------------------------------------ reports */
 
 test("a call of a registry version is reported after it returns, with its outcome, tier and time", async () => {

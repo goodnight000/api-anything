@@ -44,6 +44,8 @@ export interface ShareOutcome {
   needsConsent?: boolean;
   /** what in the upload may be the user's own (an email, an account id), for the caller to show them */
   personal?: string[];
+  /** with `strict`: what `--strict-scan` reports of the upload (publish.ts `OpPlan`), for the caller to show them */
+  borderline?: string[];
 }
 
 /** Why a public op stays here: the user never answered the question, or said no. */
@@ -77,7 +79,7 @@ async function visitorNames(site: string, ops: string[], fetchImpl?: typeof fetc
  * anything else only with `consent`.
  * One that holds what may be the user's own waits for their yes too. `parent`: the version it replaces.
  * `guest`: the names a signed-out visit is given, when the caller asked already (`visitorNames`, through
- * `fetchImpl` otherwise).
+ * `fetchImpl` otherwise). `strict`: each outcome carries its op's `borderline`.
  */
 export async function shareOps(
   site: string,
@@ -89,6 +91,7 @@ export async function shareOps(
     signal?: AbortSignal;
     guest?: string[];
     fetchImpl?: typeof fetch;
+    strict?: boolean;
   } = { evidence: {} },
 ): Promise<ShareOutcome[]> {
   // plan reads no names as all of them
@@ -106,7 +109,15 @@ export async function shareOps(
     const as = o.consent || loadSettings().share ? await uploadName(site, { signal: o.signal }) : undefined;
     // with the user's yes, public or not decides nothing
     const guest = o.guest ?? (o.consent ? [] : await visitorNames(site, ops, o.fetchImpl));
-    p = plan(site, { ops, evidence: o.evidence, parent: o.parent, consent: o.consent, guest, ...(as ? { as } : {}) });
+    p = plan(site, {
+      ops,
+      evidence: o.evidence,
+      parent: o.parent,
+      consent: o.consent,
+      guest,
+      strict: o.strict,
+      ...(as ? { as } : {}),
+    });
   } catch (e) {
     return ops.map((op) => ({ site, op, shared: false, reason: (e as Error).message.split("\n")[0] }));
   }
@@ -118,6 +129,7 @@ export async function shareOps(
       op: op.op,
       ...(p.as ? { as: p.as } : {}),
       ...(op.personal.length ? { personal: op.personal } : {}),
+      ...(op.borderline.length ? { borderline: op.borderline } : {}),
     };
     if (op.errors.length) {
       out.push({ ...base, shared: false, reason: `refused: ${op.errors.join("; ")}` });

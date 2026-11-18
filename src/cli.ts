@@ -331,9 +331,12 @@ const HELP: Record<string, string> = {
   after it (learned again or edited). A pulled spec's copy keeps its shared record, and the op gets back
   the registry version it was. The next call sends the old request: if the site really changed, it
   drifts and may heal again, so learn the op again with add if the heal was wrong.`,
-  export: `api-anything export <site> [--out <file>] [--keep-examples] [--force]
+  export: `api-anything export <site> [--out <file>] [--keep-examples] [--force] [--strict-scan]
   Writes a shareable spec: examples and response shapes stripped, and refused if a live cookie or
-  session value is inside. --keep-examples keeps param examples you confirmed are public (so verify works).`,
+  session value is inside. --keep-examples keeps param examples you confirmed are public (so verify works).
+  --strict-scan also warns of leaves the scan lets through that may still be a credential: a copy of a
+  live value under 6 characters, a number or a too-plain value under a credential-like name, text beside
+  a param there. It names places and lengths, never values, and refuses nothing.`,
   search: `api-anything search <words | domain | url>
   Finds sites someone already turned into operations: the shared registry and the specs on this
   machine, best match first, each op with its params and its status in the registry. Words match a
@@ -354,13 +357,15 @@ const HELP: Record<string, string> = {
   writes still need --allow-writes. Prints each op (method, hosts, write, login, status) and the
   warnings a human should read; a pull again names what changed. API_ANYTHING_REGISTRY overrides the
   registry's URL.`,
-  publish: `api-anything publish <site> [op ...] [--yes]
+  publish: `api-anything publish <site> [op ...] [--yes] [--strict-scan]
   Shares the ops of a site you learned (all of them, or the ones named) with the registry, so others
   can call them instead of learning the site again. Without --yes it only previews: exactly what each
   upload sends, what was stripped, the warnings, and what may be yours (an email, an account id, a
   literal typed into the page). The param examples are sent: they must be values anyone may see. It
-  refuses an op holding a live cookie or session value, or failing its checks. --yes sends them, signed
-  with this install's key; an op that needed a login or writes is reviewed before others get it.`,
+  refuses an op holding a live cookie or session value, or failing its checks. --strict-scan adds what
+  export --strict-scan warns of, to the warnings and, with --yes, to each op's outcome (borderline).
+  --yes sends them, signed with this install's key; an op that needed a login or writes is reviewed
+  before others get it.`,
   mcp: `api-anything mcp [--allow-writes] [--sites a,b] [--print-config [--pin]] [--no-learn]
   Serves list_sites, find_sites, list_operations, call_operation, call_batch, get_result, get_job, site_status, login and learn_site over
   stdio MCP, and call_write_operation with --allow-writes. list_operations and call_operation pull a
@@ -564,6 +569,7 @@ const OPTIONS = {
   public: { type: "string" },
   path: { type: "string" },
   "keep-examples": { type: "boolean" },
+  "strict-scan": { type: "boolean" },
   extract: { type: "string" },
   pick: { type: "string" },
   fields: { type: "string" },
@@ -1629,7 +1635,7 @@ async function cmdHeal({ pos }: Parsed): Promise<number> {
 
 function cmdExport({ v, pos }: Parsed): number {
   requireSite(pos[0]);
-  const r = exportSite(pos[0]!, { keepExamples: v["keep-examples"] });
+  const r = exportSite(pos[0]!, { keepExamples: v["keep-examples"], strict: v["strict-scan"] });
   if (r.secrets.length && !v.force) {
     throw new Fail(
       `refusing to export: ${r.secrets.length} live credential(s) in the spec`,
@@ -1728,7 +1734,7 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
   let p: ReturnType<typeof plan>;
   try {
     // the preview shows what --yes sends: with the user's yes, their notes go too
-    p = plan(site.name, { ops, consent: true, as: await uploadName(site.name) });
+    p = plan(site.name, { ops, consent: true, as: await uploadName(site.name), strict: v["strict-scan"] });
   } catch (e) {
     throw new Fail(oneLine((e as Error).message), `api-anything ops ${site.name}`);
   }
@@ -1757,7 +1763,7 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
   const shared = await shareOps(
     site.name,
     p.ops.map((o) => o.op),
-    { evidence: {}, consent: true },
+    { evidence: {}, consent: true, strict: v["strict-scan"] },
   );
   const ok = shared.every((s) => s.shared);
   out({
@@ -2055,11 +2061,11 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   status: { run: cmdStatus, flags: [] },
   stats: { run: cmdStats, flags: ["days", "card"] },
   revert: { run: cmdRevert, flags: [] },
-  export: { run: cmdExport, flags: ["out", "keep-examples", "force"] },
+  export: { run: cmdExport, flags: ["out", "keep-examples", "force", "strict-scan"] },
   search: { run: cmdSearch, flags: [] },
   interface: { run: cmdInterface, flags: [] },
   pull: { run: cmdPull, flags: [] },
-  publish: { run: cmdPublish, flags: ["yes"] },
+  publish: { run: cmdPublish, flags: ["yes", "strict-scan"] },
   mcp: { run: cmdMcp, flags: ["allow-writes", "sites", "print-config", "no-learn", "pin"] },
   serve: {
     run: cmdServe,

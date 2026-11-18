@@ -19,6 +19,7 @@ import {
 } from "./codec.js";
 import { getPath, inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
 import {
+  besideHoles,
   besideOrigins,
   cookieTokens,
   credentialName,
@@ -1296,13 +1297,7 @@ function refuseLeftoverText(slots: Slot[], leaves: Leaf[]): void {
   for (const { at } of leaves) {
     const own = slots.find((s) => s.param && s.template !== undefined && key(s.at) === key(at));
     if (!own) continue;
-    // The literal pieces between the holes, braces unescaped. Cut where the holes are, not on a
-    // marker character: the leaf's own text may hold any character, a NUL too.
-    const pieces = [""];
-    own.template!.split(/(\{\{|\}\}|\{[^{}]+\})/).forEach((part, i) => {
-      if (i % 2 && part !== "{{" && part !== "}}") pieces.push("");
-      else pieces[pieces.length - 1] += i % 2 ? part.charAt(0) : part;
-    });
+    const pieces = besideHoles(own.template!);
     const name = leafName(at);
     const named = (SESSION_FIELD.test(name) || SESSION_HEADER.test(name)) && pieces.join("").length >= 8;
     // the separators next to a hole are not part of the token
