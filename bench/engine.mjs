@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -104,6 +104,8 @@ async function measure(name, iterations, run, check) {
 }
 let server;
 let bulk;
+let retainedFullAnswer;
+const homes = [];
 try {
   await measure(
     "judge-json-1000",
@@ -206,6 +208,11 @@ try {
       assert.ok(JSON.stringify(r.data).length <= 20000);
     },
   );
+  if (!values.only || values.only === "call-localhost-1000") {
+    // a cut answer is kept for get_result; a key store that fails keeps none, and no assertion above sees it
+    const r = await call("bulk", "rows", { name: "bob" }, { maxTier: 1, minIntervalMs: 0 });
+    retainedFullAnswer = typeof r.resultId === "string";
+  }
   await measure(
     "cli-cold-localhost",
     1,
@@ -223,6 +230,34 @@ try {
     },
     checkCall,
   );
+  // The workload above runs every process on one home, so each waits out the site's pacing slot that the
+  // one before it took (about a second). A first call has no slot to wait for: each gets a home of its own,
+  // copied from the seeded one before the clock starts.
+  if (!values.only || values.only === "cli-cold-first-call")
+    for (let i = 0; i < samples + 6; i++) {
+      const fresh = mkdtempSync(join(tmpdir(), "aa-engine-first-"));
+      cpSync(state, fresh, { recursive: true });
+      for (const f of ["pace.json", "results.json"]) rmSync(join(fresh, f), { force: true });
+      homes.push(fresh);
+    }
+  let nextHome = 0;
+  await measure(
+    "cli-cold-first-call",
+    1,
+    async () => {
+      const { execFile } = await import("node:child_process");
+      const fresh = homes[nextHome++];
+      return new Promise((accept, reject) =>
+        execFile(
+          process.execPath,
+          [join(repo, "dist/cli.js"), "call", "perf", "rows", "name=bob", "--max-tier", "1"],
+          { env: { ...process.env, API_ANYTHING_HOME: fresh } },
+          (error, stdout) => (error ? reject(error) : accept(JSON.parse(stdout))),
+        ),
+      );
+    },
+    checkCall,
+  );
   assert.ok(summary.length, "no workload matched --only");
   console.log(
     JSON.stringify(
@@ -232,6 +267,7 @@ try {
         node: process.version,
         sourceSha256: sourceHash.digest("hex"),
         bodyBytes: Buffer.byteLength(body),
+        ...(retainedFullAnswer !== undefined ? { retainedFullAnswer } : {}),
         results: summary,
       },
       null,
@@ -242,4 +278,5 @@ try {
   await server?.close();
   if (bulk) await new Promise((accept, reject) => bulk.close((error) => (error ? reject(error) : accept())));
   rmSync(state, { recursive: true, force: true });
+  for (const h of homes) rmSync(h, { recursive: true, force: true });
 }
