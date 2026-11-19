@@ -474,3 +474,32 @@ describe("learn_site", { skip: !browserAvailable() && "no Chromium browser insta
     assert.equal(r.shared?.shared, true, JSON.stringify(r.shared));
   });
 });
+
+describe("learn_site stops after run 1", { skip: !browserAvailable() && "no Chromium browser installed" }, () => {
+  let fx: Fixture;
+  before(async () => {
+    fx = await startFixture();
+  });
+  after(async () => {
+    await closeBrowser();
+    await fx.close();
+  });
+
+  test("a bot challenge in run 1 is the answer: the page is not opened a second time", async () => {
+    const r = await learnSite(
+      {
+        site: "fx",
+        op: "walled",
+        trigger: `${fx.url}/challenged?q={q}`,
+        args: { q: "alice" },
+        args2: { q: "bobby" },
+        args3: { q: "carol" },
+      },
+      fast,
+    );
+    assert.equal(r.ok, false, JSON.stringify(r));
+    assert.match(r.error ?? "", /bot challenge/);
+    assert.deepEqual(r.nextCall, { action: "login", site: "fx", mode: "window" });
+    assert.equal(r.captures?.length, 1, "only run 1 was made");
+  });
+});
