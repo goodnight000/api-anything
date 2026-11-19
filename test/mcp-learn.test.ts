@@ -1180,4 +1180,20 @@ test("sameTrigger: the same page with placeholders at the same places, whatever 
     sameTrigger(op("https://example.com/app?q={q}#/orders"), "https://example.com/app?q={term}#/orders", { term: "x" }),
     { q: "x" },
   );
+  assert.deepEqual(
+    sameTrigger(
+      op("https://example.com/app#/orders/{id}", [{ name: "id", type: "string" as const, required: true }]),
+      "https://example.com/app#/orders/{orderId}",
+      { orderId: "7" },
+    ),
+    { id: "7" },
+  );
+  assert.equal(
+    sameTrigger(
+      op("https://example.com/app#/orders/{id}", [{ name: "id", type: "string" as const, required: true }]),
+      "https://example.com/app#/customers/{id}",
+      { id: "7" },
+    ),
+    undefined,
+  );
 });

@@ -2906,6 +2906,16 @@ test("an unreviewed candidate of someone else's spec gets none of the user's coo
   signedIn("demo");
   assert.equal(loadSite("demo")!.site.operations[0]!.version?.status, "candidate");
   assert.deepEqual(await sent("demo"), { cookie: null, token: null }, "a human's pull, and still a candidate");
+  // what the site gives a call that sent no session is a guest's: the user's sign-in stays as it was
+  const guest = (async () => {
+    const res = json({ hits: [{ title: "cats" }] });
+    const headers = new Headers(res.headers);
+    headers.append("set-cookie", "sid=guest-sid; Path=/; Secure");
+    return new Response(await res.text(), { status: 200, headers });
+  }) as typeof fetch;
+  const r0 = await call("demo", "search", { q: "cats" }, { maxTier: 1, minIntervalMs: 0, fetchImpl: guest });
+  assert.equal(r0.ok, true, JSON.stringify(r0));
+  assert.equal(loadSession("demo").cookies.find((c) => c.name === "sid")?.value, "s3cr3t-sid");
 
   fake.sites.set("demo", served(get, undefined, "live"));
   await pull("demo");

@@ -147,7 +147,10 @@ const BUS_UNREACHABLE = /Could not connect/i;
  * daemon on a headless machine that nobody set up): no store here. Unlike a locked or failing store,
  * this never changes by retrying, and every save asked it again, a subprocess each time.
  */
-const NO_COLLECTION = /Object does not exist at path \S*\/collection\//i;
+// the collection itself, the last part of the path: a missing item inside one (`collection/login/42`) is a
+// failing store, not a missing one
+const NO_COLLECTION =
+  /Object does not exist at path [“"']?\/org\/freedesktop\/secrets\/collection\/[^/\s“”"']+[”"']?(?:\s|$)/i;
 
 /** The Secret Service through libsecret's `secret-tool`, when it is installed and a session bus answers. */
 export const secretTool = (): KeyStore => ({

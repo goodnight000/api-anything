@@ -813,6 +813,18 @@ test("GraphQL machine codes decide auth, rate and drift when the message says no
   assert.equal(cls(op(), gql("PERSISTED_QUERY_NOT_FOUND", "Not here")), "drift");
   assert.equal(cls(op(), gql("NOT_FOUND", "Nothing")), "input");
   assert.equal(cls(op(), gql("INTERNAL_SERVER_ERROR", "Boom")), "error");
+  // the code decides before the prose, and an older `type` field does not hide it
+  assert.equal(cls(op(), gql("RATE_LIMITED", "Please log in to continue")), "rate");
+  assert.equal(
+    cls(
+      op(),
+      json(200, {
+        data: null,
+        errors: [{ type: "FORBIDDEN", message: "Try later", extensions: { code: "RATE_LIMITED" } }],
+      }),
+    ),
+    "rate",
+  );
 });
 
 test("a login path asked for, not redirected to, is not a sign-in: an arg may spell it", () => {

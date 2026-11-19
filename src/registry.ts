@@ -666,7 +666,7 @@ export async function search(
   let remote: z.infer<typeof SearchMatchSchema>[] = [];
   let registryError: string | undefined;
   let retryAfterMs: number | undefined;
-  // sent before this machine's sites are read and scored, so its round trip overlaps that work
+  // sent before this machine's specs are read (most of the local work), so its round trip overlaps it
   const asking = asked?.sent !== undefined ? askRegistry(asked.sent) : undefined;
   async function askRegistry(sent: string): Promise<void> {
     try {

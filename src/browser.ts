@@ -1546,8 +1546,7 @@ export async function pageFetch(o: {
       for (let hops = 0; ; hops++) {
         const { location, ...r } = await fetchHop(hop, hops === 0);
         redirected ||= !!location;
-        if (!location || !o.redirect)
-          return { ...r, ms: Math.round(performance.now() - t0), ...(redirected ? { redirected } : {}) };
+        if (!location || !o.redirect) return { ...r, ms: Math.round(performance.now() - t0), redirected };
         hop = await o.redirect(hop, r.status, location, hops);
       }
     } catch (e) {

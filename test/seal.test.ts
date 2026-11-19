@@ -410,6 +410,28 @@ test("Secret Service with no collection to keep a key in is no store: asked once
   }
 });
 
+test("a missing item inside a collection is a failing store: nothing is written", {
+  skip: process.platform === "win32" ? "the fake secret-tool is a shell script" : false,
+}, () => {
+  const dir = mkdtempSync(join(tmpdir(), "aa-secret-tool-"));
+  writeFileSync(
+    join(dir, "secret-tool"),
+    `#!/bin/sh\nif [ "$1" = store ]; then cat >/dev/null; echo 'secret-tool: Object does not exist at path “/org/freedesktop/secrets/collection/login/42”' >&2; fi\nexit 1\n`,
+  );
+  chmodSync(join(dir, "secret-tool"), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${dir}${delimiter}${path ?? ""}`;
+  process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/nonexistent";
+  try {
+    setKeyStore(secretTool());
+    assert.throws(() => saveSession("site", { cookies: jar(), values: {} }), SealError);
+    assert.ok(!existsSync(sessionFile("site")), "no plaintext session file");
+  } finally {
+    process.env.PATH = path;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 /* ------------------------------------------------------------ review fixes */
 
 const marker = () => JSON.parse(readFileSync(join(home, "sealed.json"), "utf8"));

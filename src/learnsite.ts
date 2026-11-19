@@ -360,7 +360,12 @@ function parts(url: string): [string, string][] | undefined {
       ...[...u.searchParams]
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
         .map(([k, v]): [string, string] => [`query ${k}`, v]),
-      ...(u.hash.length > 1 ? [["hash", dec(u.hash.slice(1))] as [string, string]] : []),
+      // a hash route by its segments, as the path: a placeholder there may have another name
+      ...u.hash
+        .slice(1)
+        .split("/")
+        .filter(Boolean)
+        .map((v, i): [string, string] => [`hash ${i}`, dec(v)]),
     ];
   } catch {
     return undefined;

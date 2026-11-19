@@ -33,7 +33,7 @@ export interface Sent {
   /** final URL after redirects */
   url: string;
   ms: number;
-  /** the first answer was a redirect: the server took the request (a write's POST ran) */
+  /** the first answer was a redirect: the server took the request (a write's POST ran); false when it was not */
   redirected?: boolean;
   /** cookies the answers set (every hop), for the jar */
   setCookies?: StoredCookie[];
@@ -638,7 +638,8 @@ export async function send(
         body: text,
         url: res.url || url,
         ms: Math.round(performance.now() - t0),
-        ...(redirected ? { redirected } : {}),
+        // every hop is taken here, so whether one was is known: false lets a login path asked for stand
+        redirected: !!redirected,
         ...(setCookies.length ? { setCookies } : {}),
       };
     }

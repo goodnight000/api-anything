@@ -803,9 +803,10 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
         gen: ctx.gen,
         budget: ctx.budget,
       });
-      // A rotating cookie (a rolling session, __cf_bm) must ride on the next call.
-      if (sent.setCookies) {
-        ctx.seen.push(...sent.setCookies);
+      // A rotating cookie (a rolling session, __cf_bm) must ride on the next call. A bare call sent no
+      // session, so what it was given is a guest's: it is hidden from messages, never put in the user's jar.
+      if (sent.setCookies) ctx.seen.push(...sent.setCookies);
+      if (sent.setCookies && !none) {
         try {
           mergeCapture(ctx.site, sent.setCookies);
         } catch {
@@ -844,8 +845,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       };
       r = await viaPage(await derive(op, viaPage));
     }
-    // tiers 1 and 2 take every redirect by hand, so an answer that names none was not redirected
-    const j = within(() => judge(op, { ...r, redirected: r.redirected ?? false }), DEADLINE.read);
+    const j = within(() => judge(op, r), DEADLINE.read);
     const hint = j.unfinished
       ? // the address is the site's own text (where its redirect led): shown as a spec's address is
         `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${shownAddress(j.unfinished)} in their browser and finish it, then run api-anything login ${ctx.site}; then retry once`

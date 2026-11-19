@@ -267,6 +267,13 @@ export function retryAfter(headers: Record<string, string>, now = Date.now()): {
     : { text: ` (the server says retry after ${new Date(t).toISOString()})`, ms: wait(t - now) };
 }
 
+/** GraphQL error codes (`extensions.code`) whose meaning is not in doubt, in the order they decide. */
+const GRAPHQL_CODES: [string[], Class][] = [
+  [["PERSISTED_QUERY_NOT_FOUND", "PERSISTED_QUERY_NOT_SUPPORTED"], "drift"],
+  [["RATE_LIMITED", "RATE_LIMIT_EXCEEDED", "THROTTLED", "TOO_MANY_REQUESTS"], "rate"],
+  [["UNAUTHENTICATED"], "auth"],
+];
+
 /** A GraphQL errors array's verdict; `input` for a not-found entity. */
 function graphqlErrors(errors: unknown[], extra = ""): Classified {
   const msg = errors.map((e) => (e as { message?: unknown })?.message ?? JSON.stringify(e)).join("; ");
@@ -279,11 +286,16 @@ function graphqlErrors(errors: unknown[], extra = ""): Classified {
       ),
     )
     .join(" ");
-  // a machine code says what the prose may not ("Access denied" with UNAUTHENTICATED)
-  if (DRIFT.test(msg) || /PERSISTED_?QUERY_?NOT_?FOUND/i.test(types)) return is("drift", `GraphQL: ${snippet(msg)}`);
-  if (LOGIN.test(msg) || /\bUNAUTHENTICATED\b/i.test(types)) return is("auth", `GraphQL: ${snippet(msg)}`);
-  if (RATE.test(msg) || /RATE_?LIMIT|THROTTL|TOO_?MANY_?REQUESTS/i.test(types))
-    return is("rate", `GraphQL: ${snippet(msg)}`);
+  // A machine code says what the prose may not ("Access denied" with UNAUTHENTICATED), so a known one
+  // decides first; `type` (an older field) does not hide it.
+  const codes = new Set(
+    errors.map((e) => String((e as { extensions?: { code?: unknown } })?.extensions?.code ?? "").toUpperCase()),
+  );
+  const coded = GRAPHQL_CODES.find(([names]) => names.some((n) => codes.has(n)))?.[1];
+  if (coded) return is(coded, `GraphQL: ${snippet(msg)}`);
+  if (DRIFT.test(msg)) return is("drift", `GraphQL: ${snippet(msg)}`);
+  if (LOGIN.test(msg)) return is("auth", `GraphQL: ${snippet(msg)}`);
+  if (RATE.test(msg)) return is("rate", `GraphQL: ${snippet(msg)}`);
   if (/NOT_FOUND/i.test(types) || /not found|could not resolve|does not exist|no such/i.test(msg))
     return is("input", `GraphQL: ${snippet(msg)}`);
   return is("error", `GraphQL errors${extra}: ${snippet(msg)}`);

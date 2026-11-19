@@ -172,6 +172,10 @@ try {
       },
     ],
   });
+  // a home with the spec and nothing else, before any call: what each first call starts from
+  const seed = mkdtempSync(join(tmpdir(), "aa-engine-seed-"));
+  homes.push(seed);
+  cpSync(state, seed, { recursive: true });
   const checkCall = (r) => {
     assert.equal(r.ok, true, JSON.stringify(r));
     assert.equal(r.tier, 1);
@@ -232,15 +236,14 @@ try {
   );
   // The workload above runs every process on one home, so each waits out the site's pacing slot that the
   // one before it took (about a second). A first call has no slot to wait for: each gets a home of its own,
-  // copied from the seeded one before the clock starts.
+  // copied before the clock starts from the seed, which no call has used.
   if (!values.only || values.only === "cli-cold-first-call")
     for (let i = 0; i < samples + 6; i++) {
       const fresh = mkdtempSync(join(tmpdir(), "aa-engine-first-"));
-      cpSync(state, fresh, { recursive: true });
-      for (const f of ["pace.json", "results.json"]) rmSync(join(fresh, f), { force: true });
+      cpSync(seed, fresh, { recursive: true });
       homes.push(fresh);
     }
-  let nextHome = 0;
+  let nextHome = 1;
   await measure(
     "cli-cold-first-call",
     1,

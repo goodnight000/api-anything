@@ -1746,7 +1746,7 @@ their hosts.
 and merge the answer with the specs on this machine (the user's, pulled and bundled) as `installed`,
 the local copy winning, so a site learned here and never shared is found too; a registry that cannot
 be reached, or that has not answered within 8 s (`SEARCH_TIMEOUT_MS`; the request is sent before the
-local specs are scored, so the two overlap), leaves the local ones with a `registryError`, and one that rate-limited the search adds
+local specs are read, so the two overlap), leaves the local ones with a `registryError`, and one that rate-limited the search adds
 `retryAfterMs` (its Retry-After), with a `next` that says to wait that long and search again. The registry is sent no more of the query than
 it reads (`registryQuery`), token by token. A word goes as typed: letters and digits of any script, a
 hyphen or an apostrophe only inside it, less the punctuation around it. Every other token is read as an

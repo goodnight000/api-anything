@@ -225,7 +225,8 @@ await scenario("batch-five-reads-one-field", async (i) => {
   await s.close();
   return {
     ok: results.every((r) => r.ok),
-    dataChars: results.reduce((n, r) => n + JSON.stringify(r.data).length, 0),
+    classes: results.map((r) => r.class),
+    dataChars: results.reduce((n, r) => n + (r.data === undefined ? 0 : JSON.stringify(r.data).length), 0),
   };
 });
 
