@@ -354,6 +354,64 @@ test("youtube search with the ad layout (VISITOR_INFO1_LIVE set) still returns e
   assert.deepEqual(got[0], { id: "a", title: "ta", channel: "c", views: "1 view" });
 });
 
+test("youtube search reads the lockupViewModel layout some visitors get, and returns each field once", () => {
+  // a visitor cookie can put a search in YouTube's lockup layout; the channel sits in an avatar stack or plain text
+  const meta = (part0: unknown) => ({
+    lockupMetadataViewModel: {
+      title: { content: "tl" },
+      metadata: {
+        contentMetadataViewModel: {
+          metadataRows: [{ metadataParts: [part0, { text: { content: "443" }, accessibilityLabel: "443 views" }] }],
+        },
+      },
+    },
+  });
+  const items = [
+    {
+      lockupViewModel: {
+        contentId: "e",
+        metadata: meta({ avatarStack: { avatarStackViewModel: { text: { content: "ch" } } } }),
+      },
+    },
+    { lockupViewModel: { contentId: "f", metadata: meta({ text: { content: "ch" } }) } },
+  ];
+  const data = {
+    contents: {
+      twoColumnSearchResultsRenderer: {
+        primaryContents: { sectionListRenderer: { contents: [{ itemSectionRenderer: { contents: items } }] } },
+      },
+    },
+  };
+  const search = op("youtube", "search");
+  const got = ok(search, `<script>var ytInitialData = ${JSON.stringify(data)};</script>`, "text/html");
+  assert.deepEqual(got, [
+    { id: "e", title: "tl", channel: "ch", views: "443 views" },
+    { id: "f", title: "tl", channel: "ch", views: "443 views" },
+  ]);
+  assert.deepEqual(returnedFields(search.response), ["id", "title", "channel", "views"]);
+});
+
+// ---------------------------------------------------------------- x
+
+test("x getUser answers ok for an account without a typed badge (no verification.verified_type)", () => {
+  const getUser = op("x", "getUser");
+  // a body holding every learned key path, typed as learned
+  const body: Record<string, unknown> = {};
+  const sample: Record<string, unknown> = { string: "s", number: 1, boolean: true, null: null };
+  for (const [path, type] of Object.entries(getUser.response.shape!).sort(([a], [b]) => a.length - b.length)) {
+    const keys = path.split(".");
+    let at = body;
+    for (const k of keys.slice(0, -1)) at = at[k] as Record<string, unknown>;
+    at[keys.at(-1)!] = type === "object" ? {} : type === "array" ? [] : sample[type];
+  }
+  const result = (body.data as Record<string, Record<string, Record<string, unknown>>>).user_result_by_screen_name
+    .result;
+  delete (result.verification as Record<string, unknown>).verified_type;
+  const got = ok(getUser, JSON.stringify(body)) as unknown as Record<string, unknown>;
+  assert.equal(got["verification.is_blue_verified"], true);
+  assert.equal("verification.verified_type" in got, false);
+});
+
 // ---------------------------------------------------------------- linkedin
 
 const entity = (title: string, url: string) => ({

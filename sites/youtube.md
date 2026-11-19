@@ -53,6 +53,11 @@ the results into several sections; the extract path `contents[*]` joins the vide
 section and `pick` drops the ad and shelf items. The innertube search POST
 (`/youtubei/v1/search`) sends a gzip-compressed body; the op keeps to the document, which needs
 no client context.
+Some visitor cookies (seen 2026-11-19 with `__Secure-ROLLOUT_TOKEN` and `VISITOR_INFO1_LIVE`, BR IP)
+get the filtered results as `lockupViewModel` cards instead of `videoRenderer`, with no other change
+to the page. `pick` names each field twice, once per layout, and keeps the path that holds a value.
+In the lockup layout the channel is in an avatar stack or plain text, and `views` is the accessibility
+label (`"443 views"`).
 Video details come from `ytInitialPlayerResponse` on `GET /watch?v=...`. The channel operations
 read `ytInitialData` on `GET /@handle/videos`; uploads are the first page of lockup cards.
 The first plain HTTP request sometimes reported oversized headers; the CLI retried without

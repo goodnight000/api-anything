@@ -2,6 +2,8 @@ No account is needed. Individual public posts are available; recent-post timelin
 
 - An unknown handle returns `input` from both ops.
 - `getProfile`'s `title` looks like "NASA (@NASA) on X".
+- `getUser`'s `verification.verified_type` (`"Business"`, `"Government"`) is missing for an account
+  without a typed badge.
 - `getUser`'s `avatar.image_url` is the `_normal` (48 px) size. Replace `_normal` with `_400x400` for
   a larger one.
 - `getUser` sends X's public bearer, which X could rotate. Then X answers 400 "Bad Authentication
