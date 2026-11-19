@@ -15,7 +15,7 @@ import {
 import { BudgetSpent, limited, PaceConfigError, type SendBudget, sitePace } from "./budget.js";
 import { type Changes, capChanges, changesOf } from "./changes.js";
 import { type Class, judge } from "./classify.js";
-import { asText, fillTemplate } from "./codec.js";
+import { asText, fillTemplate, templateRefs } from "./codec.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { getPath, MAX_PAGE_ELEMENTS } from "./extract.js";
 import {
@@ -290,6 +290,12 @@ const NOT_EXECUTED = new Set([400, 401, 403, 404]);
  * (Post/Redirect/Get) it ran. At tier 3 the page sent it and the answer judged may be a redirect's
  * follow-up, with nothing to tell the two apart: never proof.
  */
+/** A session value (a bearer, a page-issued token) goes into the request, whole or inside a template. */
+const holdsSessionValue = (op: Operation) =>
+  op.slots.some(
+    (s) => s.ref?.startsWith("session:") || templateRefs(s.template ?? "").some((r) => r.startsWith("session:")),
+  );
+
 const notRun = (a?: Attempt) => a?.status !== undefined && NOT_EXECUTED.has(a.status) && !a.redirected && a.tier !== 3;
 
 interface Ctx {
@@ -838,7 +844,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       };
       r = await viaPage(await derive(op, viaPage));
     }
-    const j = within(() => judge(op, r), DEADLINE.read);
+    // tiers 1 and 2 take every redirect by hand, so an answer that names none was not redirected
+    const j = within(() => judge(op, { ...r, redirected: r.redirected ?? false }), DEADLINE.read);
     const hint = j.unfinished
       ? // the address is the site's own text (where its redirect led): shown as a spec's address is
         `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${shownAddress(j.unfinished)} in their browser and finish it, then run api-anything login ${ctx.site}; then retry once`
@@ -1619,11 +1626,14 @@ async function run(
       f.warning = unsavedWarning(siteName, unsaved);
       f.next ??= `the write was sent: do not send it again. The session the site set during it was not saved; ${unsavedNext(siteName)}`;
     }
-    const sessions = [jar, sessionOrNone(siteName), ...captured(seen)];
-    if (f.reason) f.reason = hide(f.reason, sessions, true);
-    if (f.next) f.next = hide(f.next, sessions);
-    if (f.warning) f.warning = hide(f.warning, sessions);
-    if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
+    // the jar is read again only when there is text to hide its values from (a plain success has none)
+    if (f.reason || f.next || f.warning || f.heal) {
+      const sessions = [jar, sessionOrNone(siteName), ...captured(seen)];
+      if (f.reason) f.reason = hide(f.reason, sessions, true);
+      if (f.next) f.next = hide(f.next, sessions);
+      if (f.warning) f.warning = hide(f.warning, sessions);
+      if (f.heal) f.heal = { ...f.heal, changes: f.heal.changes.map((c) => hide(c, sessions)) };
+    }
     if (ledger) settleWrite(ledger, f.write ?? "may_have_applied", f);
     // a proof's rate limit or block is the site's, as any call's; a spent budget is no answer of the site
     if (!spent) coolAfter(siteName, op, f, log);
@@ -1910,11 +1920,12 @@ async function run(
       if (a.class === "blocked" && a.missing && !write && !examplesChecked && !opts.callOnly) {
         examplesChecked = true;
         const examples = exampleArgs(op);
-        if (
-          examples &&
-          !sameArgs(examples, args, op) &&
-          (await attempt({ ...ctx, args: examples }, op, tier)).class === "ok"
-        ) {
+        const b =
+          examples && !sameArgs(examples, args, op) ? await attempt({ ...ctx, args: examples }, op, tier) : undefined;
+        // a 429 is the site's answer to this client: a browser would only add load, and the wait is recorded
+        if (b?.class === "rate")
+          return fail(b, `tier ${tier} said blocked (${a.reason}); the example args: ${b.reason}`);
+        if (b?.class === "ok") {
           return done({
             ok: false,
             class: "input",
@@ -1948,12 +1959,7 @@ async function run(
         authStep = 3;
         // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
         // refreshes them, and for a read its answer is this call's answer.
-        if (
-          op.readOnly &&
-          ctx.maxTier >= 3 &&
-          browserAvailable() &&
-          op.slots.some((s) => s.ref?.startsWith("session:"))
-        ) {
+        if (op.readOnly && ctx.maxTier >= 3 && browserAvailable() && holdsSessionValue(op)) {
           const b = await attempt(ctx, op, 3);
           if (b.class === "ok") {
             const why = [...notes, `tier ${tier} said ${a.class} (${a.reason})`].join("; ");
@@ -1964,12 +1970,7 @@ async function run(
         }
         // A write's page-issued token (a CSRF field, fb_dtsg) went stale, and a login renews only cookies:
         // run the trigger as learning does, the write intercepted and never sent, to refresh it; retry once.
-        if (
-          !op.readOnly &&
-          ctx.maxTier >= 3 &&
-          browserAvailable() &&
-          op.slots.some((s) => s.ref?.startsWith("session:"))
-        ) {
+        if (!op.readOnly && ctx.maxTier >= 3 && browserAvailable() && holdsSessionValue(op)) {
           try {
             await runOpTrigger(siteName, op, args, { intercept: true });
             continue;

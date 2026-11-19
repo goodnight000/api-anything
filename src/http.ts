@@ -39,6 +39,19 @@ export interface Sent {
   setCookies?: StoredCookie[];
 }
 
+/** `jar` with each of `set` in place of the cookie of its name, domain and path, as a browser keeps them. */
+export function withCookies(jar: StoredCookie[], set: StoredCookie[]): StoredCookie[] {
+  let out = jar;
+  for (const c of set)
+    out = [
+      ...out.filter(
+        (x) => !(x.name === c.name && x.domain.toLowerCase() === c.domain.toLowerCase() && x.path === c.path),
+      ),
+      c,
+    ];
+  return out;
+}
+
 export interface SendOptions {
   /** pacing key; normally the site name */
   site: string;
@@ -602,12 +615,7 @@ export async function send(
         // a plain-http answer is whatever the network returned: it cannot touch a Secure cookie
         if (!c || insecureSet(jar, c, url)) continue;
         setCookies.push(c);
-        jar = [
-          ...jar.filter(
-            (x) => !(x.name === c.name && x.domain.toLowerCase() === c.domain.toLowerCase() && x.path === c.path),
-          ),
-          c,
-        ];
+        jar = withCookies(jar, [c]);
       }
       const location = res.headers.get("location");
       redirected ??= REDIRECT.has(res.status) && !!location;

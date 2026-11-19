@@ -7,10 +7,11 @@ import { BudgetSpent } from "./budget.js";
 import { type Class, judge, type Observed } from "./classify.js";
 import { asText, setAt, walk } from "./codec.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
-import { AddressRefused, ReadWrites, RedirectRefused, type SendOptions, type Sent, send } from "./http.js";
+import { AddressRefused, ReadWrites, RedirectRefused, type SendOptions, type Sent, send, withCookies } from "./http.js";
 import { CleartextRefused } from "./proxy.js";
 import type { Session } from "./session.js";
 import type { Lookup, Operation } from "./spec.js";
+import type { StoredCookie } from "./types.js";
 import { DERIVED_VALUE, graphqlDocuments, writesGraphql } from "./vet.js";
 
 /** What a lookup that did not answer with its value said; the op's own request was never sent. */
@@ -131,13 +132,27 @@ export async function derive(op: Operation, fetchOne: (lookup: Operation) => Pro
   return { ...op, request, slots: op.slots.filter((s) => !s.from) };
 }
 
-/** `send`, each lookup first: sent by `send` too, with the same session and options. */
+/**
+ * `send`, each lookup first: sent by `send` too, with the same options. A cookie a lookup's answer sets
+ * (a rotated session) rides on the requests after it, as in the browser, and goes to the jar with the rest.
+ */
 export async function sendDerived(
   op: Operation,
   args: Record<string, unknown>,
   session: Session,
   opts: SendOptions,
 ): Promise<Sent> {
-  const filled = await derive(op, (l) => send(l, args, session, opts));
-  return send(filled, args, session, opts);
+  let jar = session;
+  const set: StoredCookie[] = [];
+  const filled = await derive(op, async (l) => {
+    const r = await send(l, args, jar, opts);
+    if (r.setCookies?.length) {
+      set.push(...r.setCookies);
+      jar = { ...jar, cookies: withCookies(jar.cookies, r.setCookies) };
+    }
+    return r;
+  });
+  const sent = await send(filled, args, jar, opts);
+  const all = [...set, ...(sent.setCookies ?? [])];
+  return all.length ? { ...sent, setCookies: all } : sent;
 }

@@ -57,7 +57,7 @@ export interface Observed {
   body: string;
   /** final URL after redirects, when known */
   url?: string;
-  /** the first answer was a redirect, followed to `url` */
+  /** the first answer was a redirect, followed to `url`; false when the transport knows it was not */
   redirected?: boolean;
 }
 
@@ -279,9 +279,11 @@ function graphqlErrors(errors: unknown[], extra = ""): Classified {
       ),
     )
     .join(" ");
-  if (DRIFT.test(msg)) return is("drift", `GraphQL: ${snippet(msg)}`);
-  if (LOGIN.test(msg)) return is("auth", `GraphQL: ${snippet(msg)}`);
-  if (RATE.test(msg)) return is("rate", `GraphQL: ${snippet(msg)}`);
+  // a machine code says what the prose may not ("Access denied" with UNAUTHENTICATED)
+  if (DRIFT.test(msg) || /PERSISTED_?QUERY_?NOT_?FOUND/i.test(types)) return is("drift", `GraphQL: ${snippet(msg)}`);
+  if (LOGIN.test(msg) || /\bUNAUTHENTICATED\b/i.test(types)) return is("auth", `GraphQL: ${snippet(msg)}`);
+  if (RATE.test(msg) || /RATE_?LIMIT|THROTTL|TOO_?MANY_?REQUESTS/i.test(types))
+    return is("rate", `GraphQL: ${snippet(msg)}`);
   if (/NOT_FOUND/i.test(types) || /not found|could not resolve|does not exist|no such/i.test(msg))
     return is("input", `GraphQL: ${snippet(msg)}`);
   return is("error", `GraphQL errors${extra}: ${snippet(msg)}`);
@@ -666,7 +668,8 @@ function classifyResponse(
       ? is("auth", `HTTP 403 with login markers: ${snippet(body)}`)
       : { ...is("blocked", `HTTP 403 with no login or challenge markers: ${snippet(body)}`), missing: true };
   }
-  if (r.url) {
+  // an answer known not to be redirected was asked for at that address (an arg can spell /login in a path)
+  if (r.url && r.redirected !== false) {
     try {
       const u = new URL(r.url);
       if (LOGIN_URL.test(u.pathname) && !LOGIN_URL.test(new URL(op.request.url).pathname)) {
