@@ -139,8 +139,11 @@ function write(dir: string, files: Map<string, string>, hash: string): void {
  * it never installs. Neither replaces a copy from a newer version, nor a link (a checkout someone points
  * at). Undefined: refresh found nothing to do it for.
  */
-export function installSkill(dir: string, o: { mode: "setup" | "refresh"; dryRun?: boolean }): SkillResult | undefined {
-  const want = packageSkill();
+export function installSkill(
+  dir: string,
+  o: { mode: "setup" | "refresh"; dryRun?: boolean },
+  packaged: () => ReturnType<typeof packageSkill> = packageSkill,
+): SkillResult | undefined {
   let stat: ReturnType<typeof lstatSync> | undefined;
   try {
     stat = lstatSync(dir);
@@ -152,9 +155,12 @@ export function installSkill(dir: string, o: { mode: "setup" | "refresh"; dryRun
   if (!had) {
     if (o.mode === "refresh") return undefined;
     if (o.dryRun) return { skill: "would install", skillDir: dir };
+    const want = packaged();
     write(dir, want.files, want.hash);
     return { skill: "installed", skillDir: dir };
   }
+  // the package's own files are read only for a copy that is there
+  const want = packaged();
   const stamp = readStamp(dir);
   const current = hashOf(had);
   if (current === want.hash) {
@@ -202,9 +208,12 @@ export function refreshSkills(): SkillResult[] {
   const dirs = new Set(recorded());
   if (!process.env.API_ANYTHING_HOME) for (const d of Object.values(skillDirs)) dirs.add(d());
   const done: SkillResult[] = [];
+  // read and hashed once for every copy, and not at all when no copy is there
+  let pkg: ReturnType<typeof packageSkill> | undefined;
+  const packaged = () => (pkg ??= packageSkill());
   for (const d of dirs) {
     try {
-      const r = installSkill(d, { mode: "refresh" });
+      const r = installSkill(d, { mode: "refresh" }, packaged);
       if (r) done.push(r);
     } catch {
       // a copy that can't be read or written stays as it is; the call goes on

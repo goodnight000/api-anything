@@ -1745,7 +1745,8 @@ their hosts.
 **Search.** `api-anything search <words | domain | url>` and MCP `find_sites` ask `GET /v1/search`
 and merge the answer with the specs on this machine (the user's, pulled and bundled) as `installed`,
 the local copy winning, so a site learned here and never shared is found too; a registry that cannot
-be reached leaves the local ones with a `registryError`, and one that rate-limited the search adds
+be reached, or that has not answered within 8 s (`SEARCH_TIMEOUT_MS`; the request is sent before the
+local specs are scored, so the two overlap), leaves the local ones with a `registryError`, and one that rate-limited the search adds
 `retryAfterMs` (its Retry-After), with a `next` that says to wait that long and search again. The registry is sent no more of the query than
 it reads (`registryQuery`), token by token. A word goes as typed: letters and digits of any script, a
 hyphen or an apostrophe only inside it, less the punctuation around it. Every other token is read as an
@@ -2201,7 +2202,8 @@ behind the Keychain; storing them less protected than the browser did would undo
 - **Fail closed.** Plaintext is written in one case only: this home has never sealed a file, and
   the key store is not here at all (`KeyUnavailable`: no `security`, `secret-tool` or PowerShell
   binary, no session bus, a bus GLib cannot autolaunch for want of an X11 `$DISPLAY`, no Secret
-  Service on the bus, an unsupported OS). Every other key error is a `SealError` with a `next`, and
+  Service on the bus, a Secret Service with no collection to keep a key in, an unsupported OS).
+  Every other key error is a `SealError` with a `next`, and
   nothing is written: a store that exists and fails (a locked keychain, a timeout, a session bus
   address whose socket refuses the connection or is gone), any error with `API_ANYTHING_KEY` set, and
   a missing store in a home that has sealed. A home has sealed once `sealed.json` exists (written before the first sealed file) or any

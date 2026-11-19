@@ -115,6 +115,19 @@ test("ordered results, caller ids, partial failures, no caching and normal pacin
   );
 });
 
+test("an item's view shapes that item's answer only, and a bad view fails that item before sending", async () => {
+  const r = await collect([
+    { ...user("alice"), view: { fields: ["who=name"] } },
+    user("bob"),
+    { ...user("carol"), view: { maxChars: 10 } },
+  ]);
+  assert.deepEqual(r[0]!.data, { who: "alice" });
+  assert.deepEqual(r[1]!.data, { name: "bob" });
+  assert.equal(r[2]!.class, "input");
+  assert.match(r[2]!.reason ?? "", /maxChars/);
+  assert.equal(fx.calls.length, 2, "the bad view sent nothing");
+});
+
 test("writes answer input even if a JS caller supplies allowWrites, and later reads run", async () => {
   const r = await collect([{ site: "batch", op: "write" }, user("after")], { allowWrites: true } as BatchOptions);
   assert.equal(r[0]!.class, "input");
