@@ -206,7 +206,7 @@
           "data.user_result_by_screen_name.result.verification": "object",
           "data.user_result_by_screen_name.result.verification.is_blue_verified": "boolean",
           "data.user_result_by_screen_name.result.verification.verified": "boolean",
-          "data.user_result_by_screen_name.result.verification.verified_type": "string"
+          "data.user_result_by_screen_name.result.verification.verified_type": "null"
         }
       },
       "params": [

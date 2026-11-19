@@ -71,7 +71,12 @@
           "id=videoRenderer.videoId",
           "title=videoRenderer.title.runs[0].text",
           "channel=videoRenderer.ownerText.runs[0].text",
-          "views=videoRenderer.viewCountText.simpleText"
+          "views=videoRenderer.viewCountText.simpleText",
+          "id=lockupViewModel.contentId",
+          "title=lockupViewModel.metadata.lockupMetadataViewModel.title.content",
+          "channel=lockupViewModel.metadata.lockupMetadataViewModel.metadata.contentMetadataViewModel.metadataRows[0].metadataParts[0].text.content",
+          "channel=lockupViewModel.metadata.lockupMetadataViewModel.metadata.contentMetadataViewModel.metadataRows[0].metadataParts[0].avatarStack.avatarStackViewModel.text.content",
+          "views=lockupViewModel.metadata.lockupMetadataViewModel.metadata.contentMetadataViewModel.metadataRows[0].metadataParts[1].accessibilityLabel"
         ],
         "embedded": {
           "regex": "var ytInitialData = (\\{)"

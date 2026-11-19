@@ -202,7 +202,8 @@ export function getPathRegex(obj: unknown, p: string): unknown {
  * of an item is absent from it.
  */
 export function returnedFields(r: Pick<ResponseSpec, "format" | "pick" | "html" | "extract">): string[] | undefined {
-  if (r.pick?.length) return r.pick.map(pickName);
+  // a name picked twice is one field read from two layouts: pick keeps the path that holds a value
+  if (r.pick?.length) return [...new Set(r.pick.map(pickName))];
   return r.format === "html" && r.html && !r.extract ? Object.keys(r.html.fields) : undefined;
 }
 
