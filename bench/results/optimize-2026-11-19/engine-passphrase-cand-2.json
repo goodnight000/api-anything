@@ -1,0 +1,87 @@
+{
+  "repo": "cand",
+  "revision": "cand",
+  "node": "v22.23.3",
+  "sourceSha256": "41c043d5d71aa8602198dfdccc4488939c763ae76052cab0fa1da93d9111e3d7",
+  "bodyBytes": 224689,
+  "retainedFullAnswer": true,
+  "results": [
+    {
+      "name": "judge-json-1000",
+      "iterations": 15,
+      "samples": 7,
+      "medianMs": 4.298561066666662,
+      "p95BatchMeanMs": 4.508653533333332
+    },
+    {
+      "name": "judge-rpc-1000",
+      "iterations": 15,
+      "samples": 7,
+      "medianMs": 4.621012200000004,
+      "p95BatchMeanMs": 4.8713746000000056
+    },
+    {
+      "name": "judge-html-200",
+      "iterations": 15,
+      "samples": 7,
+      "medianMs": 3.320604600000009,
+      "p95BatchMeanMs": 4.673695466666671
+    },
+    {
+      "name": "pick-1000",
+      "iterations": 30,
+      "samples": 7,
+      "medianMs": 1.0378378000000035,
+      "p95BatchMeanMs": 1.0533250999999988
+    },
+    {
+      "name": "cap-1000",
+      "iterations": 30,
+      "samples": 7,
+      "medianMs": 0.2520664666666714,
+      "p95BatchMeanMs": 0.31632673333333516
+    },
+    {
+      "name": "outline-wide-30000",
+      "iterations": 2,
+      "samples": 7,
+      "medianMs": 80.97499249999987,
+      "p95BatchMeanMs": 98.31461300000001
+    },
+    {
+      "name": "build-request",
+      "iterations": 500,
+      "samples": 7,
+      "medianMs": 0.008587832000000161,
+      "p95BatchMeanMs": 0.011162952000000587
+    },
+    {
+      "name": "call-localhost",
+      "iterations": 30,
+      "samples": 7,
+      "medianMs": 1.8110338333333251,
+      "p95BatchMeanMs": 2.16713383333334
+    },
+    {
+      "name": "call-localhost-1000",
+      "iterations": 15,
+      "samples": 7,
+      "medianMs": 30.322614733333346,
+      "p95BatchMeanMs": 30.953873466666664
+    },
+    {
+      "name": "cli-cold-localhost",
+      "iterations": 1,
+      "samples": 7,
+      "medianMs": 882.0901840000006,
+      "p95BatchMeanMs": 1231.1080920000004
+    },
+    {
+      "name": "cli-cold-first-call",
+      "iterations": 1,
+      "samples": 7,
+      "medianMs": 169.0747390000015,
+      "p95BatchMeanMs": 183.43944700000065
+    }
+  ]
+}

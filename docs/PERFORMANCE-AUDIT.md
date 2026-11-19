@@ -147,3 +147,81 @@ npm exec --yes --package=node@24 -- node --import tsx --test test/*.test.ts test
 Alternate the engine baseline/candidate commands three times for the reported protocol. Raw
 measurement JSON, traces, and test logs remain local under `/tmp/api-anything-*`; the scripts
 and this concise report are the reviewable deliverables.
+
+## Second pass, 2026-11-19
+
+Baseline `a6f6403`, candidate `628b22c` (the measured tree; this report and the raw results were added
+after it). Five read-only reviewers (GPT-6.2 Astra) each covered one area: the call's hot
+path, the browser tiers, success rate, agent experience, and startup and the registry. Every finding
+was checked against the source, and the timing claims were measured, before anything changed.
+Several were refuted that way: for example, result-store occupancy (0 versus 20 kept answers measured
+86.8 versus 86.9 ms), the CLI import graph (about 15 ms left to save) and duplicate spec loading
+(0.1 to 0.4 ms).
+
+All numbers below are from Instabox `ci-runner` (Linux, 4 vCPU, Node 22.23.3), baseline and candidate
+alternated for three rounds; each cell is the median of the three round medians. Raw output:
+[bench/results/optimize-2026-11-19](../bench/results/optimize-2026-11-19).
+
+### Engine (`bench/engine.mjs`)
+
+That machine has a Secret Service whose keyring has no default collection, as headless Linux boxes
+often do. `secret-tool store` fails there every time, and the failure was an uncached `SealError`, so
+every cut answer paid for the subprocesses and was then **not kept**. It is now `KeyUnavailable`,
+cached per process like a missing store: a home that has sealed still fails closed.
+
+| Workload, keyring as found | Before, ms | After, ms | Change |
+|---|---:|---:|---:|
+| Localhost call, 1,000 records, cut | 58.94 | 19.30 | -67.3% |
+| ...full answer kept for `get_result` | no (0/3) | yes (3/3) | fixed |
+| Small localhost call | 1.96 | 1.97 | none |
+| Cold CLI, first call on a fresh home | 165.5 | 183.3 | noise: ranges 154-181 / 165-185 |
+
+With `API_ANYTHING_KEY` set (sealing works on both), no workload changed beyond noise: the 1,000-record
+call measured 31.49 against 31.12 ms. The before figure on the keyring machine ranged 56 to 86 ms
+across rounds (an earlier full run measured 76.05 against 20.70 ms). The engine-only workloads (judge, pick, cap, outline, build) did
+not change. The old `cli-cold-localhost` workload runs every process on one home, so each waits for the
+site's pacing slot the one before took: its 0.85 to 1.1 s is pacing, not startup. The new
+`cli-cold-first-call` gives each process a fresh home; a cold call is about 180 ms, of which `--version`
+alone is about 120 ms.
+
+### Failure paths (`bench/paths.mjs`)
+
+| Scenario | Before | After |
+|---|---|---|
+| Bare 403, then 429 on the example args | `drift` at tier 2 after 4.9 s, 8 site requests, Chrome launched | `rate` at tier 1 in 12 ms, 2 requests, `retryAfterMs` 120000 |
+| `learn_site` on a page with a bot challenge | 36.0 s, 2 browser runs | 18.0 s, 1 run, same `login` next step |
+| An arg spells `/login` in the path, site answers 200 JSON | `auth` (wrong) | `ok` |
+| GraphQL `UNAUTHENTICATED` with prose "Access denied" | `error` (no recovery tried) | `auth` |
+| A derived lookup rotates the session cookie | `auth`: the op's request sent the dead cookie | `ok` |
+| `call_batch`, five reads, one field wanted | 3,355 characters of data (view ignored) | 60 characters |
+
+Times are medians of three trials; the batch's time (about 4 s) is the site's pacing between
+same-site reads, unchanged.
+
+### Also changed, not separately timed
+
+- A trigger run's page timeout is the run's remaining budget, not a fresh full one after the wait for
+  the profile; Enter ends a `login --window` wait even while a subresource holds the page's load event.
+- `learn_site` reuses a shared op only for the same port and hash route.
+- Auth recovery sees a session value inside a slot template.
+- A plain success no longer re-reads the session jar for redaction.
+- A same-site `call_batch` holds no more server permits than it can use; `find_sites` names a next op
+  only from the reads it shows.
+- A search waits at most 8 s on the catalog, and the request is sent before the local specs are read.
+- Skill refresh reads and hashes the packaged skill once, and only when a copy exists.
+- Percent-encoding decides each character once per splice, not once per use.
+- The registry Worker ranks versions before parsing their operations, and has an index on
+  `sites(domain)` (migration 0011, applied on the next deploy).
+
+### Deferred
+
+A next-page URL's cursor is returned still percent-encoded and is encoded again when sent back; the
+fix needs a spec-level way to say "decode this capture" (a hand-written regex may want the raw text).
+A path-scoped cookie ref resolves against the example's path, not the filled one. Both are real and
+are left for their own change.
+
+### Verification
+
+Full suite on Instabox: 1,530 of 1,532 pass, one skipped. The one failure is the headed-window
+sign-in test, which fails the same way on the baseline (no X server); under `xvfb-run` it and the rest
+of `e2e.test.ts` and `learnsite.test.ts` pass (42 of 42). `npm run check` and `npm run lint` pass.
