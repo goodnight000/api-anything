@@ -337,7 +337,10 @@ async function defaultSiteName(trigger: string, registryName: () => Promise<stri
 
 const HOLE = /^\{(\w+)\}$/;
 
-/** A page URL as its parts in order: host (no www.), each path segment, each query key; placeholders kept. */
+/**
+ * A page URL as its parts in order: host (no www.) and port, each path segment, each query key, and the
+ * fragment (a hash route is another page of the app); placeholders kept.
+ */
 function parts(url: string): [string, string][] | undefined {
   const dec = (v: string) => {
     try {
@@ -349,7 +352,7 @@ function parts(url: string): [string, string][] | undefined {
   try {
     const u = new URL(url);
     return [
-      ["host", u.hostname.toLowerCase().replace(/^www\./, "")],
+      ["host", `${u.hostname.toLowerCase().replace(/^www\./, "")}${u.port ? `:${u.port}` : ""}`],
       ...u.pathname
         .split("/")
         .filter(Boolean)
@@ -357,6 +360,12 @@ function parts(url: string): [string, string][] | undefined {
       ...[...u.searchParams]
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
         .map(([k, v]): [string, string] => [`query ${k}`, v]),
+      // a hash route by its segments, as the path: a placeholder there may have another name
+      ...u.hash
+        .slice(1)
+        .split("/")
+        .filter(Boolean)
+        .map((v, i): [string, string] => [`hash ${i}`, dec(v)]),
     ];
   } catch {
     return undefined;
@@ -570,7 +579,15 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
 
   // the two runs: run 1 is the user's request, run 2 the second example
   let c1: CaptureFile;
-  let c2: CaptureFile;
+  let c2: CaptureFile | undefined;
+  /** run 2, opened only once run 1 has not already ended the learn (a challenge, an HTTP error) */
+  let second: (() => Promise<CaptureFile>) | undefined;
+  const failedRun = (e: unknown): LearnSiteResult => {
+    if (e instanceof ProfileInUse) return fail(e.message, PROFILE_HINT, { nextCall: { action: "retry" } });
+    if (e instanceof CaptureUnavailable)
+      return fail(e.message, e.recapture ? "learn again without captures: the two runs are made afresh" : e.next);
+    return fail((e as Error).message.split("\n")[0]!, "check the trigger URL, then learn again");
+  };
   try {
     if (input.captures) {
       // one instant for the pair: a pair valid when the learn began is not half-refused at the 24 h edge
@@ -595,25 +612,32 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
           `ask the user to run api-anything login ${site}; then learn again`,
           { nextCall: { action: "login", site }, captures: [c1.id] },
         );
-      c2 = await capturePage(fillTrigger(trigger, input.args2));
+      second = () => capturePage(fillTrigger(trigger, input.args2));
     }
   } catch (e) {
-    if (e instanceof ProfileInUse) return fail(e.message, PROFILE_HINT, { nextCall: { action: "retry" } });
-    if (e instanceof CaptureUnavailable)
-      return fail(e.message, e.recapture ? "learn again without captures: the two runs are made afresh" : e.next);
-    return fail((e as Error).message.split("\n")[0]!, "check the trigger URL, then learn again");
+    return failedRun(e);
   }
-  const captures = [c1.id, c2.id];
+  const captures = c2 ? [c1.id, c2.id] : [c1.id];
   // The rule holds for what the page requested, not only for the trigger typed: a request to this
   // machine or the local network (the page's redirect, a request its script sent, a capture of another
   // page) is no part of the run. Never ranked, shown in alternatives, picked, learned or replayed.
   const hidden = new Set<number>();
-  if (o.publicOnly) {
-    const open = (c: CaptureFile) => ({ ...c, exchanges: c.exchanges.filter((e) => !badAddress(e.request.url)) });
-    for (const e of c1.exchanges) if (badAddress(e.request.url)) hidden.add(e.id);
-    c1 = open(c1);
-    c2 = open(c2);
-  }
+  const open = (c: CaptureFile) =>
+    o.publicOnly ? { ...c, exchanges: c.exchanges.filter((e) => !badAddress(e.request.url)) } : c;
+  if (o.publicOnly) for (const e of c1.exchanges) if (badAddress(e.request.url)) hidden.add(e.id);
+  c1 = open(c1);
+  if (c2) c2 = open(c2);
+  /** Make run 2 if it is still to make; a failure to make it is the learn's answer. */
+  const runTwo = async (): Promise<LearnSiteResult | undefined> => {
+    if (c2 || !second) return undefined;
+    try {
+      c2 = open(await second());
+    } catch (e) {
+      return failedRun(e);
+    }
+    captures.push(c2.id);
+    return undefined;
+  };
 
   // the request and the recipe: the agent's, else the outline's
   const values = Object.values(input.args).map(asText);
@@ -640,6 +664,8 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   const told = Object.keys(given).length > 0;
   let chosen: Choice | undefined;
   if (input.pickRequest !== undefined) {
+    const halted = await runTwo();
+    if (halted) return halted;
     if (hidden.has(input.pickRequest))
       return fail(
         `request ${input.pickRequest} is not https on a public host: learn_site learns only requests to public hosts, and sent nothing`,
@@ -680,6 +706,10 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       page.status === 429 ? "the site is rate limiting: wait a few minutes, then learn again" : "check the trigger URL",
       { captures, nextCall: page.status === 429 ? { action: "retry" } : { action: "fix_args" } },
     );
+  // run 1 did not end the learn: run 2, the second example, is needed from here
+  const stopped = await runTwo();
+  if (stopped) return stopped;
+  const run2 = c2!;
   // the data may be keyed by a value the page looked up (a slug's id): its request carries no example value
   const derived = chosen ? undefined : lookedUpData(c1, input.args);
   if (!chosen && derived) {
@@ -721,7 +751,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   if (early)
     return notRead(`request ${chosen.request} (${chosen.method} ${chosen.url.split("?")[0]}) is not a read: ${early}`);
 
-  const paged = pagedOf(input, c1, c2, exchange(chosen.request)!);
+  const paged = pagedOf(input, c1, run2, exchange(chosen.request)!);
   if (typeof paged === "string")
     return fail(
       paged,
@@ -750,7 +780,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       ...(input.intent && !mentions ? { description: input.intent } : {}),
       response: recipe,
       from: { capture: c1, id: paged?.page2 ?? chosen.request },
-      from2: c2,
+      from2: run2,
       ...(paged ? { paging: paged.paging } : {}),
       readsOnly: true,
       ...(o.publicOnly ? { publicOnly: true } : {}),

@@ -57,7 +57,7 @@ export interface Observed {
   body: string;
   /** final URL after redirects, when known */
   url?: string;
-  /** the first answer was a redirect, followed to `url` */
+  /** the first answer was a redirect, followed to `url`; false when the transport knows it was not */
   redirected?: boolean;
 }
 
@@ -267,6 +267,13 @@ export function retryAfter(headers: Record<string, string>, now = Date.now()): {
     : { text: ` (the server says retry after ${new Date(t).toISOString()})`, ms: wait(t - now) };
 }
 
+/** GraphQL error codes (`extensions.code`) whose meaning is not in doubt, in the order they decide. */
+const GRAPHQL_CODES: [string[], Class][] = [
+  [["PERSISTED_QUERY_NOT_FOUND", "PERSISTED_QUERY_NOT_SUPPORTED"], "drift"],
+  [["RATE_LIMITED", "RATE_LIMIT_EXCEEDED", "THROTTLED", "TOO_MANY_REQUESTS"], "rate"],
+  [["UNAUTHENTICATED"], "auth"],
+];
+
 /** A GraphQL errors array's verdict; `input` for a not-found entity. */
 function graphqlErrors(errors: unknown[], extra = ""): Classified {
   const msg = errors.map((e) => (e as { message?: unknown })?.message ?? JSON.stringify(e)).join("; ");
@@ -279,6 +286,13 @@ function graphqlErrors(errors: unknown[], extra = ""): Classified {
       ),
     )
     .join(" ");
+  // A machine code says what the prose may not ("Access denied" with UNAUTHENTICATED), so a known one
+  // decides first; `type` (an older field) does not hide it.
+  const codes = new Set(
+    errors.map((e) => String((e as { extensions?: { code?: unknown } })?.extensions?.code ?? "").toUpperCase()),
+  );
+  const coded = GRAPHQL_CODES.find(([names]) => names.some((n) => codes.has(n)))?.[1];
+  if (coded) return is(coded, `GraphQL: ${snippet(msg)}`);
   if (DRIFT.test(msg)) return is("drift", `GraphQL: ${snippet(msg)}`);
   if (LOGIN.test(msg)) return is("auth", `GraphQL: ${snippet(msg)}`);
   if (RATE.test(msg)) return is("rate", `GraphQL: ${snippet(msg)}`);
@@ -666,7 +680,8 @@ function classifyResponse(
       ? is("auth", `HTTP 403 with login markers: ${snippet(body)}`)
       : { ...is("blocked", `HTTP 403 with no login or challenge markers: ${snippet(body)}`), missing: true };
   }
-  if (r.url) {
+  // an answer known not to be redirected was asked for at that address (an arg can spell /login in a path)
+  if (r.url && r.redirected !== false) {
     try {
       const u = new URL(r.url);
       if (LOGIN_URL.test(u.pathname) && !LOGIN_URL.test(new URL(op.request.url).pathname)) {

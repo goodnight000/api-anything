@@ -803,3 +803,32 @@ test("an html answer with more elements than the page budget is refused before i
   // the same page where a results page with no results is looked for
   assert.equal(emptyResults(page(MAX_PAGE_ELEMENTS + 1).body, { items: "ul li.r", empty: "p.none" }), undefined);
 });
+
+test("GraphQL machine codes decide auth, rate and drift when the message says nothing", () => {
+  const gql = (code: string, message = "Access denied") =>
+    json(200, { data: null, errors: [{ message, extensions: { code } }] });
+  assert.equal(cls(op(), gql("UNAUTHENTICATED")), "auth");
+  assert.equal(cls(op(), gql("RATE_LIMITED", "Try later")), "rate");
+  assert.equal(cls(op(), gql("THROTTLED", "Try later")), "rate");
+  assert.equal(cls(op(), gql("PERSISTED_QUERY_NOT_FOUND", "Not here")), "drift");
+  assert.equal(cls(op(), gql("NOT_FOUND", "Nothing")), "input");
+  assert.equal(cls(op(), gql("INTERNAL_SERVER_ERROR", "Boom")), "error");
+  // the code decides before the prose, and an older `type` field does not hide it
+  assert.equal(cls(op(), gql("RATE_LIMITED", "Please log in to continue")), "rate");
+  assert.equal(
+    cls(
+      op(),
+      json(200, {
+        data: null,
+        errors: [{ type: "FORBIDDEN", message: "Try later", extensions: { code: "RATE_LIMITED" } }],
+      }),
+    ),
+    "rate",
+  );
+});
+
+test("a login path asked for, not redirected to, is not a sign-in: an arg may spell it", () => {
+  const article = { data: { user: { id: 1, slug: "login" } } };
+  assert.equal(cls(op(), { ...json(200, article), url: "https://x.test/api/articles/login", redirected: false }), "ok");
+  assert.equal(cls(op(), { ...json(200, article), url: "https://x.test/login", redirected: true }), "auth");
+});

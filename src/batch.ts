@@ -9,6 +9,8 @@ export const BatchItemSchema = z.object({
   site: z.string().min(1),
   op: z.string().min(1),
   args: z.record(z.string(), z.unknown()).optional(),
+  /** shapes this item's answer, as call_operation's view: checked by call() */
+  view: z.object({ fields: z.array(z.string()).optional(), maxChars: z.number().optional() }).optional(),
 });
 export type BatchItem = z.infer<typeof BatchItemSchema>;
 export type BatchResult = CallResult & { id: string | number; site: string; op: string };
@@ -63,7 +65,8 @@ export async function* callReads(items: readonly BatchItem[], opts: BatchOptions
   const count = pending.length;
   const run = async (item: (typeof pending)[number]): Promise<BatchResult> => {
     const { id, site, op, parsed } = item;
-    if (!parsed.success) return { id, site, op, ...input("expected {id?: string or number, site, op, args?: object}") };
+    if (!parsed.success)
+      return { id, site, op, ...input("expected {id?: string or number, site, op, args?: object, view?: object}") };
     try {
       // Whitelist options: a JS caller's allowWrites, force or pacing override cannot escape the bounds.
       const r = await call(site, op, parsed.data.args ?? {}, {
@@ -74,6 +77,7 @@ export async function* callReads(items: readonly BatchItem[], opts: BatchOptions
         changes: opts.changes,
         changesOnly: opts.changesOnly,
         watch: opts.watch,
+        ...(parsed.data.view ? { view: parsed.data.view } : {}),
         allowWrites: false,
       });
       return {

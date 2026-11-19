@@ -8,6 +8,11 @@ compares another checkout or an archived baseline; pass `--revision <commit>` fo
 without Git metadata. `--only cli-cold-localhost` isolates startup. Results include the source
 hash and median batch latency; `p95BatchMeanMs` is not an individual-call tail percentile.
 
+`node --import tsx bench/paths.mjs` records what happens on failure paths (a throttled example probe, a
+login path asked for, GraphQL codes, a lookup that rotates the session, a batch's view, `learn_site` on a
+bot challenge); it takes the same `--repo`. `cli-cold-first-call` gives each process a fresh home, while
+`cli-cold-localhost` reuses one, so it includes the site's pacing between processes.
+
 `node --import tsx bench/import.mjs` measures a pinned import from disposable synthetic browser
 databases. Both scripts assert their results and use no real accounts or live websites. See
 [the audit](../docs/PERFORMANCE-AUDIT.md) for the before/after protocol and measured limits.

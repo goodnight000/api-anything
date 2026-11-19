@@ -3,7 +3,7 @@ import type { FoundOp, SearchMatch, ServedOp, ServedSite, SiteContext, Status } 
 import { domainOf, type IndexEntry, indexEntry, matchQuery, operationMatch, summarize } from "../../src/search.js";
 import type { Operation, Site } from "../../src/spec.js";
 import { LIMITS } from "../../src/vet.js";
-import { byRank, successRate } from "./rules.js";
+import { byRank, type Rankable, successRate } from "./rules.js";
 import { allSites, context, type D1Database, getSite, servable, type VersionRow } from "./store.js";
 
 const servedOp = (r: VersionRow): ServedOp => {
@@ -62,21 +62,31 @@ const KEEP: Partial<Record<Status, number>> = { live: 0, degraded: 1, candidate:
  * the whole site. Live first, then the oldest, so an op under a new name never pushes out one served before it.
  */
 export function bestPerOp(rows: VersionRow[], overhead = 0): ServedOp[] {
-  const groups = new Map<string, ServedOp & { createdAt: string; liveSince?: string }>();
+  // ranked on the row's own columns: only the winner of each name has its operation parsed
+  const groups = new Map<string, { row: VersionRow; rank: Rankable }>();
   for (const r of rows) {
-    const op = { ...servedOp(r), createdAt: r.created_at, ...(r.live_since ? { liveSince: r.live_since } : {}) };
+    const rate = successRate(r.oks, r.bad);
+    const rank: Rankable = {
+      status: r.status,
+      confirmations: r.confirmations,
+      createdAt: r.created_at,
+      ...(rate !== undefined ? { successRate: rate } : {}),
+      ...(r.live_since ? { liveSince: r.live_since } : {}),
+    };
     const held = groups.get(r.op_name);
-    if (!held || byRank(op, held) < 0) groups.set(r.op_name, op);
+    if (!held || byRank(rank, held.rank) < 0) groups.set(r.op_name, { row: r, rank });
   }
-  const oldest = [...groups.values()].sort(
-    (a, b) =>
-      (KEEP[a.status] ?? 9) - (KEEP[b.status] ?? 9) ||
-      a.createdAt.localeCompare(b.createdAt) ||
-      a.hash.localeCompare(b.hash),
-  );
+  const oldest = [...groups.values()]
+    .map(({ row }) => ({ ...servedOp(row), createdAt: row.created_at }))
+    .sort(
+      (a, b) =>
+        (KEEP[a.status] ?? 9) - (KEEP[b.status] ?? 9) ||
+        a.createdAt.localeCompare(b.createdAt) ||
+        a.hash.localeCompare(b.hash),
+    );
   const kept: ServedOp[] = [];
   let size = overhead;
-  for (const { createdAt: _, liveSince: __, ...op } of oldest) {
+  for (const { createdAt: _, ...op } of oldest) {
     if (kept.length >= LIMITS.operations) break;
     const n = opBytes(op);
     if (size + n > LIMITS.file) continue;
@@ -90,7 +100,11 @@ export function bestPerOp(rows: VersionRow[], overhead = 0): ServedOp[] {
 export async function catalog(db: D1Database, viewer?: string, name?: string): Promise<ServedSite[]> {
   const rows = await servable(db, viewer, name);
   const bySite = new Map<string, VersionRow[]>();
-  for (const r of rows) bySite.set(r.site, [...(bySite.get(r.site) ?? []), r]);
+  for (const r of rows) {
+    const held = bySite.get(r.site);
+    if (held) held.push(r);
+    else bySite.set(r.site, [r]);
+  }
   const sites = name ? [await getSite(db, name)].flatMap((s) => (s ? [s] : [])) : await allSites(db);
   return sites.flatMap((s) => {
     const site = context(s);

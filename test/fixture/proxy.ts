@@ -38,9 +38,13 @@ export async function startProxy(auth?: { user: string; pass: string }): Promise
     const { "proxy-authorization": _, "proxy-connection": __, ...headers } = req.headers;
     const out = httpRequest(req.url!, { method: req.method, headers }, (up) => {
       res.writeHead(up.statusCode ?? 502, up.headers);
+      up.on("error", () => res.destroy());
       up.pipe(res);
     });
     out.on("error", () => res.destroy());
+    // a client that goes away mid-request (Chrome closing) resets its socket: not this test's failure
+    req.on("error", () => out.destroy());
+    res.on("error", () => out.destroy());
     req.pipe(out);
   });
   server.on("connection", (s) => {
@@ -48,6 +52,9 @@ export async function startProxy(auth?: { user: string; pass: string }): Promise
     s.on("close", () => sockets.delete(s));
   });
   server.on("connect", (req, client, head) => {
+    // A CONNECT's socket is no longer the HTTP server's, which stops handling its errors: a client
+    // that resets it after a 407 (or mid-tunnel) would otherwise end the test process.
+    client.on("error", () => {});
     const authorized = ok(req.headers["proxy-authorization"]);
     seen.push({ method: "CONNECT", target: req.url ?? "", authorized });
     if (!authorized) {

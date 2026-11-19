@@ -745,7 +745,8 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     release();
     throw e;
   }
-  page.setDefaultTimeout(timeout);
+  // the run's budget counts from its start: time spent waiting for the profile is not given again
+  page.setDefaultTimeout(Math.max(1, deadline - Date.now()));
 
   const exchanges: Exchange[] = [];
   let acting = false;
@@ -1545,8 +1546,7 @@ export async function pageFetch(o: {
       for (let hops = 0; ; hops++) {
         const { location, ...r } = await fetchHop(hop, hops === 0);
         redirected ||= !!location;
-        if (!location || !o.redirect)
-          return { ...r, ms: Math.round(performance.now() - t0), ...(redirected ? { redirected } : {}) };
+        if (!location || !o.redirect) return { ...r, ms: Math.round(performance.now() - t0), redirected };
         hop = await o.redirect(hop, r.status, location, hops);
       }
     } catch (e) {
@@ -1648,7 +1648,8 @@ async function loginWindow(
   });
   try {
     // A user who clicks away before the page has loaded interrupts this navigation; the window stays theirs.
-    await page.goto(url).catch(() => {});
+    // Enter (or a close) ends the wait even while a slow subresource holds the page's load event.
+    await Promise.race([page.goto(url).catch(() => {}), done]);
     read();
     await done;
     // Enter leaves the window open, so one more read is current (unless the user closes it meanwhile).

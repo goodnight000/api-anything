@@ -1167,4 +1167,33 @@ test("sameTrigger: the same page with placeholders at the same places, whatever 
     undefined,
     "an arg the op lacks",
   );
+  // another app on the same host, or another hash route of one app, is another page
+  assert.equal(
+    sameTrigger(op("http://localhost:3000/s?q={q}"), "http://localhost:4000/s?q={q}", { q: "x" }),
+    undefined,
+  );
+  assert.equal(
+    sameTrigger(op("https://example.com/app?q={q}#/orders"), "https://example.com/app?q={q}#/customers", { q: "x" }),
+    undefined,
+  );
+  assert.deepEqual(
+    sameTrigger(op("https://example.com/app?q={q}#/orders"), "https://example.com/app?q={term}#/orders", { term: "x" }),
+    { q: "x" },
+  );
+  assert.deepEqual(
+    sameTrigger(
+      op("https://example.com/app#/orders/{id}", [{ name: "id", type: "string" as const, required: true }]),
+      "https://example.com/app#/orders/{orderId}",
+      { orderId: "7" },
+    ),
+    { id: "7" },
+  );
+  assert.equal(
+    sameTrigger(
+      op("https://example.com/app#/orders/{id}", [{ name: "id", type: "string" as const, required: true }]),
+      "https://example.com/app#/customers/{id}",
+      { id: "7" },
+    ),
+    undefined,
+  );
 });

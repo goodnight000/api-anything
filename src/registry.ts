@@ -249,6 +249,8 @@ function changes(before: Site, after: Site) {
 
 /** How long a drifted call waits for the registry before it heals on its own. */
 const SERVED_NOW_MS = 3_000;
+/** How long a search waits on the catalog before answering with this machine's matches alone. */
+export const SEARCH_TIMEOUT_MS = 8_000;
 
 const sameMatch = (a: Operation, b: Operation) =>
   (a.match.method ?? a.request.method).toUpperCase() === (b.match.method ?? b.request.method).toUpperCase() &&
@@ -664,12 +666,16 @@ export async function search(
   let remote: z.infer<typeof SearchMatchSchema>[] = [];
   let registryError: string | undefined;
   let retryAfterMs: number | undefined;
-  if (asked?.sent !== undefined)
+  // sent before this machine's specs are read (most of the local work), so its round trip overlaps it
+  const asking = asked?.sent !== undefined ? askRegistry(asked.sent) : undefined;
+  async function askRegistry(sent: string): Promise<void> {
     try {
       const r = await registryRequest<{ matches?: unknown }>(
-        `/v1/search?q=${encodeURIComponent(asked.sent)}&limit=${limit}`,
+        `/v1/search?q=${encodeURIComponent(sent)}&limit=${limit}`,
         {
           cap: 4 * 1024 * 1024,
+          // a search answers with this machine's matches too: a stalled catalog is not waited on for long
+          timeoutMs: SEARCH_TIMEOUT_MS,
         },
       );
       if (!Array.isArray(r.matches)) throw new Error(`${registryBase()}/v1/search answered no matches`);
@@ -683,7 +689,9 @@ export async function search(
       // the registry's own limits always send Retry-After; a 429 without one is told to wait a minute
       if (e instanceof RegistryError && e.status === 429) retryAfterMs = e.retryAfterMs ?? 60_000;
     }
+  }
   const local = o.local ?? localSites();
+  await asking;
   const installed = new Set(local.map((s) => s.name));
   // Local call metadata wins. Registry evidence describes its own version, never local verification.
   const remoteInterfaces = new Map(

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
 import { call } from "../src/execute.js";
 import { learnOperation } from "../src/learn.js";
-import { derive, LookupFailed } from "../src/lookup.js";
+import { derive, LookupFailed, sendDerived } from "../src/lookup.js";
 import { type Operation, parseSite, type Site } from "../src/spec.js";
 import { exportSite, saveSite } from "../src/store.js";
 import type { Exchange, StoredCookie } from "../src/types.js";
@@ -157,6 +157,36 @@ test("learning: the reviews' id is looked up by the slug, a template of its own 
   assert.ok(!text.includes(CSRF) && !text.includes(SESSION), text);
   assert.ok(slot!.from!.slots.some((s) => s.ref === "cookie:csrf" && s.at[0] === "header:x-csrf-token"));
   assert.ok(op.slots.some((s) => s.ref === "cookie:csrf"));
+});
+
+test("a cookie the lookup's answer sets rides on the op's own request and goes to the jar", async () => {
+  const op = learnOperation(await learnInput()).operation;
+  const sent: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    sent.push(`${new URL(url).pathname} ${new Headers(init?.headers).get("cookie") ?? ""}`);
+    const res = await fetch(input, init);
+    if (!url.includes("/api/resolve")) return res;
+    // the lookup rotates the session, as a rolling session does
+    const headers = new Headers(res.headers);
+    headers.append("set-cookie", "sid=rotated0123456789; Path=/");
+    return new Response(await res.text(), { status: res.status, headers });
+  };
+  const r = await sendDerived(
+    op,
+    { slug: "blue-mug" },
+    { cookies: cookies(), values: {} },
+    {
+      site: "shop",
+      minIntervalMs: 0,
+      fetchImpl,
+    },
+  );
+  assert.equal(r.status, 200, r.body);
+  const own = sent.find((x) => x.startsWith("/api/products/"));
+  assert.match(own ?? "", /sid=rotated0123456789/, sent.join("; "));
+  assert.doesNotMatch(own ?? "", new RegExp(SESSION));
+  assert.ok(r.setCookies?.some((c) => c.name === "sid" && c.value === "rotated0123456789"));
 });
 
 test("export: the derived leaf and the lookup's example go, and so does every credential", async () => {

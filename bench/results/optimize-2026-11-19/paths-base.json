@@ -1,0 +1,165 @@
+{
+  "repo": "base",
+  "revision": "base",
+  "node": "v22.23.3",
+  "browser": true,
+  "sourceSha256": "a99f0b66c3f77aa8f65edbb7b927e0993bb70f3ecdaa8c0ec6d8258e809204c9",
+  "scenarios": [
+    {
+      "name": "bare-403-then-429-on-example",
+      "medianMs": 4921,
+      "runs": [
+        {
+          "ms": 5910,
+          "class": "drift",
+          "tier": 2,
+          "siteRequests": 8
+        },
+        {
+          "ms": 4921,
+          "class": "drift",
+          "tier": 2,
+          "siteRequests": 8
+        },
+        {
+          "ms": 4917,
+          "class": "drift",
+          "tier": 2,
+          "siteRequests": 8
+        }
+      ]
+    },
+    {
+      "name": "arg-spells-login-path",
+      "medianMs": 24,
+      "runs": [
+        {
+          "ms": 24,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 1
+        },
+        {
+          "ms": 25,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 1
+        },
+        {
+          "ms": 12,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 1
+        }
+      ]
+    },
+    {
+      "name": "graphql-unauthenticated-code",
+      "medianMs": 10,
+      "runs": [
+        {
+          "ms": 11,
+          "class": "error"
+        },
+        {
+          "ms": 10,
+          "class": "error"
+        },
+        {
+          "ms": 8,
+          "class": "error"
+        }
+      ]
+    },
+    {
+      "name": "lookup-rotates-session-cookie",
+      "medianMs": 14,
+      "runs": [
+        {
+          "ms": 15,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 2
+        },
+        {
+          "ms": 14,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 2
+        },
+        {
+          "ms": 11,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 2
+        }
+      ]
+    },
+    {
+      "name": "batch-five-reads-one-field",
+      "medianMs": 3832,
+      "runs": [
+        {
+          "ms": 4008,
+          "ok": true,
+          "classes": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "dataChars": 3355
+        },
+        {
+          "ms": 3826,
+          "ok": true,
+          "classes": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "dataChars": 3355
+        },
+        {
+          "ms": 3832,
+          "ok": true,
+          "classes": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "dataChars": 3355
+        }
+      ]
+    },
+    {
+      "name": "learn-site-bot-challenge",
+      "medianMs": 35982,
+      "runs": [
+        {
+          "ms": 36326,
+          "ok": false,
+          "nextCall": "login",
+          "captures": 2
+        },
+        {
+          "ms": 35982,
+          "ok": false,
+          "nextCall": "login",
+          "captures": 2
+        },
+        {
+          "ms": 35885,
+          "ok": false,
+          "nextCall": "login",
+          "captures": 2
+        }
+      ]
+    }
+  ]
+}

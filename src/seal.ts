@@ -142,6 +142,15 @@ export const macosKeychain = (bin = "/usr/bin/security"): KeyStore => ({
 const NO_SECRET_SERVICE = /org\.freedesktop\.secrets was not provided|ServiceUnknown|autolaunch D-Bus/i;
 /** stderr when the bus address names a socket that refuses the connection or is gone */
 const BUS_UNREACHABLE = /Could not connect/i;
+/**
+ * stderr of `secret-tool store` when the Secret Service has no collection to keep an item in (a keyring
+ * daemon on a headless machine that nobody set up): no store here. Unlike a locked or failing store,
+ * this never changes by retrying, and every save asked it again, a subprocess each time.
+ */
+// the collection itself, the last part of the path: a missing item inside one (`collection/login/42`) is a
+// failing store, not a missing one
+const NO_COLLECTION =
+  /Object does not exist at path [“"']?\/org\/freedesktop\/secrets\/collection\/[^/\s“”"']+[”"']?(?:\s|$)/i;
 
 /** The Secret Service through libsecret's `secret-tool`, when it is installed and a session bus answers. */
 export const secretTool = (): KeyStore => ({
@@ -173,6 +182,8 @@ export const secretTool = (): KeyStore => ({
       ["store", "--label=api-anything data key", "service", SERVICE, "account", ACCOUNT],
       b64(key),
     );
+    if (r.status !== 0 && NO_COLLECTION.test(r.stderr))
+      throw new KeyUnavailable(`no Secret Service collection: ${r.stderr.trim()}`);
     if (r.status !== 0) throw new Error(`secret-tool store: ${r.stderr.trim() || `exit ${r.status}`}`);
   },
 });

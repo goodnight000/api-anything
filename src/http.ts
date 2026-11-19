@@ -33,10 +33,23 @@ export interface Sent {
   /** final URL after redirects */
   url: string;
   ms: number;
-  /** the first answer was a redirect: the server took the request (a write's POST ran) */
+  /** the first answer was a redirect: the server took the request (a write's POST ran); false when it was not */
   redirected?: boolean;
   /** cookies the answers set (every hop), for the jar */
   setCookies?: StoredCookie[];
+}
+
+/** `jar` with each of `set` in place of the cookie of its name, domain and path, as a browser keeps them. */
+export function withCookies(jar: StoredCookie[], set: StoredCookie[]): StoredCookie[] {
+  let out = jar;
+  for (const c of set)
+    out = [
+      ...out.filter(
+        (x) => !(x.name === c.name && x.domain.toLowerCase() === c.domain.toLowerCase() && x.path === c.path),
+      ),
+      c,
+    ];
+  return out;
 }
 
 export interface SendOptions {
@@ -602,12 +615,7 @@ export async function send(
         // a plain-http answer is whatever the network returned: it cannot touch a Secure cookie
         if (!c || insecureSet(jar, c, url)) continue;
         setCookies.push(c);
-        jar = [
-          ...jar.filter(
-            (x) => !(x.name === c.name && x.domain.toLowerCase() === c.domain.toLowerCase() && x.path === c.path),
-          ),
-          c,
-        ];
+        jar = withCookies(jar, [c]);
       }
       const location = res.headers.get("location");
       redirected ??= REDIRECT.has(res.status) && !!location;
@@ -630,7 +638,8 @@ export async function send(
         body: text,
         url: res.url || url,
         ms: Math.round(performance.now() - t0),
-        ...(redirected ? { redirected } : {}),
+        // every hop is taken here, so whether one was is known: false lets a login path asked for stand
+        redirected: !!redirected,
         ...(setCookies.length ? { setCookies } : {}),
       };
     }

@@ -226,13 +226,19 @@ function encodeLike(value: string, original: string, plusIsSpace: boolean, own =
       .join("");
   const [left, replaced, right] = [join(0, a), decoded ? join(a, b) : original, join(b, us.length)];
   let middle = "";
+  // the three texts are fixed for the splice, so each character's answer is too: asked once, not per use
+  const nearby = new Map<string, boolean | undefined>();
+  const encodedHere = (ch: string) => {
+    if (!nearby.has(ch)) nearby.set(ch, encodedNearby(ch, replaced, left, right));
+    return nearby.get(ch);
+  };
   for (const ch of value.slice(start, end)) {
     const plain = encodeURIComponent(ch);
     if (ch === " ") middle += plusIsSpace && original.includes("+") ? "+" : "%20";
     else if (ch.charCodeAt(0) >= 0x80 || "%&=#+".includes(ch)) middle += plain;
     else if (plain === ch && !"!'()*~".includes(ch)) middle += ch;
     else {
-      const encoded = encodedNearby(ch, replaced, left, right) ?? plain !== ch;
+      const encoded = encodedHere(ch) ?? plain !== ch;
       middle += encoded ? `%${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}` : ch;
     }
   }
