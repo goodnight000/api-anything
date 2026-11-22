@@ -1,3 +1,46 @@
+# Release readiness — 0.5.0, 2026-11-22
+
+Release checks complete, with one known environment-dependent test failure below.
+
+## New
+
+- Site traffic through `API_ANYTHING_PROXY` at every tier, never registry traffic (#147).
+  0.4.0 and earlier ignore the proxy variables and connect directly; the docs now say so (#153).
+- Less repeated parsing and response work on reads (#152); throttled calls stop rather than open
+  Chrome, challenged `learn_site` runs finish sooner, and headless Linux keeps cut answers (#148).
+- YouTube search reads the lockup layout; X accounts without a typed badge no longer drift (#149).
+  Filled Rest.li values keep their captured encoding, including LinkedIn URNs (#145).
+- Security fixes: shared specs cannot write as the caller, registry review cannot be skipped, and
+  local credentials and addresses stay local (#143). Response bodies are capped before buffering
+  (#133), deep bodies answer `error` rather than `drift` (#103), and the regex gate is tighter (#124).
+- Cross-process locks never run unlocked or admit two holders (#127, #140); sealing fails closed
+  when Secret Service is down (#130). Unreadable settings fail closed, and corrupt-file errors do
+  not quote contents (#128, #131, #139).
+- Strict-scan reports name knowingly allowed credential classes, never values (#134); registry
+  searches are rate-limited before D1 reads and return a retry delay (#132).
+
+## Verified
+
+- `npm run check` and `npm run lint` are clean.
+- `REQUIRE_BROWSER=1 xvfb-run -a npm test`, with Chrome for Testing 156 pinned through
+  `API_ANYTHING_BROWSER`: 1536 tests, 1535 passed, 1 failed, none skipped. The known
+  `test/cli.test.ts` `--print-config` assertion expects one environment flag, but pinning the
+  browser adds a second. That test passes with `API_ANYTHING_BROWSER` unset.
+- `npm run smoke:pack`: the 0.5.0 tarball ships 432 files and 114 sites; its installed CLI,
+  library and `serve` run. `npm pack --dry-run` includes `dist/proxy.js`.
+- The local HTTP/browser proxy tests pass (20 tests), including credentials, bypasses and refusal
+  to send a session through a plain-HTTP proxy. Loopback bypasses the proxy by default, so a packed
+  CLI call to a localhost fixture would not verify proxy routing.
+
+## Known issues
+
+- Stale examples: `aldi.applianceDetails`, `gumtree.getListingMetadata`, `workable.getJob` and
+  `workday.getJob` (removed listings and postings; not rechecked for this release).
+- `google-flights.priceCalendar` answers batchexecute error 13 (not rechecked).
+- Reddit challenges plain HTTP from many networks.
+- Linux and Windows OS key-store integration remains unverified here. api-anything's own Chrome
+  profile is not sealed.
+
 # Release readiness — 0.4.0, 2026-11-06
 
 Ready to publish. Agents and tools beyond MCP can use it now (an HTTP server with REST, OpenAPI and

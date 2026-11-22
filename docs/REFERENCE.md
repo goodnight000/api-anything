@@ -320,7 +320,7 @@ Transport tiers, cheapest first. The lowest tier that worked is remembered for e
 
 ### Through an outbound proxy
 
-New in 0.5.0 (unreleased). **0.4.0 and earlier ignore `API_ANYTHING_PROXY` and
+New in 0.5.0. **0.4.0 and earlier ignore `API_ANYTHING_PROXY` and
 `API_ANYTHING_NO_PROXY` and connect directly**, exposing your own IP. Check `api-anything --version`.
 
 On a network that requires a proxy, or for `serve` behind an egress gateway, set:

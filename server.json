@@ -16,13 +16,13 @@
       "sizes": ["any"]
     }
   ],
-  "version": "0.5.0-dev",
+  "version": "0.5.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "api-anything",
-      "version": "0.5.0-dev",
+      "version": "0.5.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
