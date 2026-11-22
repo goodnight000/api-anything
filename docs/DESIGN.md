@@ -1211,6 +1211,9 @@ send a request again (its own scripts, a retry after a navigation or a connectio
 
 ## Outbound proxy (`proxy.ts`)
 
+New in 0.5.0 (unreleased). 0.4.0 and earlier ignore `API_ANYTHING_PROXY` and
+`API_ANYTHING_NO_PROXY` and connect directly. Check `api-anything --version`.
+
 For networks that require a proxy, corporate egress, and `serve` behind an egress gateway. It is
 not a way past a bot wall: a wall seen through a proxy still answers `blocked`, as without one.
 
@@ -2063,10 +2066,11 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   named after its host.
 - Imported cookies go into the jar **and** into api-anything's own browser profile (`addCookies`), so
   tier 2/3 and heals are logged in too.
-- With `API_ANYTHING_PROXY` set, `--window` opens Chrome through the proxy, so the session comes from
+- With `API_ANYTHING_PROXY` set (new in 0.5.0), `--window` opens Chrome through the proxy, so the session comes from
   the address calls will use (some sites bind a session to it). Cookies imported from the everyday
   browser came from the user's own address, so a proxied call may answer `auth` there; `--window`
-  is then the way.
+  is then the way. 0.4.0 and earlier ignore the proxy variables and connect directly; check
+  `api-anything --version`.
 - `--window` opens a visible browser window on api-anything's profile for a by-hand sign-in (an
   independent session). It is also the automatic fallback when nothing is importable. The site's
   cookies are read as the window opens, before its page loads, and then while it is open: on every
