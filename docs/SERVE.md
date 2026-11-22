@@ -19,7 +19,7 @@ npx -y api-anything serve
 ```
 
 ```text
-{"ok":true,"version":"0.4.0","url":"http://127.0.0.1:8787","mcp":"http://127.0.0.1:8787/mcp","openapi":"http://127.0.0.1:8787/openapi.json","tokenFile":"/Users/you/.api-anything/serve-token"}
+{"ok":true,"version":"0.5.0","url":"http://127.0.0.1:8787","mcp":"http://127.0.0.1:8787/mcp","openapi":"http://127.0.0.1:8787/openapi.json","tokenFile":"/Users/you/.api-anything/serve-token"}
 ```
 
 Once it listens it prints that one JSON line on stdout. Everything after it, one line per request,
@@ -268,7 +268,7 @@ The server holds your signed-in sessions, so it is guarded like a key to them:
   running at once at `--max-concurrent` (8). An idle socket is closed after 120 seconds. A
   request the server cannot read is a 400; no request stops the server.
 - **Egress through a proxy.** Set `API_ANYTHING_PROXY` (and `API_ANYTHING_NO_PROXY`) to send site
-  calls through an egress gateway; registry traffic stays direct. New in 0.5.0 (unreleased):
+  calls through an egress gateway; registry traffic stays direct. New in 0.5.0:
   **0.4.0 and earlier ignore these variables and connect directly.** Check `api-anything --version`.
   See "Through an outbound proxy"
   in [REFERENCE.md](REFERENCE.md).

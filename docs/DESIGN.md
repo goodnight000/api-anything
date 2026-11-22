@@ -1211,7 +1211,7 @@ send a request again (its own scripts, a retry after a navigation or a connectio
 
 ## Outbound proxy (`proxy.ts`)
 
-New in 0.5.0 (unreleased). 0.4.0 and earlier ignore `API_ANYTHING_PROXY` and
+New in 0.5.0. 0.4.0 and earlier ignore `API_ANYTHING_PROXY` and
 `API_ANYTHING_NO_PROXY` and connect directly. Check `api-anything --version`.
 
 For networks that require a proxy, corporate egress, and `serve` behind an egress gateway. It is
