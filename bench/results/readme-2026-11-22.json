@@ -1,0 +1,406 @@
+{
+  "date": "2026-11-22",
+  "environment": {
+    "os": "Ubuntu 22.04.5 LTS (x86-64)",
+    "vcpus": 8,
+    "node": "v24.22.3",
+    "browser": "Chrome for Testing 156.0.8078.47",
+    "registryDisabled": true
+  },
+  "revisions": {
+    "current": {
+      "revision": "cd8d773d6617df07dc473598b67dec4d612276bc",
+      "sourceSha256": "63d4490d4b3c2a3c801c541da6b3f7718929a32c50ed84906640768aea2cdb17"
+    },
+    "engineBaseline": {
+      "revision": "4a785e8d9e72a00e2dddc0dc56569a86826df07b",
+      "sourceSha256": "722bbc1dbb9e3f0edfd0e6857e01a1b87b5bb900a61e9f2ed205337d7a6015ae"
+    },
+    "pathsBaseline": {
+      "revision": "a6f6403e4dc352ef488eb0e16327cc93b6fd5c7f",
+      "sourceSha256": "a99f0b66c3f77aa8f65edbb7b927e0993bb70f3ecdaa8c0ec6d8258e809204c9"
+    }
+  },
+  "engineRoundMediansMs": {
+    "cli-cold-first-call": {
+      "iterationsPerSample": 1,
+      "samplesPerRound": 7,
+      "before": [
+        593.465,
+        573.965,
+        527.669
+      ],
+      "current": [
+        243.566,
+        225.641,
+        226.813
+      ]
+    },
+    "outline-wide-30000": {
+      "iterationsPerSample": 2,
+      "samplesPerRound": 7,
+      "before": [
+        4943.368,
+        4897.44,
+        4995.532
+      ],
+      "current": [
+        98.034,
+        96.324,
+        108.056
+      ]
+    },
+    "judge-json-1000": {
+      "iterationsPerSample": 15,
+      "samplesPerRound": 7,
+      "before": [
+        12.583,
+        11.781,
+        11.553
+      ],
+      "current": [
+        8.797,
+        8.528,
+        8.023
+      ]
+    }
+  },
+  "pathTrials": {
+    "bare-403-then-429-on-example": {
+      "before": [
+        {
+          "ms": 5433,
+          "class": "drift",
+          "tier": 2,
+          "siteRequests": 8
+        },
+        {
+          "ms": 4589,
+          "class": "drift",
+          "tier": 2,
+          "siteRequests": 8
+        },
+        {
+          "ms": 4530,
+          "class": "drift",
+          "tier": 2,
+          "siteRequests": 8
+        }
+      ],
+      "current": [
+        {
+          "ms": 111,
+          "class": "rate",
+          "tier": 1,
+          "siteRequests": 2,
+          "retryAfterMs": 120000
+        },
+        {
+          "ms": 14,
+          "class": "rate",
+          "tier": 1,
+          "siteRequests": 2,
+          "retryAfterMs": 120000
+        },
+        {
+          "ms": 9,
+          "class": "rate",
+          "tier": 1,
+          "siteRequests": 2,
+          "retryAfterMs": 120000
+        }
+      ]
+    },
+    "arg-spells-login-path": {
+      "before": [
+        {
+          "ms": 25,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 1
+        },
+        {
+          "ms": 5,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 1
+        },
+        {
+          "ms": 5,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 1
+        }
+      ],
+      "current": [
+        {
+          "ms": 7,
+          "class": "ok",
+          "ok": true,
+          "siteRequests": 1
+        },
+        {
+          "ms": 5,
+          "class": "ok",
+          "ok": true,
+          "siteRequests": 1
+        },
+        {
+          "ms": 5,
+          "class": "ok",
+          "ok": true,
+          "siteRequests": 1
+        }
+      ]
+    },
+    "graphql-unauthenticated-code": {
+      "before": [
+        {
+          "ms": 5,
+          "class": "error"
+        },
+        {
+          "ms": 4,
+          "class": "error"
+        },
+        {
+          "ms": 4,
+          "class": "error"
+        }
+      ],
+      "current": [
+        {
+          "ms": 29,
+          "class": "auth"
+        },
+        {
+          "ms": 7,
+          "class": "auth"
+        },
+        {
+          "ms": 4,
+          "class": "auth"
+        }
+      ]
+    },
+    "lookup-rotates-session-cookie": {
+      "before": [
+        {
+          "ms": 10,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 2
+        },
+        {
+          "ms": 6,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 2
+        },
+        {
+          "ms": 6,
+          "class": "auth",
+          "ok": false,
+          "siteRequests": 2
+        }
+      ],
+      "current": [
+        {
+          "ms": 104,
+          "class": "ok",
+          "ok": true,
+          "siteRequests": 2
+        },
+        {
+          "ms": 12,
+          "class": "ok",
+          "ok": true,
+          "siteRequests": 2
+        },
+        {
+          "ms": 7,
+          "class": "ok",
+          "ok": true,
+          "siteRequests": 2
+        }
+      ]
+    },
+    "batch-five-reads-one-field": {
+      "before": [
+        {
+          "ms": 3510,
+          "ok": true,
+          "classes": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "dataChars": 3355
+        },
+        {
+          "ms": 3682,
+          "ok": true,
+          "classes": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "dataChars": 3355
+        },
+        {
+          "ms": 3732,
+          "ok": true,
+          "classes": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "dataChars": 3355
+        }
+      ],
+      "current": [
+        {
+          "ms": 3788,
+          "ok": true,
+          "classes": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "dataChars": 60
+        },
+        {
+          "ms": 3955,
+          "ok": true,
+          "classes": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "dataChars": 60
+        },
+        {
+          "ms": 3873,
+          "ok": true,
+          "classes": [
+            "ok",
+            "ok",
+            "ok",
+            "ok",
+            "ok"
+          ],
+          "dataChars": 60
+        }
+      ]
+    },
+    "learn-site-bot-challenge": {
+      "before": [
+        {
+          "ms": 36080,
+          "ok": false,
+          "nextCall": "login",
+          "captures": 2
+        },
+        {
+          "ms": 35847,
+          "ok": false,
+          "nextCall": "login",
+          "captures": 2
+        },
+        {
+          "ms": 35954,
+          "ok": false,
+          "nextCall": "login",
+          "captures": 2
+        }
+      ],
+      "current": [
+        {
+          "ms": 18830,
+          "ok": false,
+          "nextCall": "login",
+          "captures": 1
+        },
+        {
+          "ms": 17883,
+          "ok": false,
+          "nextCall": "login",
+          "captures": 1
+        },
+        {
+          "ms": 17977,
+          "ok": false,
+          "nextCall": "login",
+          "captures": 1
+        }
+      ]
+    }
+  },
+  "mentions": {
+    "project": "duckdb",
+    "days": 7,
+    "sources": {
+      "hacker-news.searchByDate": {
+        "class": "ok",
+        "tier": 1,
+        "mentions": 4
+      },
+      "hacker-news.searchByDate (comments)": {
+        "class": "ok",
+        "tier": 1,
+        "mentions": 5
+      },
+      "reddit.search": {
+        "class": "blocked",
+        "mentions": 0
+      },
+      "youtube.search": {
+        "class": "ok",
+        "tier": 1,
+        "mentions": 20
+      },
+      "github.searchRepos": {
+        "class": "ok",
+        "tier": 1,
+        "mentions": 10
+      },
+      "mastodon.tagTimeline": {
+        "class": "ok",
+        "tier": 1,
+        "mentions": 7
+      }
+    },
+    "trials": [
+      {
+        "wallSeconds": 1.71,
+        "callsSeconds": 1.5
+      },
+      {
+        "wallSeconds": 1.73,
+        "callsSeconds": 1.5
+      },
+      {
+        "wallSeconds": 1.89,
+        "callsSeconds": 1.6
+      },
+      {
+        "wallSeconds": 1.56,
+        "callsSeconds": 1.3
+      },
+      {
+        "wallSeconds": 1.6,
+        "callsSeconds": 1.4
+      }
+    ]
+  }
+}
