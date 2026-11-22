@@ -25,6 +25,12 @@ test("scout's breadth-first search keeps the first five matching paths on wide r
   );
 });
 
+test("a wide response's outline keeps just the first 30 fields in response order", () => {
+  const keys = Array.from({ length: 1000 }, (_, i) => `key-${i}`);
+  const found = outlineJson(Object.fromEntries(keys.map((key) => [key, "value"])), ["absent"]);
+  assert.deepEqual(Object.keys(found.fields), keys.slice(0, 30));
+});
+
 test("scout: a repeated HTML list carrying the example becomes a working --html recipe", () => {
   const o = outline("text/html", page, ["dune"]);
   assert.ok(o?.list, JSON.stringify(o));

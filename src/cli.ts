@@ -32,7 +32,6 @@ import { buildRequest, unknownArgs } from "./http.js";
 import { loadSettings, localOnly, localOnlyOff, setLocalOnly } from "./identity.js";
 import { AmbiguousProfile } from "./import.js";
 import { type Candidate, capturePages, matches, pageUrls, rankCandidates } from "./learn.js";
-import { learnSite } from "./learnsite.js";
 import { LockBusy } from "./lock.js";
 import {
   cookieNames,
@@ -47,7 +46,6 @@ import {
 } from "./login.js";
 import { type Outline, outline } from "./outline.js";
 import { pagingFlag, pagingHints } from "./paging.js";
-import { plan, uploadName } from "./publish.js";
 import { LocalOnlyError, pull, RegistryError, reportInterface, search } from "./registry.js";
 import { settle } from "./report.js";
 import { getResult, type ResultView, viewProblem } from "./results.js";
@@ -66,7 +64,6 @@ import {
   setup,
   summary,
 } from "./setup.js";
-import { shareOps } from "./share.js";
 import { refreshSkills } from "./skill.js";
 import {
   CheckSchema,
@@ -1731,6 +1728,7 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
       localOnlyOff(),
     );
   const again = `api-anything publish ${[site.name, ...ops].join(" ")}`;
+  const { plan, uploadName } = await import("./publish.js");
   let p: ReturnType<typeof plan>;
   try {
     // the preview shows what --yes sends: with the user's yes, their notes go too
@@ -1760,6 +1758,7 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
     });
     return 0;
   }
+  const { shareOps } = await import("./share.js");
   const shared = await shareOps(
     site.name,
     p.ops.map((o) => o.op),
@@ -1838,6 +1837,7 @@ async function cmdLearn({ v, pos, steps }: Parsed): Promise<number> {
   if (!trigger) throw new Fail("missing <trigger>", "api-anything learn --help");
   if ((v.from === undefined) !== (v.from2 === undefined))
     throw new Fail("--from and --from2 go together: the two captures of an earlier learn", "api-anything learn --help");
+  const { learnSite } = await import("./learnsite.js");
   const r = await learnSite(
     {
       trigger,

@@ -59,10 +59,13 @@ function findPaths(root: unknown, values: string[], max = 5): string[] {
       continue;
     }
     if (depth > 12 || !v || typeof v !== "object") continue;
-    const entries: [string, unknown][] = Array.isArray(v)
-      ? v.slice(0, 100).map((c, i) => [`${path}[${i}]`, c])
-      : Object.entries(v).map(([k, c]) => [step(path, k), c]);
-    for (const [p, c] of entries) queue.push({ v: c, path: p, depth: depth + 1 });
+    if (Array.isArray(v)) {
+      v.slice(0, 100).forEach((c, i) => {
+        queue.push({ v: c, path: `${path}[${i}]`, depth: depth + 1 });
+      });
+    } else {
+      for (const [k, c] of Object.entries(v)) queue.push({ v: c, path: step(path, k), depth: depth + 1 });
+    }
   }
   return out;
 }
@@ -82,7 +85,10 @@ function fieldsOf(item: unknown): Record<string, string> {
         if (v.length && v[0] && typeof v[0] === "object") visit(v[0], `${path}[*]`, depth + 1);
         return;
       }
-      for (const [k, c] of Object.entries(v)) visit(c, step(path, k), depth + 1);
+      for (const k of Object.keys(v)) {
+        if (Object.keys(out).length >= MAX_FIELDS) break;
+        visit((v as Record<string, unknown>)[k], step(path, k), depth + 1);
+      }
       return;
     }
     if (path) out[path] = sample(v);

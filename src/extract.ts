@@ -425,14 +425,17 @@ export function extractHtml(
 ): Record<string, string | string[] | undefined>[] {
   const doc = parseShown(body);
   base &&= documentBase(doc, base);
+  const fields = Object.entries(recipe.fields).map(([name, field]) => {
+    const { all, css, attr } = fieldSelector(field);
+    const value = (t: HTMLElement): string | undefined => {
+      const raw = attr ? t.getAttribute(attr) : t.text.replace(/\s+/g, " ").trim();
+      return raw && base && attr ? address(raw, attr, base) : raw;
+    };
+    return { name, all, css, value };
+  });
   return doc.querySelectorAll(recipe.items).map((el) => {
     const out: Record<string, string | string[] | undefined> = {};
-    for (const [name, field] of Object.entries(recipe.fields)) {
-      const { all, css, attr } = fieldSelector(field);
-      const value = (t: HTMLElement): string | undefined => {
-        const raw = attr ? t.getAttribute(attr) : t.text.replace(/\s+/g, " ").trim();
-        return raw && base && attr ? address(raw, attr, base) : raw;
-      };
+    for (const { name, all, css, value } of fields) {
       if (all) out[name] = (css ? el.querySelectorAll(css) : [el]).map(value).filter((v): v is string => !!v);
       else {
         const target = css ? el.querySelector(css) : el;

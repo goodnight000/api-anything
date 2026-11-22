@@ -31,6 +31,8 @@ To turn a site into an API (several operations, a write, or a read `learn_site` 
 
 ## Results
 
+- For several independent reads, use one `call_batch` instead of separate tool calls. When only
+  certain result fields answer the question, pass `view.fields` to get just those fields.
 - `ok: true` with `data: []`: the site has no results. A field missing from one item comes with a
   `reason`: say it is missing rather than filling it in.
 - `healed: true`: the op was repaired during the call. Tell the user in one line what changed
