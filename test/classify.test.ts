@@ -663,6 +663,29 @@ test("an html recipe's empty selector: a no-results page with no list container 
   assert.match(emptyResults('<ul class="r"></ul>', recipe)!, /container of "ul.r li" is on the page and empty/);
 });
 
+test("judging an HTML read keeps the response path and pick and resolves links against the final page", () => {
+  const listed = op({
+    response: {
+      format: "html",
+      html: { items: "li", fields: { links: "all:a@href", title: "span" } },
+      extract: "[1]",
+      pick: ["url=links[0]", "title"],
+    },
+  });
+  const observed = {
+    ...html(
+      200,
+      '<html><head><base href="../books/"></head><body><ul><li>ad</li><li><span>Dune</span><a href="dune">Book</a></li></ul></body></html>',
+    ),
+    url: "https://x.com/redirect/results",
+  };
+  assert.deepEqual(judge(listed, observed), {
+    class: "ok",
+    reason: "ok",
+    data: { url: "https://x.com/books/dune", title: "Dune" },
+  });
+});
+
 test("paging reads the next cursor from the whole answer, past extract and pick; a pick-emptied page is drift with none", () => {
   const paged = op({
     response: { format: "json", extract: "data.edges", pick: ["id"] },

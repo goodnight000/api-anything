@@ -190,10 +190,14 @@ export function htmlFinds(recipe: HtmlRecipe, items: ReturnType<typeof extractHt
 }
 
 /** The html/embedded recipe finds data here (a non-empty list, or a value). Never throws. */
-function recipeFinds(op: Operation, body: string): boolean {
+function recipeFinds(
+  op: Operation,
+  body: string,
+  readHtml: (recipe: HtmlRecipe) => ReturnType<typeof extractHtml>,
+): boolean {
   try {
     if (op.response.format === "html")
-      return !!op.response.html && htmlFinds(op.response.html, extractHtml(body, op.response.html));
+      return !!op.response.html && htmlFinds(op.response.html, readHtml(op.response.html));
     if (op.response.format === "embedded") {
       const d = extract(op.response, body);
       return d !== undefined && !(Array.isArray(d) && !d.length);
@@ -611,10 +615,10 @@ function shapeKept(expected: Record<string, string>, data: unknown): number {
  * none (an ad, a shelf), so a list of only those empties too: missing data, which the example args
  * tell from drift.
  */
-function pickEmptied(op: Operation, list: unknown): string | undefined {
+function pickEmptied(op: Operation, list: unknown, readPicked: (data: unknown) => unknown): string | undefined {
   const fields = op.response.pick;
   if (!fields?.length || !Array.isArray(list) || !list.length) return undefined;
-  if ((pick(list, fields) as unknown[]).length) return undefined;
+  if ((readPicked(list) as unknown[]).length) return undefined;
   return `none of the ${list.length} items has a picked field (${fields.join(", ")})`;
 }
 
@@ -641,13 +645,16 @@ function classifyResponse(
   r: Observed,
   readJson: () => unknown,
   readTarget = (data: unknown) => getPath(data, op.response.extract),
+  readPicked = (data: unknown) =>
+    op.response.pick?.length && data !== undefined ? pick(data, op.response.pick) : data,
+  readHtml = (recipe: HtmlRecipe) => extractHtml(r.body ?? "", recipe),
 ): Classified {
   const body = r.body ?? "";
   const ct = (r.headers["content-type"] ?? "").toLowerCase();
   const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
   const wantsJson = op.response.format === "json";
 
-  const wall = botWall(r, wantsJson, () => recipeFinds(op, body));
+  const wall = botWall(r, wantsJson, () => recipeFinds(op, body, readHtml));
   if (wall) return is("blocked", wall);
 
   const { text: wait, ms: waitMs } = retryAfter(r.headers);
@@ -670,9 +677,10 @@ function classifyResponse(
   // Laravel answers a stale CSRF token with 419, Rails with 422 InvalidAuthenticityToken. A bot
   // wall answers 419 too (Hacker News: "Sorry" to a non-browser claiming Chrome), so the reason
   // names CSRF only when the body does.
-  const csrf = CSRF_FAILED.test(body) || (r.status === 419 && /page expired/i.test(body));
-  if (r.status === 419 || ((r.status === 400 || r.status === 422) && csrf)) {
-    return is("auth", `HTTP ${r.status}: ${csrf ? "CSRF check failed: " : ""}${snippet(body)}`);
+  if (r.status === 419 || r.status === 400 || r.status === 422) {
+    const csrf = CSRF_FAILED.test(body) || (r.status === 419 && /page expired/i.test(body));
+    if (r.status === 419 || csrf)
+      return is("auth", `HTTP ${r.status}: ${csrf ? "CSRF check failed: " : ""}${snippet(body)}`);
   }
   if (r.status === 401) return is("auth", `HTTP 401: ${snippet(body)}`);
   if (r.status === 403) {
@@ -798,7 +806,7 @@ function classifyResponse(
 
   if (op.response.format === "html") {
     if (!op.response.html) return ok();
-    const items = extractHtml(body, op.response.html);
+    const items = readHtml(op.response.html);
     if (htmlFinds(op.response.html, items)) return ok();
     if (loginPage(body)) return is("auth", "login page instead of content");
     if (emptyResults(body, op.response.html)) return ok("no results");
@@ -811,7 +819,7 @@ function classifyResponse(
   }
   if (op.response.format === "embedded") {
     const found = extract({ ...op.response, pick: undefined }, body);
-    const emptied = pickEmptied(op, found);
+    const emptied = pickEmptied(op, found, readPicked);
     if (found !== undefined && !emptied) return ok();
     if (loginPage(body)) return is("auth", "login page instead of content");
     return missing(emptied ?? "embedded data not found");
@@ -823,7 +831,7 @@ function classifyResponse(
   let gone: string | undefined;
   const scope = op.response.shape ? shapeScope(op, data, target) : undefined;
   // A site that renamed the picked fields: a shared spec has no learned shape to tell, and "no results" would lie.
-  const emptied = pickEmptied(op, target);
+  const emptied = pickEmptied(op, target, readPicked);
   if (op.response.extract && target === undefined) gone = `extract path "${op.response.extract}" missing`;
   else if (emptied) gone = emptied;
   else if (scope && Object.keys(scope.expected).length >= 4 && shapeKept(scope.expected, scope.value) < 0.5) {
@@ -883,6 +891,8 @@ export function judge(op: Operation, r: Observed): Judged {
   let read = false;
   let target: unknown;
   let selected = false;
+  let projected: { data: unknown } | undefined;
+  let items: ReturnType<typeof extractHtml> | undefined;
   const readJson = () => {
     if (!read) {
       parsed = parseBody(r.body ?? "", op.response.xssiPrefix);
@@ -897,9 +907,15 @@ export function judge(op: Operation, r: Observed): Judged {
     }
     return target;
   };
+  const readPicked = (data: unknown) => {
+    if (!projected)
+      projected = { data: data !== undefined && op.response.pick?.length ? pick(data, op.response.pick) : data };
+    return projected.data;
+  };
+  const readHtml = (recipe: HtmlRecipe) => (items ??= extractHtml(r.body ?? "", recipe, r.url));
   let c: Classified;
   try {
-    c = classifyResponse(op, r, readJson, readTarget);
+    c = classifyResponse(op, r, readJson, readTarget, readPicked, readHtml);
   } catch (e) {
     // nothing was compared, and the same page comes back: an error, with its own words
     if (e instanceof PageTooLarge) return is("error", e.message);
@@ -910,13 +926,13 @@ export function judge(op: Operation, r: Observed): Judged {
     // from the whole answer, before extract and pick throw the rest away
     const page = pageOf(op, r.body, readJson);
     // r.url is the page's final address (redirects included): it is where a relative @href/@src lives
-    if (op.response.format !== "json") return { ...c, data: extract(op.response, r.body, r.url), ...page };
-    const data = readTarget(readJson());
-    return {
-      ...c,
-      data: data !== undefined && op.response.pick?.length ? pick(data, op.response.pick) : data,
-      ...page,
-    };
+    if (op.response.format === "embedded")
+      return { ...c, data: projected ? projected.data : extract(op.response, r.body, r.url), ...page };
+    const data =
+      op.response.format === "html"
+        ? readTarget(op.response.html ? readHtml(op.response.html) : r.body)
+        : readTarget(readJson());
+    return { ...c, data: readPicked(data), ...page };
   } catch (e) {
     // a write's non-JSON answer: hand back its text
     if (!op.readOnly) return { ...c, data: r.body.trim() ? r.body.slice(0, 1000) : null };
