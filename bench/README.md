@@ -1,4 +1,87 @@
-# Benchmark: an agent with a browser vs the same agent with API Anything
+# Benchmarks
+
+## November 22 rerun
+
+The 2026-11-22 run measured main at `cd8d773`, using Node 24.22.3 on a Linux x86-64 VM
+(Ubuntu 22.04, 8 vCPUs). [Measurements](results/readme-2026-11-22.json) record the revisions,
+source hashes, and per-run results. These benchmarks answer different questions:
+
+| Measurement | What the clock includes |
+| --- | --- |
+| Engine | In-process extraction and outlining, or a fresh Node process and successful localhost read |
+| Failure paths | Elapsed time in an existing process against synthetic localhost scenarios |
+| DuckDB mentions | Full Node process, including real public reads, merge, and shutdown |
+
+The engine baseline `4a785e8` is from before the first latency pass. Both revisions were built
+with the current checkout's installed dependencies. Each engine number is the median of three
+alternating round medians, with seven samples per round after warmup. Every workload asserts its
+output. The path baseline `a6f6403` is from before the second pass. Each path has three trials per
+revision and uses Chrome for Testing 156 where the scenario calls for it. The shared catalog
+was disabled. See the [performance audit](../docs/PERFORMANCE-AUDIT.md) for the original passes.
+
+| Engine workload | Before | Current |
+| --- | ---: | ---: |
+| Fresh CLI read | 574 ms | 227 ms |
+| Judge and extract 1,000 JSON records | 11.78 ms | 8.53 ms |
+| Outline a synthetic 30,000-key response | 4.94 s | 98.03 ms |
+
+These are isolated workloads, not estimates for an arbitrary response or real site.
+
+The throttling fixture answers the first request with HTTP 403 and the example probe with
+HTTP 429. The baseline misclassified this as drift after eight site requests; current main
+returns `rate` with the site's `Retry-After` after two, without opening Chrome. The learning
+fixture still asks the user to log in; it now stops after one browser run instead of two.
+The batch comparison counts only the serialized `data` fields. All five reads passed in
+both arms; response size fell from 3,355 to 60 characters, but median wall time was 3.68 s
+before and 3.87 s now. It is not a batch speedup.
+
+The mentions demo ran five times with empty homes, no sign-in, and `maxTier: 1`. Every run
+found 46 mentions: nine on Hacker News, 20 on YouTube, ten on GitHub, and seven on Mastodon.
+Reddit returned a JavaScript challenge; it was reported as blocked, not retried in a browser.
+Process wall times were 1.56–1.89 s. The [November 6 runs](../docs/demos/README.md#6-whos-talking-about-a-project)
+found 65 mentions in 1.8–2.0 s, but used different machines, networks, and live data. This is
+a fresh result, not a controlled speed or result-count comparison.
+
+The Claude Code comparisons below are historical, not part of this rerun. The original flights
+have already departed, and the agent runner expects an authenticated Claude Code CLI and macOS's
+`memory_pressure`. Neither the local fixtures nor the live script measure agent time, model
+spend, or token use.
+
+### Reproduce the rerun
+
+```sh
+npm ci
+npm run build
+before_engine=$(mktemp -d)
+before_paths=$(mktemp -d)
+git archive 4a785e8 | tar -x -C "$before_engine"
+git archive a6f6403 | tar -x -C "$before_paths"
+ln -s "$PWD/node_modules" "$before_engine/node_modules"
+ln -s "$PWD/node_modules" "$before_paths/node_modules"
+npm run build --prefix "$before_engine"
+export API_ANYTHING_LOCAL_ONLY=1
+
+(
+  export API_ANYTHING_KEY=bench-local-only-passphrase
+  for workload in cli-cold-first-call outline-wide-30000 judge-json-1000; do
+    for run in 1 2 3; do
+      node --import tsx bench/engine.mjs --only "$workload" --repo "$before_engine" --revision 4a785e8
+      node --import tsx bench/engine.mjs --only "$workload"
+    done
+  done
+)
+
+# Set API_ANYTHING_BROWSER to a Chromium executable if it isn't installed in a default location.
+node --import tsx bench/paths.mjs --repo "$before_paths" --revision a6f6403
+node --import tsx bench/paths.mjs
+
+for run in 1 2 3 4 5; do
+  home=$(mktemp -d)
+  API_ANYTHING_HOME="$home" time node examples/mentions.mjs duckdb --json
+  rm -r "$home"
+done
+rm -r "$before_engine" "$before_paths"
+```
 
 ## Offline engine latency
 
