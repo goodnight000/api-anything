@@ -320,6 +320,9 @@ Transport tiers, cheapest first. The lowest tier that worked is remembered for e
 
 ### Through an outbound proxy
 
+New in 0.5.0 (unreleased). **0.4.0 and earlier ignore `API_ANYTHING_PROXY` and
+`API_ANYTHING_NO_PROXY` and connect directly**, exposing your own IP. Check `api-anything --version`.
+
 On a network that requires a proxy, or for `serve` behind an egress gateway, set:
 
 ```sh
@@ -408,7 +411,9 @@ api-anything login linkedin.com
 ```
 
 The target can be a site name (`linkedin`), a domain (`linkedin.com`, `www.linkedin.com`) or a URL.
-(Calling through `API_ANYTHING_PROXY`? Imported cookies came from your own address, and some sites
+(Calling through `API_ANYTHING_PROXY`? [Proxy support](#through-an-outbound-proxy) is new in 0.5.0;
+0.4.0 and earlier ignore the variables and connect directly. Check `api-anything --version`.
+Imported cookies came from your own address, and some sites
 bind a session to it, so a proxied call may answer `auth`. `login <site> --window` signs in through
 the proxy instead.)
 By default this **imports** the site's cookies from your everyday browser — you are almost always
