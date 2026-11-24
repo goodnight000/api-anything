@@ -855,3 +855,25 @@ test("a login path asked for, not redirected to, is not a sign-in: an arg may sp
   assert.equal(cls(op(), { ...json(200, article), url: "https://x.test/api/articles/login", redirected: false }), "ok");
   assert.equal(cls(op(), { ...json(200, article), url: "https://x.test/login", redirected: true }), "auth");
 });
+
+test("an unfollowed redirect to a sign-in page is auth (a tier-3 page's own request is the hop); elsewhere it stays an error", () => {
+  const page = op({
+    request: { method: "GET", url: "https://admin.s.test/reservations/view?id=1", headers: {} },
+    response: { format: "embedded", embedded: { regex: "window.__STATE__ = (\\{)" } },
+  });
+  const hop = (location: string, status = 302): Observed => ({
+    status,
+    headers: { location },
+    body: "",
+    url: "https://admin.s.test/reservations/view?id=1",
+  });
+  const c = classify(page, hop("/login?next=%2Freservations%2Fview"));
+  assert.equal(c.class, "auth", c.reason);
+  assert.equal(c.reason, "HTTP 302 to /login");
+  assert.equal(cls(page, hop("https://sso.s.test/accounts/login/?next=x", 303)), "auth");
+  assert.equal(cls(page, hop("/reservations/view?id=1&tab=2")), "error");
+  assert.equal(cls(page, { ...hop("/login"), headers: {} }), "error");
+  // an op that asks for a sign-in path itself is not told it was sent to sign in
+  const own = op({ request: { method: "GET", url: "https://s.test/login/state", headers: {} } });
+  assert.equal(cls(own, hop("/login/next")), "error");
+});

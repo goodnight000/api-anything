@@ -41,6 +41,7 @@ import {
   knownGuests,
   logout,
   resolveLoginTarget,
+  strayLogin,
   windowLogin,
   windowRetry,
 } from "./login.js";
@@ -1142,6 +1143,8 @@ async function cmdAdd({ v, pos, steps }: Parsed): Promise<number> {
     r.warnings.push(
       `requests ${paged.requests.join(" and ")} of capture ${c!.id} are two pages of this list: to page it, add it again with ${paged.flags} and its other --example values`,
     );
+  const stray = strayLogin(site);
+  if (stray) r.warnings.push(stray.fix.replace(/ask the user to run in a terminal: /, "run: "));
   out({
     ok: true,
     site,

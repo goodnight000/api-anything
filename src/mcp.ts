@@ -32,6 +32,7 @@ import {
   importWarning,
   knownGuests,
   resolveLoginTarget,
+  strayLogin,
   windowLogin,
   windowRetry,
 } from "./login.js";
@@ -168,9 +169,10 @@ export function mcpNext(next: string): string {
       /(?<!in a terminal: )api-anything pull ([\w.-]+)/g,
       'list_operations {"site":"$1"} (it pulls a shared site)',
     )
-    // the login tool's import only refreshes a session the user imported: before that, it is theirs to run
+    // the login tool's import only refreshes a session the user imported: before that, it is theirs to
+    // run. A login from a named profile is the CLI's alone, and stays as it is.
     .replace(
-      /(?:ask the user to run(?: in a terminal)?:? )?api-anything login ([\w.-]+)( --window)?/g,
+      /(?:ask the user to run(?: in a terminal)?:? )?api-anything login ([\w.-]+)(?![\w.-]| --profile)( --window)?/g,
       (_, site, window) =>
         window
           ? `the login tool {"site":"${site}","mode":"window"} (the user signs in or clears the challenge by hand)`
@@ -178,7 +180,8 @@ export function mcpNext(next: string): string {
             ? `the login tool {"site":"${site}"} (mode "window" when the user must sign in or clear a challenge by hand)`
             : `ask the user to run in a terminal: api-anything login ${site} (it imports the cookies of the browser they are signed in with, no password), or api-anything login ${site} --window to sign in by hand`,
     )
-    .replace(/api-anything add creates one/, "a new site is added with the CLI");
+    .replace(/api-anything add creates one/, "a new site is added with the CLI")
+    .replace(/allow a higher tier \(--max-tier (\d)\)/, "call again with maxTier $1");
   return /\bapi-anything (heal|add|capture|verify|export|publish|setup)\b/.test(out)
     ? `${out} (api-anything is a CLI: run it in your shell, as npx -y api-anything when the command is not installed; with no shell, ask the user)`
     : out;
@@ -210,6 +213,14 @@ export function mcpNextCall(nc: NextCall, again?: ToolCall): NextCall & Partial<
       return { ...nc, tool: "list_sites", args: {} };
     case "retry":
       return { ...nc, ...(again ?? { tool: "call_operation", args: { site, op } }) };
+    case "raise_tier": {
+      // the same call with the cap the step names
+      const call = again ?? { tool: "call_operation", args: { site, op } };
+      // only call_operation takes a cap over MCP
+      return nc.tier && call.tool === "call_operation"
+        ? { ...nc, tool: call.tool, args: { ...call.args, maxTier: nc.tier } }
+        : nc;
+    }
     default:
       return nc;
   }
@@ -445,7 +456,7 @@ export interface ServerOptions {
   permits?: Permits;
 }
 
-/** Call options a REST call takes that the MCP tools do not. */
+/** Call options passed beside a tool's own input: REST's for both calls, and call_operation's maxTier. */
 export type CallExtra = Pick<CallOptions, "maxTier">;
 
 type OpInput = { site: string; op: string; args?: Record<string, unknown>; view?: ResultView };
@@ -750,7 +761,7 @@ export function createToolset({
           site,
           op,
           args,
-          { tool: "call_operation", args: { site, op, args, ...(view ? { view } : {}), ...watch } },
+          { tool: "call_operation", args: { site, op, args, ...(view ? { view } : {}), ...watch, ...extra } },
           undefined,
           view,
           watch,
@@ -803,11 +814,17 @@ export function createToolset({
         args: z.record(z.string(), z.unknown()).optional().describe("param name -> value"),
         view: viewSchema.optional(),
         ...watchSchema,
+        maxTier: z
+          .union([z.literal(1), z.literal(2), z.literal(3)])
+          .optional()
+          .describe(
+            "highest transport tier: 1 plain HTTP, no browser; 2 a fetch from the site's page; 3 the page's own request (default)",
+          ),
       },
       outputSchema: outputSchema(CALL_RESULT_SCHEMA),
       annotations: READ_HINTS,
     },
-    (input: CallInput) => callOperation(input),
+    ({ maxTier, ...input }: CallInput & CallExtra) => callOperation(input, maxTier ? { maxTier } : {}),
   );
 
   server.registerTool(
@@ -1133,12 +1150,15 @@ const oneLineIssues = (e: z.ZodError) =>
 async function importLogin(t: ReturnType<typeof resolveLoginTarget>, publicOnly: boolean): Promise<Reply> {
   const source = loadSite(t.site) ? browserSource(t.site) : undefined;
   if (!source) {
+    const stray = strayLogin(t.site);
     return reply(
       {
         ok: false,
         site: t.site,
         error: "MCP can only refresh a session the user imported with the CLI",
-        next: `ask the user to run in a terminal: api-anything login ${t.site} (or use mode "window")`,
+        next: stray
+          ? `${stray.fix} (or use mode "window")`
+          : `ask the user to run in a terminal: api-anything login ${t.site} (or use mode "window")`,
       },
       true,
     );

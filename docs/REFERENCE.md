@@ -355,13 +355,16 @@ nothing and needs no browser. Output is one line of JSON:
   lower, than the 6 days before (3 calls in each window at least);
 - `problems`, each `{site, op, problem, detail, next}`: `cooling`, `stale`, `escalated` (a read
   remembered above its own tier; `next` calls it once with `--max-tier` at that tier, and an
-  answer there forgets the escalation; the command spells a stored example only when every
+  answer there forgets the escalation. A call whose remembered tier fails also tries the op's own
+  tier once by itself; the command spells a stored example only when every
   character of it is one no shell reads, and leaves `<param>` for you to fill otherwise), `degraded`, `failing` (the last call failed for a reason
   other than its args), `verify` (the last verify on this version failed), `write` (a write may
   have gone through), `plaintext` (a session file is stored unsealed because no key is available,
   a session or capture written before sealing is not sealed yet, or the key fails, such as a wrong
   `API_ANYTHING_KEY`), `settings` (`settings.json` cannot be read, so this install is local-only until
-  it is fixed or replaced). `next` is phrased as a call's `next`;
+  it is fixed or replaced), `login` (the site's session has no browser sign-in on record while one
+  for its host is saved under the host's name, from a login run before the site was added: `next`
+  names the login that records it for the site). `next` is phrased as a call's `next`;
 - `storage`: whether session and capture files are sealed here, `{sealed: true, key}` with the key's
   source, or `{sealed: false, why, chosen}`. Finding out may create the key in the OS store, as the
   first save would.
@@ -653,7 +656,7 @@ its older ids are gone and new answers are kept again.
 |---|---|---|
 | `list_sites` | the sites, with how many operations each has | read-only |
 | `list_operations` | a site's operations: args (`inputSchema`), output shape/type hints (`output`), field names (`returns`), operation `links`, paging and readback, and the site's notes; optional `prepare` builds a linked call without executing it | read-only |
-| `call_operation` | call a read; a write op is refused and nothing is sent | read-only, idempotent |
+| `call_operation` | call a read; a write op is refused and nothing is sent; optional `maxTier` 1..3, as the CLI's `--max-tier` | read-only, idempotent |
 | `call_batch` | up to 20 read items, optional `concurrency` 1..4; `{ok, results}` in input order, writes rejected | read-only, idempotent |
 | `call_write_operation` | call a write, with `again` and `idempotencyKey`; only with `--allow-writes` | destructive, not idempotent |
 | `get_job` | wait up to 25 s for a pending call's result | read-only |

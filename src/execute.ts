@@ -740,7 +740,9 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       ctx.seen.push(...run.capture.cookies);
       if (run.values && Object.keys(run.values).length) ctx.seenValues.push(run.values);
       // held to DEADLINE.read (judgeExchange): the catch below answers a stop
-      const judged = run.matched && judgeExchange(op, run.matched);
+      const answer = run.matched && judgeExchange(op, run.matched);
+      // the op's request was redirected and the run ended on a sign-in page: that page is the answer
+      const judged = answer && answer.class === "error" && run.loginWall ? undefined : answer;
       // The page is told nothing of a redirect that was stopped, its status included: this is the answer.
       const resent: Attempt | undefined = run.resends
         ? {
@@ -1862,11 +1864,40 @@ async function run(
   const noted = (a: Attempt) => success(a, notes.length ? { reason: notes.join("; ") } : {});
   let examplesChecked = false;
   let plainTried = false;
+  /**
+   * A remembered escalation is a speed hint: when the tier it names fails a read, the call starts once
+   * more at the op's own tier, where an answer forgets it. `hinted` is that tier until then; `fellFrom`
+   * is its failure, which ends the call if the ladder climbs back to it, so it is not tried twice.
+   */
+  let hinted = !write && remembered !== undefined && tier > op.minTier ? tier : undefined;
+  let fellFrom: { tier: Tier; a?: Attempt } | undefined;
+  const fallBack = (why: string) => {
+    notes.push(`tier ${tier}, remembered from an earlier call, ${why}; tried tier ${op.minTier} again`);
+    tier = op.minTier as Tier;
+    hinted = undefined;
+  };
+  const failed = (x: Attempt, at: Tier, reason: string): Promise<CallResult> =>
+    done({
+      ok: false,
+      class: x.class,
+      tier: at,
+      reason,
+      next: nextFor(x.class, siteName, op, x, signIn?.text),
+      ...(x.class === "auth" && signIn ? { nextCall: signIn.step } : {}),
+      ...stepOf(x),
+      ...(x.server ? { server: true as const } : {}),
+    });
   // A send the budget refuses, at any tier or retry, ends the call: nothing more went.
   const ladder = async (): Promise<CallResult> => {
     for (;;) {
+      if (fellFrom?.a && tier >= fellFrom.tier) return failed(fellFrom.a, fellFrom.tier, notes.join("; "));
       if (tier > ctx.maxTier) return done(tierBlocked(site, op, { tier, maxTier: ctx.maxTier }, opts.maxTier, notes));
       if (tier > 1 && !browserAvailable()) {
+        if (hinted === tier) {
+          fellFrom = { tier };
+          fallBack("needs a Chromium browser, and none was found");
+          continue;
+        }
         return done({
           ok: false,
           class: "blocked",
@@ -1885,18 +1916,16 @@ async function run(
         return done(noted(a));
       }
       const fail = (x = a, reason = a.note ? `${a.reason}; ${a.note}` : a.reason): Promise<CallResult> =>
-        done({
-          ok: false,
-          class: x.class,
-          tier,
-          reason,
-          next: nextFor(x.class, siteName, op, x, signIn?.text),
-          ...(x.class === "auth" && signIn ? { nextCall: signIn.step } : {}),
-          ...stepOf(x),
-          ...(x.server ? { server: true as const } : {}),
-        });
+        failed(x, tier, reason);
       // Approval covers this transport and session, not a retry in another profile or with refreshed cookies.
       if (write && (opts.callOnly || !notRun(a))) return fail();
+      // A rate limit or a 451 is the site's answer to this client and network, and `input` the args':
+      // another tier meets the same. Anything else may be the remembered tier's own (a lapsed profile).
+      if (hinted === tier && a.class !== "rate" && a.class !== "input" && a.status !== 451) {
+        fellFrom = { tier, a };
+        fallBack(`said ${a.class} (${a.reason})`);
+        continue;
+      }
       // Plain HTTP refused a read from a site with no login on record. Some walls refuse a client that
       // claims to be Chrome without Chrome's TLS (Hacker News's 419 "Sorry"): the same request goes once
       // more without the browser's identity headers, before any recovery or browser. Nothing is kept, so
@@ -1959,7 +1988,7 @@ async function run(
         authStep = 3;
         // Session values (a bearer, a guest token) come from the site's own requests: a trigger run
         // refreshes them, and for a read its answer is this call's answer.
-        if (op.readOnly && ctx.maxTier >= 3 && browserAvailable() && holdsSessionValue(op)) {
+        if (op.readOnly && ctx.maxTier >= 3 && fellFrom?.tier !== 3 && browserAvailable() && holdsSessionValue(op)) {
           const b = await attempt(ctx, op, 3);
           if (b.class === "ok") {
             const why = [...notes, `tier ${tier} said ${a.class} (${a.reason})`].join("; ");
@@ -1986,7 +2015,15 @@ async function run(
       // attempt tells them apart, for a read only: a page can send a request more than once (its own
       // scripts, a retry after a navigation or a reset), and a write is sent once. When the attempt does
       // not get the data, the call ends with tier 1's answer.
-      if (a.class === "auth" && tier === 1 && !write && ctx.maxTier >= 2 && browserAvailable() && noLogin()) {
+      if (
+        a.class === "auth" &&
+        tier === 1 &&
+        !write &&
+        ctx.maxTier >= 2 &&
+        fellFrom?.tier !== 2 &&
+        browserAvailable() &&
+        noLogin()
+      ) {
         const b = await attempt(ctx, op, 2);
         if (b.class === "ok") {
           if (!proof) rememberTier(siteName, op.name, 2);

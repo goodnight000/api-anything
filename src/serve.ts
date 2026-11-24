@@ -202,7 +202,11 @@ function requestFor(tool: unknown, args: unknown, has: { writes: boolean; learn:
     case "call_write_operation": {
       if (!site || !op || (tool === "call_write_operation" && !has.writes)) return undefined;
       const kind = tool === "call_operation" ? "call" : "write";
-      const body = { args: isObject(a.args) ? a.args : {}, ...(a.view !== undefined ? { view: a.view } : {}) };
+      const body = {
+        args: isObject(a.args) ? a.args : {},
+        ...(a.view !== undefined ? { view: a.view } : {}),
+        ...(a.maxTier !== undefined ? { maxTier: a.maxTier } : {}),
+      };
       return { method: "POST", path: `/v1/${kind}/${seg(site)}/${seg(op)}`, body };
     }
     case "list_operations":
