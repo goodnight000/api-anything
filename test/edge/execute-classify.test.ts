@@ -598,6 +598,22 @@ describe("execution ladder", () => {
     assert.equal(r.tier, 1);
   });
 
+  test("a remembered browser tier with no browser here falls back to the op's own tier, which forgets it", async () => {
+    site("nochrome", rd("l", "/plain"));
+    rememberTier("nochrome", "l", 2);
+    const was = process.env.API_ANYTHING_BROWSER;
+    process.env.API_ANYTHING_BROWSER = join(HOME, "no-such-browser", "chrome");
+    try {
+      const r = await call("nochrome", "l", {}, { minIntervalMs: 0, timeoutMs: 3000 });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.tier, 1);
+      assert.match(r.reason ?? "", /tier 2, remembered from an earlier call, needs a Chromium browser/);
+      assert.equal(rememberedTier("nochrome", "l"), undefined);
+    } finally {
+      if (was === undefined) delete process.env.API_ANYTHING_BROWSER;
+      else process.env.API_ANYTHING_BROWSER = was;
+    }
+  });
   test("an unknown arg name (a typo) is refused instead of silently using the default", async () => {
     site("typo", {
       ...rd("items", "/api/items?page=1"),
@@ -1175,6 +1191,58 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
     }
   });
 
+  test("a remembered tier 3 sent to sign in is auth there, and the call tries tier 1 again, which forgets it", async () => {
+    site(
+      "lapsed",
+      rd("items", "/api/lapsed", { trigger: { url: `${fx.base}/lapsed-page` }, match: { path: "/api/lapsed" } }),
+    );
+    rememberTier("lapsed", "items", 3);
+    const r = await call("lapsed", "items", {}, { minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.tier, 1);
+    assert.deepEqual(r.data, [{ lapsed: "no" }]);
+    assert.match(
+      r.reason ?? "",
+      /tier 3, remembered from an earlier call, said auth \(HTTP 302 to \/accounts\/login\/\); tried tier 1 again/,
+    );
+    assert.equal(rememberedTier("lapsed", "items"), undefined, "the escalation is forgotten");
+  });
+
+  test("a tier-3 run whose own request was redirected to a sign-in page is auth, whatever the page's path", async () => {
+    site(
+      "gated",
+      rd("items", "/api/lapsed?to=/gate", {
+        minTier: 3,
+        trigger: { url: `${fx.base}/api/lapsed?to=/gate` },
+        match: { path: "/api/lapsed" },
+        response: { format: "html", html: { items: "li", fields: {} } },
+      }),
+    );
+    const r = await call("gated", "items", {}, { minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.equal(r.tier, 3);
+    assert.match(r.reason ?? "", /the trigger landed on a sign-in page \(\/gate\)/);
+    assert.equal(r.nextCall?.action, "login");
+  });
+
+  test("after falling back from a remembered tier, the ladder does not climb back into it: that tier's answer ends the call", async () => {
+    site("nowhere", rd("items", "/api/nowhere"));
+    rememberTier("nowhere", "items", 2);
+    fx.hits.length = 0;
+    const r = await call("nowhere", "items", {}, { minIntervalMs: 0, timeoutMs: 5000 });
+    assert.equal(r.class, "auth", JSON.stringify(r));
+    assert.equal(r.tier, 2);
+    const asked = (chrome: boolean) =>
+      fx.hits.filter((h) => h.url === "/api/nowhere" && /Chrome\//.test(String(h.headers["user-agent"])) === chrome)
+        .length;
+    assert.equal(asked(true), 1, "tier 2 was tried once");
+    assert.equal(asked(false), 1, "tier 1 was tried once");
+    assert.match(
+      r.reason ?? "",
+      /tier 2, remembered from an earlier call, said auth .*tried tier 1 again; tier 1 was blocked/,
+    );
+    assert.equal(rememberedTier("nowhere", "items"), 2, "nothing answered lower, so the escalation stays");
+  });
   test("auth at tier 3 re-imports the browser session into the profile and retries once", async () => {
     site(
       "t3auth",

@@ -325,6 +325,61 @@ test("MCP points an auth failure at the login tool only for a session the user i
   }
 });
 
+test("MCP call_operation takes maxTier: the call gets it, a retry keeps it, and a step that needs more names it", async () => {
+  const s = await connect();
+  try {
+    const seen: unknown[] = [];
+    const call = (async (_site: string, _op: string, _args: unknown, o: { maxTier?: number }) => {
+      seen.push(o.maxTier);
+      return o.maxTier === 1
+        ? {
+            ok: false,
+            class: "blocked",
+            tier: 2,
+            reason: "needs tier 2, capped at 1",
+            next: "allow a higher tier (--max-tier 2)",
+            nextCall: { action: "raise_tier", tier: 2, site: "x", op: "get" },
+            ms: 1,
+          }
+        : { ok: false, class: "error", reason: "boom", nextCall: { action: "retry", site: "x", op: "get" }, ms: 1 };
+    }) as unknown as NonNullable<ServerOptions["run"]>["call"];
+    await s.start({ run: { call } });
+    const { tools } = await s.client.listTools();
+    const props = tools.find((t) => t.name === "call_operation")!.inputSchema.properties ?? {};
+    assert.ok("maxTier" in props);
+    const capped = await s.tool("call_operation", { site: "x", op: "get", maxTier: 1 });
+    assert.equal(capped.next, "call again with maxTier 2");
+    assert.deepEqual(
+      [capped.nextCall.tool, capped.nextCall.args],
+      ["call_operation", { site: "x", op: "get", args: {}, maxTier: 2 }],
+    );
+    const retried = await s.tool("call_operation", { site: "x", op: "get", maxTier: 2 });
+    assert.deepEqual(retried.nextCall.args, { site: "x", op: "get", args: {}, maxTier: 2 });
+    await s.tool("call_operation", { site: "x", op: "get" });
+    assert.deepEqual(seen, [1, 2, undefined]);
+    const bad = await s.client.callTool({ name: "call_operation", arguments: { site: "x", op: "get", maxTier: 4 } });
+    assert.equal(bad.isError, true);
+  } finally {
+    await s.done();
+  }
+});
+
+test("MCP login names the CLI login that records a sign-in saved under the site's host for the site", async () => {
+  const s = await connect();
+  try {
+    saveOne("admin", "me", true);
+    // a login run with the host before the site was added made a site named after it
+    saveSession("example.test", { cookies: [], values: {}, source: "chrome:Default" });
+    await s.start();
+    const r = await s.tool("login", { site: "admin" });
+    assert.match(r.error, /only refresh a session the user imported/);
+    assert.match(r.next, /saved under example\.test, not admin.*api-anything login admin --profile "[^"]+\/Default"/);
+    // site_status passes the same step through mcpNext, which leaves a login from a named profile as it is
+    assert.equal(mcpNext(r.next), r.next);
+  } finally {
+    await s.done();
+  }
+});
 test("MCP list_operations gives each op a JSON Schema of its args: types, enum, bounds, anchored pattern, required", async () => {
   const site = await localSite();
   const s = await connect();

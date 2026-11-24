@@ -125,6 +125,17 @@ export function loginPath(url: string): boolean {
     return false;
   }
 }
+/** The sign-in path a redirect's Location names, unless the op asks for a sign-in path itself. */
+function loginLocation(op: Operation, r: Observed): string | undefined {
+  const at = r.headers.location;
+  if (!at) return undefined;
+  try {
+    const u = new URL(at, r.url ?? op.request.url);
+    return LOGIN_URL.test(u.pathname) && !LOGIN_URL.test(new URL(op.request.url).pathname) ? u.pathname : undefined;
+  } catch {
+    return undefined;
+  }
+}
 /**
  * A document that is a login page. Only what the page says or shows counts: every logged-out page
  * can link a sign-in page (Google's Sign-in button goes to ServiceLogin), and a login redirect is
@@ -699,6 +710,10 @@ function classifyResponse(
       /* not a URL; ignore */
     }
   }
+  // A redirect not followed (at tier 3 the page's own request is the hop, and Chrome went on) to a
+  // sign-in page: the session lapsed, which a login fixes and the op's own tier does not.
+  const to = r.status >= 300 && r.status < 400 ? loginLocation(op, r) : undefined;
+  if (to) return is("auth", `HTTP ${r.status} to ${to}`);
   if (r.status === 404 || r.status === 410) {
     // With the param in the path, 404 usually means that entity doesn't exist. With a rotating id
     // in the path too (Next.js /_next/data/<buildId>/...), it may be a deploy: let the caller check.

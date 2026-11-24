@@ -317,6 +317,32 @@ export function browserSource(site: string): string | undefined {
   return isBrowserSource(source) ? source : undefined;
 }
 
+/**
+ * A browser login saved under the host of the site's baseUrl while the site's own session has none: a
+ * login run with the host before the site was added made a site of that name, and the site's calls
+ * never renew from it. Undefined when the site's session has a browser source, or no such login exists.
+ */
+export function strayLogin(site: string): { site: string; source: string; fix: string } | undefined {
+  try {
+    if (browserSource(site)) return undefined;
+    const baseUrl = loadSite(site)?.site.baseUrl;
+    if (!baseUrl) return undefined;
+    const host = new URL(baseUrl).hostname.toLowerCase().replace(/^www\./, "");
+    if (host === safeName(site) || !existsSync(sessionFile(host))) return undefined;
+    const source = browserSource(host);
+    if (!source) return undefined;
+    const { label, profile } = profileLabel(source);
+    return {
+      site: host,
+      source,
+      fix: `the sign-in imported from ${label} is saved under ${host}, not ${site}, so ${site}'s calls cannot renew it: ask the user to run in a terminal: api-anything login ${site} --profile "${profile}"`,
+    };
+  } catch {
+    // an unreadable session or spec says nothing here
+    return undefined;
+  }
+}
+
 /** The registrable domain of a site's baseUrl, or of a site named after its host ("github.com"). */
 function siteDomain(site: string): string | undefined {
   try {

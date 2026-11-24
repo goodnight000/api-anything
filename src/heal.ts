@@ -634,7 +634,9 @@ export async function runOpTrigger(
     if (!once) throw e;
     if (differsFromStored(site, capture.cookies, values)) unsaved = (e as Error).message.split("\n")[0]!;
   }
-  const wall = matched?.response ? undefined : loginWall(capture, t.url);
+  // a redirect is no answer: where the page ended up says what it was
+  const hop = matched?.response && matched.response.status >= 300 && matched.response.status < 400;
+  const wall = matched?.response && !hop ? undefined : loginWall(capture, t.url);
   const { repeats, resends, others } = once?.stopped ?? {};
   const stopped = [...(others ?? [])];
   const left = [...(once?.left ?? [])];

@@ -7,6 +7,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadRecord, type Outcome, opHash } from "./checks.js";
 import { settingsFix, settingsProblem } from "./identity.js";
+import { strayLogin } from "./login.js";
 import { plaintextFiles, plaintextSessions, SealError, type Sealing, sealing } from "./seal.js";
 import { home } from "./session.js";
 import type { Operation } from "./spec.js";
@@ -50,7 +51,17 @@ export interface SiteStatus {
 export interface Problem {
   site: string;
   op?: string;
-  problem: "cooling" | "stale" | "escalated" | "degraded" | "failing" | "verify" | "write" | "plaintext" | "settings";
+  problem:
+    | "cooling"
+    | "stale"
+    | "escalated"
+    | "degraded"
+    | "failing"
+    | "verify"
+    | "write"
+    | "plaintext"
+    | "settings"
+    | "login";
   detail: string;
   next: string;
 }
@@ -211,6 +222,14 @@ function siteStatus(name: string, now: number, named: boolean): { status: SiteSt
             : `ask the user to run api-anything login ${name} --window (a login ends the wait), then retry once`,
     });
   }
+
+  const stray = strayLogin(name);
+  if (stray)
+    problem({
+      problem: "login",
+      detail: `no browser sign-in is on record for ${name}, so an auth answer cannot re-import it; one for its host is saved under ${stray.site}`,
+      next: stray.fix,
+    });
 
   const stale = new Map(staleList(now).flatMap((s) => (s.site === name ? [[s.op, s]] : [])));
   const tiers = new Map(tierList().flatMap((t) => (t.site === name ? [[t.op, t.tier]] : [])));

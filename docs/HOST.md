@@ -204,7 +204,9 @@ Host calls always set `CallOptions.callOnly`. Direct library callers can also se
   and resources as before. No example-argument probes are sent in call-only mode.
 - A write stays at its planned starting tier. Any failure returns without a transport escalation,
   cookie-refresh resend, intercept recapture or other retry, even after a definite non-execution.
-  A read can still climb within the approved cap and refresh cookies/session values.
+  A read can still climb within the approved cap and refresh cookies/session values, and a read
+  that starts at a remembered tier tries the operation's own tier once when that tier fails, as
+  `call()` does.
 - A tier-3 write must have a `companions` list, even if empty, and a non-empty `match`.
   Planning and direct call-only execution refuse older or incomplete specs with
   `class: "refused"` and `write: "not_sent"`, before any browser run or write-ledger entry.

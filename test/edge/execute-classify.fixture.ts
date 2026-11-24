@@ -303,6 +303,27 @@ export async function startFixture(): Promise<Fixture> {
           .end(
             '<!doctype html><title>paged</title><script>fetch("/api/items?page="+encodeURIComponent(new URLSearchParams(location.search).get("page")))</script>',
           );
+      // signed-in data whose browser sign-in lapsed: Chrome is sent to sign in (?to= names where), plain HTTP still answers
+      case "/api/lapsed":
+        return /Chrome\//.test(req.headers["user-agent"] ?? "")
+          ? void res.writeHead(302, { location: u.searchParams.get("to") ?? "/accounts/login/?next=/api/lapsed" }).end()
+          : json(res, { items: [{ lapsed: "no" }] });
+      case "/lapsed-page":
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end('<!doctype html><title>lapsed</title><script>fetch("/api/lapsed")</script>');
+      // a sign-in page at a path that does not say so
+      case "/gate":
+        return void res
+          .writeHead(200, { "content-type": "text/html" })
+          .end(
+            '<!doctype html><title>Welcome</title><form><input name="user"><input type="password" name="pw"></form>',
+          );
+      // signed out everywhere: Chrome is sent to sign in, plain HTTP gets a bare 403
+      case "/api/nowhere":
+        return /Chrome\//.test(req.headers["user-agent"] ?? "")
+          ? void res.writeHead(302, { location: "/accounts/login/?next=/api/nowhere" }).end()
+          : void res.writeHead(403, { "content-type": "text/plain" }).end("no");
       case "/":
         return void res.writeHead(200, { "content-type": "text/html" }).end("<!doctype html><title>home</title>");
       default:
