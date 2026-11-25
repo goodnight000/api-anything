@@ -309,9 +309,10 @@ export function plan(
   // The user's own notes go only with their yes; without it, only notes that came from the registry
   const notes = o.consent ? siteNotes(name) : siteNotes(name, { from: "registry" });
   const session = loadSession(name);
-  const pages = r.site.operations.flatMap((op) =>
-    opPages(op, [o.evidence?.holdout?.args, proofOf(name, op)?.holdout?.args]),
-  );
+  const pages = [
+    ...r.site.operations.flatMap((op) => opPages(op, [o.evidence?.holdout?.args, proofOf(name, op)?.holdout?.args])),
+    ...(session.pages ?? []),
+  ];
   const live = credentialsOf(besideOrigins(session, [ex.spec.baseUrl, ...ex.spec.operations.flatMap(opUrls)], pages));
   const as = o.as ?? registryName(r.site);
   const context: SiteContext = {

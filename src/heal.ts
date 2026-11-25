@@ -1220,7 +1220,7 @@ function saveOperation(
     const fresh = { name: site, baseUrl: new URL(operation.trigger.url).origin, operations: [] };
     return putOperation(current ?? fresh, operation);
   });
-  recordOrigins(site, opUrls(operation));
+  recordOrigins(site, opUrls(operation), opPages(operation, examples));
   clearStale(site, operation.name);
   return { operation, warnings, path, ...(preview ? { preview } : {}), replaced };
 }
@@ -1878,7 +1878,7 @@ function saveHealed(
     if (!current) throw new Error(`site "${site}" disappeared during heal`);
     return putOperation(current, healed);
   });
-  recordOrigins(site, opUrls(op));
+  recordOrigins(site, opUrls(op), opPages(op, examples));
   const changes = templateChanges(before, op);
   appendHeal({
     site,

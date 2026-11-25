@@ -1787,3 +1787,50 @@ test("issue #158 negative control: analytics URL cookie carrying extra token que
   );
   assert.equal(loadSite("sam158-neg-reset"), undefined);
 });
+
+test("issue #158 review: stored setting inside trigger URL cookie stays setting after recordOrigins, later captures, export, and publish", async () => {
+  const { plan } = await import("../../src/publish.js");
+  const base = "https://shop158.test";
+  const p1 = `${base}/category/televisions/`;
+  const lastUrl = here("_last_url", encodeURIComponent(p1));
+  lastUrl.domain = ".shop158.test";
+
+  const saved = await addOperation({
+    site: "sam158-setting",
+    op: "list",
+    trigger: { url: p1 },
+    examples: [{}],
+    match: { path: "/api/products" },
+    from: {
+      capture: {
+        id: "set-1",
+        at: new Date().toISOString(),
+        url: p1,
+        finalUrl: p1,
+        exchanges: [
+          xhr({
+            url: `${base}/api/products?category=televisions`,
+            headers: { cookie: `_last_url=${encodeURIComponent(p1)}` },
+          }),
+        ],
+        cookies: [lastUrl],
+        storage: { category: "televisions" },
+      },
+    },
+  });
+
+  const settingRef = saved.operation.slots.find((s) => s.ref === "session:list/category")?.ref;
+  assert.equal(settingRef, "session:list/category", JSON.stringify(saved.operation.slots));
+  assert.deepEqual(loadSession("sam158-setting").kinds, { "list/category": "setting" });
+  assert.deepEqual(loadSession("sam158-setting").pages, [p1]);
+
+  mergeCapture("sam158-setting", [{ ...lastUrl, value: "rotated" }]);
+  assert.deepEqual(loadSession("sam158-setting").kinds, { "list/category": "setting" });
+  assert.deepEqual(exportSite("sam158-setting").secrets, []);
+  const planned = plan("sam158-setting");
+  assert.deepEqual(
+    planned.ops[0]?.errors.filter((e) => /holds the live|live session|live cookie|the upload of/i.test(e)),
+    [],
+    JSON.stringify(planned.ops[0]?.errors),
+  );
+});

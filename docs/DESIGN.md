@@ -329,9 +329,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    spec's `baseUrl`. The spec (together with the caller's trigger inputs) already spells those bytes, so a copy
    anywhere carries nothing new, and an analytics cookie keeping the last visited page
    (`https://www.x.test/` or `https%3A%2F%2Fwww.x.test%2Fus%2Fitem`) would otherwise refuse every learn on the
-   site. Each saved operation's origins are recorded in the session file (`origins`, never dropped), and a learn's
-   own count for what the write storing its values stores (not for what the file held: a refused save must not take a
-   protection apart), so no session write records a setting as a credential for holding one or being held by one. Any
+   site. Each saved operation's origins (`origins`) and filled trigger pages (`pages`) are recorded in the session file
+   (never dropped), and a learn's own count for what the write storing its values stores (not for what the file held: a
+   refused save must not take a protection apart), so no session write records a setting as a credential for holding one
+   or being held by one. Any
    other URL is a value like any other: another host's or port's origin, another path or non-segment prefix, added
    query parameters or fragments, or a URL with userinfo. One exception, in this check only: a
    stored value that is a credential by its storage key's name alone (`token: "solarized-dark"`), neither random-looking

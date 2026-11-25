@@ -791,8 +791,9 @@ export function exportSite(
     }
   });
   const own = [spec.baseUrl, ...spec.operations.flatMap(opUrls)];
-  const pages = r.site.operations.flatMap((op) => opPages(op));
-  const live = credentialsOf(besideOrigins(loadSession(name), own, pages));
+  const session = loadSession(name);
+  const pages = [...r.site.operations.flatMap((op) => opPages(op)), ...(session.pages ?? [])];
+  const live = credentialsOf(besideOrigins(session, own, pages));
   const scan = scanSecrets(spec, live, allowed);
   const borderline = o.strict ? borderlineCredentials(spec, live) : [];
   // one finding per place: the exact live hit already names it
