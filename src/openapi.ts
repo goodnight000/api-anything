@@ -59,20 +59,6 @@ export function opResponseSchema(op: Operation): JsonSchema {
   return rest(callResultSchema(opDataSchema(op)));
 }
 
-/**
- * A tool's schema with each tuple (`prefixItems`, `items: false`) as a plain array of any of its
- * item types, held to its length: many OpenAPI loaders read only `items`, and only as an object.
- */
-function plainTuples(s: unknown): unknown {
-  if (Array.isArray(s)) return s.map(plainTuples);
-  if (!s || typeof s !== "object") return s;
-  const { prefixItems, ...rest } = s as JsonSchema;
-  const out = Object.fromEntries(Object.entries(rest).map(([k, v]) => [k, plainTuples(v)]));
-  if (!Array.isArray(prefixItems)) return out;
-  const kinds = [...new Map(prefixItems.map((x) => [JSON.stringify(x), plainTuples(x)])).values()];
-  return { ...out, items: kinds.length === 1 ? kinds[0] : { anyOf: kinds } };
-}
-
 /** `<site>__<op>` with anything outside [A-Za-z0-9_] as `_`, made unique with a numbered suffix. */
 function operationIds() {
   const used = new Set<string>();
@@ -290,7 +276,7 @@ export function openApiDocument(tools: Toolset, o: OpenApiOptions): JsonSchema {
           summary: "Learn a read operation for a website nobody shared yet",
           description:
             "The page URL with {param} placeholders, the user's values and two other real values. Loads the page in a browser; can take minutes.",
-          requestBody: body(plainTuples(learn) as JsonSchema),
+          requestBody: body(learn),
           responses: { "200": json(rest(learnSiteSchema())), ...calling },
         },
       };

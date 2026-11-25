@@ -396,3 +396,155 @@ test("send slots and the write ledger: a lock another process keeps throws LockB
     lockWait.ms = 30_000;
   }
 });
+
+test("besideOrigins with triggerPages: allows filled URLs and segment prefixes, keeps credentials and secrets", async () => {
+  const { besideOrigins, credentialsOf, opPages, scanSecrets, triggerPages } = await import("../src/secrets.js");
+  const cookie = (name: string, value: string) => ({
+    name,
+    value,
+    domain: ".samsung.test",
+    path: "/",
+    expires: -1,
+    httpOnly: false,
+    secure: true,
+  });
+
+  const trigger = {
+    url: "https://www.samsung.test/us/tvs/{slug}/?q={q}#specs",
+    softFrom: "https://www.samsung.test/us/store/",
+    steps: [
+      { action: "goto" as const, value: "https://www.samsung.test/us/tvs/compare/{slug}/" },
+      { action: "goto" as const, selector: "https://www.samsung.test/us/tvs/specs/{slug}/" },
+    ],
+  };
+  const page1 = "https://www.samsung.test/us/tvs/qled-4k/?q=smart%20tv#specs";
+  const pages = triggerPages(trigger, [
+    { slug: "qled-4k", q: "smart tv" },
+    { slug: "tv/4k", q: "a&b" },
+  ]);
+  assert.ok(pages.includes("https://www.samsung.test/us/tvs/qled-4k/?q=smart%20tv#specs"));
+  assert.ok(pages.includes("https://www.samsung.test/us/tvs/tv%2F4k/?q=a%26b#specs"));
+  assert.ok(pages.includes("https://www.samsung.test/us/store/"));
+  assert.ok(pages.includes("https://www.samsung.test/us/tvs/compare/qled-4k/"));
+  assert.ok(pages.includes("https://www.samsung.test/us/tvs/specs/qled-4k/"));
+
+  // opPages pulls example/default args and unstripped request leaf values + checks
+  const opPagesList = opPages(
+    {
+      request: { method: "GET", url: "https://api.samsung.test/tvs?q=neo%20qled", headers: {} },
+      trigger,
+      params: [
+        { name: "slug", type: "string" as const, required: false, default: "qled-4k" },
+        { name: "q", type: "string" as const, required: true },
+      ],
+      slots: [{ param: "q", at: ["query:q"] }],
+      checks: [{ expect: "result" as const, args: { slug: "frame-tv", q: "art mode" } }],
+    },
+    [{ slug: "oled-4k", q: "4k" }],
+  );
+  assert.ok(opPagesList.some((u) => u.includes("/us/tvs/qled-4k/?q=neo%20qled#specs")));
+  assert.ok(opPagesList.some((u) => u.includes("/us/tvs/oled-4k/?q=4k#specs")));
+  assert.ok(opPagesList.some((u) => u.includes("/us/tvs/frame-tv/?q=art%20mode#specs")));
+
+  const urls = ["https://api.samsung.test/tvs", trigger.url, trigger.softFrom];
+  const kept = [
+    ["raw", page1],
+    ["encoded", encodeURIComponent(page1)],
+    ["quoted", `"${page1}"`],
+    ["quotedEncoded", `"${encodeURIComponent(page1)}"`],
+    ["specialCharsEncoded", encodeURIComponent("https://www.samsung.test/us/tvs/tv%2F4k/?q=a%26b#specs")],
+    ["noSlash", "https://www.samsung.test/us/tvs/qled-4k?q=smart%20tv#specs"],
+    ["relTail", "/us/tvs/qled-4k?q=smart%20tv#specs"],
+    ["relPlus", "/us/tvs/qled-4k/?q=smart+tv#specs"],
+    ["prefixSlash", "https://www.samsung.test/us/"],
+    ["prefixNoSlash", "https://www.samsung.test/us/tvs"],
+    ["relPrefix", "/us/"],
+    ["mixedCase", "HTTPS://WWW.SAMSUNG.TEST/Us/Tvs/QLED-4K?Q=Smart+TV#SPECS"],
+    ["plusVsPct20", "https://www.samsung.test/us/tvs/qled-4k/?q=smart+tv#specs"],
+    ["softFrom", "https://www.samsung.test/us/store"],
+    ["gotoStep", "https://www.samsung.test/us/tvs/compare/qled-4k"],
+    ["gotoSelectorStep", "https://www.samsung.test/us/tvs/specs/qled-4k"],
+  ] as const;
+  const secrets = [
+    ["extraQuery", "https://www.samsung.test/us/tvs/qled-4k/?q=smart%20tv&token=secret-token-123"],
+    ["prefixExtraQuery", "https://www.samsung.test/us/tvs?token=secret-token-123"],
+    ["extraFragment", "https://www.samsung.test/us/tvs/qled-4k/#secret-token-123"],
+    ["prefixFragment", "https://www.samsung.test/us/#secret"],
+    ["otherPath", "https://www.samsung.test/reset/secret-token-123"],
+    ["subReset", "https://www.samsung.test/us/reset/secret-token-123"],
+    ["relReset", "/reset/secret-token-123"],
+    ["nonSegmentPrefix", "/u"],
+    ["absNonSegmentPrefix", "https://www.samsung.test/u"],
+    ["protoRel", "//evil.test/us/tvs/qled-4k"],
+    ["protoRelEncoded", encodeURIComponent("//evil.test/us/tvs/qled-4k")],
+    ["userinfo", "https://user:pass@www.samsung.test/us/tvs/qled-4k/"],
+    ["otherOrigin", "https://evil.test/us/tvs/qled-4k/"],
+    ["otherPort", "https://www.samsung.test:8443/us/tvs/qled-4k/"],
+    ["httpScheme", "http://www.samsung.test/us/tvs/qled-4k/"],
+    ["bareScalar", "qled-4k-secret-uuid-9876"],
+  ] as const;
+
+  const filtered = besideOrigins(
+    {
+      cookies: [...kept, ...secrets].map(([k, v]) => cookie(`c_${k}`, v)),
+      values: Object.fromEntries([...kept, ...secrets].map(([k, v]) => [`v_${k}`, v])),
+    },
+    urls,
+    pages,
+  );
+  assert.deepEqual(
+    filtered.cookies.map((c) => c.name),
+    secrets.map(([k]) => `c_${k}`),
+  );
+  assert.deepEqual(
+    Object.keys(filtered.values),
+    secrets.map(([k]) => `v_${k}`),
+  );
+
+  // Bare arg scalars and reset-link URLs remain credentials to scanSecrets
+  const scalar = "qled-4k-secret-uuid-9876";
+  const reset = "https://www.samsung.test/reset/secret-token-123";
+  const op = {
+    name: "get",
+    request: {
+      method: "GET",
+      url: `https://api.samsung.test/tvs?id=${scalar}&r=${encodeURIComponent(reset)}`,
+      headers: {},
+    },
+    slots: [],
+    volatile: [],
+    trigger: { url: "https://www.samsung.test/us/tvs/{id}/" },
+    match: {},
+    response: { format: "json" as const },
+    params: [{ name: "id", type: "string" as const, required: true, example: scalar }],
+    readOnly: true,
+    minTier: 1 as const,
+    learnedLoggedIn: false,
+  };
+  const live = credentialsOf(
+    besideOrigins(
+      {
+        cookies: [
+          cookie("_ba_last_url", encodeURIComponent(`https://www.samsung.test/us/tvs/${scalar}/`)),
+          cookie("sid", scalar),
+          cookie("rst", reset),
+        ],
+        values: {},
+      },
+      ["https://api.samsung.test/tvs", op.trigger.url],
+      opPages(op),
+    ),
+  );
+  assert.deepEqual(
+    live.cookies.map((c) => c.name),
+    ["sid", "rst"],
+  );
+  const found = scanSecrets(op, live).secrets;
+  assert.ok(found.includes("$.request.url holds the live cookie sid"), JSON.stringify(found));
+  assert.ok(found.includes("$.request.url holds the live cookie rst"), JSON.stringify(found));
+  assert.equal(
+    found.some((s) => s.includes("_ba_last_url")),
+    false,
+    JSON.stringify(found),
+  );
+});

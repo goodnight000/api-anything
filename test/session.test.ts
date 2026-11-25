@@ -284,6 +284,43 @@ test("an operation's origins count as the site's own for its learn's write only,
   assert.deepEqual(loadSession("p").kinds, { "one/host": "setting" });
 });
 
+test("saved operation trigger pages preserve setting classifications across recordOrigins and later writes", async () => {
+  const { recordOrigins } = await import("../src/session.js");
+  process.env.API_ANYTHING_HOME = mkdtempSync(join(tmpdir(), "api-anything-pages-"));
+  const page = "https://shop.test/category/televisions/";
+  const urls = ["https://shop.test/api?category=televisions", page];
+  const setting = { from: page, values: { "one/category": "televisions" } };
+
+  // Unsaved learn: the trigger page URL cookie does not promote the setting during its own write,
+  // while a subsequent write rotating the cookie without saving the operation still protects it.
+  mergeCapture("unsaved-page", [c("_last_url", encodeURIComponent(page), "shop.test")], setting, {
+    settings: ["one/category"],
+    urls,
+    pages: [page],
+  });
+  assert.deepEqual(loadSession("unsaved-page").kinds, { "one/category": "setting" });
+  assert.equal(loadSession("unsaved-page").pages, undefined);
+  mergeCapture("unsaved-page", [c("_last_url", "rotated", "shop.test")], setting, {
+    settings: ["one/category"],
+    urls,
+    pages: [page],
+  });
+  assert.deepEqual(loadSession("unsaved-page").kinds, { "one/category": "credential" });
+
+  // Saved operation: recordOrigins persists Session.pages, keeping the setting exempt across
+  // recordOrigins itself and subsequent captures/cookie rotations.
+  mergeCapture("saved-page", [c("_last_url", encodeURIComponent(page), "shop.test")], setting, {
+    settings: ["one/category"],
+    urls,
+    pages: [page],
+  });
+  recordOrigins("saved-page", urls, [page]);
+  assert.deepEqual(loadSession("saved-page").pages, [page]);
+  assert.deepEqual(loadSession("saved-page").kinds, { "one/category": "setting" });
+  mergeCapture("saved-page", [c("_last_url", "rotated", "shop.test")]);
+  assert.deepEqual(loadSession("saved-page").kinds, { "one/category": "setting" });
+});
+
 test("withLock: another live process's lock blocks it, it throws LockBusy without running fn, and the holder's death frees it at once", async () => {
   const file = join(mkdtempSync(join(tmpdir(), "aa-lock-")), "state.json");
   const child = await holdInChild(file);

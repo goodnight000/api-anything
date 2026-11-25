@@ -42,7 +42,7 @@ import type { NextAction } from "./execute.js";
 import { standIn } from "./paging.js";
 import { siteFetch } from "./proxy.js";
 import { readSealed, SealError, writeSealed } from "./seal.js";
-import { besideOrigins, credentialsOf, leafName, opUrls, scanSecrets, signInFills } from "./secrets.js";
+import { besideOrigins, credentialsOf, leafName, opPages, opUrls, scanSecrets, signInFills } from "./secrets.js";
 import {
   CAPTURE_TTL_MS,
   cookieHeaderFor,
@@ -1179,6 +1179,7 @@ function saveOperation(
   warnings: string[],
   session: Session,
   again: string | undefined,
+  examples: readonly (Record<string, unknown> | undefined)[] = [],
 ): Omit<AddResult, "captures"> {
   let preview: AddResult["preview"];
   const res = exchange?.response;
@@ -1205,7 +1206,11 @@ function saveOperation(
   }
 
   const allowed = new Set((operation.public ?? []).map((h) => `$.request.headers.${h}`));
-  const secrets = scanSecrets(operation, credentialsOf(besideOrigins(session, opUrls(operation))), allowed).secrets;
+  const secrets = scanSecrets(
+    operation,
+    credentialsOf(besideOrigins(session, opUrls(operation), opPages(operation, examples))),
+    allowed,
+  ).secrets;
   secrets.push(...signInFills(operation.trigger.steps).map((f) => `trigger ${f}`));
   if (secrets.length) throw new Error(`refusing to save a spec containing a credential: ${secrets.join("; ")}`);
   // Re-read under the lock: another add or a heal may have saved this site since we started.
@@ -1215,7 +1220,7 @@ function saveOperation(
     const fresh = { name: site, baseUrl: new URL(operation.trigger.url).origin, operations: [] };
     return putOperation(current ?? fresh, operation);
   });
-  recordOrigins(site, opUrls(operation));
+  recordOrigins(site, opUrls(operation), opPages(operation, examples));
   clearStale(site, operation.name);
   return { operation, warnings, path, ...(preview ? { preview } : {}), replaced };
 }
@@ -1472,13 +1477,15 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     !readbackProblems(existing, { ...operation, readback: old.readback }).length
   )
     operation = { ...operation, readback: old.readback };
+  const examples = ex2 ? [ex1, ex2] : [ex1];
   const session = mergeCapture(
     i.site,
     (run2 ?? run1).cookies,
     { from: learned.operation.request.url, values: learned.sessionValues },
     {
       settings: learned.settings,
-      urls: opUrls(learned.operation),
+      urls: opUrls(operation),
+      pages: opPages(operation, examples),
     },
   );
 
@@ -1538,7 +1545,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   }
 
   const again = captures[0] ?? i.from?.capture.id;
-  const saved = saveOperation(i.site, operation, learned.exchange, warnings, session, again);
+  const saved = saveOperation(i.site, operation, learned.exchange, warnings, session, again, examples);
   rememberTier(i.site, operation.name, undefined);
   return { ...saved, captures };
 }
@@ -1845,6 +1852,7 @@ function saveHealed(
   op: Operation,
   strategy: "rescan" | "recapture",
   attempt: Attempt,
+  examples: readonly (Record<string, unknown> | undefined)[] = [],
 ): HealResult {
   // an op an agent learned over MCP stays on public addresses: the page it heals from chose the new request
   const sends = [op.request.url, ...op.slots.flatMap((s) => (s.from ? [s.from.request.url] : []))];
@@ -1854,7 +1862,11 @@ function saveHealed(
       reason: "the healed request is not https on a public host, and this operation goes only to public addresses",
     };
   const allowed = new Set((op.public ?? []).map((h) => `$.request.headers.${h}`));
-  const secrets = scanSecrets(op, credentialsOf(besideOrigins(loadSession(site), opUrls(op))), allowed).secrets;
+  const secrets = scanSecrets(
+    op,
+    credentialsOf(besideOrigins(loadSession(site), opUrls(op), opPages(op, examples))),
+    allowed,
+  ).secrets;
   if (secrets.length)
     return {
       outcome: "failed",
@@ -1866,7 +1878,7 @@ function saveHealed(
     if (!current) throw new Error(`site "${site}" disappeared during heal`);
     return putOperation(current, healed);
   });
-  recordOrigins(site, opUrls(op));
+  recordOrigins(site, opUrls(op), opPages(op, examples));
   const changes = templateChanges(before, op);
   appendHeal({
     site,
@@ -1989,7 +2001,7 @@ export async function healOperation(
   if (scanned) {
     budget--;
     last = await o.validate(scanned.operation);
-    if (last.class === "ok") return saveHealed(site, op, scanned.operation, "rescan", last);
+    if (last.class === "ok") return saveHealed(site, op, scanned.operation, "rescan", last, [callArgs]);
     if (learnedNothing(last))
       return { outcome: "failed", attempt: last, transient: true, reason: swapped.replace("%s", last.reason) };
     if (!budget) return { outcome: "failed", attempt: last, reason: swapped.replace("%s", last.reason) };
@@ -2135,7 +2147,12 @@ export async function healOperation(
     settings = settings.filter((n) => n in sessionValues);
   }
   // A deploy that adds an auth/anti-bot header: its value is needed to validate (and later send) the candidate.
-  mergeCapture(site, [], { from: fresh.request.url, values: sessionValues }, { settings, urls: opUrls(fresh) });
+  mergeCapture(
+    site,
+    [],
+    { from: fresh.request.url, values: sessionValues },
+    { settings, urls: opUrls(fresh), pages: opPages(fresh, [learnArgs, callArgs]) },
+  );
   // An arg equal to a constant the old template had there ("search" in /api/search) is not a param position.
   const oldLeaves = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.value.toLowerCase()]));
   const oldSlots = new Set(op.slots.map((sl) => JSON.stringify(sl.at)));
@@ -2210,7 +2227,7 @@ export async function healOperation(
     return { outcome: "identical", fallback, reason: "re-learning produced a byte-identical template" };
   }
   last = await o.validate(candidate);
-  if (last.class === "ok") return saveHealed(site, op, candidate, "recapture", last);
+  if (last.class === "ok") return saveHealed(site, op, candidate, "recapture", last, [learnArgs, callArgs]);
   return {
     outcome: "failed",
     attempt: last,

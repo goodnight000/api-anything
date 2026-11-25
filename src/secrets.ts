@@ -3,9 +3,9 @@
  * credentials into references and to check none is left; the store uses them before a save or an export.
  * `redact` takes live values out of the messages a call returns and keeps.
  */
-import { getAt, type Leaf, type Step, walk } from "./codec.js";
+import { asText, fillTemplate, getAt, type Leaf, type Step, walk } from "./codec.js";
 import type { Session } from "./session.js";
-import type { Request, Site } from "./spec.js";
+import type { Operation, Request, Site, Trigger } from "./spec.js";
 import type { CaptureResult, StoredCookie, TriggerStep } from "./types.js";
 
 export const SESSION_HEADER =
@@ -361,12 +361,98 @@ export function ipIn(v: string): string | undefined {
   return undefined;
 }
 
+/** The `{name}` placeholder names in `template`, ignoring escaped `{{`/`}}`. */
+function holesOf(template: string): string[] {
+  return [...template.matchAll(/\{\{|\}\}|\{([^{}]+)\}/g)].flatMap((m) => (m[1] ? [m[1]] : []));
+}
+
+/** Normalize a URL pathname for trigger-page matching: lowercase, no trailing slashes (except "/"). */
+function normPath(pathname: string): string {
+  return pathname.replace(/\/+$/, "").toLowerCase() || "/";
+}
+
+/** Normalize a URL's path + query + fragment (`%20` and `+` in queries compare equal). */
+function normTail(u: URL): string {
+  const q = new URLSearchParams(u.search).toString().toLowerCase();
+  return `${normPath(u.pathname)}${q ? `?${q}` : ""}${u.hash.toLowerCase()}`;
+}
+
 /** The addresses an operation sends to or opens. */
 export const opUrls = (op: { request: { url: string }; trigger: { url: string; softFrom?: string } }) => [
   op.request.url,
   op.trigger.url,
   op.trigger.softFrom,
 ];
+
+/**
+ * Full page URLs the caller-supplied `trigger` opens when filled with each arg map in `argsList`.
+ * Static URLs resolve even with no args; parameterized URLs only resolve when every hole has a
+ * defined value so partially filled templates are never treated as opened URLs.
+ */
+export function triggerPages(
+  trigger: Pick<Trigger, "url" | "softFrom" | "steps">,
+  argsList: readonly (Record<string, unknown> | undefined)[] = [],
+): string[] {
+  const templates = [
+    trigger.url,
+    trigger.softFrom,
+    ...(trigger.steps ?? []).flatMap((s) =>
+      s.action === "goto" && (s.value ?? s.selector) ? [s.value ?? s.selector!] : [],
+    ),
+  ].filter((t): t is string => Boolean(t));
+  const pages = new Set<string>();
+  const add = (url: string) => {
+    if (/^https?:/i.test(url)) {
+      pages.add(url);
+      return;
+    }
+    if (url.startsWith("/") && !url.startsWith("//") && /^https?:/i.test(trigger.url)) {
+      try {
+        pages.add(new URL(url, trigger.url).href);
+      } catch {
+        /* template host or invalid base */
+      }
+    }
+  };
+  for (const t of templates) {
+    const holes = holesOf(t);
+    if (!holes.length) {
+      add(fillTemplate(t, {}));
+      continue;
+    }
+    for (const args of argsList) {
+      if (!args || !holes.every((h) => args[h] !== undefined)) continue;
+      add(fillTemplate(t, Object.fromEntries(holes.map((h) => [h, encodeURIComponent(asText(args[h]))]))));
+    }
+  }
+  return [...pages];
+}
+
+/**
+ * Full trigger page URLs filled from an operation's stored param examples, unstripped request leaf
+ * values, check args, and any extra arg maps supplied by the caller.
+ */
+export function opPages(
+  op: Pick<Operation, "request" | "trigger" | "params" | "slots"> & Partial<Pick<Operation, "checks">>,
+  extra: readonly (Record<string, unknown> | undefined)[] = [],
+): string[] {
+  const fromExample: Record<string, unknown> = {};
+  for (const p of op.params) {
+    const v = p.example ?? p.default;
+    if (v !== undefined) fromExample[p.name] = v;
+  }
+  const fromRequest: Record<string, unknown> = { ...fromExample };
+  for (const s of op.slots) {
+    if (!s.param || s.template) continue;
+    try {
+      const v = getAt(op.request, s.at);
+      if (v !== undefined) fromRequest[s.param] = v;
+    } catch {
+      /* absent optional slot */
+    }
+  }
+  return triggerPages(op.trigger, [fromExample, fromRequest, ...extra, ...(op.checks ?? []).map((c) => c.args)]);
+}
 
 /** The origins of `urls` (`https://www.x.test`), the http(s) ones whose host is no template. */
 export function originsOf(urls: readonly (string | undefined)[]): Set<string> {
@@ -387,14 +473,17 @@ const BROWSER_UA = /^Mozilla\/5\.0 \([^)]+\) \S/;
 /**
  * The session without the values that are one of the origins of `urls` (`https://www.x.test/`, the
  * last page an analytics cookie kept), one of their hosts or parent domains (`www.x.test`,
- * `.x.test`), or a browser's User-Agent, raw, unquoted or URL-decoded. A spec spells the host it
- * sends to and opens, and sends the browser's headers, so such a value carries nothing the spec does
- * not hold already, wherever a copy of it is: it is no credential to look for, and nothing to make a
- * ref of. A URL with a path, query or fragment is still looked for: a reset link carries a token.
+ * `.x.test`), a filled trigger `pages` URL (or an origin+segment prefix or relative path of one),
+ * or a browser's User-Agent, raw, unquoted or URL-decoded. A spec spells the host it sends to and
+ * opens (along with the filled trigger URLs the caller navigated to), and sends the browser's
+ * headers, so such a value carries nothing the spec does not hold already, wherever a copy of it
+ * is: it is no credential to look for, and nothing to make a ref of. Any other path, added query
+ * or fragment, another host/port, or a URL carrying userinfo is still looked for.
  */
 export function besideOrigins<S extends Pick<Session, "cookies" | "values">>(
   session: S,
   urls: readonly (string | undefined)[],
+  pages: readonly string[] = [],
 ): S {
   const origins = originsOf(urls);
   // a host the spec spells, or a parent domain of one (a cookie's `.x.test` copied into its value)
@@ -405,10 +494,64 @@ export function besideOrigins<S extends Pick<Session, "cookies" | "values">>(
     if (ipAddress(host.replace(/^\[|\]$/g, ""))) hosts.add(host);
     else for (let i = 0; i < labels.length - 1; i++) hosts.add(labels.slice(i).join("."));
   }
-  const own = (v: string) =>
-    [v, v.replace(/^"|"$/g, ""), pctDecode(v, false)].some(
-      (f) => origins.has(f.replace(/\/$/, "")) || hosts.has(f.replace(/^\./, "").toLowerCase()) || BROWSER_UA.test(f),
+  const pageTails = new Set<string>();
+  const pagePrefixes = new Set<string>();
+  const relTails = new Set<string>();
+  const relPrefixes = new Set<string>();
+  for (const p of pages) {
+    if (!/^https?:/i.test(p)) continue;
+    try {
+      const u = new URL(p);
+      if (u.username || u.password || !origins.has(u.origin)) continue;
+      const tail = normTail(u);
+      pageTails.add(`${u.origin}\0${tail}`);
+      relTails.add(tail);
+      const segs = u.pathname.split("/").filter(Boolean);
+      for (let i = 1; i <= segs.length; i++) {
+        const pre = `/${segs.slice(0, i).join("/")}`.toLowerCase();
+        pagePrefixes.add(`${u.origin}\0${pre}`);
+        relPrefixes.add(pre);
+      }
+    } catch {
+      /* unparseable trigger page */
+    }
+  }
+  const DUMMY = "https://dummy.invalid";
+  const matchPage = (f: string): boolean => {
+    if (/^https?:/i.test(f)) {
+      try {
+        const u = new URL(f);
+        if (u.username || u.password || !origins.has(u.origin)) return false;
+        const tail = normTail(u);
+        if (pageTails.has(`${u.origin}\0${tail}`)) return true;
+        return !u.search && !u.hash && pagePrefixes.has(`${u.origin}\0${normPath(u.pathname)}`);
+      } catch {
+        return false;
+      }
+    }
+    if (f.startsWith("/") && !f.startsWith("//") && !f.includes("\\")) {
+      try {
+        const u = new URL(f, DUMMY);
+        if (u.origin !== DUMMY || u.username || u.password) return false;
+        const tail = normTail(u);
+        if (relTails.has(tail)) return true;
+        return !u.search && !u.hash && relPrefixes.has(normPath(u.pathname));
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
+  const own = (v: string) => {
+    const unquoted = v.replace(/^"|"$/g, "");
+    return [v, unquoted, pctDecode(unquoted, false)].some(
+      (f) =>
+        origins.has(f.replace(/\/$/, "").toLowerCase()) ||
+        hosts.has(f.replace(/^\./, "").toLowerCase()) ||
+        BROWSER_UA.test(f) ||
+        matchPage(f),
     );
+  };
   return {
     ...session,
     cookies: session.cookies.filter((c) => !own(c.value)),
@@ -555,14 +698,26 @@ function failClosed(out: string, session: Pick<Session, "cookies" | "values">): 
  * web storage. `keep`: the user's own example values, which a URL shows as they are.
  */
 export function captureLive(
-  c: Pick<CaptureResult, "cookies" | "storage">,
+  c: Pick<CaptureResult, "cookies" | "storage"> & {
+    url?: string;
+    softFrom?: string;
+    steps?: TriggerStep[];
+    args?: readonly (Record<string, unknown> | undefined)[];
+  },
   keep: readonly string[] = [],
 ): Pick<Session, "cookies" | "values"> {
   const own = new Set(keep.map((v) => v.toLowerCase()));
-  return {
+  const live = {
     cookies: c.cookies.filter((k) => !own.has(k.value.toLowerCase())),
     values: Object.fromEntries(Object.entries(c.storage ?? {}).filter(([, v]) => !own.has(v.toLowerCase()))),
   };
+  if (!c.url) return live;
+  const trigger: Pick<Trigger, "url" | "softFrom" | "steps"> = {
+    url: c.url,
+    ...(c.softFrom ? { softFrom: c.softFrom } : {}),
+    ...(c.steps ? { steps: c.steps } : {}),
+  };
+  return besideOrigins(live, [c.url, c.softFrom], triggerPages(trigger, c.args));
 }
 
 /* -------------------------------------------------------- a cookie's parts */

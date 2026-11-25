@@ -1197,3 +1197,152 @@ test("sameTrigger: the same page with placeholders at the same places, whatever 
     undefined,
   );
 });
+
+test("learn_site rejects captures lengths other than 2 and accepts 2 capture ids", async () => {
+  const prevHome = process.env.API_ANYTHING_HOME;
+  const home = mkdtempSync(join(tmpdir(), "aa-mcp-cap-len-"));
+  process.env.API_ANYTHING_HOME = home;
+  const client = new Client({ name: "cap-len-test", version: "0" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await Promise.all([createServer().connect(a), client.connect(b)]);
+  try {
+    const baseArgs = {
+      site: "shop",
+      op: "search",
+      trigger: "https://example.com/shop?q={q}",
+      args: { q: "alice" },
+      args2: { q: "bobby" },
+      args3: { q: "carol" },
+    };
+    for (const bad of [["only-one"], ["one", "two", "three"]]) {
+      await assert.rejects(async () => {
+        const r = await client.callTool({
+          name: "learn_site",
+          arguments: { ...baseArgs, captures: bad },
+        });
+        if (r.isError) throw new Error(JSON.stringify(r.content));
+      }, /captures|2/);
+    }
+    const r = await client.callTool({
+      name: "learn_site",
+      arguments: { ...baseArgs, captures: ["none-1", "none-2"] },
+    });
+    assert.equal(r.isError, true);
+    assert.match(JSON.stringify(r.content), /no capture|none-1/i);
+  } finally {
+    await client.close();
+    rmSync(home, { recursive: true, force: true });
+    process.env.API_ANYTHING_HOME = prevHome;
+  }
+});
+
+test("captureLive and learnSite allow analytics page-URL cookies on 2-capture learning and holdout", async () => {
+  const { captureLive } = await import("../src/secrets.js");
+  const { writePrivate } = await import("../src/session.js");
+  const prevHome = process.env.API_ANYTHING_HOME;
+  const home = mkdtempSync(join(tmpdir(), "aa-mcp-url-cookie-"));
+  process.env.API_ANYTHING_HOME = home;
+
+  const hits: string[] = [];
+  const srv = createHttpServer((req, res) => {
+    const u = new URL(req.url!, "http://127.0.0.1");
+    hits.push(`${req.method} ${u.pathname}${u.search}`);
+    if (u.pathname.startsWith("/api/tvs/")) {
+      const slug = u.pathname.slice("/api/tvs/".length);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ items: [{ slug, title: `Model ${slug}` }] }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end("<html></html>");
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+  const { port } = srv.address() as { port: number };
+  const base = `http://127.0.0.1:${port}`;
+
+  try {
+    const trigger = `${base}/us/tvs/{slug}/?view=specs`;
+    const p1 = `${base}/us/tvs/65-qled-4k/?view=specs`;
+    const p2 = `${base}/us/tvs/75-neo-qled/?view=specs`;
+    const cookie = (name: string, value: string) => ({
+      name,
+      value,
+      domain: "127.0.0.1",
+      path: "/",
+      expires: -1,
+      httpOnly: false,
+      secure: false,
+    });
+    const capFile = (id: string, slug: string, curUrl: string, prevUrl: string) => {
+      const cap = {
+        id,
+        at: new Date().toISOString(),
+        url: curUrl,
+        finalUrl: curUrl,
+        exchanges: [
+          {
+            id: 1,
+            resourceType: "fetch",
+            request: {
+              method: "GET",
+              url: `${base}/api/tvs/${slug}?view=specs`,
+              headers: {
+                cookie: `_ba_last_url=${encodeURIComponent(curUrl)}; _ba_last_2nd_url=${encodeURIComponent(prevUrl)}`,
+              },
+            },
+            response: {
+              status: 200,
+              contentType: "application/json",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ items: [{ slug, title: `Model ${slug}` }] }),
+            },
+          },
+        ],
+        cookies: [
+          cookie("_ba_last_url", encodeURIComponent(curUrl)),
+          cookie("_ba_last_2nd_url", encodeURIComponent(prevUrl)),
+        ],
+      };
+      mkdirSync(join(home, "captures"), { recursive: true });
+      writePrivate(join(home, "captures", `${id}.json`), JSON.stringify(cap));
+      return cap;
+    };
+
+    const c1 = capFile("cap1", "65-qled-4k", p1, `${base}/us/tvs/`);
+    const c2 = capFile("cap2", "75-neo-qled", p2, p1);
+
+    const liveFiltered = captureLive(
+      {
+        cookies: [...c1.cookies, cookie("sid", "real-session-token-xyz")],
+        storage: {},
+        url: trigger,
+        args: [{ slug: "65-qled-4k" }],
+      },
+      ["65-qled-4k"],
+    );
+    assert.deepEqual(
+      liveFiltered.cookies.map((c) => c.name),
+      ["sid"],
+    );
+
+    const res = await learnSite(
+      {
+        site: "tvshop",
+        op: "tv",
+        trigger,
+        args: { slug: "65-qled-4k" },
+        args2: { slug: "75-neo-qled" },
+        args3: { slug: "85-frame-tv" },
+        captures: [c1.id, c2.id],
+      },
+      { minIntervalMs: 0 },
+    );
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.equal(res.proof?.holdout.ok, true, JSON.stringify(res.proof));
+    assert.ok(hits.includes("GET /api/tvs/85-frame-tv?view=specs"), JSON.stringify(hits));
+  } finally {
+    await new Promise<void>((r) => srv.close(() => r()));
+    rmSync(home, { recursive: true, force: true });
+    process.env.API_ANYTHING_HOME = prevHome;
+  }
+});

@@ -321,16 +321,20 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
    the request's own Cookie header); the `session:` values that are credentials (found by name or as issued, stored as
    one, or sent under a credential's name), those of refs dropped from inside a container sent whole included; and
    the stored values that are credentials, whether or not anything made them refs. A cookie or stored value that is
-   the origin of a URL the operation sends to or opens (its request's, its trigger's or `softFrom`'s), raw, quoted
-   or percent-encoded, is no live value at all: not to learning's passes and this check, not to the add and heal
-   save-time scans, and not to export, which adds the spec's `baseUrl`. The spec spells those bytes as its host, so
-   a copy anywhere carries nothing new, and an analytics cookie keeping the last page (`https://www.x.test/`) would
-   otherwise refuse every learn on the site. Each saved operation's origins are recorded in the session file
-   (`origins`, never dropped), and a learn's own count for what the write storing its values stores (not for what
-   the file held: a refused save must not take a protection apart), so no session write records a setting as a
-   credential for holding one or being held by one. Any other
-   URL is a value like any other: another host's or port's origin, or one with user info, a path, a query or a
-   fragment. One exception, in this check only: a
+   the origin of a URL the operation sends to or opens (its request's, its trigger's or `softFrom`'s), a filled
+   trigger page URL (from the trigger's `url`, `softFrom`, or `goto` steps, using caller-supplied args; exact
+   normalized URL, segment prefix of its path with no query/fragment, or matching `/...` relative path), or its host
+   or browser `User-Agent`, raw, quoted or percent-encoded, is no live value at all: not to learning's passes and
+   this check, not to `captureLive`, not to the add and heal save-time scans, and not to export, which adds the
+   spec's `baseUrl`. The spec (together with the caller's trigger inputs) already spells those bytes, so a copy
+   anywhere carries nothing new, and an analytics cookie keeping the last visited page
+   (`https://www.x.test/` or `https%3A%2F%2Fwww.x.test%2Fus%2Fitem`) would otherwise refuse every learn on the
+   site. Each saved operation's origins (`origins`) and filled trigger pages (`pages`) are recorded in the session file
+   (never dropped), and a learn's own count for what the write storing its values stores (not for what the file held: a
+   refused save must not take a protection apart), so no session write records a setting as a credential for holding one
+   or being held by one. Any
+   other URL is a value like any other: another host's or port's origin, another path or non-segment prefix, added
+   query parameters or fragments, or a URL with userinfo. One exception, in this check only: a
    stored value that is a credential by its storage key's name alone (`token: "solarized-dark"`), neither random-looking
    nor shaped like a token (a JWT, a bearer, a long hex or base64 blob), does not refuse the learn, since the check
    fires only for a copy that could not be a ref and the text is then kept as captured; where it can be a ref it still

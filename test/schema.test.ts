@@ -458,3 +458,57 @@ test("find_sites' schema names what the catalog was not sent, beside what stayed
   assert.deepEqual(props.notSent, props.localOnly);
   assert.deepEqual(props.notSent, { type: "string" });
 });
+
+test("MCP and OpenAPI schemas emit no tuple prefixItems and validate learn_site captures", async () => {
+  const { createToolset } = await import("../src/mcp.js");
+  const { openApiDocument } = await import("../src/openapi.js");
+
+  const client = new Client({ name: "schema-tuple-check", version: "0" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await Promise.all([createServer({ allowWrites: true }).connect(a), client.connect(b)]);
+  const { tools } = await client.listTools();
+  await client.close();
+
+  const learn = tools.find((t) => t.name === "learn_site");
+  assert.ok(learn, "learn_site is registered");
+  const captures = learn.inputSchema.properties?.captures as Record<string, unknown> | undefined;
+  assert.deepEqual(captures, {
+    type: "array",
+    items: { type: "string" },
+    minItems: 2,
+    maxItems: 2,
+    description: captures?.description,
+  });
+
+  const checkSchema = (node: unknown, path: string): void => {
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) checkSchema(node[i], `${path}[${i}]`);
+      return;
+    }
+    if (!node || typeof node !== "object") return;
+    const obj = node as Record<string, unknown>;
+    assert.equal("prefixItems" in obj, false, `${path} must not emit prefixItems`);
+    if ("items" in obj) {
+      assert.ok(
+        typeof obj.items === "boolean" ||
+          (typeof obj.items === "object" && obj.items !== null && !Array.isArray(obj.items)),
+        `${path}.items must be object or boolean`,
+      );
+    }
+    for (const [k, v] of Object.entries(obj)) checkSchema(v, `${path}.${k}`);
+  };
+
+  for (const tool of tools) {
+    checkSchema(tool.inputSchema, `mcp.${tool.name}.inputSchema`);
+    if (tool.outputSchema) checkSchema(tool.outputSchema, `mcp.${tool.name}.outputSchema`);
+  }
+
+  const doc = openApiDocument(createToolset({ allowWrites: true }), {
+    url: "http://127.0.0.1:1",
+    version: "0",
+    allowWrites: true,
+    learn: true,
+    sites: [],
+  });
+  checkSchema(doc, "openapi");
+});
