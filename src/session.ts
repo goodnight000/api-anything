@@ -184,7 +184,12 @@ export function loadSession(site: string): Session {
  * -- before the write and after it, since either state can hold the relationship -- and a credential
  * is sticky. A setting whose own value this write replaces is left alone: the protected text is gone.
  */
-function recordProtection(site: string, s: Session, urls: (string | undefined)[]): Session {
+function recordProtection(
+  site: string,
+  s: Session,
+  urls: (string | undefined)[],
+  pages: readonly string[] = [],
+): Session {
   if (!s.kinds || !Object.values(s.kinds).includes("setting")) return s; // nothing is exempt: nothing to keep
   const kinds = { ...s.kinds };
   const stored = loadSession(site);
@@ -203,11 +208,11 @@ function recordProtection(site: string, s: Session, urls: (string | undefined)[]
   // The origins of an operation not saved yet relax only what this write stores: what the file held is
   // protected as it was, since a refused save would otherwise leave that protection taken apart.
   const own = s.origins ?? [];
-  for (const [held, origins] of [
-    [was, own],
-    [s, [...own, ...urls]],
+  for (const [held, origins, trigger] of [
+    [was, own, [] as readonly string[]],
+    [s, [...own, ...urls], pages],
   ] as const)
-    for (const name of Object.keys(credentialsOf(besideOrigins(held, origins)).values))
+    for (const name of Object.keys(credentialsOf(besideOrigins(held, origins, trigger)).values))
       if (held.kinds?.[name] === "setting" && kinds[name] === "setting" && held.values[name] === s.values[name])
         kinds[name] = "credential";
   return { ...s, kinds };
@@ -219,8 +224,13 @@ function recordProtection(site: string, s: Session, urls: (string | undefined)[]
  * kinds the seal has already overruled, and save a spec this file's own kinds refuse. `urls`: those of
  * an operation being learned, whose origins count as the site's own for this write only.
  */
-export function saveSession(site: string, s: Session, urls: (string | undefined)[] = []): Session {
-  const recorded = recordProtection(site, s, urls);
+export function saveSession(
+  site: string,
+  s: Session,
+  urls: (string | undefined)[] = [],
+  pages: readonly string[] = [],
+): Session {
+  const recorded = recordProtection(site, s, urls, pages);
   writeSealed(
     sessionFile(site),
     JSON.stringify({ ...recorded, updatedAt: new Date().toISOString() }, null, 1),
@@ -243,7 +253,7 @@ export function mergeCapture(
    * a learn's classification of `values`, and the URLs its operation sends to or opens; without one a
    * name whose value changed is unclassified again
    */
-  learned?: { settings: string[]; urls?: (string | undefined)[] },
+  learned?: { settings: string[]; urls?: (string | undefined)[]; pages?: readonly string[] },
   now = Date.now(),
 ): Session {
   const { values } = captured;
@@ -279,7 +289,7 @@ export function mergeCapture(
       ...(s.origins ? { origins: s.origins } : {}),
       ...(s.guestCookies ? { guestCookies: s.guestCookies } : {}),
     };
-    return saveSession(site, merged, learned?.urls);
+    return saveSession(site, merged, learned?.urls, learned?.pages);
   });
 }
 

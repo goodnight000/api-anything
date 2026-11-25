@@ -30,6 +30,7 @@ import {
   ipIn,
   leafName,
   literalCredentials,
+  opPages,
   opUrls,
   redact,
   scanSecrets,
@@ -790,7 +791,8 @@ export function exportSite(
     }
   });
   const own = [spec.baseUrl, ...spec.operations.flatMap(opUrls)];
-  const live = credentialsOf(besideOrigins(loadSession(name), own));
+  const pages = r.site.operations.flatMap((op) => opPages(op));
+  const live = credentialsOf(besideOrigins(loadSession(name), own, pages));
   const scan = scanSecrets(spec, live, allowed);
   const borderline = o.strict ? borderlineCredentials(spec, live) : [];
   // one finding per place: the exact live hit already names it

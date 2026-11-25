@@ -36,6 +36,7 @@ import {
   SESSION_FIELD,
   SESSION_HEADER,
   scanSecrets,
+  triggerPages,
   URLISH,
 } from "./secrets.js";
 import { loggedIn, parseCookieHeader, type Session } from "./session.js";
@@ -1349,30 +1350,41 @@ function covers(at: Step[], leaf: Step[]): boolean {
   return at.slice(0, last).every((step, i) => leaf[i] === step) && (deeper || below);
 }
 
-/** The cookies and storage a learn reads as live: all but the operation's own origins (`besideOrigins`). */
-const ownSession = (input: LearnInput, captured: Request, sent: StoredCookie[] = []) =>
+/** The cookies and storage a learn reads as live: all but the operation's own origins and filled trigger pages (`besideOrigins`). */
+const ownSession = (
+  input: LearnInput,
+  captured: Request,
+  sent: StoredCookie[] = [],
+  triggerArgs: readonly (Args | undefined)[] = input.examples,
+) =>
   besideOrigins(
     { cookies: [...input.cookies, ...sent], values: input.storage ?? {} },
     opUrls({ request: captured, trigger: input.trigger }),
+    triggerPages(input.trigger, triggerArgs),
   );
 
 /**
  * What the op being learned spells of its own accord (`ownTexts`), and the caller's example values: a
  * cookie that keeps the address of the page the learn opened holds each of them.
  */
-const ownOf = (input: LearnInput, captured: Request) => [
+const ownOf = (input: LearnInput, captured: Request, triggerArgs: readonly (Args | undefined)[] = input.examples) => [
   ...ownTexts({ request: captured, trigger: input.trigger }),
-  ...input.examples.flatMap((args) => Object.values(args ?? {}).map(asText)),
+  ...triggerArgs.flatMap((args) => Object.values(args ?? {}).map(asText)),
 ];
 
 /** `liveValues` of a learn's own session, with the parts of its cookies that `captured` sends. */
-function liveOf(input: LearnInput, captured: Request, sent?: StoredCookie[]): Map<string, Live> {
-  const { cookies, values } = ownSession(input, captured, sent);
+function liveOf(
+  input: LearnInput,
+  captured: Request,
+  sent?: StoredCookie[],
+  triggerArgs: readonly (Args | undefined)[] = input.examples,
+): Map<string, Live> {
+  const { cookies, values } = ownSession(input, captured, sent, triggerArgs);
   return liveValues(
     cookies,
     values,
     walk(captured).map((l) => l.value),
-    ownOf(input, captured),
+    ownOf(input, captured, triggerArgs),
   );
 }
 
@@ -1389,6 +1401,7 @@ function sessionRefs(
   captured: Request,
   leaves: Leaf[],
   params: Slot[],
+  triggerArgs: readonly (Args | undefined)[] = input.examples,
 ): {
   request: Request;
   slots: Slot[];
@@ -1396,8 +1409,8 @@ function sessionRefs(
   publicNames: string[];
   settings: string[];
 } {
-  const { cookies, values: storage } = ownSession(input, captured, sentCookies(ex));
-  const own = ownOf(input, captured);
+  const { cookies, values: storage } = ownSession(input, captured, sentCookies(ex), triggerArgs);
+  const own = ownOf(input, captured, triggerArgs);
   const live = liveValues(
     cookies,
     storage,
@@ -2015,7 +2028,12 @@ interface LearnedLookup {
  * it carries; or why it cannot be one. A lookup is sent with the op's session as it is: a value the
  * page makes, a stored session value or a nonce would need more than a template.
  */
-function learnLookup(input: LearnInput, e: Exchange, params: string[]): LearnedLookup | string {
+function learnLookup(
+  input: LearnInput,
+  e: Exchange,
+  params: string[],
+  triggerArgs: readonly (Args | undefined)[] = input.examples,
+): LearnedLookup | string {
   const only = (a: Args) => Object.fromEntries(params.flatMap((k) => (a[k] !== undefined ? [[k, a[k]]] : [])));
   const [a1, a2] = input.examples;
   let l: Learned;
@@ -2036,6 +2054,7 @@ function learnLookup(input: LearnInput, e: Exchange, params: string[]): LearnedL
       },
       new Map(),
       false,
+      triggerArgs,
     );
   } catch (err) {
     return `cannot be learned (${(err as Error).message.split(". ")[0]})`;
@@ -2076,11 +2095,12 @@ function derivedSlots(
   args: Args,
   pages: string[],
   warnings: string[],
+  triggerArgs: readonly (Args | undefined)[] = input.examples,
 ): Derived {
   const out: Derived = { slots: [], params: new Set(), types: new Map(), unproven: [] };
   const two = !!input.exchanges2 && !!input.examples[1];
   const kept = new Set((input.derived ?? []).map((d) => key(d.at)));
-  const live = liveOf(input, captured, sentCookies(exchange));
+  const live = liveOf(input, captured, sentCookies(exchange), triggerArgs);
   const found = lookedUp(input.exchanges, exchange, args, pages, (v) => live.has(v));
   if (!found.length) return out;
   // run 2's counterpart: the same request, with example values and the candidate path segments as wildcards
@@ -2104,7 +2124,7 @@ function derivedSlots(
     }
     let l = lookups.get(c.lookup.id);
     if (l === undefined) {
-      l = learnLookup(input, c.lookup, c.params);
+      l = learnLookup(input, c.lookup, c.params, triggerArgs);
       lookups.set(c.lookup.id, l);
     }
     if (typeof l === "string") {
@@ -2149,7 +2169,12 @@ export function learnOperation(input: LearnInput): Learned {
  * pass over the same input saw run 2 disprove. `derive`: look for derived values (a lookup's own
  * template is learned without).
  */
-function learn(input: LearnInput, disproved: Disproved, derive = true): Learned {
+function learn(
+  input: LearnInput,
+  disproved: Disproved,
+  derive = true,
+  triggerArgs: readonly (Args | undefined)[] = input.examples,
+): Learned {
   const { examples } = input;
   const [args1] = examples;
   // a short example is expected to equal leaves that are not its own: only the other disproofs are news
@@ -2166,13 +2191,13 @@ function learn(input: LearnInput, disproved: Disproved, derive = true): Learned 
 
   // 3, derived values: before the params, since a param only the lookup carries has no place here
   const derived = derive
-    ? derivedSlots(input, exchange, captured, args1, pages, warnings)
+    ? derivedSlots(input, exchange, captured, args1, pages, warnings, triggerArgs)
     : { slots: [], params: new Set<string>(), types: new Map<string, Param["type"]>(), unproven: [] };
 
   // 2. params. A request the agent picked by id is its call: an echo-shaped leaf there is evidence
   // (a route resolver posts {path:"/facebook/react"}, the page's own path).
   const locs = input.id !== undefined ? { abs: [], rel: [] } : locations(pages);
-  const live = input.established && liveOf(input, captured);
+  const live = input.established && liveOf(input, captured, undefined, triggerArgs);
   let param: ReturnType<typeof paramSlots>;
   try {
     param = paramSlots(
@@ -2196,10 +2221,14 @@ function learn(input: LearnInput, disproved: Disproved, derive = true): Learned 
   }
 
   // 4. session refs: live cookie/storage values anywhere, per-session fields, credential-named values, auth headers
-  let { request, slots, sessionValues, publicNames, settings } = sessionRefs(input, exchange, captured, leaves, [
-    ...param.slots,
-    ...derived.slots,
-  ]);
+  let { request, slots, sessionValues, publicNames, settings } = sessionRefs(
+    input,
+    exchange,
+    captured,
+    leaves,
+    [...param.slots, ...derived.slots],
+    triggerArgs,
+  );
 
   // 5. volatile anchors
   let volatile = volatileAnchors(request, leaves, slots);
@@ -2211,7 +2240,7 @@ function learn(input: LearnInput, disproved: Disproved, derive = true): Learned 
   // 3. two-run diff. A place run 2 disproved was never the param's: learn again without it.
   const found: Disproved = new Map(disproved);
   const { minTier, exchange2, generated } = twoRunDiff(input, exchange, request, slots, match, warnings, found, short);
-  if (found.size > disproved.size) return learn(input, found, derive);
+  if (found.size > disproved.size) return learn(input, found, derive, triggerArgs);
   if (generated.length) {
     ({ request, slots, volatile } = asGenerated({ request, slots, volatile }, generated, sessionValues));
     settings = settings.filter((n) => n in sessionValues);

@@ -66,7 +66,9 @@ export function registerLearn(
           ),
         embedded: z.string().optional().describe("a regex for JSON inside the page; group 1 marks where it starts"),
         captures: z
-          .tuple([z.string(), z.string()])
+          .array(z.string())
+          .min(2)
+          .max(2)
           .optional()
           .describe("an earlier result's captures: learn again from them, with no browser"),
         fresh: z
@@ -89,8 +91,14 @@ export function registerLearn(
       outputSchema: outputSchema(learnSiteSchema()),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
-    (input: LearnSiteInput) =>
-      o.asJob(`learn ${JSON.stringify(input)}`, LEARN_NOTE, async () => {
+    ({ captures, ...rest }) => {
+      const input: LearnSiteInput = {
+        ...rest,
+        ...(captures && captures[0] !== undefined && captures[1] !== undefined
+          ? { captures: [captures[0], captures[1]] }
+          : {}),
+      };
+      return o.asJob(`learn ${JSON.stringify(input)}`, LEARN_NOTE, async () => {
         let r: LearnSiteResult;
         // a write is refused by learnSite whatever its trigger
         // a goto step loads an address too
@@ -152,6 +160,7 @@ export function registerLearn(
           },
           !r.ok,
         );
-      }),
+      });
+    },
   );
 }

@@ -1589,3 +1589,201 @@ test("a setting a credential reaches only through a live value the learn did not
   );
   assert.deepEqual(exportSite("c25-link").secrets, [], "op one itself keeps no copy");
 });
+
+// Issue #158: analytics cookies holding the last two visited page URLs (samsung.com `_ba_last_url`
+// and `_ba_last_2nd_url`) equal the filled trigger URLs themselves; learning, export, publish plan,
+// and healing must treat them as the op's own trigger addresses rather than credentials.
+test("issue #158: last-page analytics cookies allow add, export, publish plan, and heal", async () => {
+  const { healOperation } = await import("../../src/heal.js");
+  const { plan } = await import("../../src/publish.js");
+  const { parseSite } = await import("../../src/spec.js");
+  const { saveSite } = await import("../../src/store.js");
+
+  const base = "https://www.samsung.test";
+  const trigger = { url: `${base}/us/{category}/{subcategory}/{slug}/` };
+  const a1 = { category: "tvs", subcategory: "qled-tv", slug: "55-neo-qled-4k" };
+  const a2 = { category: "tvs", subcategory: "qled-tv", slug: "65-neo-qled-4k" };
+  const p1 = `${base}/us/${a1.category}/${a1.subcategory}/${a1.slug}/`;
+  const p2 = `${base}/us/${a2.category}/${a2.subcategory}/${a2.slug}/`;
+  const embedded = '(\\{)\\s*"@context"\\s*:\\s*"https://schema\\.org/?"\\s*,\\s*"@type"\\s*:\\s*"Product"';
+
+  const docExchange = (id: number, pageUrl: string, title: string, cookieHeader: string): Exchange => ({
+    id,
+    resourceType: "document",
+    request: { method: "GET", url: pageUrl, headers: { cookie: cookieHeader } },
+    response: {
+      status: 200,
+      contentType: "text/html",
+      headers: { "content-type": "text/html" },
+      body: `<html><script type="application/ld+json">${JSON.stringify({ "@context": "https://schema.org", "@type": "Product", name: title })}</script></html>`,
+    },
+  });
+  const sCookie = (name: string, value: string): StoredCookie => ({
+    ...here(name, value),
+    domain: ".samsung.test",
+  });
+  const makeCap = (id: string, pageUrl: string, title: string, cookies: StoredCookie[]): CaptureFile => ({
+    id,
+    at: new Date().toISOString(),
+    url: pageUrl,
+    finalUrl: pageUrl,
+    exchanges: [docExchange(1, pageUrl, title, cookies.map((c) => `${c.name}=${c.value}`).join("; "))],
+    cookies,
+  });
+
+  const c1 = makeCap("sam-1", p1, "55 Neo QLED", [
+    sCookie("_ba_last_url", encodeURIComponent(p1)),
+    sCookie("_ba_last_2nd_url", encodeURIComponent(`${base}/us/`)),
+  ]);
+  const c2 = makeCap("sam-2", p2, "65 Neo QLED", [
+    sCookie("_ba_last_url", encodeURIComponent(p2)),
+    sCookie("_ba_last_2nd_url", encodeURIComponent(p1)),
+  ]);
+
+  const saved = await addOperation({
+    site: "sam158",
+    op: "product",
+    trigger,
+    examples: [a1, a2],
+    from: { capture: c1 },
+    from2: c2,
+    response: { embedded: { regex: embedded } },
+  });
+  assert.ok(
+    saved.operation.slots.some((s) => s.param === "slug"),
+    JSON.stringify(saved.operation.slots),
+  );
+  assert.equal(
+    saved.operation.slots.some((s) => s.ref?.includes("_ba_last")),
+    false,
+    JSON.stringify(saved.operation.slots),
+  );
+  assert.deepEqual(exportSite("sam158").secrets, []);
+  const planned = plan("sam158");
+  assert.deepEqual(
+    planned.ops[0]?.errors.filter((e) => /_ba_last|live cookie|credential/i.test(e)),
+    [],
+    JSON.stringify(planned.ops[0]?.errors),
+  );
+
+  // Rescan heal when session holds the filled trigger URL for callArgs
+  const OLD = "Aa1Bb2Cc3Dd4Ee5Ff6Gg7H";
+  const NEW = "Zz9Yy8Xx7Ww6Vv5Uu4Tt3S";
+  const op = parseSite({
+    name: "samheal",
+    baseUrl: base,
+    operations: [
+      {
+        name: "product",
+        readOnly: true,
+        request: { method: "GET", url: `${base}/api/${OLD}/Product?slug=55-neo-qled-4k`, headers: {} },
+        slots: [{ param: "slug", at: ["query:slug"] }],
+        volatile: [{ at: ["path:1"], shape: { charset: "base64url", length: 22 }, anchor: "Product" }],
+        trigger: { url: `${base}/us/tvs/{slug}/` },
+        params: [{ name: "slug", type: "string", required: true, example: "55-neo-qled-4k" }],
+        response: { extract: "product" },
+      },
+    ],
+  });
+  saveSite(op);
+  saveSession("samheal", {
+    cookies: [
+      sCookie("_ba_last_url", encodeURIComponent(`${base}/us/tvs/85-oled/`)),
+      sCookie("_ba_last_2nd_url", encodeURIComponent(`${base}/us/tvs/`)),
+    ],
+    values: {},
+  });
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const u = String(input);
+    if (u === `${base}/us/tvs/85-oled/`)
+      return new Response('<html><script src="/main.js"></script></html>', {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      });
+    if (u === `${base}/main.js`)
+      return new Response(`e.exports={queryId:"${NEW}",operationName:"Product"}`, {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+      });
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+
+  const healed = await healOperation(
+    "samheal",
+    op.operations[0]!,
+    { slug: "85-oled" },
+    {
+      fetchImpl,
+      browser: false,
+      validate: async () => ({ tier: 1 as const, class: "ok" as const, reason: "" }),
+    },
+  );
+  assert.equal(healed.outcome, "healed", JSON.stringify(healed));
+  assert.deepEqual(exportSite("samheal").secrets, []);
+});
+
+test("issue #158 negative control: analytics URL cookie carrying extra token query or reset path is still refused", async () => {
+  const trigger = { url: "http://127.0.0.1/us/tvs/{slug}/" };
+  const p1 = "http://127.0.0.1/us/tvs/55-neo-qled-4k/";
+  const p2 = "http://127.0.0.1/us/tvs/65-neo-qled-4k/";
+
+  const poisoned = `${p1}?token=secret-token-xyz`;
+  await assert.rejects(
+    addOperation({
+      site: "sam158-neg-query",
+      op: "product",
+      trigger,
+      examples: [{ slug: "55-neo-qled-4k" }, { slug: "65-neo-qled-4k" }],
+      from: {
+        capture: {
+          id: "neg-q-1",
+          at: new Date().toISOString(),
+          url: p1,
+          finalUrl: p1,
+          exchanges: [xhr({ url: `${local}?slug=55-neo-qled-4k&ctx=${b64(poisoned)}` })],
+          cookies: [here("_ba_last_url", encodeURIComponent(poisoned))],
+        },
+      },
+      from2: {
+        id: "neg-q-2",
+        at: new Date().toISOString(),
+        url: p2,
+        finalUrl: p2,
+        exchanges: [xhr({ url: `${local}?slug=65-neo-qled-4k&ctx=${b64(poisoned)}` })],
+        cookies: [here("_ba_last_url", encodeURIComponent(poisoned))],
+      },
+    }),
+    /holds the live cookie _ba_last_url/,
+  );
+  assert.equal(loadSite("sam158-neg-query"), undefined);
+
+  const resetUrl = "http://127.0.0.1/reset/secret-token-xyz";
+  await assert.rejects(
+    addOperation({
+      site: "sam158-neg-reset",
+      op: "product",
+      trigger,
+      examples: [{ slug: "55-neo-qled-4k" }, { slug: "65-neo-qled-4k" }],
+      from: {
+        capture: {
+          id: "neg-r-1",
+          at: new Date().toISOString(),
+          url: p1,
+          finalUrl: p1,
+          exchanges: [xhr({ url: `${local}?slug=55-neo-qled-4k&ctx=${b64(resetUrl)}` })],
+          cookies: [here("_ba_last_url", encodeURIComponent(resetUrl))],
+        },
+      },
+      from2: {
+        id: "neg-r-2",
+        at: new Date().toISOString(),
+        url: p2,
+        finalUrl: p2,
+        exchanges: [xhr({ url: `${local}?slug=65-neo-qled-4k&ctx=${b64(resetUrl)}` })],
+        cookies: [here("_ba_last_url", encodeURIComponent(resetUrl))],
+      },
+    }),
+    /holds the live cookie _ba_last_url/,
+  );
+  assert.equal(loadSite("sam158-neg-reset"), undefined);
+});

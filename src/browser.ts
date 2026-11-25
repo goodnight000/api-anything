@@ -4,6 +4,7 @@
  * process. Produces raw Exchanges for the learner (tier 3 / create / heal) and tier-2 page fetches.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { isIP } from "node:net";
 import { basename, join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import type { BrowserContext, Cookie, chromium, Dialog, Frame, Page, Request, Response, Route } from "playwright-core";
@@ -246,8 +247,11 @@ export function openBrowser({
   profileDir: string;
   headless?: boolean;
 }): Promise<BrowserContext> {
-  if (users === 0) scheduleIdleClose();
-  if (current && current.profileDir === profileDir && current.headless === headless) return current.ctx;
+  if (current && current.profileDir === profileDir && current.headless === headless) {
+    if (users === 0) scheduleIdleClose();
+    return current.ctx;
+  }
+  clearTimeout(idleTimer);
   const prev = current;
   const ctx = (async () => {
     if (prev) await closeContext(prev.ctx);
@@ -272,9 +276,14 @@ export function openBrowser({
     return c;
   })();
   current = { profileDir, headless, ctx };
-  ctx.catch(() => {
-    if (current?.ctx === ctx) current = undefined;
-  });
+  void ctx.then(
+    () => {
+      if (users === 0 && current?.ctx === ctx) scheduleIdleClose();
+    },
+    () => {
+      if (current?.ctx === ctx) current = undefined;
+    },
+  );
   return ctx;
 }
 
@@ -398,7 +407,9 @@ export async function clearProfileSite(site: string, profileDir: string, origins
     const ctx = await openBrowser({ profileDir });
     const esc = site.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const under = new RegExp(`(^|\\.)${esc}$`);
-    const hosts = new Set([site, `www.${site}`]);
+    const hosts = new Set(
+      isIP(site.replace(/^\[|\]$/g, "")) || site.startsWith("www.") ? [site] : [site, `www.${site}`],
+    );
     for (const c of await ctx.cookies()) {
       const host = c.domain.replace(/^\./, "").toLowerCase();
       if (under.test(host)) hosts.add(host);
