@@ -44,6 +44,7 @@ import { safeName } from "./session.js";
 import { HOLDOUT_PURPOSE, type ShareOutcome, shareOps } from "./share.js";
 import { CheckSchema, type Operation, type Paging } from "./spec.js";
 import { loadSite, updateSite } from "./store.js";
+import { isEventStream } from "./stream.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { badAddress, LIMITS, notARead } from "./vet.js";
 
@@ -225,7 +226,7 @@ const empty = (d: unknown) =>
 /** The recipe run 1's outline suggests for one request, if it can read the example values out of it. */
 function suggest(e: Exchange, carries: string[], values: string[]): Pick<Choice, "recipe" | "fields"> | undefined {
   const r = e.response;
-  const o = r?.body ? outline(r.contentType, r.body, values) : undefined;
+  const o = r && (r.body || isEventStream(r.contentType)) ? outline(r.contentType, r.body ?? "", values) : undefined;
   if (!o) return undefined;
   // a JSON answer is learnable only from a request that carries the args
   if (o.json)

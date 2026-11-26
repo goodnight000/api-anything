@@ -52,6 +52,7 @@ import {
   type Trigger,
   type Volatile,
 } from "./spec.js";
+import { isEventStream } from "./stream.js";
 import type { CaptureResult, Exchange, StoredCookie } from "./types.js";
 import { DERIVED_VALUE, METHOD_OVERRIDE } from "./vet.js";
 
@@ -363,11 +364,11 @@ function shortCarrier(examples: [string, string][], short: [string, string][], s
   };
 }
 
-/** `contentType`: the answer's, for a body that is one (`parseBody`). */
+/** `contentType`: the answer's, for a body that is one (`parseBody`); an empty event stream is an empty list. */
 function tryParse(body: string | undefined, contentType?: string): unknown {
-  if (!body) return undefined;
+  if (!body && !isEventStream(contentType)) return undefined;
   try {
-    return parseBody(body, undefined, contentType);
+    return parseBody(body ?? "", undefined, contentType);
   } catch {
     return undefined;
   }

@@ -92,6 +92,7 @@ import {
   updateSite,
   userSitesDir,
 } from "./store.js";
+import { isEventStream } from "./stream.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { readbackProblems, SHARED_NOTE } from "./vet.js";
 
@@ -101,7 +102,7 @@ const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.
 /** capture/inspect --outline: the scout's summary of one exchange's response. */
 function outlineOf(e: Exchange | undefined, values: string[]): { outline?: Outline } {
   const r = e?.response;
-  const o = r?.body ? outline(r.contentType, r.body, values) : undefined;
+  const o = r && (r.body || isEventStream(r.contentType)) ? outline(r.contentType, r.body ?? "", values) : undefined;
   return o && Object.keys(o).length ? { outline: o } : {};
 }
 

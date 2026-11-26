@@ -14,6 +14,7 @@ import { classify, judge } from "../src/classify.js";
 import { call } from "../src/execute.js";
 import { capOutput, extract, inferShape, parseBody, pick } from "../src/extract.js";
 import { addOperation, capturePage } from "../src/heal.js";
+import { learnOperation } from "../src/learn.js";
 import { outline } from "../src/outline.js";
 import { loadSession } from "../src/session.js";
 import { type Operation, OperationSchema, type Site } from "../src/spec.js";
@@ -181,6 +182,38 @@ describe("the content type decides whether a body is a stream, wherever there is
     assert.deepEqual(parseBody(STREAM), EVENTS);
     assert.deepEqual(parseBody(STREAM, undefined, ""), EVENTS);
     assert.equal(classify(read({ extract: "[*]" }), { status: 200, headers: {}, body: STREAM }).class, "ok");
+  });
+
+  test("an empty body is a stream when its content type says so, in learning as in a call", () => {
+    const exchange = (contentType: string) => ({
+      id: 1,
+      resourceType: "fetch",
+      request: { method: "GET", url: "https://s.test/api/live?q=alpha", headers: {} },
+      response: { status: 200, headers: { "content-type": contentType }, contentType, body: "" },
+    });
+    const learned = (contentType: string) =>
+      learnOperation({
+        name: "live",
+        readOnly: true,
+        trigger: { url: "https://s.test/live?q={q}" },
+        match: { path: "/api/live" },
+        examples: [{ q: "alpha" }],
+        cookies: [],
+        exchanges: [exchange(contentType)],
+      }).operation;
+    // a completed stream with no bytes: its next call's events are read as events, not as raw text
+    for (const type of ["text/event-stream", "text/event-stream; charset=utf-8"]) {
+      const o = learned(type);
+      assert.equal(o.response.format, "json", type);
+      const j = judge(o, { status: 200, headers: { "content-type": type }, body: "data: hello\n\n" });
+      assert.deepEqual([j.class, j.data], ["ok", [{ event: "message", data: "hello" }]], `${type}: ${j.reason}`);
+    }
+    // any other type of empty answer is no stream: kept as the text it is
+    const plain = learned("text/plain");
+    assert.equal(plain.response.format, "html");
+    // and an outline of an empty stream is the empty list it is; of empty text, nothing
+    assert.ok(outline("text/event-stream", "", []), "an empty stream has an outline");
+    assert.equal(outline("text/plain", "", []), undefined);
   });
 });
 
