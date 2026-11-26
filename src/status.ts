@@ -5,6 +5,7 @@
  */
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { windowWhere } from "./attach.js";
 import { loadRecord, type Outcome, opHash } from "./checks.js";
 import { settingsFix, settingsProblem } from "./identity.js";
 import { strayLogin } from "./login.js";
@@ -172,7 +173,7 @@ function stepFor(cls: string, site: string, name: string, write: boolean): strin
     case "auth":
       return `ask the user to run: api-anything login ${site}; then retry once`;
     case "blocked":
-      return `ask the user to run api-anything login ${site} --window and clear the challenge in the window, then retry once`;
+      return `ask the user to run api-anything login ${site} --window${windowWhere()} and clear the challenge in the window, then retry once`;
     case "rate":
       return "rate limited: wait a few minutes before the next call";
     case "drift":
@@ -247,7 +248,7 @@ function siteStatus(name: string, now: number, named: boolean): { status: SiteSt
           ? "the site refuses this network or region (HTTP 451): no call changes that; tell the user"
           : cool.class === "rate"
             ? `rate limited: wait until ${iso(cool.until)}; only if the user asks, send one sooner with api-anything call ${name} <op> --force`
-            : `ask the user to run api-anything login ${name} --window (a login ends the wait), then retry once`,
+            : `ask the user to run api-anything login ${name} --window${windowWhere()} (a login ends the wait), then retry once`,
     });
   }
 

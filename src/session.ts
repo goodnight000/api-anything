@@ -491,15 +491,26 @@ export function signInCookies(
 }
 
 /**
- * Cookies every visitor is given, signed in or not, that carry no account: analytics, consent, bot
- * management, CSRF tokens, and Google's signed-out preference cookies. Only positive evidence belongs
- * here: never a login cookie (Google's SID, HSID, SSID, APISID, SAPISID and __Secure-*PSID* stay out).
- * Analytics scripts set many of these from page script, where a cookie-less probe never sees them
- * (Google Ads, Hotjar, Segment, Clarity, HubSpot, Bing, Pinterest, TikTok, Stripe's fraud ids,
- * Datadog RUM). HubSpot's are named one by one: its `__hsmem` is a member's sign-in.
+ * Cookies a page sets on every visit without asking the visitor anything: analytics, advertising,
+ * Google's signed-out preference cookies, CSRF tokens. None carries an account, and none is a
+ * visitor's answer to the page. Analytics scripts set many of these from page script, where a
+ * cookie-less probe never sees them (Google Ads, Hotjar, Segment, Clarity, HubSpot, Bing, Pinterest,
+ * TikTok, Stripe's fraud ids, Datadog RUM). HubSpot's are named one by one: its `__hsmem` is a
+ * member's sign-in.
  */
-export const ANONYMOUS_COOKIE =
-  /^(_ga|_ga_[\w-]+|_gid|_gat|_gat_[\w-]+|_fbp|CONSENT|SOCS|OptanonConsent|OptanonAlertBoxClosed|euconsent(-v\d+)?|__cf_bm|_cfuvid|cf_clearance|csrftoken|XSRF-TOKEN|_csrf|NID|AEC|1P_JAR|__Secure-ENID|_gcl_[\w-]+|_hj[\w-]+|ajs_anonymous_id|_clck|_clsk|__hstc|__hssc|__hssrc|hubspotutk|_uetsid|_uetvid|_pin_unauth|_ttp|_tt_enable_cookie|__stripe_mid|__stripe_sid|_dd_s)$/;
+export const UNASKED_COOKIE =
+  /^(_ga|_ga_[\w-]+|_gid|_gat|_gat_[\w-]+|_fbp|csrftoken|XSRF-TOKEN|_csrf|NID|AEC|1P_JAR|__Secure-ENID|_gcl_[\w-]+|_hj[\w-]+|ajs_anonymous_id|_clck|_clsk|__hstc|__hssc|__hssrc|hubspotutk|_uetsid|_uetvid|_pin_unauth|_ttp|_tt_enable_cookie|__stripe_mid|__stripe_sid|_dd_s)$/;
+
+/** Cookies that record a visitor's answer and carry no account: a cookie consent, a cleared bot check. */
+export const ANSWER_COOKIE =
+  /^(CONSENT|SOCS|OptanonConsent|OptanonAlertBoxClosed|euconsent(-v\d+)?|__cf_bm|_cfuvid|cf_clearance)$/;
+
+/**
+ * Cookies every visitor is given, signed in or not, that carry no account (`UNASKED_COOKIE` and
+ * `ANSWER_COOKIE`). Only positive evidence belongs here: never a login cookie (Google's SID, HSID,
+ * SSID, APISID, SAPISID and __Secure-*PSID* stay out).
+ */
+export const ANONYMOUS_COOKIE = new RegExp(`${UNASKED_COOKIE.source}|${ANSWER_COOKIE.source}`);
 
 /**
  * Whether a cookie of this name may carry the user's account. A name is anonymous only on positive

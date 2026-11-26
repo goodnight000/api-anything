@@ -4,7 +4,7 @@
  * reactive only.
  */
 import { randomBytes } from "node:crypto";
-import { AttachError } from "./attach.js";
+import { AttachError, windowWhere } from "./attach.js";
 import {
   browserAvailable,
   type PageFetchResult,
@@ -591,8 +591,8 @@ function nextFor(
     case "blocked":
       if (a?.status === 451) return REGION;
       if (a?.missing)
-        return `the site refuses requests from this machine or network (a 403 with no challenge or sign-in to clear): do not retry as it is; a window may show why: ask the user to run api-anything login ${site} --window, then retry once`;
-      return `the site is challenging automated requests: ask the user to run api-anything login ${site} --window and clear the challenge in the window, then retry once`;
+        return `the site refuses requests from this machine or network (a 403 with no challenge or sign-in to clear): do not retry as it is; a window may show why: ask the user to run api-anything login ${site} --window${windowWhere()}, then retry once`;
+      return `the site is challenging automated requests: ask the user to run api-anything login ${site} --window${windowWhere()} and clear the challenge in the window, then retry once`;
     case "drift":
       if (!op.readOnly)
         return `${ran ? "the write may have run: check the site first, then " : ""}re-learn it with api-anything add ${site} ${op.name} ... --write`;
@@ -616,7 +616,7 @@ function unfinishedNext(site: string, op: Operation, at: string, wall?: "consent
     return `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${shown} in their browser and finish it, then run api-anything login ${site}; then retry once`;
   if (signedInRead(op))
     return `the site asks for a cookie-consent choice first: ask the user to open ${shown} in their browser and finish it, then run api-anything login ${site}; then retry once`;
-  return `the site asks this visitor for a cookie-consent choice first (${shown}), which api-anything never makes for the user: ask the user to run api-anything login ${site} --window, make the choice on the site's page there and close the window (the cookies the site sets then are kept for ${site}); then retry once`;
+  return `the site asks this visitor for a cookie-consent choice first (${shown}), which api-anything never makes for the user: ask the user to run api-anything login ${site} --window${windowWhere()}, make the choice on the site's page there and close the window (the cookies the site sets then are kept for ${site}); then retry once`;
 }
 
 function success(a: Attempt, extra: Partial<Result> = {}): Result {

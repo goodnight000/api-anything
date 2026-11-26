@@ -5,11 +5,12 @@
  * untouched.
  */
 import assert from "node:assert/strict";
-import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { createServer as createNet } from "node:net";
+import { execFile } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer as httpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -20,19 +21,29 @@ import {
   browserChoice,
   clearProfileSite,
   closeBrowser,
+  openBrowser,
   pageFetch,
   profileCookies,
   runTrigger,
 } from "../src/browser.js";
 import { call } from "../src/execute.js";
-import { addOperation, PROFILE_HINT, profileDir } from "../src/heal.js";
+import { addOperation, capturePage, PROFILE_HINT, profileDir } from "../src/heal.js";
 import { claim, lockPath } from "../src/lock.js";
-import { logout, windowLogin } from "../src/login.js";
+import { logout } from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
 import { saveSite } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
+import {
+  freePort,
+  sleep,
+  startUserBrowser,
+  stopUserBrowser,
+  type UserBrowser,
+  userCookies,
+  userTabs,
+} from "./fixture/user-browser.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-attach-"));
@@ -44,83 +55,6 @@ after(() => {
   delete process.env.API_ANYTHING_CDP;
   rmSync(HOME, { recursive: true, force: true });
 });
-
-async function freePort(): Promise<number> {
-  const s = createNet();
-  await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
-  const { port } = s.address() as { port: number };
-  await new Promise((r) => s.close(r));
-  return port;
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** A Chromium with a DevTools port, its own profile and one tab open at `url`: the user's browser. */
-interface UserBrowser {
-  proc: ChildProcess;
-  port: number;
-  dir: string;
-}
-async function startUserBrowser(port: number, url: string): Promise<UserBrowser> {
-  const dir = mkdtempSync(join(tmpdir(), "api-anything-attach-user-"));
-  const proc = spawn(
-    BIN!,
-    [
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${dir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--no-sandbox",
-      // a user can allow a site's pop-ups: the guards on the tabs a run opens are proven with them allowed
-      "--disable-popup-blocking",
-      ...(process.env.DISPLAY ? [] : ["--headless=new"]),
-      url,
-    ],
-    { stdio: "ignore" },
-  );
-  for (const end = Date.now() + 20_000; Date.now() < end; ) {
-    if (proc.exitCode !== null) throw new Error(`the browser exited with ${proc.exitCode}`);
-    try {
-      if ((await fetch(`http://127.0.0.1:${port}/json/version`)).ok && (await userTabs(port)).length)
-        return { proc, port, dir };
-    } catch {
-      /* not up yet */
-    }
-    await sleep(100);
-  }
-  proc.kill("SIGKILL");
-  throw new Error("the browser did not open its DevTools port");
-}
-async function stopUserBrowser(b: UserBrowser | undefined): Promise<void> {
-  if (!b) return;
-  if (b.proc.exitCode === null && b.proc.signalCode === null) {
-    const exited = new Promise((r) => b.proc.once("exit", r));
-    b.proc.kill("SIGKILL");
-    await exited;
-  }
-  // its helper processes may still be writing for a moment after it went
-  rmSync(b.dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-}
-
-/** The browser's open tabs, as its own DevTools endpoint lists them. */
-async function userTabs(port: number): Promise<{ id: string; url: string }[]> {
-  const list = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as {
-    id: string;
-    url: string;
-    type: string;
-  }[];
-  return list.filter((t) => t.type === "page").map(({ id, url }) => ({ id, url }));
-}
-
-/** The user's own cookies, read as the user would, from a connection of the test's. */
-async function userCookies(port: number): Promise<string[]> {
-  const b = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-  try {
-    return (await b.contexts()[0]!.cookies()).map((c) => `${c.name}=${c.value}`);
-  } finally {
-    await b.close();
-  }
-}
 
 /** The rejections nothing handled while `run` ran, and a moment after. */
 async function unhandledDuring(run: () => Promise<void>): Promise<string[]> {
@@ -135,6 +69,17 @@ async function unhandledDuring(run: () => Promise<void>): Promise<string[]> {
   }
   return seen.map(String);
 }
+
+/** A cookie of the user's own spec's jar. */
+const JAR_COOKIE: StoredCookie = {
+  name: "carried",
+  value: "from-the-jar",
+  domain: "127.0.0.1",
+  path: "/",
+  expires: -1,
+  httpOnly: true,
+  secure: false,
+};
 
 const minTier2 = (fx: Fixture) =>
   parseSite({
@@ -224,6 +169,72 @@ describe("API_ANYTHING_CDP refused before anything connects", () => {
       delete process.env.API_ANYTHING_PROXY;
     }
   });
+
+  /** A local server that answers /json/version as a browser's DevTools endpoint does, and nothing else. */
+  const fakeDevTools = async () => {
+    const server = httpServer((req, res) => {
+      const { port } = server.address() as AddressInfo;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/fake` }));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as AddressInfo;
+    return { host: `127.0.0.1:${port}`, close: () => new Promise<void>((r) => server.close(() => r())) };
+  };
+
+  test("the attach lock is in a directory of this OS user's alone, so another user's lock never blocks it", () => {
+    const file = lockPath(attachLock("127.0.0.1:9222"));
+    if (process.platform === "win32") return; // the temp directory is the user's own there
+    const dir = dirname(file);
+    assert.notEqual(dir, tmpdir(), "not in the temp directory every user shares");
+    const s = statSync(dir);
+    assert.equal(s.uid, process.getuid!());
+    assert.equal(s.mode & 0o077, 0, "no other user can enter it");
+  });
+
+  test("a lock that cannot be opened, or a lock directory that is not this user's alone, is refused cleanly with a next", async () => {
+    saveSite(minTier2(fx));
+    const devtools = await fakeDevTools();
+    process.env.API_ANYTHING_CDP = `http://${devtools.host}`;
+    const lock = lockPath(attachLock(devtools.host));
+    const refused = async (what: string, why: RegExp) => {
+      await assert.rejects(fetchOnce(), (e: Error) => {
+        assert.ok(e instanceof AttachError, `${what}: ${e.name}: ${e.message}`);
+        assert.match(e.message, why, what);
+        assert.ok(e.next.length > 0, what);
+        return true;
+      });
+      const r = await call("attached", "secret", {}, fast);
+      assert.deepEqual([r.ok, r.class], [false, "error"], `${what}: ${JSON.stringify(r)}`);
+      assert.match(r.reason ?? "", why, what);
+      assert.ok((r.next ?? "").length > 0, `${what}: a next`);
+    };
+    try {
+      // what another OS user's lock file is to this process: there, and not to be opened
+      rmSync(lock, { recursive: true, force: true });
+      mkdirSync(lock);
+      await refused("a directory in the lock's place", /lock .*could not be opened/);
+      rmSync(lock, { recursive: true, force: true });
+      if (process.getuid?.() !== 0) {
+        writeFileSync(lock, "");
+        chmodSync(lock, 0);
+        await refused("a lock file this user may not open", /lock .*could not be opened/);
+        rmSync(lock, { force: true });
+      }
+      if (process.platform !== "win32") {
+        const dir = dirname(lock);
+        chmodSync(dir, 0o777);
+        try {
+          await refused("a lock directory others may write to", /not a directory of this user's alone/);
+        } finally {
+          chmodSync(dir, 0o700);
+        }
+      }
+    } finally {
+      rmSync(lock, { recursive: true, force: true });
+      await devtools.close();
+    }
+  });
 });
 
 describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser installed" }, () => {
@@ -245,7 +256,7 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
   before(async () => {
     fx = await startFixture();
     port = await freePort();
-    user = await startUserBrowser(port, `${fx.url}/list`);
+    user = await startUserBrowser(BIN!, port, `${fx.url}/list`);
     [tab] = await userTabs(port);
     await signIn();
     process.env.API_ANYTHING_CDP = `http://localhost:${port}`;
@@ -271,6 +282,8 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
       method: "GET",
       headers: { "x-csrf-token": ct0.value, authorization: PUBLIC_BEARER },
       profileDir: profileDir(),
+      // the jar the run's cookies were merged into, as a call of the user's own spec passes it
+      jar: r.cookies,
     });
     assert.equal(f.status, 200);
     assert.equal(JSON.parse(f.body).data.user.name, "alice");
@@ -366,9 +379,6 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
       AttachError,
     );
     await assert.rejects(clearProfileSite("127.0.0.1", profileDir()), AttachError);
-    const w = await windowLogin("fixture", `${fx.url}/private`, { waitForEnter: false });
-    assert.equal(w.ok, false);
-    assert.match(w.ok ? "" : w.reason, /API_ANYTHING_CDP/);
     const out = await logout("attached");
     assert.equal(out.session, true, "the jar is removed");
     assert.notEqual(out.profile, "cleared");
@@ -376,6 +386,69 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
     assert.ok((await userCookies(port)).includes(USER_COOKIE), "the user's cookie is still in their browser");
   });
 
+  test("logout while attached leaves none of the site's cookies in api-anything's context, and the next call carries none", async () => {
+    saveSite(minTier2(fx));
+    const session = { ...JAR_COOKIE, name: "session", value: fx.mintSession() };
+    saveSession("attached", { cookies: [session], values: {} });
+    const signedIn = await call("attached", "secret", {}, fast);
+    assert.equal(signedIn.ok, true, JSON.stringify(signedIn));
+    const ctx = await openBrowser({ profileDir: profileDir() });
+    assert.ok(
+      (await ctx.cookies()).some((c) => c.name === "session"),
+      "the call's context holds the jar's cookie",
+    );
+    await logout("attached");
+    assert.deepEqual(
+      (await ctx.cookies()).filter((c) => c.domain.replace(/^\./, "") === "127.0.0.1").map((c) => c.name),
+      [],
+      "the context the call left open holds none of the site's cookies",
+    );
+    const after = await call("attached", "secret", {}, fast);
+    assert.notEqual(after.ok, true, JSON.stringify(after));
+    assert.equal(
+      loadSession("attached").cookies.some((c) => c.name === "session"),
+      false,
+      "no run merged the old sign-in back into the jar",
+    );
+    assert.ok((await userCookies(port)).includes(USER_COOKIE), "the user's own context is untouched");
+  });
+
+  test("a run that carries no stored cookies, right after or during one that carries the jar, carries none of it; neither breaks the other", async () => {
+    const sent = (tag: string) =>
+      fx.calls.filter((c) => c.path.includes(`tag=${tag}`)).map((c) => String(c.headers.cookie ?? ""));
+    const page = (tag: string) => `${fx.url}/api/result-list?tag=${tag}`;
+    const carried = `${JAR_COOKIE.name}=${JAR_COOKIE.value}`;
+    await runTrigger({ url: page("own1"), profileDir: profileDir(), jar: [JAR_COOKIE] });
+    await capturePage({ url: page("bare1") });
+    assert.ok(sent("own1").length && sent("own1").every((h) => h.includes(carried)), JSON.stringify(sent("own1")));
+    assert.ok(sent("bare1").length && sent("bare1").every((h) => !h.includes(carried)), JSON.stringify(sent("bare1")));
+    // at once: the jar's run loads a second page after the bare run has started
+    const own = runTrigger({
+      url: page("own2"),
+      profileDir: profileDir(),
+      jar: [JAR_COOKIE],
+      steps: [
+        { action: "wait", ms: 2000 },
+        { action: "goto", value: page("own3") },
+      ],
+    });
+    await sleep(500);
+    const bare = capturePage({ url: page("bare2") });
+    const [o, b] = await Promise.all([own, bare]);
+    for (const tag of ["own2", "own3"])
+      assert.ok(
+        sent(tag).length && sent(tag).every((h) => h.includes(carried)),
+        `${tag}: ${JSON.stringify(sent(tag))}`,
+      );
+    assert.ok(sent("bare2").length && sent("bare2").every((h) => !h.includes(carried)), JSON.stringify(sent("bare2")));
+    assert.ok(o.cookies.some((c) => c.name === JAR_COOKIE.name));
+    assert.equal(
+      b.cookies.some((c) => c.name === JAR_COOKIE.name),
+      false,
+      "the bare run read none of the jar back",
+    );
+    assert.equal(sentUserCookie(), false);
+  });
   test("idle close and closeBrowser() leave the browser and the user's tab as they were, and take api-anything's tabs", async () => {
     await runTrigger({ url: `${fx.url}/u/alice`, profileDir: profileDir() });
     await pageFetch({ origin: fx.url, url: `${fx.url}/list`, method: "GET", headers: {}, profileDir: profileDir() });
@@ -420,7 +493,7 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
         pageFetch({ origin: fx.url, url: `${fx.url}/list`, method: "GET", headers: {}, profileDir: profileDir() }),
         (e: Error) => e instanceof AttachError && /nothing answers/.test(e.message),
       );
-      user = await startUserBrowser(port, `${fx.url}/list`);
+      user = await startUserBrowser(BIN!, port, `${fx.url}/list`);
       const back = await runTrigger({ url: `${fx.url}/u/alice`, profileDir: profileDir() });
       assert.ok(back.exchanges.some((e) => e.request.url.includes("/UserByName?") && e.response?.status === 200));
       [tab] = await userTabs(port);
@@ -493,6 +566,23 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
       assert.equal(n.skipped, 0, `${name}: nothing is skipped for want of a browser`);
       assert.ok(n.pass >= (name === "whole files" ? 30 : 15), `${name}: ${JSON.stringify(n)}`);
     }
+    assert.deepEqual(await userTabs(port), [tab], "the runs left the user's tab alone and took their own");
+    assert.ok((await userCookies(port)).includes(USER_COOKIE));
+    assert.equal(sentUserCookie(), false);
+  });
+
+  test("the stream tests' browser cases pass in attached mode", { timeout: 900_000 }, async () => {
+    await closeBrowser();
+    const r = await suite(["test/stream.test.ts"]);
+    const n = counts(r.out);
+    const failed = r.out.split("\n").filter((l) => /^\s*not ok /.test(l));
+    assert.equal(r.code, 0, `${failed.join("\n")}\n${r.out.slice(-4000)}`);
+    assert.equal(n.fail, 0, r.out.slice(-4000));
+    assert.equal(n.cancelled, 0);
+    assert.equal(n.skipped, 0, "nothing is skipped for want of a browser");
+    // the file's browser cases, learned and called at every tier, among the rest
+    assert.ok(n.pass >= 30, JSON.stringify(n));
+    assert.match(r.out, /^\s*ok \d+ - learned and called at every tier$/m);
     assert.deepEqual(await userTabs(port), [tab], "the runs left the user's tab alone and took their own");
     assert.ok((await userCookies(port)).includes(USER_COOKIE));
     assert.equal(sentUserCookie(), false);

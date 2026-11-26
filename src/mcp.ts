@@ -13,13 +13,15 @@ import { readFileSync } from "node:fs";
 import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { AttachError, attached } from "./attach.js";
 import { idleWork } from "./background.js";
 import { BATCH_CONCURRENCY, BatchItemSchema, callReads } from "./batch.js";
-import { closeBrowser } from "./browser.js";
+import { closeBrowser, ProfileInUse } from "./browser.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { describeOperation, inputSchema } from "./describe.js";
 import { type CallOptions, call, type NextCall } from "./execute.js";
 import { returnedFields } from "./extract.js";
+import { PROFILE_HINT } from "./heal.js";
 import { publicAddress } from "./http.js";
 import { localOnlyOff } from "./identity.js";
 import { type Job, Jobs, type Permits } from "./jobs.js";
@@ -30,10 +32,10 @@ import {
   cookieNames,
   importSession,
   importWarning,
-  keptNote,
   knownGuests,
   resolveLoginTarget,
   strayLogin,
+  windowAnswer,
   windowLogin,
   windowRetry,
 } from "./login.js";
@@ -408,11 +410,13 @@ async function guard(fn: () => Promise<Reply>): Promise<Reply> {
         ok: false,
         error: msg,
         next:
-          e instanceof SealError || e instanceof LockBusy
+          e instanceof SealError || e instanceof LockBusy || e instanceof AttachError
             ? mcpNext(e.next)
-            : /invalid site name|no site/.test(msg)
-              ? "list_sites"
-              : "fix or delete the file named in error, then retry once",
+            : e instanceof ProfileInUse
+              ? PROFILE_HINT
+              : /invalid site name|no site/.test(msg)
+                ? "list_sites"
+                : "fix or delete the file named in error, then retry once",
       },
       true,
     );
@@ -1032,7 +1036,7 @@ export function createToolset({
     "login",
     {
       description:
-        "Sign in to a site so its operations work; use after a call returns class 'auth'. mode 'import' (default) refreshes the session from the browser profile the user already chose with `api-anything login` (no password); 'window' opens a visible browser for the user to sign in and clear 2FA/captcha by hand, or answer a cookie-consent page (a call's wall 'consent'): tell the user to close that window when done. A window still open after about 25 s answers class pending with a job (get_job); a second login for the site meanwhile returns the same job, and the window closes by itself after 10 minutes.",
+        "Sign in to a site so its operations work; use after a call returns class 'auth'. mode 'import' (default) refreshes the session from the browser profile the user already chose with `api-anything login` (no password); 'window' opens a visible browser for the user to sign in and clear 2FA/captcha by hand, or answer a cookie-consent page (a call's wall 'consent'): tell the user to close that window when done. With API_ANYTHING_CDP set it is a new window of the browser the user runs. A window still open after about 25 s answers class pending with a job (get_job); a second login for the site meanwhile returns the same job, and the window closes by itself after 10 minutes.",
       inputSchema: {
         site: z.string().optional().describe("site name from list_sites"),
         url: z.string().optional().describe("a full URL, if the site is not yet known (window mode only)"),
@@ -1076,7 +1080,7 @@ export function createToolset({
         if (mode === "window")
           return asJob(
             `login ${t.site}`,
-            "the sign-in window is open: tell the user to sign in there and close it when done",
+            `the sign-in window is open${attached() ? " in a new window of the browser the user runs" : ""}: tell the user to sign in there and close it when done`,
             async () => {
               // a human signs in by hand: they see which site and which account
               let capped = false;
@@ -1107,13 +1111,7 @@ export function createToolset({
                   true,
                 );
               return reply({
-                ok: true,
-                site: t.site,
-                source: "window",
-                cookies: cookieNames(w.cookies),
-                loggedIn: !w.kept,
-                renewed: w.renewed,
-                ...(w.kept ? { kept: w.kept, warning: keptNote(t.site, w.kept) } : {}),
+                ...windowAnswer(t.site, w, 'ask the user, then call login with mode "window" again'),
                 ...why,
               });
             },
