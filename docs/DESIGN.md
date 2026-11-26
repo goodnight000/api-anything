@@ -1593,8 +1593,9 @@ default: a plain call writes none.
   and the site's `baseUrl`: an edit, a heal or a raised `minTier` is a miss) and at a tier the call's
   `maxTier` allows, the call answers it with `cached: true` and `ageMs`, sending nothing, before the
   cool-down or the budget is consulted; it is not a call of the site, so it adds no call-log line and
-  no report. Every read that sends with `maxAgeMs` or `changes` and gets an `ok` answer refreshes the
-  cache entry. Only an `ok` answer is ever kept, so a failure is never served, and a failed call
+  no report. A kept answer that was an event stream cut at a bound keeps its `truncated`, and a hit
+  answers with it, so a cut answer never comes back looking whole. Every read that sends with
+  `maxAgeMs` or `changes` and gets an `ok` answer refreshes the cache entry. Only an `ok` answer is ever kept, so a failure is never served, and a failed call
   leaves the last ok answer in place. A write is never kept or served (each call is the user's
   action), whatever it is passed; neither is a write's readback. A `maxAgeMs` call never moves a baseline.
 - `changes` (CLI `--changes`): the answer gains `changes`, against the baseline of the call's watcher,
@@ -1619,7 +1620,8 @@ default: a plain call writes none.
   view's `maxChars`: the longest of the three lists loses its last entries, and `truncated` counts
   them, saying they are not reported again. When the answer cannot be kept as the baseline (too
   large, a home that cannot be written, a session that changed during the call), the call stays `ok` and `changes` says `retained: false` with
-  a `reason`: the next call compares with the one before. `changesOnly` (CLI `--changes-only`) answers
+  a `reason`: the next call compares with the one before. A baseline that was a stream cut at a bound
+  makes `changes` say so in `sinceTruncated` (its `truncated`): what it lacked shows as added. `changesOnly` (CLI `--changes-only`) answers
   `changes` with no `data` and keeps no result view, for polling at a few tokens a run; it is a read's
   option, and a write keeps its `data`. A cached answer compared with a baseline it already is reports
   nothing changed.

@@ -45,6 +45,8 @@ export type Changes =
       /** a list: the field items are told apart by; `hash` when none identifies them */
       key?: string;
       truncated?: string;
+      /** the answer compared with was a stream cut at a bound (why): what it lacked shows as added */
+      sinceTruncated?: string;
     } & NotRetained);
 
 /** Fields that name an item on most sites, tried in this order when the op declares no key. */

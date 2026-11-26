@@ -362,6 +362,19 @@ describe("against the fixture", () => {
       assert.ok(took < STREAM_IDLE_MS + 4000, `took ${took} ms`);
     });
 
+    test("a cached answer of a cut stream says it was cut, and so does a comparison with one", async () => {
+      const keep = { ...one, ignoreCoolDown: true, maxAgeMs: 60_000, changes: true };
+      const first = await call(SITE, "idle", { q: "lima" }, keep);
+      assert.match(first.truncated ?? "", /no event for 3 s/, JSON.stringify(first));
+      const hit = await call(SITE, "idle", { q: "lima" }, { ...one, maxAgeMs: 60_000 });
+      assert.equal(hit.cached, true, JSON.stringify(hit));
+      assert.deepEqual(hit.data, first.data);
+      assert.equal(hit.truncated, first.truncated, "the cache entry says what its answer said");
+      const next = await call(SITE, "idle", { q: "lima" }, { ...one, ignoreCoolDown: true, changes: true });
+      const changes = next.changes as { sinceTruncated?: string } | undefined;
+      assert.equal(changes?.sinceTruncated, first.truncated, JSON.stringify(next.changes));
+    });
+
     test("an error event, a rate limit, a challenge and an empty stream each get their class", async () => {
       // each call past the cool-down the one before it starts
       const past = { ...one, ignoreCoolDown: true };

@@ -24,6 +24,8 @@ export interface Snapshot {
   data: unknown;
   nextPage?: string | number;
   hasMore?: boolean;
+  /** the answer was the part of an event stream read before a bound: why it stopped there */
+  truncated?: string;
 }
 
 export const KEEP_SNAPSHOT_MS = 30 * 24 * 60 * 60_000;
