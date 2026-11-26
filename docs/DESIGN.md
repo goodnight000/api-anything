@@ -1245,7 +1245,12 @@ send a request again (its own scripts, a retry after a navigation or a connectio
 - `softFrom` loads the neutral page, then navigates in-app: a link the app rendered is clicked
   (its router handles it); otherwise `history.pushState` + `popstate`, which client routers listen
   to. Only if nothing fired does it load the URL. An injected `<a>` is not routed by React Router,
-  TanStack or Comet, so it would be a second full page load that fires no data XHR.
+  TanStack or Comet, so it would be a second full page load that fires no data XHR. "Nothing fired"
+  is judged after the page had up to 1 s to show a first request or a new address: a route's
+  request can lag its click (a handler that waits, a busy machine), and a page taken for unrouted
+  too early got a second load of the same address, which the link's own navigation then interrupted
+  (`PageUnreachable`, seen in the suite under load). A load that such a navigation still interrupts
+  waits for that navigation instead of failing.
 - Service workers are blocked in the profile: their fetches bypass routing and capture.
 - Known gap: shared workers are not guarded. A shared worker's requests reach no route, no page's
   tap and no capture, so a write a guarded page hands to one (started from a URL, a blob: or data:
