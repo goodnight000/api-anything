@@ -36,6 +36,7 @@ import { browserProxy, proxied } from "./proxy.js";
 import { SIGN_IN_AUTOCOMPLETE, SIGN_IN_REFUSAL } from "./secrets.js";
 import { home, siteOf, writePrivate } from "./session.js";
 import type { Request as Hop } from "./spec.js";
+import { carriesField, isEventStream, STREAM_IDLE_MS, STREAM_MAX_MS, type StreamCut, streamCut } from "./stream.js";
 import type { CaptureResult, Exchange, SeenDialog, StoredCookie, TriggerStep } from "./types.js";
 
 let current: { key: string; ctx: Promise<BrowserContext>; close: () => Promise<void> } | undefined;
@@ -579,8 +580,9 @@ export async function clearProfileSite(site: string, profileDir: string, origins
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-// Binary resources: their bodies are never useful to the learner and are not valid UTF-8. A stream's never ends.
-const NO_BODY = new Set(["image", "media", "font", "stylesheet", "eventsource", "websocket"]);
+// Binary resources: their bodies are never useful to the learner and are not valid UTF-8. A WebSocket's
+// messages are not a body. An event stream's is read as it arrives (streamTap), to a bound.
+const NO_BODY = new Set(["image", "media", "font", "stylesheet", "websocket"]);
 const QUIET_MS = 500;
 // Streams never finish; a request open this long is a long poll or a hung tracker, not the data.
 const LONG_LIVED = new Set(["eventsource", "websocket"]);
@@ -767,6 +769,136 @@ async function tap(
   };
 }
 
+/** One event stream a page is receiving, as its DevTools session reports it. */
+interface Streaming {
+  url: string;
+  method: string;
+  chunks: Buffer[];
+  bytes: number;
+  /** when its response came, and when the last piece carrying a field did (stream.ts carriesField) */
+  start: number;
+  last: number;
+  ended: boolean;
+  /** the browser answered the ask to stream it, with what it had buffered: before that, an end says nothing */
+  ready: boolean;
+  /** the browser would not hand its body over as it streams: Playwright's own read is the fallback */
+  unread?: boolean;
+  /** taken by an exchange */
+  claimed?: boolean;
+}
+
+/**
+ * A page's event streams, read as they arrive on a DevTools session of the run's own: Playwright's
+ * `text()` of a response settles only once its body has ended, which a stream may never do, and it
+ * never reads an EventSource's. Each stream's pieces are kept up to `MAX_BODY_BYTES`; the page itself
+ * is not touched and gets every byte as before.
+ */
+async function streamTap(ctx: BrowserContext, page: Page) {
+  const cdp = await ctx.newCDPSession(page);
+  const methods = new Map<string, string>();
+  const streams = new Map<string, Streaming>();
+  const decoders = new Map<string, TextDecoder>();
+  const add = (id: string, data: string | undefined) => {
+    const s = streams.get(id);
+    if (!s || !data) return;
+    const buf = Buffer.from(data, "base64");
+    if (s.bytes + buf.byteLength > MAX_BODY_BYTES) {
+      s.bytes = Number.POSITIVE_INFINITY;
+      return;
+    }
+    s.bytes += buf.byteLength;
+    s.chunks.push(buf);
+    if (carriesField(decoders.get(id)!.decode(buf, { stream: true }))) s.last = Date.now();
+  };
+  cdp.on("Network.requestWillBeSent", (e) => void methods.set(e.requestId, e.request.method));
+  cdp.on("Network.responseReceived", (e) => {
+    const method = methods.get(e.requestId) ?? "GET";
+    if (!isEventStream(e.response.mimeType) && !isEventStream(e.response.headers["content-type"])) return;
+    const s: Streaming = {
+      url: e.response.url,
+      method,
+      chunks: [],
+      bytes: 0,
+      start: Date.now(),
+      last: Date.now(),
+      ended: false,
+      ready: false,
+      claimed: false,
+    };
+    streams.set(e.requestId, s);
+    decoders.set(e.requestId, new TextDecoder());
+    cdp.send("Network.streamResourceContent", { requestId: e.requestId }).then(
+      (r) => {
+        add(e.requestId, r.bufferedData);
+        s.ready = true;
+      },
+      () => {
+        s.unread = true;
+        s.ready = true;
+      },
+    );
+  });
+  cdp.on("Network.dataReceived", (e) => add(e.requestId, e.data));
+  const done = ({ requestId }: { requestId: string }) => {
+    methods.delete(requestId);
+    const s = streams.get(requestId);
+    if (s) s.ended = true;
+  };
+  cdp.on("Network.loadingFinished", done);
+  cdp.on("Network.loadingFailed", done);
+  await cdp.send("Network.enable");
+  return {
+    /** the stream answering this request, once the session has seen its response (up to a second later) */
+    async find(method: string, url: string): Promise<Streaming | undefined> {
+      for (const end = Date.now() + 1000; Date.now() < end; await sleep(20))
+        for (const s of streams.values())
+          if (s.claimed === false && s.method === method && s.url === url) {
+            s.claimed = true;
+            return s;
+          }
+      return undefined;
+    },
+    /** let go of a stream's pieces once read */
+    drop(s: Streaming) {
+      for (const [id, x] of streams)
+        if (x === s) {
+          streams.delete(id);
+          decoders.delete(id);
+        }
+    },
+  };
+}
+type StreamTap = Awaited<ReturnType<typeof streamTap>>;
+
+/**
+ * Read a tapped stream until it ends or a bound (stream.ts) stops it, or `stop` resolves (the run is
+ * done with it), or `until`, the run's deadline, comes. The body is what arrived, the bound its
+ * `truncated`; undefined when the browser would not stream it after all.
+ */
+async function readTapped(
+  s: Streaming,
+  until: number,
+  stop: Promise<unknown>,
+): Promise<{ body: string; truncated?: string } | undefined> {
+  let stopped = false;
+  void stop.then(() => (stopped = true));
+  let cut: StreamCut | undefined;
+  for (;;) {
+    const now = Date.now();
+    if (s.unread) return undefined;
+    if (s.ended && s.ready) break;
+    if (s.bytes === Number.POSITIVE_INFINITY) cut = "bytes";
+    else if (stopped || now >= until) cut = "ended";
+    else if (now - s.start >= STREAM_MAX_MS) cut = "time";
+    else if (now - s.last >= STREAM_IDLE_MS) cut = "idle";
+    if (cut) break;
+    await sleep(50);
+  }
+  return {
+    body: Buffer.concat(s.chunks).toString("utf8"),
+    ...(cut ? { truncated: streamCut(cut, Date.now() - s.start) } : {}),
+  };
+}
 /**
  * Leave a page for about:blank in an attached browser, where the back/forward cache is on (a browser
  * api-anything launches has it off): a document left by a plain navigation is kept, frozen, and what
@@ -1017,6 +1149,15 @@ async function trigger(o: TriggerOptions): Promise<CaptureResult> {
   };
   page.on("dialog", onDialog);
 
+  /** each page of the run's stream tap, once attached (undefined when that failed) */
+  const streamTaps = new Map<Page, Promise<StreamTap | undefined>>();
+  const watchStreams = (p: Page) => {
+    if (!streamTaps.has(p))
+      streamTaps.set(
+        p,
+        streamTap(ctx, p).catch(() => undefined),
+      );
+  };
   // This run's pages: its own and any popup they open. The context is shared with concurrent runs.
   const own = new Set<Page>([page]);
   const ownerOf = (req: Request): Page | undefined => {
@@ -1045,6 +1186,7 @@ async function trigger(o: TriggerOptions): Promise<CaptureResult> {
     if ((opener && own.has(opener)) || (await stray(p))) {
       own.add(p);
       cover(p);
+      watchStreams(p);
       p.on("dialog", onDialog);
     }
     return own.has(p);
@@ -1127,16 +1269,50 @@ async function trigger(o: TriggerOptions): Promise<CaptureResult> {
   const onDone = (req: Request) => {
     if (pending.delete(req)) lastActivity = Date.now();
   };
+  /** event streams being read, each to its own bound (stream.ts), and how to stop each one sooner */
+  const streamReads: Promise<unknown>[] = [];
+  const streamStops = new Map<Exchange, () => void>();
+  const readStream = async (res: Response, ex: Exchange): Promise<{ body?: string; truncated?: string }> => {
+    let stop = () => {};
+    const stopped = new Promise<void>((r) => (stop = r));
+    streamStops.set(ex, stop);
+    const owner = ownerOf(res.request());
+    const t = owner && (await streamTaps.get(owner));
+    const s = await t?.find(res.request().method(), res.url());
+    const tapped = s && (await readTapped(s, deadline, stopped));
+    if (s) t!.drop(s);
+    if (tapped) return tapped;
+    // Playwright's own read, which settles once the body has ended: a stream that finished, or nothing
+    const start = Date.now();
+    const late = new Promise<undefined>((r) =>
+      setTimeout(() => r(undefined), Math.max(0, Math.min(STREAM_MAX_MS, deadline - start))).unref(),
+    );
+    const body = await Promise.race([res.text().catch(() => undefined), stopped.then(() => undefined), late]);
+    return body === undefined ? { truncated: streamCut("time", Date.now() - start) } : { body };
+  };
   // Bodies must be read here: after the next navigation the browser discards them.
   const onResponse = (res: Response) => {
     if (!mine(res.request())) return;
     const ex = record(res.request());
+    // a stream is not "still loading": it is read on its own, to its bound
+    const streamed = isEventStream(res.headers()["content-type"]);
+    if (streamed && pending.delete(res.request())) lastActivity = Date.now();
     const read = (async () => {
       const headers = await res.allHeaders().catch(() => res.headers());
+      const contentType = headers["content-type"] ?? "";
+      if (streamed) {
+        const { body, truncated } = await readStream(res, ex);
+        ex.response = { status: res.status(), headers, body, contentType, ...(truncated ? { truncated } : {}) };
+        return;
+      }
       const body = NO_BODY.has(ex.resourceType) ? undefined : await res.text().catch(() => undefined);
-      ex.response = { status: res.status(), headers, body, contentType: headers["content-type"] ?? "" };
+      ex.response = { status: res.status(), headers, body, contentType };
     })();
     bodies.set(ex, read);
+    if (streamed) {
+      streamReads.push(read.catch(() => {}));
+      return;
+    }
     // a body its document outlives by 2 s is not coming (Playwright never settles it)
     const gone = nextDoc.then(() => sleep(2000));
     bounded(Promise.race([read, gone]));
@@ -1299,6 +1475,9 @@ async function trigger(o: TriggerOptions): Promise<CaptureResult> {
     if (intercept) dropSocketSends = await guardSockets(ctx, (ex) => intercept(ex, acting));
     // in place before the first document, so that what it defers (fetchLater) passes through it
     cover(page);
+    // and so is the stream tap, so that a stream the first document opens is read from its start
+    watchStreams(page);
+    await within(Promise.resolve(streamTaps.get(page)), undefined);
     if (intercept && !(await within(Promise.resolve(taps.get(page)), undefined)))
       throw new Error("could not attach the request guard to the page");
     if (o.softFrom) {
@@ -1378,6 +1557,13 @@ async function trigger(o: TriggerOptions): Promise<CaptureResult> {
       }
     })();
     await Promise.race([settled, grace]);
+    // Streams are read to their own bounds. With a match only the op's own is waited for: the others
+    // stop here, with what they sent so far.
+    for (let n = -1; n !== streamReads.length; ) {
+      n = streamReads.length;
+      for (const [ex, stop] of streamStops) if (o.match && !o.match(ex)) stop();
+      await Promise.all(streamReads);
+    }
     // Tokens an SPA keeps in web storage (not the jar); learning turns a request repeating one into a session: ref.
     const storage = await within(
       page.evaluate(() =>
@@ -1473,6 +1659,8 @@ export interface PageFetchResult {
   ms: number;
   /** the first answer was a redirect */
   redirected?: boolean;
+  /** the body is the part of an event stream read before a bound: why it stopped (stream.ts) */
+  truncated?: string;
 }
 
 /**
@@ -1640,8 +1828,15 @@ async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetc
       const redirects: Response[] = [];
       const onResponse = (res: Response) => void (res.status() >= 300 && res.status() < 400 && redirects.push(res));
       page.on("response", onResponse);
+      // An event stream is read here as it arrives, to the bounds of stream.ts, inside what is left of the
+      // fetch's time (its abort would throw away what arrived), and then closed.
+      const stream = {
+        idle: STREAM_IDLE_MS,
+        max: Math.max(0, Math.min(STREAM_MAX_MS, left - 500)),
+        cap: MAX_BODY_BYTES,
+      };
       const run = page.evaluate(
-        async ({ url, method, headers, body, left, credentials }) => {
+        async ({ url, method, headers, body, left, credentials, stream }) => {
           const r = await fetch(url, {
             method,
             headers,
@@ -1655,9 +1850,66 @@ async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetc
           r.headers.forEach((v, k) => {
             h[k] = v;
           });
-          return { opaque: false as const, status: r.status, headers: h, body: await r.text(), url: r.url };
+          let cut: "idle" | "time" | "bytes" | undefined;
+          const start = Date.now();
+          if (!r.body || !/^\s*text\/event-stream\s*(;|$)/i.test(r.headers.get("content-type") ?? ""))
+            return {
+              opaque: false as const,
+              status: r.status,
+              headers: h,
+              body: await r.text(),
+              url: r.url,
+              cut,
+              ms: 0,
+            };
+          const reader = r.body.getReader();
+          const decoder = new TextDecoder();
+          let text = "";
+          let bytes = 0;
+          let last = start;
+          let pending: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+          for (;;) {
+            const idleAt = last + stream.idle;
+            const end = start + stream.max;
+            const wait = Math.min(idleAt, end) - Date.now();
+            if (wait <= 0) {
+              cut = idleAt < end ? "idle" : "time";
+              break;
+            }
+            pending ??= reader.read();
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const got = await Promise.race([
+              pending,
+              new Promise<undefined>((done) => {
+                timer = setTimeout(() => done(undefined), wait);
+              }),
+            ]);
+            clearTimeout(timer);
+            if (!got) continue;
+            pending = undefined;
+            if (got.done) break;
+            bytes += got.value.byteLength;
+            if (bytes > stream.cap) {
+              cut = "bytes";
+              break;
+            }
+            const piece = decoder.decode(got.value, { stream: true });
+            text += piece;
+            // a piece with a field line is an event on its way; comments alone are a heartbeat
+            if (/(?:^|[\r\n])[^:\r\n]/.test(piece)) last = Date.now();
+          }
+          if (cut) void reader.cancel().catch(() => {});
+          return {
+            opaque: false as const,
+            status: r.status,
+            headers: h,
+            body: text,
+            url: r.url,
+            cut,
+            ms: Date.now() - start,
+          };
         },
-        { ...hop, left, credentials: o.credentials ?? ("include" as const) },
+        { ...hop, left, credentials: o.credentials ?? ("include" as const), stream },
       );
       // the page itself can hang (a stuck renderer): the budget holds either way
       let timer: NodeJS.Timeout | undefined;
@@ -1675,7 +1927,9 @@ async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetc
       });
       try {
         const r = await Promise.race([run, late, quiet]);
-        return r.opaque ? await redirectOf(redirects, hop, r.url) : { ...r, location: undefined };
+        if (r.opaque) return await redirectOf(redirects, hop, r.url);
+        const { cut, ms, ...answer } = r;
+        return { ...answer, ...(cut ? { truncated: streamCut(cut, ms) } : {}), location: undefined };
       } catch (e) {
         const message = (e as Error).message;
         const timedOut = /TimeoutError|timed out|signal timed out|no response within/i.test(message);

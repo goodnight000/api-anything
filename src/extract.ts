@@ -2,6 +2,7 @@
 import { type HTMLElement, parse as parseHtml } from "node-html-parser";
 import { jsonValueEnd, parseJson } from "./codec.js";
 import type { ResponseSpec } from "./spec.js";
+import { looksLikeEventStream, parseEventStream } from "./stream.js";
 
 export const XSSI = ")]}'";
 // Anti-JSON-hijacking prefixes: Google's, Meta's /ajax/* and older Google/Facebook APIs.
@@ -12,10 +13,12 @@ export const xssiOf = (body: string) => PREFIXES.find((p) => body.trimStart().st
 
 /**
  * Strip the XSSI prefix and parse JSON losslessly. Google `rt=c` length-prefixed chunks, and
- * Meta-style bodies that repeat the prefix before each JSON value, become an array.
+ * Meta-style bodies that repeat the prefix before each JSON value, become an array. A server-sent
+ * event stream becomes its list of events (stream.ts).
  */
 export function parseBody(body: string, xssiPrefix?: string): unknown {
   let text = body.trimStart();
+  if (looksLikeEventStream(text)) return parseEventStream(text);
   const prefix = xssiPrefix ?? xssiOf(text) ?? "";
   if (prefix && text.startsWith(prefix)) text = text.slice(prefix.length);
   text = text.trim();

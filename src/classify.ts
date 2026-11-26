@@ -19,6 +19,7 @@ import {
 } from "./extract.js";
 import { siteOf } from "./session.js";
 import type { Operation, ResponseSpec } from "./spec.js";
+import { looksLikeEventStream, type StreamEvent } from "./stream.js";
 
 export type Class = "ok" | "drift" | "auth" | "rate" | "blocked" | "input" | "error";
 export interface Classified {
@@ -61,6 +62,8 @@ export interface Observed {
   url?: string;
   /** the first answer was a redirect, followed to `url`; false when the transport knows it was not */
   redirected?: boolean;
+  /** the body is the part of an event stream read before a bound: why the read stopped (stream.ts) */
+  truncated?: string;
 }
 
 // [vendor, interstitial, integration]. The interstitial pattern is the challenge page's own
@@ -729,7 +732,31 @@ function classifyResponse(
   readHtml = (recipe: HtmlRecipe) => extractHtml(r.body ?? "", recipe),
 ): Classified {
   const c = classifyBody(op, r, readJson, readTarget, readPicked, readHtml);
-  return c.class === "drift" ? (consentWall(op, r) ?? c) : c;
+  if (c.class !== "drift") return c;
+  // the part of a stream read before a bound may hold no data yet: nothing moved, and a heal would read the same
+  return (
+    consentWall(op, r) ??
+    (r.truncated
+      ? is("error", `${c.reason} in what arrived (${r.truncated}): the data may come later in the stream`)
+      : c)
+  );
+}
+
+/**
+ * A decoded event stream's own verdict, before the recipe reads it: an `error` event is the stream
+ * saying the answer failed, so the call is not ok and nothing is healed, whatever data came before it
+ * (its words can make it auth or rate, as a refusal's do). A stream cut at a bound before any event is
+ * an error too: nothing has been answered yet.
+ */
+function streamVerdict(r: Observed, data: unknown): Classified | undefined {
+  if (!Array.isArray(data) || !looksLikeEventStream((r.body ?? "").trimStart())) return undefined;
+  const failed = (data as StreamEvent[]).find((e) => e?.event === "error");
+  if (failed) {
+    const said = typeof failed.data === "string" ? failed.data : (JSON.stringify(failed.data) ?? "");
+    return refusedAs(said, `the event stream sent an error event${said.trim() ? `: ${snippet(said)}` : ""}`);
+  }
+  if (r.truncated && !data.length) return is("error", `${r.truncated}, and no event had arrived`);
+  return undefined;
 }
 
 function classifyBody(
@@ -859,6 +886,8 @@ function classifyBody(
       return is("drift", isHtml ? "HTML where JSON was expected" : `response is not JSON: ${snippet(body)}`);
     }
   }
+  const streamed = streamVerdict(r, data);
+  if (streamed) return streamed;
   const d = data as { errors?: unknown; data?: unknown } | null;
   const errors = d && typeof d === "object" && Array.isArray(d.errors) && d.errors.length ? d.errors : undefined;
   // An error status in the body is judged as that status: a server's own failure is not moved data.
@@ -960,6 +989,8 @@ export interface Judged extends Classified {
   nextPage?: string | number;
   /** true with a nextPage; false when the answer says there is none (null, "" or false there) */
   hasMore?: boolean;
+  /** the data is from the part of an event stream read before a bound; see Observed.truncated */
+  truncated?: string;
 }
 
 /**
@@ -1022,7 +1053,7 @@ export function judge(op: Operation, r: Observed): Judged {
   if (c.class !== "ok" && !c.lost) return c;
   try {
     // from the whole answer, before extract and pick throw the rest away
-    const page = pageOf(op, r.body, readJson);
+    const page = { ...pageOf(op, r.body, readJson), ...(r.truncated ? { truncated: r.truncated } : {}) };
     // r.url is the page's final address (redirects included): it is where a relative @href/@src lives
     if (op.response.format === "embedded")
       return { ...c, data: projected ? projected.data : extract(op.response, r.body, r.url), ...page };

@@ -160,7 +160,6 @@ const DENY_RESOURCE = new Set([
   "manifest",
   "texttrack",
   "websocket",
-  "eventsource",
   "preflight",
   "ping",
   "cspviolationreport",
@@ -170,7 +169,10 @@ const DENY_MIME =
 const ANALYTICS =
   /google-analytics\.com|googletagmanager\.com|doubleclick\.net|sentry\.io|\/sentry\/|segment\.(io|com)|mixpanel\.com|amplitude\.com|hotjar\.com|facebook\.com\/tr|clarity\.ms|nr-data\.net|datadoghq|\/(collect|beacon|log_event|telemetry|jot|csp-report|client_event|tracking|logging)(\/|\?|$)/i;
 // Pages and APIs can end in .js (github.com/vercel/next.js, /repos/chart.js): the extension only means an asset for subresources.
-const DATA_RESOURCE = new Set(["document", "xhr", "fetch"]);
+// An EventSource's stream (stream.ts) is data, read like a fetch's.
+const DATA_RESOURCE = new Set(["document", "xhr", "fetch", "eventsource"]);
+/** The requests a page's script makes for data. */
+const SCRIPTED = new Set(["xhr", "fetch", "eventsource"]);
 
 function isNoise(e: Exchange): boolean {
   if (e.request.method.toUpperCase() === "OPTIONS") return true;
@@ -189,7 +191,7 @@ function isNoise(e: Exchange): boolean {
   // Media is never data, even fetched by XHR (video segments); otherwise XHR/fetch are data by
   // definition: Instagram's GraphQL answers JSON as text/javascript.
   if (/^(image|font|video|audio)\//i.test(e.response.contentType)) return true;
-  return e.resourceType !== "xhr" && e.resourceType !== "fetch" && DENY_MIME.test(e.response.contentType);
+  return !SCRIPTED.has(e.resourceType) && DENY_MIME.test(e.response.contentType);
 }
 
 /* ------------------------------------------------------------- candidates */
@@ -414,7 +416,7 @@ export function rankCandidates(
         (e.aborted ? 600 : 0) +
         (status !== undefined && status >= 200 && status < 300 ? 300 : 0) +
         (json ? 400 : 0) +
-        (e.resourceType === "xhr" || e.resourceType === "fetch" ? 100 : 0) +
+        (SCRIPTED.has(e.resourceType) ? 100 : 0) +
         (values.some(([, v]) => lower.includes(v)) ? 200 : 0) +
         Math.min(body.length / 1000, 100);
       return {
