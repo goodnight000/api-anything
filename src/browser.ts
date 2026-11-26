@@ -27,11 +27,12 @@ import {
   attached,
   attachLock,
   attachSetting,
+  lockRefused,
   ownProfileRefused,
 } from "./attach.js";
 import { botWall } from "./classify.js";
 import { MAX_BODY_BYTES } from "./http.js";
-import { claim } from "./lock.js";
+import { claim, lockPath } from "./lock.js";
 import { browserProxy, proxied } from "./proxy.js";
 import { SIGN_IN_AUTOCOMPLETE, SIGN_IN_REFUSAL } from "./secrets.js";
 import { home, siteOf, writePrivate } from "./session.js";
@@ -356,7 +357,10 @@ async function guest(): Promise<BrowserContext> {
   const { host } = new URL(endpoint);
   // One process at a time, as with the profile: another DevTools client takes this one's tabs for the
   // browser's own and answers their dialogs (seen: a confirm a write's learning accepts, dismissed).
-  const release = await claim(attachLock(host), LOCK_WAIT_MS);
+  const file = attachLock(host);
+  const release = await claim(file, LOCK_WAIT_MS).catch((e) => {
+    throw lockRefused(host, lockPath(file), e);
+  });
   if (!release)
     throw new ProfileInUse(
       host,

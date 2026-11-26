@@ -1306,9 +1306,16 @@ attach to. A DevTools endpoint is full control of a browser.
   DevTools clients of one browser each take the other's context for the default one, so each sees
   the other's tabs as tabs of the browser and answers their dialogs (seen: two test processes
   attached at once dismissed each other's confirms, and an order a read's learning should have
-  stopped reached the server). The lock is machine-wide, in the temp directory, keyed by the
-  address and port, not under a home; another process waits up to 15 s for it, then fails as
-  `ProfileInUse` does. A DevTools client that is not api-anything is not excluded: keep other
+  stopped reached the server). The lock is per OS user, keyed by the address and port, not under a
+  home: `api-anything-<uid>/api-anything-cdp-<host>_<port>.lk` in the temp directory, a directory
+  of the user's own (0700; one that is not a directory, is another user's, or is open to others is
+  refused as `AttachError` with a `next`). It used to be in the temp directory itself, which Linux
+  shares: once one user had attached to a port, another user's every attached call failed with
+  SQLite's "unable to open database file" and no `next`. A lock file that cannot be opened is
+  refused as `AttachError` with a `next` too, nothing sent. Another process of the same user waits
+  up to 15 s for it, then fails as `ProfileInUse` does. Two OS users attached to one browser at once
+  are not kept apart: each would need the other's DevTools port, which is full control of the
+  browser either way. A DevTools client that is not api-anything is not excluded: keep other
   automation off the port while api-anything uses it.
 - Sessions. The context starts empty. For the user's own specs, a call's tier-2 page and its
   trigger run, a heal's recapture and `add`'s runs first get the site's stored cookies, what tier 1

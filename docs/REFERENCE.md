@@ -398,8 +398,11 @@ Attached mode refuses, with a reason and a `next`:
   only), refreshing cookies from it on `auth`, and clearing it on `logout` (`logout` still
   removes the stored session, and says when api-anything's own profile kept the site's cookies;
   unset the variable and log out again to clear them);
-- a second api-anything process while one is attached: it waits up to 15 s, then fails with a
-  hint, as with the profile. Keep other automation off the port while api-anything uses it.
+- a second api-anything process of the same OS user while one is attached: it waits up to 15 s,
+  then fails with a hint, as with the profile. Keep other automation off the port while
+  api-anything uses it. The lock is kept in a directory of your own in the temp directory
+  (`api-anything-<uid>`), so another user's never gets in your way; a lock or directory there that
+  cannot be used is refused with a `next`.
 
 ### Health: `api-anything status [site]`
 

@@ -6,9 +6,11 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer as httpServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
@@ -165,6 +167,72 @@ describe("API_ANYTHING_CDP refused before anything connects", () => {
       await assert.rejects(fetchOnce(), (e: Error) => e instanceof AttachError && /API_ANYTHING_PROXY/.test(e.message));
     } finally {
       delete process.env.API_ANYTHING_PROXY;
+    }
+  });
+
+  /** A local server that answers /json/version as a browser's DevTools endpoint does, and nothing else. */
+  const fakeDevTools = async () => {
+    const server = httpServer((req, res) => {
+      const { port } = server.address() as AddressInfo;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/fake` }));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as AddressInfo;
+    return { host: `127.0.0.1:${port}`, close: () => new Promise<void>((r) => server.close(() => r())) };
+  };
+
+  test("the attach lock is in a directory of this OS user's alone, so another user's lock never blocks it", () => {
+    const file = lockPath(attachLock("127.0.0.1:9222"));
+    if (process.platform === "win32") return; // the temp directory is the user's own there
+    const dir = dirname(file);
+    assert.notEqual(dir, tmpdir(), "not in the temp directory every user shares");
+    const s = statSync(dir);
+    assert.equal(s.uid, process.getuid!());
+    assert.equal(s.mode & 0o077, 0, "no other user can enter it");
+  });
+
+  test("a lock that cannot be opened, or a lock directory that is not this user's alone, is refused cleanly with a next", async () => {
+    saveSite(minTier2(fx));
+    const devtools = await fakeDevTools();
+    process.env.API_ANYTHING_CDP = `http://${devtools.host}`;
+    const lock = lockPath(attachLock(devtools.host));
+    const refused = async (what: string, why: RegExp) => {
+      await assert.rejects(fetchOnce(), (e: Error) => {
+        assert.ok(e instanceof AttachError, `${what}: ${e.name}: ${e.message}`);
+        assert.match(e.message, why, what);
+        assert.ok(e.next.length > 0, what);
+        return true;
+      });
+      const r = await call("attached", "secret", {}, fast);
+      assert.deepEqual([r.ok, r.class], [false, "error"], `${what}: ${JSON.stringify(r)}`);
+      assert.match(r.reason ?? "", why, what);
+      assert.ok((r.next ?? "").length > 0, `${what}: a next`);
+    };
+    try {
+      // what another OS user's lock file is to this process: there, and not to be opened
+      rmSync(lock, { recursive: true, force: true });
+      mkdirSync(lock);
+      await refused("a directory in the lock's place", /lock .*could not be opened/);
+      rmSync(lock, { recursive: true, force: true });
+      if (process.getuid?.() !== 0) {
+        writeFileSync(lock, "");
+        chmodSync(lock, 0);
+        await refused("a lock file this user may not open", /lock .*could not be opened/);
+        rmSync(lock, { force: true });
+      }
+      if (process.platform !== "win32") {
+        const dir = dirname(lock);
+        chmodSync(dir, 0o777);
+        try {
+          await refused("a lock directory others may write to", /not a directory of this user's alone/);
+        } finally {
+          chmodSync(dir, 0o700);
+        }
+      }
+    } finally {
+      rmSync(lock, { recursive: true, force: true });
+      await devtools.close();
     }
   });
 });
