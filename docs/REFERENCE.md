@@ -560,8 +560,12 @@ go — avoid heavy automated traffic on it. Other ways in:
   the second factor is done. It counts as a sign-in only if a login cookie appeared or changed while
   it was open. Without one, the cookies your own choices set there (a cookie-consent answer, a
   cleared challenge) are kept for the site and `login` answers `ok: true`, `loggedIn: false`, with
-  their names in `kept`; with none of those either, it answers `ok: false`, says why, and keeps the
-  session you had.
+  their names in `kept`, a `warning` and a `next`. Analytics and advertising cookies never count as
+  a choice. A kept cookie whose name api-anything cannot tell from a session cookie is said to maybe
+  carry an account, and `next` says what to do either way: retry the call if you answered a consent
+  page or cleared a challenge; if you signed in, list the session cookie's name in the spec's
+  `loginCookies` and open the window again. With none of those either, it answers `ok: false`, says
+  why, and keeps the session you had.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
 - `api-anything logout <site|url>` takes what `login` takes and names the site it logged out. It
   deletes the stored session (it needs no key, so it also resets a sealed session whose key is lost),

@@ -32,10 +32,10 @@ import {
   cookieNames,
   importSession,
   importWarning,
-  keptNote,
   knownGuests,
   resolveLoginTarget,
   strayLogin,
+  windowAnswer,
   windowLogin,
   windowRetry,
 } from "./login.js";
@@ -1111,13 +1111,7 @@ export function createToolset({
                   true,
                 );
               return reply({
-                ok: true,
-                site: t.site,
-                source: "window",
-                cookies: cookieNames(w.cookies),
-                loggedIn: !w.kept,
-                renewed: w.renewed,
-                ...(w.kept ? { kept: w.kept, warning: keptNote(t.site, w.kept) } : {}),
+                ...windowAnswer(t.site, w, 'ask the user, then call login with mode "window" again'),
                 ...why,
               });
             },

@@ -816,8 +816,8 @@ drift.
 Its `next` leads to a step that works. A public read (no credential ref, learned signed out): the
 user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
 closes the window. The cookies the site set while it was open that are the visitor's own choices
-(`visitorChoices`: new or changed there, none every visitor is given unasked, none that shows a
-sign-in) are added to the site's jar, and nothing else of the profile, so tier 1 sends them; tiers 2
+(`visitorChoices`: new or changed there, none every visitor is given unasked, no analytics,
+advertising or CSRF name, none that shows a sign-in) are added to the site's jar, and nothing else of the profile, so tier 1 sends them; tiers 2
 and 3 send the profile's, which holds them. The spec gains no cookie value and no ref, so a shared spec
 and `vetShared` are unchanged, and the clean replay (`clean.ts`) still sends nothing of the user's:
 from a network the site walls, a consent-walled site's clean replay answers this `error`, and the op
@@ -2383,8 +2383,19 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   replaced and `login` answers `ok: true` with the `renewed` names. With no sign-in, the cookies the
   visitor's own choices set there (a consent answered, a challenge cleared: `visitorChoices`, see
   "A consent wall" under the classifier) are added to the jar alone, and `login` answers `ok: true`,
-  `loggedIn: false`, with their names in `kept` and a `warning` saying so; the session's `source`
-  stays as it was. With none of those either, it answers `ok: false`
+  `loggedIn: false`, with their names in `kept`, a `warning` and a `next` (`windowAnswer`, the
+  same over MCP and on the CLI, which exits 0); the session's `source` stays as it was. Analytics,
+  advertising and CSRF names (`UNASKED_COOKIE`) are never a choice: a window in which only those
+  appeared keeps nothing (before, a user who closed the window on a site with analytics got
+  `ok: true`, and an agent that came from `auth` retried into `auth` again). A kept cookie whose
+  name is a known consent or challenge record (`ANSWER_COOKIE`) is described as one, and `next`
+  says to retry the call. Any other kept name may carry an account (`mayCarryAccount`): a sign-in
+  whose session cookie no rule knows (PHPSESSID, connect.sid, JSESSIONID) looks the same as a
+  consent cookie of a name no rule knows. Such a cookie is never called a consent: the `warning`
+  says it may carry an account, and `next` covers both cases, retrying the call if the user
+  answered a consent page or cleared a challenge, and listing the name that is the sign-in in the
+  spec's `loginCookies` and opening the window again if they signed in. A session holding such a
+  cookie is never judged public (`isPublic`), as any other. With none of those either, it answers `ok: false`
   with why (no login cookie appeared, or the ones held at opening did not change) and keeps the stored
   session. The window does not close itself when a login cookie appears: a site can set its session
   cookie before a second factor, a consent page or the redirect back from an identity provider is done,
