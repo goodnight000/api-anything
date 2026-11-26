@@ -8,6 +8,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { siteOf } from "../../src/domain.js";
 import {
+  type RelatedSite,
   type Report,
   type SearchMatch,
   type ServedSite,
@@ -46,6 +47,7 @@ export function served(
     ...(s.displayName ? { displayName: s.displayName } : {}),
     ...(s.description ? { description: s.description } : {}),
     ...(s.pace ? { pace: s.pace } : {}),
+    ...(s.aliases ? { aliases: s.aliases } : {}),
     ...(notes !== undefined ? { notes } : {}),
     operations: s.operations.map((op) => {
       const { version: _v, ...operation } = op;
@@ -70,6 +72,8 @@ export async function startRegistry() {
     sites: new Map<string, ServedSite>(),
     /** what GET /v1/search answers, whatever the query */
     matches: [] as SearchMatch[],
+    /** what GET /v1/search answers beside them as `related`, when any */
+    related: [] as Omit<RelatedSite, "note">[],
     jobs: [] as VerifyJob[],
     /** what POST and GET /v1/claims answer as wanted */
     wanted: [] as { site: string; fingerprint: string; named: boolean }[],
@@ -122,7 +126,11 @@ export async function startRegistry() {
       if (fake.hang) return void res.on("close", () => fake.abandoned++);
       if (fake.down) return send(503, { error: "down" });
       const u = new URL(path, "http://x");
-      if (method === "GET" && u.pathname === "/v1/search") return send(200, { matches: fake.matches });
+      if (method === "GET" && u.pathname === "/v1/search")
+        return send(200, {
+          matches: fake.matches,
+          ...(fake.related.length ? { related: fake.related.map((r) => ({ ...r, note: "registry text" })) } : {}),
+        });
       if (method === "GET" && u.pathname.startsWith("/v1/sites/")) {
         const s = fake.sites.get(decodeURIComponent(u.pathname.slice("/v1/sites/".length)));
         return s ? send(200, s) : send(404, { error: "nothing servable" });

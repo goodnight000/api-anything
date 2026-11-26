@@ -1,10 +1,26 @@
 /** What the registry serves: each site with the best version of each of its ops, and search over them. */
-import type { FoundOp, SearchMatch, ServedOp, ServedSite, SiteContext, Status } from "../../src/registry-api.js";
-import { domainOf, type IndexEntry, indexEntry, matchQuery, operationMatch, summarize } from "../../src/search.js";
+import type {
+  FoundOp,
+  RelatedSite,
+  SearchMatch,
+  ServedOp,
+  ServedSite,
+  SiteContext,
+  Status,
+} from "../../src/registry-api.js";
+import {
+  domainOf,
+  type IndexEntry,
+  indexEntry,
+  matchQuery,
+  operationMatch,
+  relatedDomain,
+  summarize,
+} from "../../src/search.js";
 import type { Operation, Site } from "../../src/spec.js";
 import { LIMITS } from "../../src/vet.js";
 import { byRank, type Rankable, successRate } from "./rules.js";
-import { allSites, context, type D1Database, getSite, servable, type VersionRow } from "./store.js";
+import { aliasesBySite, allSites, context, type D1Database, getSite, servable, type VersionRow } from "./store.js";
 
 const servedOp = (r: VersionRow): ServedOp => {
   const rate = successRate(r.oks, r.bad);
@@ -45,7 +61,7 @@ function opBytes(o: ServedOp): number {
   return n;
 }
 
-/** What a pull's spec holds of a site besides its ops, written out. */
+/** What a pull's spec holds of a site besides its ops, written out (its aliases included). */
 const contextBytes = ({ domain: _, notes: __, ...site }: SiteContext) =>
   bytes(JSON.stringify({ ...site, operations: [] }, null, 2));
 
@@ -106,8 +122,10 @@ export async function catalog(db: D1Database, viewer?: string, name?: string): P
     else bySite.set(r.site, [r]);
   }
   const sites = name ? [await getSite(db, name)].flatMap((s) => (s ? [s] : [])) : await allSites(db);
+  const aliases = await aliasesBySite(db, name);
   return sites.flatMap((s) => {
-    const site = context(s);
+    const known = aliases.get(s.name);
+    const site = { ...context(s), ...(known ? { aliases: known } : {}) };
     const operations = bestPerOp(bySite.get(s.name) ?? [], contextBytes(site));
     // none when every version it has is over the size alone
     return operations.length ? [{ ...site, operations }] : [];
@@ -119,6 +137,7 @@ const asSite = (s: ServedSite): Site => ({
   baseUrl: s.baseUrl,
   ...(s.displayName ? { displayName: s.displayName } : {}),
   ...(s.description ? { description: s.description } : {}),
+  ...(s.aliases?.length ? { aliases: s.aliases } : {}),
   operations: s.operations.map((o) => o.operation),
 });
 
@@ -169,6 +188,7 @@ export function search(sites: ServedSite[], query: string, limit: number): Searc
       domain: s.domain,
       ...(s.displayName ? { displayName: s.displayName } : {}),
       ...(s.description ? { description: s.description } : {}),
+      ...(s.aliases?.length ? { aliases: s.aliases } : {}),
       matched,
       unmatched,
       operations: s.operations.map((o) => ({
@@ -176,4 +196,33 @@ export function search(sites: ServedSite[], query: string, limit: number): Searc
         ...operationMatch({ op: summarize(o.operation).op, description: o.operation.description }, query),
       })),
     }));
+}
+
+const MAX_RELATED = 3;
+
+/**
+ * Beside a domain search that matched nothing: confirmed sites of another region, whose domain or alias
+ * differs from the asked one only in the public suffix. Confirmed only: anyone may upload a site on
+ * paypal.co, and a hint is read as a pointer.
+ */
+export function related(sites: ServedSite[], query: string): RelatedSite[] {
+  const asked = domainOf(query);
+  if (!asked) return [];
+  return sites
+    .filter(confirmed)
+    .flatMap((s) => {
+      const domain = [s.domain, ...(s.aliases ?? [])].find((d) => relatedDomain(asked, d));
+      return domain
+        ? [
+            {
+              name: s.name,
+              domain,
+              ...(s.displayName ? { displayName: s.displayName } : {}),
+              note: `another region's site: it does not cover ${asked}`,
+            },
+          ]
+        : [];
+    })
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, MAX_RELATED);
 }

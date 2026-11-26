@@ -19,11 +19,19 @@ import {
   type Status,
   triggerSig,
 } from "./registry-api.js";
-import { indexEntry, matchQuery, operationMatch, type QueryMatch, summarize } from "./search.js";
+import {
+  domainOf,
+  indexEntry,
+  matchQuery,
+  operationMatch,
+  type QueryMatch,
+  relatedDomain,
+  summarize,
+} from "./search.js";
 import { dropUnbound, home, loadSession, readJson, safeName, siteOf, writePrivate } from "./session.js";
 import { type Operation, parseSite, type Site } from "./spec.js";
 import { listSites, loadSite, registryDir, updateSite } from "./store.js";
-import { badAddress, interfaceAddress, LIMITS, MAX_INTERFACE_URL, vetShared } from "./vet.js";
+import { badAddress, cleanDomain, interfaceAddress, LIMITS, MAX_INTERFACE_URL, vetShared } from "./vet.js";
 
 export { summarize };
 
@@ -143,9 +151,23 @@ const sitesOfSession = (name: string) => {
   ]);
 };
 
+/**
+ * The aliases of a served site this client keeps: clean registrable domains (`cleanDomain`) other than its
+ * own, each once, at most `LIMITS.aliases`. The registry's own rules hold them already; one that does not
+ * pass is dropped rather than failing the site.
+ */
+const keptAliases = (list: unknown, own?: string): string[] =>
+  Array.isArray(list)
+    ? [...new Set(list.filter((a): a is string => typeof a === "string" && cleanDomain(a) && a !== own))].slice(
+        0,
+        LIMITS.aliases,
+      )
+    : [];
+
 /** A served site as a local spec: each op records the version it is. */
 function siteFrom(name: string, served: ServedSite): Site {
   if (String(served.name).toLowerCase() !== name) throw new Error(`is the site "${served.name}", not "${name}"`);
+  const aliases = keptAliases(served.aliases, served.domain);
   const site = parseSite({
     name,
     ...(served.displayName ? { displayName: served.displayName } : {}),
@@ -153,6 +175,7 @@ function siteFrom(name: string, served: ServedSite): Site {
     ...(served.description ? { description: served.description } : {}),
     ...(served.loginCookies ? { loginCookies: served.loginCookies } : {}),
     ...(served.pace ? { pace: served.pace } : {}),
+    ...(aliases.length ? { aliases } : {}),
     operations: served.operations.map((o) => ({ ...o.operation, version: { hash: o.hash, status: o.status } })),
   });
   if (siteOf(new URL(site.baseUrl).hostname) !== served.domain)
@@ -455,6 +478,10 @@ const SearchMatchSchema = z.object({
   displayName: z.string().max(100).optional(),
   description: text.optional(),
   operations: z.array(FoundOpSchema).max(LIMITS.operations),
+  aliases: z
+    .unknown()
+    .optional()
+    .transform((list) => keptAliases(list)),
   // a malformed interface is dropped, not the match
   interfaces: z
     .array(z.unknown())
@@ -468,6 +495,13 @@ const SearchMatchSchema = z.object({
         })
         .slice(0, MAX_INTERFACES),
     ),
+});
+
+/** A related site the registry named; its note is the client's own (`relatedSites`), not the registry's text. */
+const RelatedSchema = z.object({
+  name: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
+  domain: z.string().regex(/^[a-z0-9.-]{1,253}$/),
+  displayName: z.string().max(100).optional(),
 });
 
 /** Whether the registry may be asked about `host`: no IP, localhost, single label, suffix outside the public list or `.arpa` name. */
@@ -592,6 +626,56 @@ export interface Found extends QueryMatch {
    * show the user, never spelled into `next`, and nothing checked that one is the site's own
    */
   interfaces?: { kind: "mcp" | "openapi"; url: string; confirmations: number }[];
+  /** other domains it is known by: a domain search matched one of these when `matched` names it */
+  aliases?: string[];
+}
+
+/**
+ * Another region's site beside a domain search that matched nothing (registry-api.ts `RelatedSite`): a hint
+ * to show the person, never an answer for the asked domain.
+ */
+export interface Related {
+  site: string;
+  domain: string;
+  displayName?: string;
+  installed: boolean;
+  note: string;
+}
+
+const MAX_RELATED = 3;
+
+/** What `next` says of `related`: a hint for the person, never a site to call for the asked domain. */
+export const relatedNext = (related: Related[]) =>
+  `nothing covers the asked domain. related names another region's site (${related.map((x) => `${x.domain}, as ${x.site}`).join("; ")}): another site with other data, not an answer for it. Tell the user so rather than calling it`;
+
+/**
+ * This machine's sites, then the registry's, whose domain or alias differs from `asked` only in the public
+ * suffix. A registry entry is checked here too: one that is not related is dropped.
+ */
+function relatedSites(asked: string, local: Site[], remote: z.infer<typeof RelatedSchema>[]): Related[] {
+  const note = `another region's site: it does not cover ${asked}`;
+  const out = new Map<string, Related>();
+  for (const s of local) {
+    const domain = [siteOf(new URL(s.baseUrl).hostname), ...(s.aliases ?? [])].find((d) => relatedDomain(asked, d));
+    if (domain)
+      out.set(s.name, {
+        site: s.name,
+        domain,
+        ...(s.displayName ? { displayName: s.displayName } : {}),
+        installed: true,
+        note,
+      });
+  }
+  for (const r of remote)
+    if (!out.has(r.name) && relatedDomain(asked, r.domain))
+      out.set(r.name, {
+        site: r.name,
+        domain: r.domain,
+        ...(r.displayName ? { displayName: r.displayName } : {}),
+        installed: false,
+        note,
+      });
+  return [...out.values()].slice(0, MAX_RELATED);
 }
 
 /** This machine's specs; one that does not load is left out, as `sites` reports it. */
@@ -611,6 +695,7 @@ const localFound = (s: Site): Found => ({
   domain: siteOf(new URL(s.baseUrl).hostname),
   ...(s.displayName ? { displayName: s.displayName } : {}),
   ...(s.description ? { description: s.description } : {}),
+  ...(s.aliases?.length ? { aliases: s.aliases } : {}),
   installed: true,
   matched: [],
   unmatched: [],
@@ -646,6 +731,7 @@ const localFound = (s: Site): Found => ({
  * says how long to wait in `retryAfterMs`. A registry match that breaks the
  * limits is dropped, not the rest. Local-only mode searches this machine alone and says so in `localOnly`.
  * `notSent` says when the registry was sent only part of the query, or was not asked: its side of the answer is then partial.
+ * `related`, beside no match for a domain or URL, names sites of another region (`relatedSites`).
  */
 export async function search(
   query: string,
@@ -656,6 +742,7 @@ export async function search(
   retryAfterMs?: number;
   localOnly?: string;
   notSent?: string;
+  related?: Related[];
 }> {
   const limit = o.limit ?? 5;
   const offline = localOnly();
@@ -664,6 +751,7 @@ export async function search(
   // local scoring and each op's coverage repeat the query's words too
   query = query.trim().slice(0, MAX_SEARCH_QUERY);
   let remote: z.infer<typeof SearchMatchSchema>[] = [];
+  let remoteRelated: z.infer<typeof RelatedSchema>[] = [];
   let registryError: string | undefined;
   let retryAfterMs: number | undefined;
   // sent before this machine's specs are read (most of the local work), so its round trip overlaps it
@@ -683,6 +771,11 @@ export async function search(
         const p = SearchMatchSchema.safeParse(m);
         // a match whose interfaces were all dropped and that has no operations is no site to name
         return p.success && (p.data.operations.length || p.data.interfaces?.length) ? [p.data] : [];
+      });
+      const near = (r as { related?: unknown }).related;
+      remoteRelated = (Array.isArray(near) ? near : []).flatMap((x) => {
+        const p = RelatedSchema.safeParse(x);
+        return p.success ? [p.data] : [];
       });
     } catch (e) {
       registryError = (e as Error).message;
@@ -723,6 +816,7 @@ export async function search(
           domain: m.domain,
           ...(m.displayName ? { displayName: m.displayName } : {}),
           ...(m.description ? { description: m.description } : {}),
+          ...(m.aliases.length ? { aliases: m.aliases } : {}),
           installed: false,
           matched: [],
           unmatched: [],
@@ -757,8 +851,11 @@ export async function search(
         ...operationMatch({ op: op.signature, description: op.description }, query),
       })),
     }));
+  const uncovered = matches.length ? undefined : domainOf(query);
+  const related = uncovered ? relatedSites(uncovered, local, remoteRelated) : [];
   return {
     matches,
+    ...(related.length ? { related } : {}),
     ...(registryError ? { registryError } : {}),
     ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
     ...(offline

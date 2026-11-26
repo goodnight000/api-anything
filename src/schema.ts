@@ -276,11 +276,13 @@ export function findSitesSchema(): JsonSchema {
     installed: bool,
     operations: objects,
     interfaces: objects,
+    aliases: strings,
     matched: strings,
     unmatched: strings,
   });
   return object({
     matches: { type: "array", items: match },
+    related: { type: "array", items: object({ site: str, domain: str, displayName: str, installed: bool, note: str }) },
     registryError: str,
     retryAfterMs: num,
     localOnly: str,
