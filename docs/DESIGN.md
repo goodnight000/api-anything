@@ -2058,7 +2058,9 @@ and inside its budget (`sitePace`, `budgetCheck`) and cool-down; a site that is 
 budget, or the site answering `rate` (which starts a cool-down, as after any call) sends no upload now,
 since a re-upload of the same version is a duplicate that changes nothing: the outcome says so with a
 `next`. An op learned over MCP or a pulled site's op goes only to public addresses (`publicOnly`). The
-result is not kept: a second share of the same op replays again. A failed replay still uploads; the
+result is not kept: a second share of the same op replays again. What goes up is the op that was
+replayed: when the stored op changed while the request was out (another process learned or healed it),
+nothing goes up, and the outcome says why with a `next` to publish again. A failed replay still uploads; the
 registry holds it, and the outcome carries `cleanReplay` and `cleanReason`. `publish`'s preview sends
 nothing to the site and says per op what the replay will be (`cleanReplay`: on record, `skipped` and
 why, or "will run on publish").

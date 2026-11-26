@@ -269,6 +269,23 @@ test("a site cooling down, over its budget, or answering rate gets no replay now
   assert.equal(uploads().length, 1, "only the paced site's first replay went up");
 });
 
+test("an op learned again while its clean replay was out is not shared: the replay proved the one it replaced", async () => {
+  shareOn();
+  saveSite(site());
+  const { asked, fetchImpl } = web(() => {
+    // another process re-learns the op while the request is in flight
+    saveSite(site({ description: "learned again" }));
+    return json({ hits: [{ title: "a puppy" }] });
+  });
+  const [out] = await shareOps("demo", ["search"], { evidence: {}, consent: true, fetchImpl, minIntervalMs: 0 });
+  assert.equal(asked.length, 1);
+  assert.equal(out!.shared, false, JSON.stringify(out));
+  assert.match(out!.reason!, /changed while its clean replay was out/);
+  assert.match(out!.next!, /api-anything publish demo search --yes/);
+  assert.equal(uploads().length, 0, "nothing went up with an ok another op earned");
+  assert.equal(loadSite("demo")!.site.operations[0]!.description, "learned again", "the new op is left as it is");
+});
+
 test("every reason the registry gives has a category, and an unknown one is other", () => {
   const samples = [
     "its clean replay was skipped, not ok",
