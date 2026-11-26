@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { botWall, classify, emptyResults, judge, type Observed, signInForm } from "../src/classify.js";
+import { botWall, classify, consentStep, emptyResults, judge, type Observed, signInForm } from "../src/classify.js";
 import { MAX_PAGE_ELEMENTS } from "../src/extract.js";
 import { type Operation, OperationSchema } from "../src/spec.js";
 
@@ -727,6 +727,81 @@ test("a signed-in JSON read redirected to a same-site page with no login or chal
   assert.equal(
     cls(me, { ...html(200, "<title>Just a moment...</title>"), url: "https://www.s.test/x", redirected: true }),
     "blocked",
+  );
+});
+
+test("a read redirected to the site's cookie-consent page is an error naming it, signed in or not, in every format", () => {
+  // Google's consent page: a question, two answers, and a Sign-in link to ServiceLogin
+  const consent =
+    '<html><head><title>Before you continue</title></head><body><h1>Before you continue</h1><form action="/save"><button>Reject all</button><button>Accept all</button></form><a href="https://accounts.google.com/ServiceLogin">Sign in</a></body></html>';
+  const asked = "https://www.s.test/travel/flights?q=AMS";
+  const at = (url: string, redirected = true, body = consent): Observed => ({ ...html(200, body), url, redirected });
+  const base = {
+    request: { method: "GET", url: asked, headers: {} },
+    slots: [{ param: "q", at: ["query:q"] }],
+    params: [{ name: "q" }],
+    trigger: { url: "https://www.s.test/travel/flights?q={q}" },
+  };
+  const ops = {
+    json: op({ ...base, response: { format: "json", extract: "flights" } }),
+    html: op({ ...base, response: { format: "html", html: { items: "ul.flights li", fields: { to: ".to" } } } }),
+    embedded: op({
+      ...base,
+      response: { format: "embedded", embedded: { regex: "window.DATA = (\\{)" }, extract: "flights" },
+    }),
+  };
+  const signIn =
+    '<html><body><form action="/session"><input name="email"><input type="password" name="pw"></form></body></html>';
+  for (const [format, o] of Object.entries(ops)) {
+    // what a page without the data is when it is no consent step: a JSON read's HTML page that links
+    // ServiceLogin is a login page, as before
+    const before = format === "json" ? "auth" : "drift";
+    // a consent host label, a consent path segment, and a page that says so and holds the way back
+    for (const url of [
+      "https://consent.s.test/m?continue=https%3A%2F%2Fwww.s.test%2Ftravel%2Fflights%3Fq%3DAMS",
+      "https://www.s.test/consent?continue=%2Ftravel%2Fflights",
+      "https://www.s.test/cookie-wall",
+      "https://www.s.test/m?continue=%2Ftravel%2Fflights",
+    ]) {
+      const c = judge(o, at(url));
+      assert.equal(c.class, "error", `${format} ${url}: ${c.reason}`);
+      assert.equal(c.wall, "consent");
+      assert.equal(c.unfinished, url);
+      assert.match(c.reason, /the site's cookie-consent page, instead of the data/);
+      // signed in, the same page is the same answer
+      assert.equal(judge(op({ ...o, learnedLoggedIn: true }), at(url)).wall, "consent");
+    }
+    // the same words with nowhere to go back to, and no consent in the address: drift as before
+    assert.equal(cls(o, at("https://www.s.test/m")), before, format);
+    // real drift: the asked address answered without the data, or no redirect is known
+    assert.equal(cls(o, at(asked, false)), before, format);
+    assert.equal(cls(o, at("https://www.s.test/consent", false)), before, format);
+    // another site's consent page is not this site's question
+    assert.equal(cls(o, at("https://consent.other.test/m")), before, format);
+    // the data moved at the asked address, no consent page in sight: drift
+    const moved = format === "json" ? json(200, { trips: [] }) : html(200, "<html><body><p>Flights</p></body></html>");
+    assert.equal(cls(o, { ...moved, url: asked, redirected: false }), "drift", format);
+    // a sign-in page is auth, a bot challenge blocked, a 404 what it is without the redirect
+    assert.equal(cls(o, at("https://consent.s.test/m", true, signIn)), "auth", format);
+    assert.equal(cls(o, at("https://www.s.test/consent", true, "<title>Just a moment...</title>")), "blocked", format);
+    const gone = { ...html(404, consent), url: "https://www.s.test/consent", redirected: true };
+    assert.deepEqual(classify(o, gone), classify(o, { ...html(404, consent) }), format);
+    // a consent page where the data is found is the data
+    const found = '<html><body><ul class="flights"><li><span class="to">LIS</span></li></ul>Accept all</body></html>';
+    if (format === "html") assert.equal(cls(o, at("https://www.s.test/consent", true, found)), "ok");
+  }
+  // a write sent there is judged as a write
+  assert.notEqual(classify(op({ ...ops.json, readOnly: false }), at("https://consent.s.test/m")).wall, "consent");
+  assert.equal(consentStep(asked, "https://www.s.test/signin?continue=%2Fx", consent), false, "a sign-in path");
+  // a page about consent that moved is the content, not a step before it: the asked address names it too
+  const about = "<html><body><h1>Our GDPR policy</h1></body></html>";
+  assert.equal(consentStep("https://www.s.test/gdpr", "https://www.s.test/en/gdpr", about), false, "a moved page");
+  assert.equal(consentStep("https://www.s.test/help/consent", "https://www.s.test/consent", about), false);
+  assert.equal(consentStep("https://consent.s.test/docs", "https://consent.s.test/docs/v2", about), false);
+  assert.equal(
+    consentStep("https://www.s.test/help", "https://www.s.test/gdpr", about),
+    true,
+    "a step it did not ask for",
   );
 });
 

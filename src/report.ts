@@ -103,7 +103,8 @@ export function afterCall(
   o: { fetchImpl?: typeof fetch; minIntervalMs?: number; args?: Record<string, unknown> } = {},
 ): void {
   try {
-    if (!loadSettings().share) return;
+    // a consent page asks this visitor a question: it says nothing about the version or the bundled spec
+    if (!loadSettings().share || r.wall) return;
     const version = op.version;
     if (version) {
       const outcome = r.healed ? "fail" : outcomeOf(r.class);
