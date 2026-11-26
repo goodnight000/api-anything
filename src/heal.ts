@@ -146,6 +146,8 @@ export interface Attempt {
   unfinished?: string;
   /** with `unfinished`: that page is the site's cookie-consent step */
   wall?: "consent";
+  /** the data is from the part of an event stream read before a bound; see Observed.truncated */
+  truncated?: string;
 }
 
 export const PROFILE_HINT =
@@ -795,7 +797,13 @@ export function judgeExchange(op: Operation, e: Exchange): Attempt | undefined {
   return {
     tier: 3,
     status: r.status,
-    ...judged(op, { status: r.status, headers: r.headers, body: r.body ?? "", url: e.request.url }),
+    ...judged(op, {
+      status: r.status,
+      headers: r.headers,
+      body: r.body ?? "",
+      url: e.request.url,
+      truncated: r.truncated,
+    }),
   };
 }
 
@@ -1155,7 +1163,13 @@ function answerOf(op: Operation, r: Observed | undefined): string | undefined {
 
 const observed = (e: Exchange | undefined): Observed | undefined =>
   e?.response
-    ? { status: e.response.status, headers: e.response.headers, body: e.response.body ?? "", url: e.request.url }
+    ? {
+        status: e.response.status,
+        headers: e.response.headers,
+        body: e.response.body ?? "",
+        url: e.request.url,
+        truncated: e.response.truncated,
+      }
     : undefined;
 
 /** Both runs answered, through the op's recipe, with the same data, and it is not empty. */
@@ -1233,6 +1247,7 @@ function saveOperation(
       headers: res.headers,
       body: res.body ?? "",
       url: exchange.request.url,
+      truncated: res.truncated,
     });
     if (j.class === "ok") preview = previewOf(j.data);
     else if (learnedNothing(j)) {

@@ -27,7 +27,7 @@ export interface PagingHint {
 // under a key that says so.
 const PAGE_KEY = /next|cursor|after|token|continu/i;
 const NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
-const PAGED = new Set(["document", "xhr", "fetch"]);
+const PAGED = new Set(["document", "xhr", "fetch", "eventsource"]);
 
 /** The places a request sends values. Headers are left out: a trace id differs on every request. */
 function placesOf(e: Exchange): Map<string, Leaf> {

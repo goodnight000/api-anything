@@ -834,6 +834,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
           headers: res.headers,
           body: res.body ?? "",
           url: answered.request.url,
+          truncated: res.truncated,
         }),
       DEADLINE.read,
     );

@@ -42,6 +42,8 @@ export interface Fixture {
   listings: Listing[];
   /** the next /api/listings answers have these statuses instead of the list, in order */
   failListings(...statuses: number[]): void;
+  /** /live/* pages send `query` where they sent `q`, and the stream endpoints refuse `q` as an unknown argument */
+  moveStream(): void;
   /** the board as it starts (`LISTINGS`), with no failure queued */
   resetListings(): void;
   close(): Promise<void>;
@@ -230,6 +232,7 @@ export async function startFixture(): Promise<Fixture> {
   const likes: number[] = [];
   const listings = LISTINGS();
   const listingFails: number[] = [];
+  let streamMoved = false;
 
   const send = (
     res: ServerResponse,
@@ -884,6 +887,111 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       return found ? json(res, 200, { listing: found }) : json(res, 404, { message: "no such listing" });
     }
 
+    // Answers that arrive as server-sent events. The pages read them with EventSource or with a fetch
+    // whose body they read as it streams, and send the CSRF cookie's value as a header. moveStream()
+    // renames the request's field (q becomes query), as a redeploy does: the old field is refused.
+    if (p.startsWith("/live/")) {
+      const q = JSON.stringify(u.searchParams.get("q") ?? "");
+      const api = (path: string) =>
+        `${JSON.stringify(path)}+"?${streamMoved ? "query" : "q"}="+encodeURIComponent(${q})`;
+      const read = `const rd=r.body.getReader(),dec=new TextDecoder();let t="";for(;;){const x=await rd.read();if(x.done)break;t+=dec.decode(x.value);document.getElementById("app").textContent=t}`;
+      const viaFetch = (path: string) =>
+        `fetch(${api(path)},{headers:{accept:"text/event-stream","x-csrf-token":ct0()}}).then(async r=>{${read}})`;
+      const ct0 = `const ct0=()=>(document.cookie.match(/(?:^|; )ct0=([^;]*)/)||[])[1]||"";`;
+      const script = (js: string, body = "") =>
+        html(200, `<!doctype html><html><body>${body}<div id="app"></div><script>${ct0}${js}</script></body></html>`);
+      switch (p) {
+        case "/live/es":
+          // EventSource sends no custom header: the token rides in the query instead
+          return script(
+            `const es=new EventSource(${api("/api/live/es")}+"&t="+ct0());es.addEventListener("result",e=>{document.getElementById("app").textContent=e.data});es.addEventListener("done",()=>es.close())`,
+          );
+        case "/live/fetch":
+          return script(viaFetch("/api/live/stream"));
+        case "/live/forever":
+          return script(viaFetch("/api/live/forever"));
+        case "/live/idle":
+          return script(viaFetch("/api/live/idle"));
+        case "/live/error":
+          return script(viaFetch("/api/live/error"));
+        case "/live/ask":
+        case "/live/ask-plain": {
+          const path = p === "/live/ask" ? "/api/live/ask" : "/api/live/ask-plain";
+          return script(
+            `document.getElementById("ask").onclick=()=>fetch(${JSON.stringify(path)},{method:"POST",headers:{"content-type":"application/json","x-csrf-token":ct0()},body:JSON.stringify({q:${q}})}).then(async r=>{${read}})`,
+            '<button id="ask">Ask</button>',
+          );
+        }
+      }
+    }
+    if (p.startsWith("/api/live/")) {
+      // /api/live/plain?mode=<kind> answers as the endpoint of that name, with no token to check
+      const plain = p === "/api/live/plain";
+      const kind = plain ? (u.searchParams.get("mode") ?? "stream") : p.slice("/api/live/".length);
+      const field = streamMoved ? "query" : "q";
+      const q = u.searchParams.get(field);
+      // the other mode's field is a schema error, as a GraphQL server answers an unknown argument
+      if (!plain && q === null && u.searchParams.has(streamMoved ? "q" : "query"))
+        return json(res, 400, { errors: [{ message: `unknown argument ${streamMoved ? "q" : "query"}` }] });
+      const own = kind === "es" ? u.searchParams.get("t") : req.headers["x-csrf-token"];
+      if (!plain && kind !== "ask-plain" && (!jar.ct0 || own !== jar.ct0))
+        return json(res, 403, { message: "csrf token missing or invalid" });
+      if (kind === "ask-plain") return json(res, 200, { answer: `you asked ${JSON.parse(body || "{}").q}` });
+      if (kind === "rate") return json(res, 429, { message: "Too many requests" });
+      if (kind === "challenge")
+        return send(
+          res,
+          403,
+          "text/html; charset=utf-8",
+          '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
+        );
+      res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
+      const timers = new Set<NodeJS.Timeout>();
+      res.on("close", () => timers.forEach(clearInterval));
+      const later = (ms: number, write: string, end = false) =>
+        timers.add(
+          setTimeout(() => {
+            res.write(write);
+            if (end) res.end();
+          }, ms),
+        );
+      const word = q ?? "";
+      const items = [
+        { name: `${word} one`, rank: 1 },
+        { name: `${word} two`, rank: 2 },
+      ];
+      if (kind === "empty") {
+        res.write(": nothing to say\n\n");
+        return later(50, ": still nothing\n\n", true);
+      }
+      if (kind === "error") {
+        res.write(": working\n\n");
+        return later(50, `event: error\ndata: {"message":"the answer could not be made"}\n\n`, true);
+      }
+      if (kind === "forever") {
+        let n = 0;
+        timers.add(setInterval(() => res.write(`data: {"tick":${n++},"q":${JSON.stringify(word)}}\n\n`), 100));
+        return;
+      }
+      if (kind === "idle") {
+        res.write(`event: result\ndata: ${JSON.stringify({ items: items.slice(0, 1) })}\n\n`);
+        later(100, `event: result\ndata: ${JSON.stringify({ items: items.slice(1) })}\n\n`);
+        // heartbeats keep it open, and are not events
+        timers.add(setInterval(() => res.write(": ping\n\n"), 500));
+        return;
+      }
+      if (kind === "ask") {
+        const asked = String(JSON.parse(body || "{}").q ?? "");
+        res.write(`data: {"token":"you"}\n\n`);
+        return later(50, `data: {"token":"asked ${asked}"}\n\nevent: done\ndata: [DONE]\n\n`, true);
+      }
+      // the finite stream (stream, es): a comment, a retry, the results split over two data lines, then done
+      res.write(": hello\r\nretry: 1000\r\n\r\n");
+      const whole = JSON.stringify({ items });
+      later(50, `event: result\nid: 1\ndata: ${whole.slice(0, 10)}\ndata: ${whole.slice(10)}\n\n`);
+      return later(100, "event: done\nid: 2\ndata: [DONE]\n\n", true);
+    }
+
     if (p === "/api/limited") {
       limitedHits++;
       return limitedHits > 2
@@ -922,6 +1030,9 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
     listings,
     failListings(...statuses) {
       listingFails.push(...statuses);
+    },
+    moveStream() {
+      streamMoved = true;
     },
     resetListings() {
       listings.splice(0, listings.length, ...LISTINGS());

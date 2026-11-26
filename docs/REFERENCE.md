@@ -1020,6 +1020,18 @@ Known limits in detail:
 - Example values need at least 3 characters and must appear in the request (multi-word values
   are fine; they are matched decoded, so `mcp server` finds `mcp%20server`).
 - An op extracts one value from one request. Data in two places of one page takes two ops.
+- An answer that arrives as server-sent events (`text/event-stream`, from an `EventSource` or a
+  `fetch`) is learned, called at every tier and healed like JSON: its body reads as a list of
+  `{event, id, data}` (`data` parsed when it is a JSON object or array, else text), so a recipe
+  reaches in with `[*]` (`--extract '[*].data.items'`). Each read of a stream stops when it ends,
+  after 3 s with no event (heartbeat comments do not count), after 10 s, or past 32 MiB. A stream cut
+  that way answers with what arrived, `ok` when the recipe found data there, and `truncated` says
+  which bound stopped it ("the event stream was still open after 10 s, so it was read no further");
+  `inspect` shows a captured one's as `cut`. A cut stream whose recipe found nothing yet is `error`,
+  not drift, and so is a stream that sends an `error` event. A streamed POST is judged as any POST:
+  learning stops it unless it is `--write` or pinned with `--match`. WebSocket messages are not
+  answers: an operation whose data arrives over a WebSocket cannot be learned. This was checked
+  against a local fixture only, not against a real site's stream.
 - `--html` returns text as it is in the page. `@href` and `@src` are links, so a relative value
   is resolved against the page's `<base href>` or else the final URL the answer came from, and
   returned absolute; the other attributes (`@title`, `@id`, ...) and plain text stay as they are.

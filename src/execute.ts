@@ -627,6 +627,7 @@ function success(a: Attempt, extra: Partial<Result> = {}): Result {
     data: a.data,
     ...(a.nextPage !== undefined ? { nextPage: a.nextPage } : {}),
     ...(a.hasMore !== undefined ? { hasMore: a.hasMore } : {}),
+    ...(a.truncated ? { truncated: a.truncated } : {}),
     ...extra,
   };
 }
@@ -1543,7 +1544,9 @@ function shape(
   const viewed = resultView(out.data, opts.view, undefined, opts.callOnly);
   if (viewed.truncated && out.nextPage !== undefined)
     viewed.truncated += `; nextPage starts after the last item of this page, cut or not${opts.callOnly ? "" : "; more stays on this page"}`;
-  return { ...out, ...viewed, ...(changes ? { changes } : {}) };
+  // a stream read to a bound (out.truncated) and the view's cap each say what they cut
+  const truncated = [out.truncated, viewed.truncated].filter(Boolean).join("; ");
+  return { ...out, ...viewed, ...(truncated ? { truncated } : {}), ...(changes ? { changes } : {}) };
 }
 
 const asAnswer = (s: Snapshot, opts: CallOptions) => ({ full: s.data, shown: projectView(s.data, opts.view) });
