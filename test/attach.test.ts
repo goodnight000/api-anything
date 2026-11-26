@@ -5,9 +5,8 @@
  * untouched.
  */
 import assert from "node:assert/strict";
-import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { createServer as createNet } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -27,12 +26,21 @@ import {
 import { call } from "../src/execute.js";
 import { addOperation, PROFILE_HINT, profileDir } from "../src/heal.js";
 import { claim, lockPath } from "../src/lock.js";
-import { logout, windowLogin } from "../src/login.js";
+import { logout } from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
 import { saveSite } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
+import {
+  freePort,
+  sleep,
+  startUserBrowser,
+  stopUserBrowser,
+  type UserBrowser,
+  userCookies,
+  userTabs,
+} from "./fixture/user-browser.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-attach-"));
@@ -44,83 +52,6 @@ after(() => {
   delete process.env.API_ANYTHING_CDP;
   rmSync(HOME, { recursive: true, force: true });
 });
-
-async function freePort(): Promise<number> {
-  const s = createNet();
-  await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
-  const { port } = s.address() as { port: number };
-  await new Promise((r) => s.close(r));
-  return port;
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** A Chromium with a DevTools port, its own profile and one tab open at `url`: the user's browser. */
-interface UserBrowser {
-  proc: ChildProcess;
-  port: number;
-  dir: string;
-}
-async function startUserBrowser(port: number, url: string): Promise<UserBrowser> {
-  const dir = mkdtempSync(join(tmpdir(), "api-anything-attach-user-"));
-  const proc = spawn(
-    BIN!,
-    [
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${dir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--no-sandbox",
-      // a user can allow a site's pop-ups: the guards on the tabs a run opens are proven with them allowed
-      "--disable-popup-blocking",
-      ...(process.env.DISPLAY ? [] : ["--headless=new"]),
-      url,
-    ],
-    { stdio: "ignore" },
-  );
-  for (const end = Date.now() + 20_000; Date.now() < end; ) {
-    if (proc.exitCode !== null) throw new Error(`the browser exited with ${proc.exitCode}`);
-    try {
-      if ((await fetch(`http://127.0.0.1:${port}/json/version`)).ok && (await userTabs(port)).length)
-        return { proc, port, dir };
-    } catch {
-      /* not up yet */
-    }
-    await sleep(100);
-  }
-  proc.kill("SIGKILL");
-  throw new Error("the browser did not open its DevTools port");
-}
-async function stopUserBrowser(b: UserBrowser | undefined): Promise<void> {
-  if (!b) return;
-  if (b.proc.exitCode === null && b.proc.signalCode === null) {
-    const exited = new Promise((r) => b.proc.once("exit", r));
-    b.proc.kill("SIGKILL");
-    await exited;
-  }
-  // its helper processes may still be writing for a moment after it went
-  rmSync(b.dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-}
-
-/** The browser's open tabs, as its own DevTools endpoint lists them. */
-async function userTabs(port: number): Promise<{ id: string; url: string }[]> {
-  const list = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as {
-    id: string;
-    url: string;
-    type: string;
-  }[];
-  return list.filter((t) => t.type === "page").map(({ id, url }) => ({ id, url }));
-}
-
-/** The user's own cookies, read as the user would, from a connection of the test's. */
-async function userCookies(port: number): Promise<string[]> {
-  const b = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-  try {
-    return (await b.contexts()[0]!.cookies()).map((c) => `${c.name}=${c.value}`);
-  } finally {
-    await b.close();
-  }
-}
 
 /** The rejections nothing handled while `run` ran, and a moment after. */
 async function unhandledDuring(run: () => Promise<void>): Promise<string[]> {
@@ -245,7 +176,7 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
   before(async () => {
     fx = await startFixture();
     port = await freePort();
-    user = await startUserBrowser(port, `${fx.url}/list`);
+    user = await startUserBrowser(BIN!, port, `${fx.url}/list`);
     [tab] = await userTabs(port);
     await signIn();
     process.env.API_ANYTHING_CDP = `http://localhost:${port}`;
@@ -366,9 +297,6 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
       AttachError,
     );
     await assert.rejects(clearProfileSite("127.0.0.1", profileDir()), AttachError);
-    const w = await windowLogin("fixture", `${fx.url}/private`, { waitForEnter: false });
-    assert.equal(w.ok, false);
-    assert.match(w.ok ? "" : w.reason, /API_ANYTHING_CDP/);
     const out = await logout("attached");
     assert.equal(out.session, true, "the jar is removed");
     assert.notEqual(out.profile, "cleared");
@@ -420,7 +348,7 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
         pageFetch({ origin: fx.url, url: `${fx.url}/list`, method: "GET", headers: {}, profileDir: profileDir() }),
         (e: Error) => e instanceof AttachError && /nothing answers/.test(e.message),
       );
-      user = await startUserBrowser(port, `${fx.url}/list`);
+      user = await startUserBrowser(BIN!, port, `${fx.url}/list`);
       const back = await runTrigger({ url: `${fx.url}/u/alice`, profileDir: profileDir() });
       assert.ok(back.exchanges.some((e) => e.request.url.includes("/UserByName?") && e.response?.status === 200));
       [tab] = await userTabs(port);

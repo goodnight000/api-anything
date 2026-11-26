@@ -4,7 +4,7 @@
  */
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { AttachError, attached } from "./attach.js";
+import { AttachError, attached, windowWhere } from "./attach.js";
 import {
   atStep,
   browserAvailable,
@@ -1130,7 +1130,7 @@ function learnOrExplain(
       botWall({ status: doc.response.status, headers: doc.response.headers, body: doc.response.body ?? "" });
     if (wall)
       throw new Error(
-        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} --window and clear it, then add again (learning said: ${(e as Error).message})`,
+        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} --window${windowWhere()} and clear it, then add again (learning said: ${(e as Error).message})`,
       );
     const asked = input.readOnly && run.dialogs?.find((d) => d.type === "confirm" && !d.accepted);
     if (asked)
@@ -1256,7 +1256,7 @@ function saveOperation(
         `refusing to save ${operation.name}: the captured response is ${j.class}: ${j.reason}, so it was learned from ${j.class === "rate" ? "a throttled answer" : j.class === "error" ? "a server failure" : "a challenge or sign-in page"}, not the op's own answer. ` +
           (j.class === "rate" || j.class === "error"
             ? "Wait a few minutes, then add again"
-            : `Ask the user to run api-anything login ${site}${j.class === "blocked" ? " --window and clear the challenge" : ""}, then add again`),
+            : `Ask the user to run api-anything login ${site}${j.class === "blocked" ? ` --window${windowWhere()} and clear the challenge` : ""}, then add again`),
       );
     } else
       warnings.push(
@@ -1395,7 +1395,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     const consent = i.write ? undefined : consentWall(run1, fillTrigger(trigger, ex1).url);
     if (consent)
       throw new Error(
-        `${consentReason(consent)}. Ask the user to run api-anything login ${i.site} --window, make the choice on the site's page there and close the window; then add again`,
+        `${consentReason(consent)}. Ask the user to run api-anything login ${i.site} --window${windowWhere()}, make the choice on the site's page there and close the window; then add again`,
       );
     run2 = await run(ex2 ?? ex1);
   }

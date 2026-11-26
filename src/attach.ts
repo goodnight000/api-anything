@@ -37,6 +37,23 @@ export const ownProfileRefused = (what: string) =>
     "unset API_ANYTHING_CDP to use api-anything's own browser profile",
   );
 
+/**
+ * What a hint that sends the user to the sign-in window adds while attached: the window is a tab of
+ * api-anything's own context in the browser they run, not a window of api-anything's own browser.
+ */
+export const windowWhere = (env: NodeJS.ProcessEnv = process.env): string =>
+  attached(env) ? " (a new window of the browser the user runs, API_ANYTHING_CDP)" : "";
+
+/**
+ * How to learn a page once the window got the user past its wall (`again`: the same learning again).
+ * Attached, `capture`'s and `learn_site`'s runs (`what`) start with none of the site's stored cookies,
+ * so they would meet the wall again; `add`'s runs for the user's own site carry what the window kept.
+ */
+export const learnAgain = (again: string, what: string, site = "<site>", op = "<op>"): string =>
+  attached()
+    ? `learn it with api-anything add ${site} ${op} --trigger <url> --example k=v instead: its runs in the attached browser carry what the window kept, and ${what}'s start with none of it`
+    : again;
+
 const loopback = (ip: string) => (isIP(ip) === 4 ? ip.startsWith("127.") : ip === "::1" || /^::ffff:127\./i.test(ip));
 
 /**

@@ -3,7 +3,7 @@
  * api-anything must handle: persisted GraphQL ids in a hashed bundle (X), layered form/JSON
  * encoding with an XSSI prefix (Google), UI-triggered writes, per-request signatures,
  * login walls served as 200 HTML or by redirect, a login box on a public page, rate limits,
- * server-rendered HTML lists, and a cookie-consent wall by redirect.
+ * server-rendered HTML lists, a cookie-consent wall by redirect, and a bot challenge a visitor clears.
  */
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -219,6 +219,8 @@ export async function startFixture(): Promise<Fixture> {
   const calls: FixtureCall[] = [];
   const seenSigs = new Set<string>();
   const revoked = new Set<string>();
+  /** the /gate clearances given out, as a challenge vendor's server knows the ones it issued */
+  const clearances = new Set<string>();
   const mint = () => randomBytes(12).toString("hex");
   let requireSignature = false;
   let limitedHits = 0;
@@ -328,6 +330,31 @@ export async function startFixture(): Promise<Fixture> {
         403,
         "text/html; charset=utf-8",
         '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
+      );
+    // A bot challenge a person gets past (Cloudflare's interstitial, cf_clearance): every /gate page and
+    // /api/gate answer is the interstitial, for a real browser too, until the visitor presses Verify
+    // there; the server then sets a clearance it issued, and lets through whatever carries it.
+    if (p === "/gate/verify" && req.method === "POST") {
+      const pass = mint();
+      clearances.add(pass);
+      return send(res, 204, "text/plain", "", {
+        "set-cookie": `gate_clearance=${pass}; Path=/; Max-Age=1800; SameSite=Lax`,
+      });
+    }
+    if ((p.startsWith("/gate/") || p.startsWith("/api/gate/")) && !clearances.has(jar.gate_clearance ?? ""))
+      return send(
+        res,
+        403,
+        "text/html; charset=utf-8",
+        '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div><button id="verify">Verify you are human</button><script>document.getElementById("verify").onclick=()=>fetch("/gate/verify",{method:"POST"}).then(()=>location.reload())</script></body></html>',
+      );
+    if (p === "/api/gate/data") return json(res, 200, { data: { items: ["past the gate"] } });
+    if (p.startsWith("/gate/"))
+      return send(
+        res,
+        200,
+        "text/html; charset=utf-8",
+        '<!doctype html><html><body><h1 id="through">through</h1><ul id="items"></ul><script>fetch("/api/gate/data").then(r=>r.json()).then(v=>{for(const x of v.data.items){const li=document.createElement("li");li.textContent=x;document.getElementById("items").append(li)}})</script></body></html>',
       );
     if (/^\/follow\/[^/]+$/.test(p)) return html(200, page(state.build, '<button id="follow">Follow</button>'));
     // A product page addressed by a slug whose data is keyed by a numeric id: the page asks

@@ -901,7 +901,7 @@ local `blocked` (a tier cap, no browser, an unconfirmed op) sets none. While it 
 answers `rate` or `blocked` without sending anything, a write before its ledger records it
 (`write: "not_sent"`), with `cooling: true`, `retryAfterMs` counting down to its end and a `reason`
 naming what the site answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
-asks for `api-anything login <site> --window`. Any login for the site (an import, a cookies file, the
+asks for `api-anything login <site> --window` (while attached, a tab in the attached browser). Any login for the site (an import, a cookies file, the
 window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. A consent
 wall (Failure classifier) is `error` and sets none: the site asked a question, it did not say stop. The call
 option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends that one call through
@@ -1317,11 +1317,31 @@ attach to. A DevTools endpoint is full control of a browser.
   as after any browser run: those cookies are api-anything's context's, never the user's. Tier 1 is
   unchanged: it sends from the sealed session file, and nothing reads the attached browser's
   cookies.
+- The sign-in window. While attached, `login --window` and the MCP `login` tool's `mode: "window"`
+  open a tab of api-anything's own context in the attached browser (in Chrome, a new window of
+  it), brought to the front where the browser allows it, instead of a window of api-anything's own
+  profile, which is the only way past a wall in this mode: a clearance a site gives is for the
+  browser that earned it, and later attached calls run in this one. The tab is a new page, never
+  one a call is using. The context first gets the site's stored cookies (`seed`), where
+  api-anything's profile would hold them, so `windowLogin` decides as it does unattached, fed with
+  that context's cookies as the window opened and as it closed: login cookies that appeared or
+  changed replace the jar, else the visitor's choices (a cleared challenge, a consent answer) are
+  merged into it. The window ends as it does unattached (the user closes the tab or its window,
+  Enter on the CLI, the MCP job's 10-minute cap); the context then closes, as on idle, and the next
+  call's context is seeded from the jar, so it carries what the site set. The attach rules hold
+  for it: the lock (another process holding it fails as `ProfileInUse`, after the wait), loopback
+  only, refused with the proxy, the user's default context never read. The attached browser going
+  away while the window is open (a read of the context no longer answers, and api-anything did not
+  close it) fails the login as `AttachError`, nothing kept. Every hint that sends the user to the
+  window says, while attached, that it is a new window of the browser they run (`windowWhere`). A
+  hint after a wall met by `capture` or `learn_site` names `add` instead of learning again
+  (`learnAgain`): their runs start with none of the stored cookies (above), so they would meet the
+  wall again, while `add`'s runs for the user's own site carry what the window kept.
 - Refused while attached: `API_ANYTHING_PROXY` set as well (the attached browser's traffic does not
   go through the proxy, and the cleartext guard cannot be installed on it); and everything that
-  works on api-anything's own profile, which is never opened while attached: `login --window` (its
-  answer says so), putting imported cookies into the profile (the import still fills the jar),
-  the cookie refresh from the profile on `auth`, and logout's clearing of the profile (logout
+  works on api-anything's own profile, which is never opened while attached: putting imported
+  cookies into the profile (the import still fills the jar), the cookie refresh from the profile on
+  `auth`, and logout's clearing of the profile (logout
   still removes the jar and the captures, and says the profile kept the site's cookies when an
   offline read finds a sign-in there). `profile-state.ts` reads only api-anything's own profile
   directory, offline: it never looks at the attached browser, and while attached its answer can
@@ -1334,8 +1354,10 @@ attach to. A DevTools endpoint is full control of a browser.
 - Not used while attached: `API_ANYTHING_BROWSER` and the headless user agent (the browser keeps
   its own), the profile lock. Shared workers are the gap described above, as in api-anything's own
   browser.
-- Not tested against any real site, protected or not. A challenge the user clears in their own
-  tabs is not carried into api-anything's context, which is separate.
+- Not tested against any real site, protected or not: no real challenge has been cleared through
+  the window, only the fixture's (`test/attach-window.test.ts`). A challenge the user clears in their
+  own tabs is not carried into api-anything's context, which is separate: they clear it in the
+  window instead.
 
 ## Outbound proxy (`proxy.ts`)
 
@@ -2337,7 +2359,8 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   is then the way. 0.4.0 and earlier ignore the proxy variables and connect directly; check
   `api-anything --version`.
 - `--window` opens a visible browser window on api-anything's profile for a by-hand sign-in (an
-  independent session). It is also the automatic fallback when nothing is importable. The site's
+  independent session); with `API_ANYTHING_CDP` set, a tab of api-anything's own context in the
+  attached browser instead (see "Attached browser"). It is also the automatic fallback when nothing is importable. The site's
   cookies are read as the window opens, before its page loads, and then while it is open: on every
   response (where a `Set-Cookie` lands) and every half second (for one a script sets), and once more
   on Enter. Of the reads that completed while it was open, the newest started is kept; one still in
