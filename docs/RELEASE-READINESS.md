@@ -1,3 +1,40 @@
+# Live verification — 2026-11-26, after 0.5.0
+
+The first run of `npm run verify:live` (`test/verify-live.ts`; from now on daily, through
+`.github/workflows/verify-live.yml`), at `6261b32` (0.5.0's specs), from an empty home on an
+Instabox VM (a cloud address), logged out, in 14 minutes: of 323 operations on 114 sites, 291
+passed, 11 failed, 13 were inconclusive and 8 skipped (`dominos-au` and `linkedin`, as before).
+Cases: 699 passed, 17 failed, 25 inconclusive, 8 skipped. The 2026-11-06 run, by hand, counted
+716 passed, 6 failed, 19 inconclusive and 8 skipped.
+
+## Fixed
+
+- Stale examples, replaced with current listings (request and recipe unchanged, so the same
+  version): `aldi.applianceDetails` (example and check, HTTP 410), `gumtree.getListingMetadata`
+  (its folding-bike check, HTTP 410), `hays.getJob` (example and check, HTTP 410) and
+  `workday.getJob` (example and both checks, HTTP 404). All four, and `workable`, pass
+  `verify:live` from the same VM afterwards.
+- `workable.getJob` passed as it was: both its postings are still up, so 0.5.0's note was stale,
+  not the example.
+
+## Known issues
+
+- `google-flights.priceCalendar` still answers batchexecute error 13 (judged a server error, so
+  inconclusive).
+- `trip.listHotels` finds no hotels for London (its check) and Singapore: their pages now put an
+  FAQ JSON-LD block before the hotel list, and the recipe reads the first block. Shanghai, the
+  example, works. Not repaired here.
+- `x.getTweet` answers drift on all three cases: the page's HTML has no `article`, though Chrome
+  renders the post, and a heal's recapture fails replay the same way. Seen from the VM only; not
+  rechecked from a home network.
+- From the VM's address, and not counted as broken (their specs are unchanged):
+  `allrecipes.searchRecipes` (Cloudflare challenges tier 1, and tier 2 judges the site's 404 for
+  a nonsense query as drift, so its `input` check fails), `booking.searchHotels` (HTTP 202 with no
+  properties, the dates ignored), `youtube.getVideo` ("Sign in to confirm you're not a bot"),
+  `craigslist.search` and `craigslist.searchArea` (a check answered a short page with no results;
+  the same query answered 356 results a minute later), `reddit`, `ticketmaster` and `wikidata`
+  (blocked or a reCAPTCHA), and `appstore` and `instagram` (HTTP 429). `openfoodfacts` answered
+  HTTP 503. GitHub's runner is a cloud address too, so expect the same there.
 # Release readiness — 0.5.0, 2026-11-22
 
 Release checks complete, with one known environment-dependent test failure below.

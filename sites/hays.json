@@ -58,7 +58,7 @@
           "type": "string",
           "required": true,
           "description": "Exact route segment after /job-detail/ from a Hays UK posting URL, including its public reference.",
-          "example": "senior-quantity-surveyor--derbyshire_4840331",
+          "example": "quantity-surveyor-glasgow_4842339",
           "pattern": "[A-Za-z0-9_().-]{3,180}",
           "hint": "Copy the exact job-detail route segment, without slash or query string."
         }
@@ -69,7 +69,7 @@
       "checks": [
         {
           "args": {
-            "job": "software-engineer-(aws-python-c-c-cfd-fea)-oxford_4763934"
+            "job": "graduate-embedded-software-engineer-(c-python)-southampton_4843505"
           },
           "expect": "result",
           "purpose": "A different public posting has a distinct title, references and location."
