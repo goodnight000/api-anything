@@ -181,6 +181,16 @@ describe("public stats", () => {
       sharing: { last30Days: 5 },
     });
     delete counts.installs;
+    // the upload funnel has a test of its own (replay.test.ts)
+    assert.deepEqual(counts.uploads.byStatus, {
+      candidate: 0,
+      live: 1,
+      degraded: 0,
+      review: 0,
+      archived: 0,
+      blocked: 0,
+    });
+    delete counts.uploads;
     assert.deepEqual(counts, {
       calls: { last7Days: 4, ok: 2, okRate: 0.667 },
       sites: { live: 2, operations: 2 },

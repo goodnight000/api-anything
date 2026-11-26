@@ -1765,6 +1765,7 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
       { errors: p.errors },
     );
   if (!v.yes) {
+    const { cleanReplayPreview } = await import("./share.js");
     out({
       ok: true,
       site: p.site,
@@ -1775,6 +1776,10 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
       warnings: p.warnings,
       personal: p.personal,
       checks: p.checks,
+      cleanReplay: cleanReplayPreview(
+        p.site,
+        p.ops.map((o) => o.op),
+      ),
       public: "each upload is public: anyone can fetch it from the registry, param examples included",
       next: `show the user each upload and every warning and personal item; only with their explicit OK: ${again} --yes`,
     });
@@ -1787,12 +1792,15 @@ async function cmdPublish({ v, pos }: Parsed): Promise<number> {
     { evidence: {}, consent: true, strict: v["strict-scan"] },
   );
   const ok = shared.every((s) => s.shared);
+  const held = shared.filter((s) => s.status === "review").map((s) => s.op);
   out({
     ok,
     shared,
-    next: ok
-      ? "others can call them now; one that needed a login or writes is served to others once a maintainer reviews it"
-      : "fix the reason given for each op that was not shared, then run it again",
+    next: !ok
+      ? "fix the reason given for each op that was not shared, then run it again"
+      : held.length
+        ? `${held.join(", ")} held for review: served only to this install until a maintainer approves it; each one's reason says why, and its next what to do`
+        : "others can call them now",
   });
   return ok ? 0 : 1;
 }

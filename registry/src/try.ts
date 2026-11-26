@@ -1,11 +1,13 @@
 /**
- * `GET /v1/try/:site/:op`: the one place the catalog sends a request to a site, so a visitor can try a
+ * `GET /v1/try/:site/:op`: where the catalog sends a request to a site for a visitor, so they can try a
  * public read with no install. Only an allowlisted plain-HTTP GET with no cookie or session value runs,
  * once, from the Worker, under per-network and global limits, cached, and only while TRY_ENABLED is on.
  * It fills the template and judges the answer with the client's own modules.
  *
  * What runs is the op as reviewed in the repo's sites/, built into the Worker. Nothing the registry
  * serves is ever run here: anyone can upload a version under an allowlisted name and get it promoted.
+ * The sender and its guards (`sendRefusal`, `fetchCapped`) are replay.ts's too, which replays a held
+ * version once to supply evidence its uploader's client did not send.
  */
 
 import nasaImages from "../../sites/nasa-images.json" with { type: "json" };
@@ -62,7 +64,7 @@ const VARS: Record<keyof typeof DEFAULTS, string> = {
   maxBytes: "TRY_MAX_BYTES",
   cacheSeconds: "TRY_CACHE_SECONDS",
 };
-type Limits = typeof DEFAULTS;
+export type Limits = typeof DEFAULTS;
 
 const MAX_ARG = 500;
 const MAX_ARGS = 20;
@@ -82,7 +84,7 @@ export interface TryEnv {
 /** On only when the Worker var says so: registry/wrangler.jsonc sets it, and any other value turns it off. */
 export const tryEnabled = (env: TryEnv) => /^(1|true|on|yes)$/i.test(String(env.TRY_ENABLED ?? ""));
 
-function limits(env: TryEnv): Limits {
+export function limits(env: TryEnv): Limits {
   const out = { ...DEFAULTS };
   for (const k of Object.keys(VARS) as (keyof Limits)[]) {
     const v = Number(env[VARS[k]]);
@@ -117,15 +119,12 @@ export function httpsOrigin(url: string): string | undefined {
   return u.port === "" && !u.username && !u.password ? u.origin : undefined;
 }
 
-/** Why `op` may not be tried from the catalog, or undefined when it may. `site.operations`: the site's ops, for the shared rules. */
-export function tryRefusal(
-  site: { name: string; baseUrl: string; operations?: Operation[] },
-  op: Operation,
-  allow: typeof TRY_OPS = TRY_OPS,
-): string | undefined {
-  const ops = Object.hasOwn(allow, site.name) ? allow[site.name] : undefined;
-  const extra = ops && Object.hasOwn(ops, op.name) ? ops[op.name] : undefined;
-  if (!extra) return `${site.name} ${op.name} is not one of the operations open to try`;
+/**
+ * Why the catalog may never send `op` itself, or undefined when it may: a plain-HTTP GET read with no
+ * cookie, session value or lookup, learned signed out, https on port 443 to a public host on the
+ * registrable domain of the site's `baseUrl`. The shared rules are the caller's to add.
+ */
+export function sendRefusal(site: { baseUrl: string }, op: Operation): string | undefined {
   if (!op.readOnly) return "it writes";
   if (op.request.method.toUpperCase() !== "GET") return `it is sent as ${op.request.method}, not GET`;
   if ((op.minTier ?? 1) !== 1) return "it needs a browser";
@@ -136,6 +135,20 @@ export function tryRefusal(
   if (bad) return `its address ${bad}`;
   if (!sameSite(op.request.url, site.baseUrl)) return "it sends off its own site";
   if (!httpsOrigin(op.request.url)) return "its address is not https on port 443";
+  return undefined;
+}
+
+/** Why `op` may not be tried from the catalog, or undefined when it may. `site.operations`: the site's ops, for the shared rules. */
+export function tryRefusal(
+  site: { name: string; baseUrl: string; operations?: Operation[] },
+  op: Operation,
+  allow: typeof TRY_OPS = TRY_OPS,
+): string | undefined {
+  const ops = Object.hasOwn(allow, site.name) ? allow[site.name] : undefined;
+  const extra = ops && Object.hasOwn(ops, op.name) ? ops[op.name] : undefined;
+  if (!extra) return `${site.name} ${op.name} is not one of the operations open to try`;
+  const why = sendRefusal(site, op);
+  if (why) return why;
   const odd = extra.find((o) => httpsOrigin(o) !== o);
   if (odd !== undefined) return `the extra origin ${odd} is not an https origin on port 443`;
   // the whole site: an op's links name its other ops
@@ -240,7 +253,7 @@ function argsOf(url: URL): Record<string, string> | string {
   return out;
 }
 
-interface Upstream {
+export interface Upstream {
   status: number;
   headers: Record<string, string>;
   body: string;
@@ -248,15 +261,15 @@ interface Upstream {
   redirected?: boolean;
 }
 
-class TooBig extends Error {}
-class OverCap extends Error {}
+export class TooBig extends Error {}
+export class OverCap extends Error {}
 
 /**
  * One GET of `url`, its redirects followed at most MAX_REDIRECTS times and only to `origins`, the whole
  * exchange under `timeoutMs` and `maxBytes`. `reserve` takes a send from the day's total before each
  * request, a redirect's too.
  */
-async function fetchCapped(
+export async function fetchCapped(
   url: string,
   headers: Record<string, string>,
   origins: ReadonlySet<string>,

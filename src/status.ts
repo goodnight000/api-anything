@@ -8,10 +8,21 @@ import { join } from "node:path";
 import { loadRecord, type Outcome, opHash } from "./checks.js";
 import { settingsFix, settingsProblem } from "./identity.js";
 import { strayLogin } from "./login.js";
+import { meansOf, nextStep, type ReviewCategory } from "./review.js";
 import { plaintextFiles, plaintextSessions, SealError, type Sealing, sealing } from "./seal.js";
 import { home } from "./session.js";
 import type { Operation } from "./spec.js";
-import { type CallRecord, coolList, loadCalls, loadHeals, loadSite, loadWrites, staleList, tierList } from "./store.js";
+import {
+  type CallRecord,
+  coolList,
+  loadCalls,
+  loadHeals,
+  loadSite,
+  loadWrites,
+  staleList,
+  tierList,
+  userSitesDir,
+} from "./store.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 /** fewer calls than this in a window say nothing about a trend */
@@ -40,6 +51,8 @@ export interface OpStatus {
   writes?: Partial<Record<"accepted" | "applied" | "mayHaveApplied" | "notApplied" | "notSent", number>>;
   calls?: { "24h"?: Window; "7d": Window; last: { at: string; class: string; tier?: number } };
   degraded?: string;
+  /** this install's upload of it, which the registry held for review: its version and why, by category */
+  review?: { hash: string; reasons: string[] };
 }
 
 export interface SiteStatus {
@@ -61,7 +74,8 @@ export interface Problem {
     | "write"
     | "plaintext"
     | "settings"
-    | "login";
+    | "login"
+    | "review";
   detail: string;
   next: string;
 }
@@ -192,6 +206,20 @@ function sitesWithState(now: number): string[] {
   } catch {
     // no verify has run
   }
+  // a site whose upload the registry held for review: the user's own specs only
+  try {
+    for (const f of readdirSync(userSitesDir())) {
+      if (!f.endsWith(".json") || names.has(f.slice(0, -5))) continue;
+      try {
+        if (loadSite(f.slice(0, -5))?.site.operations.some((o) => o.version?.status === "review"))
+          names.add(f.slice(0, -5));
+      } catch {
+        // a spec that does not load has nothing to say here
+      }
+    }
+  } catch {
+    // no spec of the user's own
+  }
   return [...names].sort();
 }
 
@@ -304,6 +332,17 @@ function siteStatus(name: string, now: number, named: boolean): { status: SiteSt
       });
     const heal = heals.get(opName);
     if (heal) s.lastHeal = heal;
+    if (op?.version?.status === "review") {
+      const categories = (op.version.review ?? []) as ReviewCategory[];
+      s.review = { hash: op.version.hash, reasons: categories };
+      const why = meansOf(categories);
+      problem({
+        op: opName,
+        problem: "review",
+        detail: `the registry held its upload (${op.version.hash.slice(0, 12)}) for review: served only to this install until a maintainer approves it${why.length ? `, because ${why.join("; ")}` : ""}`,
+        next: nextStep(categories, { site: name, op }),
+      });
+    }
     const rec = record[opName];
     if (rec?.results?.length) {
       const outcome = verdict(rec.results);
