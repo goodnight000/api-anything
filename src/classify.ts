@@ -575,7 +575,11 @@ export function consentStep(asked: string, landed: string, body: string): boolea
   if (site !== siteOf(from.hostname) || (to.hostname === from.hostname && to.pathname === from.pathname)) return false;
   if (LOGIN_URL.test(to.pathname) || LOGIN_SAID.test(body) || signInForm(body)) return false;
   const labels = to.hostname.slice(0, -site.length).split(".").filter(Boolean);
-  const named = [...labels, ...to.pathname.split("/")].some((part) => part && CONSENT_NAME.test(part));
+  // a name the asked address holds too is the content's own (a /gdpr page moved to /en/gdpr), no step before it
+  const own = new Set([...from.hostname.split("."), ...from.pathname.split("/")]);
+  const named = [...labels, ...to.pathname.split("/")].some(
+    (part) => part && !own.has(part) && CONSENT_NAME.test(part),
+  );
   return named || (returnsTo(to, site) && CONSENT_SAID.test(body.slice(0, 200_000)));
 }
 

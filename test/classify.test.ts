@@ -793,6 +793,16 @@ test("a read redirected to the site's cookie-consent page is an error naming it,
   // a write sent there is judged as a write
   assert.notEqual(classify(op({ ...ops.json, readOnly: false }), at("https://consent.s.test/m")).wall, "consent");
   assert.equal(consentStep(asked, "https://www.s.test/signin?continue=%2Fx", consent), false, "a sign-in path");
+  // a page about consent that moved is the content, not a step before it: the asked address names it too
+  const about = "<html><body><h1>Our GDPR policy</h1></body></html>";
+  assert.equal(consentStep("https://www.s.test/gdpr", "https://www.s.test/en/gdpr", about), false, "a moved page");
+  assert.equal(consentStep("https://www.s.test/help/consent", "https://www.s.test/consent", about), false);
+  assert.equal(consentStep("https://consent.s.test/docs", "https://consent.s.test/docs/v2", about), false);
+  assert.equal(
+    consentStep("https://www.s.test/help", "https://www.s.test/gdpr", about),
+    true,
+    "a step it did not ask for",
+  );
 });
 
 /** What `fn` answers and how long it held the thread, in ms. */
