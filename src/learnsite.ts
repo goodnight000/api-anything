@@ -5,7 +5,7 @@
  * then a holdout call through call(), a replay with no cookies, and shareOps.
  */
 import { readFileSync } from "node:fs";
-import { AttachError } from "./attach.js";
+import { AttachError, learnAgain, windowWhere } from "./attach.js";
 import { browserAvailable, ProfileInUse } from "./browser.js";
 import { type Proof, recordCases } from "./checks.js";
 import { botWall, consentReason, judge } from "./classify.js";
@@ -633,7 +633,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   if (consent)
     return fail(
       consentReason(consent),
-      `ask the user to run api-anything login ${site} --window, make the choice on the site's page there and close the window; then learn again`,
+      `ask the user to run api-anything login ${site} --window${windowWhere()}, make the choice on the site's page there and close the window; then ${learnAgain("learn again", "learn_site", site, op)}`,
       { captures, wall: "consent", nextCall: { action: "login", site, mode: "window" } },
     );
   // The rule holds for what the page requested, not only for the trigger typed: a request to this
@@ -715,7 +715,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   if (!chosen && wall)
     return fail(
       `the site served a bot challenge (${wall})`,
-      `ask the user to run api-anything login ${site} --window and clear it; then learn again`,
+      `ask the user to run api-anything login ${site} --window${windowWhere()} and clear it; then ${learnAgain("learn again", "learn_site", site, op)}`,
       { captures, nextCall: { action: "login", site, mode: "window" } },
     );
   if (!chosen && page && page.status >= 400)

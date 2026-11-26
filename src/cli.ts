@@ -4,7 +4,7 @@ import { createReadStream, existsSync, readdirSync, readFileSync, writeFileSync 
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { z } from "zod";
-import { AttachError } from "./attach.js";
+import { AttachError, attached, learnAgain, windowWhere } from "./attach.js";
 import { BATCH_CONCURRENCY, BATCH_MAX, type BatchItem, callReads } from "./batch.js";
 import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { parseDuration, sitePace } from "./budget.js";
@@ -131,7 +131,8 @@ const HELP: Record<string, string> = {
   --window    open a visible browser window to sign in by hand (an independent session); also the
               automatic fallback when nothing is importable. This is where you solve 2FA/captchas.
               It counts only if a login cookie appears or changes while it is open; else ok:false
-              and the stored session is kept.
+              and the stored session is kept. With API_ANYTHING_CDP set, it is a new window of
+              that browser.
   --cookies   import a cookies.txt (Netscape) or JSON export (Cookie-Editor / Playwright), for CI
   Output: loggedIn, renewed (new login cookies), and a warning when the cookies show no sign-in or
   are the ones the session already had. Cookies every signed-out visitor gets never count.`,
@@ -662,7 +663,7 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
   const runWindow = async (reason?: string) => {
     needBrowser();
     process.stderr.write(
-      `${reason ? `${reason} ` : ""}Sign in to ${url} in the browser window (or answer what the site asks there, such as a cookie choice), then close it or press Enter here.\n`,
+      `${reason ? `${reason} ` : ""}Sign in to ${url} in ${attached() ? "the new window of the browser you are running (API_ANYTHING_CDP)" : "the browser window"} (or answer what the site asks there, such as a cookie choice), then close it or press Enter here.\n`,
     );
     const w = await windowLogin(site, url, { loginCookies });
     if (!w.ok)
@@ -702,8 +703,8 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
       throw new Fail(
         e.message,
         e.declined
-          ? `nothing was read. To sign in without your browser's cookies: api-anything login ${site} --window`
-          : `ask the user to run in a terminal: api-anything login ${site} (it asks before reading their browser's cookies), or to sign in in a window of its own: api-anything login ${site} --window. Automation the user set up can pre-approve the domain: API_ANYTHING_ALLOW_IMPORT=${e.domain}`,
+          ? `nothing was read. To sign in without your browser's cookies: api-anything login ${site} --window${windowWhere()}`
+          : `ask the user to run in a terminal: api-anything login ${site} (it asks before reading their browser's cookies), or to sign in in a window of its own: api-anything login ${site} --window${windowWhere()}. Automation the user set up can pre-approve the domain: API_ANYTHING_ALLOW_IMPORT=${e.domain}`,
         { site },
       );
     if (!(e instanceof AmbiguousProfile)) throw e;
@@ -886,9 +887,9 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     ...(page.status ? { pageStatus: page.status } : {}),
     ...(stopped.length ? { stopped } : {}),
     next: wall
-      ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> --window (clear the challenge in the window), then capture again`
+      ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> --window${windowWhere()} and clear the challenge in the window, then ${learnAgain("capture again", "a capture")}`
       : consent
-        ? `${consentReason(consent)}: ask the user to run api-anything login <site> --window, make the choice on the site's page there and close the window, then capture again`
+        ? `${consentReason(consent)}: ask the user to run api-anything login <site> --window${windowWhere()}, make the choice on the site's page there and close the window, then ${learnAgain("capture again", "a capture")}`
         : halted?.site.length
           ? stoppedHint(halted.site, "capture again")
           : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),

@@ -1774,21 +1774,28 @@ async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetc
 /**
  * Open `url` headed so the user can sign in. Resolves when they close the window or press Enter
  * in the terminal; what counts as logged in is the caller's call. Returns the site's cookies as the
- * window opened, before the page loaded, and as it closed.
+ * window opened, before the page loaded, and as it closed. Attached (API_ANYTHING_CDP), the window
+ * is a tab of api-anything's own context in that browser, started with `jar`, and its cookies are
+ * that context's alone; the browser going away while it is open throws AttachError.
  */
 export async function login({
   url,
   profileDir,
   waitForEnter = true,
+  jar,
 }: {
   url: string;
   profileDir: string;
   waitForEnter?: boolean;
+  /** attached only: the stored cookies the window starts with, as api-anything's own profile would hold them */
+  jar?: StoredCookie[];
 }): Promise<{ opened: StoredCookie[]; closed: StoredCookie[] }> {
-  if (attached()) throw ownProfileRefused("the sign-in window");
   const release = hold();
+  const before = losses;
   try {
-    return await loginWindow(url, profileDir, waitForEnter);
+    return await loginWindow(url, profileDir, waitForEnter, jar);
+  } catch (e) {
+    throw lost(e, before);
   } finally {
     release();
   }
@@ -1801,10 +1808,15 @@ async function loginWindow(
   url: string,
   profileDir: string,
   waitForEnter: boolean,
+  jar?: StoredCookie[],
 ): Promise<{ opened: StoredCookie[]; closed: StoredCookie[] }> {
   const ctx = await openBrowser({ profileDir, headless: false });
+  const own = guests.has(ctx);
+  await seed(ctx, jar);
   const opened = siteCookies(await ctx.cookies(), url);
-  const page = ctx.pages()[0] ?? (await ctx.newPage());
+  // attached: a tab of its own, never a page a call is using, shown in front where the browser lets it
+  const page = own ? await ctx.newPage() : (ctx.pages()[0] ?? (await ctx.newPage()));
+  if (own) await within(page.bringToFront(), undefined);
   // Playwright answers the window's dialogs, not the human: leaving or closing a page is never refused
   // (a dismissed beforeunload would keep it open), an alert is only read, a confirm or prompt declined.
   const onDialog = (d: Dialog) => answer(d, d.type() === "beforeunload" || d.type() === "alert");
@@ -1853,6 +1865,7 @@ async function loginWindow(
     };
     ctx.once("close", close);
     page.once("close", close);
+    ctx.browser()?.once("disconnected", close);
     // The MCP server's stdin is its transport; only the CLI reads Enter.
     if (waitForEnter) {
       process.stdin.once("data", onEnter);
@@ -1865,6 +1878,14 @@ async function loginWindow(
     await Promise.race([page.goto(url).catch(() => {}), done]);
     read();
     await done;
+    // A closed tab leaves the context; a browser that went away (quit, killed) takes it along, and the
+    // reads that would show what the user did there with it. Closing it here (the MCP cap) is not that.
+    const browser = ctx.browser();
+    if (own && browser && !leaving.has(browser) && !(await within(ctx.cookies().then(Boolean), false, 2000)))
+      throw new AttachError(
+        "the attached browser (API_ANYTHING_CDP) went away while the sign-in window was open: nothing was kept, and the stored session is unchanged",
+        "start the browser again with its DevTools port, then open the window again",
+      );
     // Enter leaves the window open, so one more read is current (unless the user closes it meanwhile).
     if (entered && !shut) read();
     shut = true;

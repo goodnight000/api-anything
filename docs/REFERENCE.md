@@ -374,17 +374,28 @@ works only in it: your tabs, cookies and sign-ins in that browser are never read
 cleared, and when it goes idle it closes its own tabs and disconnects, leaving the browser running.
 Its tabs carry the session `api-anything login` stored for your own specs, as api-anything's own
 browser would; a spec you pulled from the catalog gets none. Tier 1 is unchanged. Nothing about any
-site's bot wall is promised or tested.
+site's bot wall is promised or tested against a real site.
+
+To get past a bot challenge or a cookie-consent page there, follow the call's `next`:
+`api-anything login <site> --window` (MCP: the `login` tool with `mode: "window"`) opens the site in a
+new window of the browser you are running, in api-anything's own context. Clear the challenge or
+make your choice on the site's page, sign in if you want to, then close that window (or press Enter
+in the terminal). What the site set there is kept for that site, as with api-anything's own window,
+and the next calls in that browser carry it. A challenge you clear in your own tabs does not count:
+they are a separate context. `capture` and `learn_site` start without the stored session in this
+mode, so after the window, learn a walled page with `api-anything add <site> <op> --trigger <url>`,
+as their `next` says.
 
 Attached mode refuses, with a reason and a `next`:
 
 - an endpoint that is not this machine's loopback address (`127.0.0.1`, `[::1]`, `localhost`), or
   where no browser answers;
 - `API_ANYTHING_PROXY` set as well: the attached browser's traffic would not go through the proxy;
-- `login --window`, which opens api-anything's own browser profile. `api-anything login <site>`
-  still imports, into the stored session only; `logout` still removes the stored session, and
-  says when api-anything's own profile kept the site's cookies (unset the variable and log out
-  again to clear them);
+- what works on api-anything's own browser profile, which is not opened in this mode: putting
+  imported cookies into it (`api-anything login <site>` still imports, into the stored session
+  only), refreshing cookies from it on `auth`, and clearing it on `logout` (`logout` still
+  removes the stored session, and says when api-anything's own profile kept the site's cookies;
+  unset the variable and log out again to clear them);
 - a second api-anything process while one is attached: it waits up to 15 s, then fails with a
   hint, as with the profile. Keep other automation off the port while api-anything uses it.
 
@@ -539,7 +550,8 @@ makes an import nobody watched silent. With Allow, each import asks.
 The imported session is the *same* one as your browser, so if the site logs it out, both
 go — avoid heavy automated traffic on it. Other ways in:
 
-- `--window` opens a visible Chrome window to sign in by hand (an independent session). Use it when
+- `--window` opens a visible Chrome window to sign in by hand (an independent session); with
+  `API_ANYTHING_CDP` set, a new window of that browser ([A browser you already run](#in-a-browser-you-already-run)). Use it when
   the site asks for 2FA or a captcha, or when you don't want to share your browser's session. It is
   also the automatic fallback when nothing is importable. Finish signing in, 2FA included, then close
   the window or press Enter: it does not close itself, because some sites set their login cookie before
@@ -1077,8 +1089,9 @@ Known limits in detail:
   repair that ends on a challenge that did not solve is `blocked` and marks nothing stale.
   [A browser you already run](#in-a-browser-you-already-run) (`API_ANYTHING_CDP`) runs the browser
   tiers in a browser that automation did not start; whether a given wall treats it differently is
-  not tested, and a challenge you clear in your own tabs there does not carry into api-anything's,
-  which are a separate context.
+  not tested. There, `login <site> --window` opens in that browser, and a challenge cleared in that
+  window carries into later calls; one you clear in your own tabs does not, as they are a separate
+  context.
 - Paging returns the site's own next cursor, and only when the answer holds one. Numbered pages
   get no `nextPage`. When the output cap cuts a page, the cut items are on neither that page nor
   the next; use the local `more`/`get_result` continuation to recover them before following
