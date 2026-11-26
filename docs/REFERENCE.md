@@ -353,6 +353,41 @@ plain `http://` is refused through the proxy when the call would carry your sess
 proxy could read its cookies; add the host to `API_ANYTHING_NO_PROXY` to call it directly. A proxy
 does not get a call past a bot wall: a site that blocks you still answers `blocked`.
 
+### In a browser you already run
+
+Some sites challenge a browser that automation started. You can run the browser tiers (tiers 2 and
+3, `add`, `capture`, `learn_site` and repairs) in a Chromium browser you started yourself, over its
+DevTools port, instead of one api-anything launches. Start the browser with a profile of its own
+(Chrome 136 and later ignore the port on your default profile), then point api-anything at it:
+
+```sh
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 --user-data-dir="$HOME/.chrome-for-api-anything"
+export API_ANYTHING_CDP=http://127.0.0.1:9222
+```
+
+A DevTools port is full control of that browser: any program on this machine can use it to read
+and act on every site signed in there.
+
+api-anything is a guest there. It opens its own window, a separate context of that browser, and
+works only in it: your tabs, cookies and sign-ins in that browser are never read, navigated or
+cleared, and when it goes idle it closes its own tabs and disconnects, leaving the browser running.
+Its tabs carry the session `api-anything login` stored for your own specs, as api-anything's own
+browser would; a spec you pulled from the catalog gets none. Tier 1 is unchanged. Nothing about any
+site's bot wall is promised or tested.
+
+Attached mode refuses, with a reason and a `next`:
+
+- an endpoint that is not this machine's loopback address (`127.0.0.1`, `[::1]`, `localhost`), or
+  where no browser answers;
+- `API_ANYTHING_PROXY` set as well: the attached browser's traffic would not go through the proxy;
+- `login --window`, which opens api-anything's own browser profile. `api-anything login <site>`
+  still imports, into the stored session only; `logout` still removes the stored session, and
+  says when api-anything's own profile kept the site's cookies (unset the variable and log out
+  again to clear them);
+- a second api-anything process while one is attached: it waits up to 15 s, then fails with a
+  hint, as with the profile. Keep other automation off the port while api-anything uses it.
+
 ### Health: `api-anything status [site]`
 
 An op can keep working and still be in trouble: an escalation to tier 3 is remembered for good, so
@@ -1032,13 +1067,18 @@ Known limits in detail:
   (tier 3, whose per-param reads would not answer), or when example 2 changes only that param and
   the two answers happen to differ anyway.
 - Chrome locks its profile to one process. An MCP server releases it after 3 s idle; another
-  process waits up to 15 s for it, then fails with a hint.
+  process waits up to 15 s for it, then fails with a hint. A browser attached with
+  `API_ANYTHING_CDP` is one process's at a time in the same way.
 - Optional request structure (a reply block that only some calls have) needs a separate op.
 - Rescan only reads scripts that the page references directly. An id inside a lazily loaded
   chunk heals through recapture instead, which is slower.
 - A site behind a bot wall that challenges a real Chrome as well needs you to clear it by hand
   (`api-anything login <site> --window`). There is no CAPTCHA solving and no TLS impersonation. A trigger run or
   repair that ends on a challenge that did not solve is `blocked` and marks nothing stale.
+  [A browser you already run](#in-a-browser-you-already-run) (`API_ANYTHING_CDP`) runs the browser
+  tiers in a browser that automation did not start; whether a given wall treats it differently is
+  not tested, and a challenge you clear in your own tabs there does not carry into api-anything's,
+  which are a separate context.
 - Paging returns the site's own next cursor, and only when the answer holds one. Numbered pages
   get no `nextPage`. When the output cap cuts a page, the cut items are on neither that page nor
   the next; use the local `more`/`get_result` continuation to recover them before following

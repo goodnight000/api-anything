@@ -34,6 +34,51 @@ const holding = new Set<string>();
 
 const busy = (e: unknown) => ((e as { errcode?: number }).errcode ?? 0) % 256 === 5; // SQLITE_BUSY and its extended codes
 
+/**
+ * Hold `file`'s lock until the returned function is called, for a hold across async work. The wait
+ * (up to `waitMs`) polls, so it never blocks the event loop; undefined when the lock stayed held.
+ */
+export async function claim(file: string, waitMs: number): Promise<(() => void) | undefined> {
+  const lock = lockPath(file);
+  try {
+    closeSync(openSync(lock, "wx", 0o600));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+  }
+  const db = openReadWrite(lock);
+  const deadline = Date.now() + waitMs;
+  try {
+    db.exec("PRAGMA busy_timeout = 0");
+    for (;;) {
+      try {
+        db.exec("PRAGMA journal_mode = MEMORY");
+        db.exec("BEGIN EXCLUSIVE");
+        break;
+      } catch (e) {
+        if (!busy(e)) throw e;
+        if (Date.now() >= deadline) {
+          db.close();
+          return undefined;
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+  } catch (e) {
+    db.close();
+    throw e;
+  }
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    try {
+      db.exec("ROLLBACK");
+    } finally {
+      db.close();
+    }
+  };
+}
+
 /** Run fn holding `file`'s lock, waiting up to `waitMs` for it: undefined when it stayed held. */
 export function hold<T>(file: string, waitMs: number, fn: () => T): { value: T } | undefined {
   const lock = lockPath(file);

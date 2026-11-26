@@ -6,6 +6,7 @@
  * of a site from a browser profile waits for a person's yes (`ImportRefused` without one).
  */
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import { attached, ownProfileRefused } from "./attach.js";
 import { addCookiesToProfile, browserAvailable, clearProfileSite, login } from "./browser.js";
 import { dropCaptures, profileDir } from "./heal.js";
 import { publicAddress } from "./http.js";
@@ -436,6 +437,8 @@ export async function windowLogin(
   url: string,
   o: { loginCookies?: string[]; waitForEnter?: boolean; publicOnly?: boolean } = {},
 ): Promise<WindowLogin> {
+  // the window is api-anything's own profile, never a window of the attached browser
+  if (attached()) return { ok: false, cookies: [], reason: ownProfileRefused("the sign-in window").message };
   const guest = await knownGuests(site, url, o.loginCookies, undefined, o.publicOnly ? publicAddress : undefined);
   const { opened, closed } = await login({ url, profileDir: profileDir(), waitForEnter: o.waitForEnter });
   // the user had the site open: a challenge cleared there counts even with no sign-in

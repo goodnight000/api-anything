@@ -1261,6 +1261,74 @@ send a request again (its own scripts, a retry after a navigation or a connectio
   guarded page. Closing it needs per-run ownership of a worker.
 - A per-site minimum interval between network requests (default 1 s) keeps usage at human scale.
 
+### Attached browser (`attach.ts`)
+
+`API_ANYTHING_CDP` runs the browser tiers in a Chromium browser the user started with a DevTools
+port, instead of one api-anything launches: tiers 2 and 3, `add`, `capture`, `learn_site` and heals'
+recaptures. Unset, nothing changes and nothing is probed; api-anything never looks for a browser to
+attach to. A DevTools endpoint is full control of a browser.
+
+- The value is an `http://` DevTools address (`http://127.0.0.1:9222`) or the browser's `ws://`
+  address. Its host must be loopback: an address in `127.0.0.0/8` or `::1`, or a name all of whose
+  addresses are. Anything else, and any other scheme, is refused before a connection is made, as
+  `AttachError`: the call answers `error` with nothing sent and a `next`. The name is resolved
+  once and the address it resolved to is the one connected to; of the WebSocket address the browser
+  answers `/json/version` with, only the path is used, on that same address. Nothing answering
+  there is refused the same way ("nothing answers as a browser at ..."). Chrome 136 and later ignore
+  `--remote-debugging-port` on the default user data directory, so the browser runs with a
+  `--user-data-dir` of its own.
+- A guest. api-anything opens a browser context of its own in the attached browser (`newContext`,
+  `serviceWorkers: "block"`, no viewport emulation), and every tab it opens is in that context. The
+  user's tabs, cookies, storage and service workers are in the browser's default context, which it
+  never reads, navigates or clears; it connects with `noDefaults`, so Playwright applies no
+  emulation to that context either. The routes, the socket guard and the service-worker block are
+  installed on api-anything's context and reach its own pages only. Idle close (3 s),
+  `closeBrowser()` and `closeHost()` close that context, which closes its tabs, and disconnect: the
+  browser keeps running.
+- The write guards hold as in api-anything's own browser. One difference needed handling: an
+  attached browser has the back/forward cache on (Playwright launches its own with it off), so a
+  document a guarded run leaves by a plain navigation can be kept frozen, and what its pagehide
+  handler sends can come after the run stopped waiting for it (seen: a handler that takes 400 ms
+  was neither stopped nor captured). In an attached browser a guarded page is therefore emptied
+  with `location.replace("about:blank")`: with its history entry gone it cannot be kept, and it
+  unloads under the seal. `test/attach.test.ts` runs the existing write-guard, socket-guard and
+  dialog tests attached, against a browser with pop-ups allowed (a user can allow a site's), since
+  several of them need the tabs a page opens by script.
+- One api-anything process at a time is attached to a browser, as one holds the profile. Two
+  DevTools clients of one browser each take the other's context for the default one, so each sees
+  the other's tabs as tabs of the browser and answers their dialogs (seen: two test processes
+  attached at once dismissed each other's confirms, and an order a read's learning should have
+  stopped reached the server). The lock is machine-wide, in the temp directory, keyed by the
+  address and port, not under a home; another process waits up to 15 s for it, then fails as
+  `ProfileInUse` does. A DevTools client that is not api-anything is not excluded: keep other
+  automation off the port while api-anything uses it.
+- Sessions. The context starts empty. For the user's own specs, a call's tier-2 page and its
+  trigger run, a heal's recapture and `add`'s runs first get the site's stored cookies, what tier 1
+  may send and api-anything's profile would hold already (`jar`); someone else's spec (`shared`),
+  a bare call, `capture` and `learn_site` get none. What a run's pages set is merged into the jar
+  as after any browser run: those cookies are api-anything's context's, never the user's. Tier 1 is
+  unchanged: it sends from the sealed session file, and nothing reads the attached browser's
+  cookies.
+- Refused while attached: `API_ANYTHING_PROXY` set as well (the attached browser's traffic does not
+  go through the proxy, and the cleartext guard cannot be installed on it); and everything that
+  works on api-anything's own profile, which is never opened while attached: `login --window` (its
+  answer says so), putting imported cookies into the profile (the import still fills the jar),
+  the cookie refresh from the profile on `auth`, and logout's clearing of the profile (logout
+  still removes the jar and the captures, and says the profile kept the site's cookies when an
+  offline read finds a sign-in there). `profile-state.ts` reads only api-anything's own profile
+  directory, offline: it never looks at the attached browser, and while attached its answer can
+  only err toward signed in.
+- When the attached browser goes away mid-call, the call fails with "the attached browser
+  (API_ANYTHING_CDP) went away during the call: ..." (a tier-2 page that had not loaded is still
+  unsent; anything else may have sent), the process forgets the connection, and the next call
+  attaches again or is refused as above. A guarded run whose browser is gone skips its seal rounds,
+  since no tab is left to empty.
+- Not used while attached: `API_ANYTHING_BROWSER` and the headless user agent (the browser keeps
+  its own), the profile lock. Shared workers are the gap described above, as in api-anything's own
+  browser.
+- Not tested against any real site, protected or not. A challenge the user clears in their own
+  tabs is not carried into api-anything's context, which is separate.
+
 ## Outbound proxy (`proxy.ts`)
 
 New in 0.5.0. 0.4.0 and earlier ignore `API_ANYTHING_PROXY` and
@@ -2204,7 +2272,8 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   on a known site's baseUrl host (with or without `www.`) is that site; any other becomes a site
   named after its host.
 - Imported cookies go into the jar **and** into api-anything's own browser profile (`addCookies`), so
-  tier 2/3 and heals are logged in too.
+  tier 2/3 and heals are logged in too. With `API_ANYTHING_CDP` set the profile is not opened: they
+  go into the jar only, and reach the attached browser's tabs from there (see "Attached browser").
 - With `API_ANYTHING_PROXY` set (new in 0.5.0), `--window` opens Chrome through the proxy, so the session comes from
   the address calls will use (some sites bind a session to it). Cookies imported from the everyday
   browser came from the user's own address, so a proxied call may answer `auth` there; `--window`

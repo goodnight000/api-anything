@@ -5,6 +5,7 @@
  * then a holdout call through call(), a replay with no cookies, and shareOps.
  */
 import { readFileSync } from "node:fs";
+import { AttachError } from "./attach.js";
 import { browserAvailable, ProfileInUse } from "./browser.js";
 import { type Proof, recordCases } from "./checks.js";
 import { botWall, consentReason, judge } from "./classify.js";
@@ -592,6 +593,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   let second: (() => Promise<CaptureFile>) | undefined;
   const failedRun = (e: unknown): LearnSiteResult => {
     if (e instanceof ProfileInUse) return fail(e.message, PROFILE_HINT, { nextCall: { action: "retry" } });
+    if (e instanceof AttachError) return fail(e.message, e.next);
     if (e instanceof CaptureUnavailable)
       return fail(e.message, e.recapture ? "learn again without captures: the two runs are made afresh" : e.next);
     return fail((e as Error).message.split("\n")[0]!, "check the trigger URL, then learn again");
