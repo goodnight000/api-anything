@@ -38,6 +38,7 @@ for (const file of readdirSync(dir)
     ...(site.loginCookies ? { loginCookies: site.loginCookies } : {}),
     ...(site.pace && Object.keys(site.pace).length ? { pace: site.pace } : {}),
     ...(notes ? { notes } : {}),
+    ...(site.aliases?.length ? { aliases: site.aliases } : {}),
   };
   const res = await fetch(new URL("/v1/admin/seed", url), {
     method: "POST",

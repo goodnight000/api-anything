@@ -545,12 +545,17 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   const existing = loadSite(site)?.site;
   // One name is one site, as pull holds it (registry.ts) and the default name does (`defaultSiteName`):
   // an operation saved under a site on another registrable domain would be called as that site's.
-  if (existing && domainOf(existing.baseUrl) !== domainOf(input.trigger))
+  // An alias is no exception: it finds the site in a search, and never makes its domain a host the site's ops call.
+  const pageDomain = domainOf(input.trigger);
+  if (existing && domainOf(existing.baseUrl) !== pageDomain)
     return {
       ok: false,
       class: "refused",
       site,
-      error: `site "${site}" is ${clip(existing.baseUrl)}, another site than the trigger's: a name holds one site`,
+      error:
+        pageDomain && existing.aliases?.includes(pageDomain)
+          ? `site "${site}" is ${clip(existing.baseUrl)}: ${pageDomain} is only a search alias of ${site}, and a name holds one site`
+          : `site "${site}" is ${clip(existing.baseUrl)}, another site than the trigger's: a name holds one site`,
       next: "leave site out (it is named from the trigger), or pass a name no site has",
       nextCall: { action: "fix_args" },
     };

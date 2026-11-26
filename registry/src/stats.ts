@@ -5,7 +5,7 @@
 import type { ServedSite } from "../../src/registry-api.js";
 import { confirmed } from "./catalog.js";
 import { SERVED, successRate } from "./rules.js";
-import type { D1Database } from "./store.js";
+import { type D1Database, UNCOVERED } from "./store.js";
 
 /** The uploader of a maintainer's seed (worker.ts `adminSeed`, store.ts `seedSite`). */
 const SEED = "seed";
@@ -241,7 +241,7 @@ export async function publicStats(
   const wanted = await db
     .prepare(
       `SELECT COUNT(DISTINCT d.domain) AS n FROM demand d
-       WHERE d.at >= ? AND NOT EXISTS (SELECT 1 FROM sites s WHERE s.domain = d.domain)`,
+       WHERE d.at >= ? AND ${UNCOVERED}`,
     )
     .bind(demandSince)
     .first<{ n: number }>();

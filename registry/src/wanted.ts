@@ -3,22 +3,13 @@
  * teach it. A demand domain came from someone's search, so only a clean registrable domain gets a page,
  * and it is escaped like any spec string.
  */
-import { domainOf } from "../../src/search.js";
-import { badAddress } from "../../src/vet.js";
+import { cleanDomain } from "../../src/vet.js";
 import { command, esc, layout, plural } from "./pages.js";
+
+export { cleanDomain };
 
 /** Networks that must have asked before a wanted page is listed for search engines: one is too thin. */
 export const WANTED_INDEX_NETWORKS = 2;
-
-const LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
-const DOMAIN = new RegExp(`^(?=.{4,253}$)(?:${LABEL}\\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$`);
-
-/**
- * Whether `s` is a lowercase registrable domain on a public suffix, exactly as demand records one: no host,
- * port or path. Not a name of someone's own network (corp.internal, printer.home.arpa, nas.local), which a
- * search may name and no public list may show.
- */
-export const cleanDomain = (s: string) => DOMAIN.test(s) && domainOf(s) === s && !badAddress(`https://${s}`);
 
 export function wantedPage(d: { domain: string; networks: number }, origin: string, days: number): string {
   const { domain, networks } = d;
