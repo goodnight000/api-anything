@@ -9,10 +9,8 @@ import {
   MAX_SEARCH_QUERY,
   nameHashText,
   type Report,
-  requestSig,
   type SearchMatch,
   type Status,
-  triggerSig,
   type UploadResult,
   type VerifyJob,
 } from "../../src/registry-api.js";
@@ -22,6 +20,7 @@ import { badAddress, interfaceAddress, MAX_INTERFACE_URL, uploadProblems } from 
 import { networksOf, searcherOf, sha256Hex, signatureHeaders, signer } from "./auth.js";
 import { catalog, confirmed, entryOf, search } from "./catalog.js";
 import { CSP, homePage, sitemap, sitePage } from "./pages.js";
+import { replaySkipped } from "./replay.js";
 import { nextStatus, type Thresholds, thresholds, toArchive } from "./rules.js";
 import { community, countCalls, forgetCalls, publicStats } from "./stats.js";
 import {
@@ -43,7 +42,6 @@ import {
   getSite,
   getVersion,
   holders,
-  incumbent,
   interfacesOf,
   markPending,
   pendingVersions,
@@ -55,7 +53,7 @@ import {
   reseed,
   seedSite,
   setStatus,
-  siteOps,
+  siteHeld,
   sitesOn,
   touchKey,
   touchOk,
@@ -434,19 +432,7 @@ async function upload(c: Ctx) {
     return json({ hash: u.hash, status, duplicate: true, ...(reasons ? { reasons } : {}) } satisfies UploadResult);
   }
 
-  const ops = await siteOps(db, u.site.name, u.site.domain);
-  const loginCookies = bound?.login_cookies ? (JSON.parse(bound.login_cookies) as string[]).length > 0 : false;
-  const live = await incumbent(db, u.site.name, u.operation.name);
-  // what it sends and opens is read from its stored operation: a row's `sig` holds only what its uploader declared
-  const liveOp = live ? (JSON.parse(live.operation) as Operation) : undefined;
-  const reasons = reviewReasons(u.site, u.operation, u.evidence, {
-    opNames: ops.opNames,
-    login: loginCookies || ops.loginOp,
-    established: ops.established,
-    ...(live && liveOp
-      ? { incumbent: { match: live.sig, request: requestSig(liveOp), trigger: triggerSig(liveOp) } }
-      : {}),
-  });
+  const reasons = reviewReasons(u.site, u.operation, u.evidence, await siteHeld(db, u.site, bound, u.operation.name));
   const heal = await isHeal(c, u.evidence.healedFrom, u.site.name, u.operation.name, key);
   if (claimed) reasons.push(claimed.reason);
   const status: Status = reasons.length ? "review" : "candidate";
@@ -811,7 +797,8 @@ export default {
   },
 
   /**
-   * Every minute: recount the versions whose recount a report found held back. Daily: archive stale
+   * Every minute: recount the versions whose recount a report found held back, then replay a few
+   * versions held only for a skipped clean replay (replay.ts). Daily: archive stale
    * candidates and degraded versions, and degraded versions a newer live one replaced; delete what was
    * archived over 30 days ago, with its reports; recount every version as reports age out.
    */
@@ -820,6 +807,12 @@ export default {
     const t = thresholds(env);
     if (controller.cron === EVERY_MINUTE) {
       for (const v of await pendingVersions(env.DB)) await judge(env.DB, t, now, v, true);
+      // a site's answer never holds the recounts up, and a failure here is the next minute's to retry
+      try {
+        await replaySkipped(env, now);
+      } catch (e) {
+        console.error(e);
+      }
       return;
     }
     const cutoff = new Date(now - t.recentDays * DAY).toISOString();

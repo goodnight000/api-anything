@@ -177,6 +177,10 @@ export interface SiteHeld {
   incumbent?: { match: string; request: string; trigger: string };
 }
 
+/** The review reason of a clean replay that was not ok; replay.ts finds the versions held for "skipped" alone by it. */
+export const cleanReplayReason = (evidence: Pick<Evidence, "cleanReplay">) =>
+  `its clean replay was ${evidence.cleanReplay}, not ok`;
+
 /** Why a version is outside the automatic rules: served to its uploader only until a maintainer decides. */
 export function reviewReasons(
   site: SiteContext,
@@ -227,8 +231,7 @@ export function reviewReasons(
   }
   if (op.public?.length) reasons.push(`lists public values: ${op.public.join(", ")}`);
   // blocked: a bot wall answered the cookie-free replay, so the data is public behind it
-  if (evidence.cleanReplay !== "ok" && evidence.cleanReplay !== "blocked")
-    reasons.push(`its clean replay was ${evidence.cleanReplay}, not ok`);
+  if (evidence.cleanReplay !== "ok" && evidence.cleanReplay !== "blocked") reasons.push(cleanReplayReason(evidence));
   // the export scan's heuristics: a JWT, a bearer, a long blob; they misfire, so a maintainer looks
   const spec = SiteSchema.parse({ name: site.name, baseUrl: site.baseUrl, operations: [op] });
   for (const w of vetShared(spec).warnings) if (w.startsWith("$")) reasons.push(w);

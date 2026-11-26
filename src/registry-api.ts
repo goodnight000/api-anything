@@ -61,6 +61,11 @@ export interface Evidence {
   tier?: 1 | 2 | 3;
   /** a heal: the version this one repairs */
   healedFrom?: string;
+  /**
+   * the registry's own clean replay of a version its uploader sent none for (registry/src/replay.ts):
+   * set by the registry only, never taken from an upload. Evidence alone: no report, no promotion
+   */
+  registryReplay?: { at: string; outcome: "ok" };
 }
 
 /** POST /v1/versions (signed). The operation is stored as sent, keyed by its hash. */
