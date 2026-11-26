@@ -100,7 +100,9 @@ local-only and how to turn it off (`setup --no-local-only --share-only`, or unse
    clearing them. An upload's are dropped unread, so a site an install first shared has none, and no
    upload adds or changes one on any site. Each must be a clean registrable domain as demand records one,
    not the site's own, at most 10; one that is already another site's alias, or the domain of another
-   site the registry serves, is refused (one the site already holds stays through a reseed). An alias
+   site the registry serves, is refused (one the site already holds stays through a reseed). A seed
+   replaces the aliases with its spec's, so a seed with none clears those the admin route set
+   ("Deploying"). An alias
    is a search key only: never a host an op may call (an op sending to it is off its site, so review),
    never part of `siteOf`, never a cookie's or a session's site, never a domain `sharedName` answers for.
 
@@ -351,7 +353,7 @@ the every-minute cron:
 - through try's sender: an empty jar and only the op's literal headers, every redirect hop to the op's
   own origin (at most 2), the whole exchange under `TRY_TIMEOUT_MS` and `TRY_MAX_BYTES`, each send taken
   from `TRY_PER_DAY_ALL` and from the replays' own day (200, `REPLAY_PER_DAY`); once either is spent
-  the tick stops and counts nothing;
+  the tick stops, and an attempt that had sent nothing yet is not counted;
 - at most 3 a tick (`REPLAY_PER_TICK`), one per site, and only while `TRY_ENABLED` is `true`. A tick
   waits at most a few timeouts, and a failure in it never holds up the recounts before it.
 
@@ -361,7 +363,13 @@ uploader's `cleanReplay`, which stays as sent. Anything else (an error status, a
 redirect off its origin, a timeout) leaves it in review and counts an attempt; a version is tried at
 most 3 times, at least a day apart, and never after. The attempt is counted before the request leaves, so
 a version whose answer ends the tick (the Worker's own limits, on a body and a recipe its uploader chose)
-is not first in line again the next minute; only a send the day's budget refused is taken back. An upload cannot claim a replay: the upload schema
+is not first in line again the next minute. Counting it is a claim: it changes the version only while it
+is still in review with the attempts and time the queue read saw, and when it changes nothing (a
+maintainer blocked it, another tick took it) nothing is sent. Only an attempt that sent no request at all
+is taken back: one whose first request went and whose redirect hop the day's budget refused counts. A
+version the replay promotes is archived as a fresh upload is, counted from the promotion: with no ok
+report in the 30 days after it. Its health on the pages is unchanged (the replay is no report). An
+upload cannot claim a replay: the upload schema
 has no such field. The replay is evidence, not a report: it counts toward no promotion, never makes a
 version `live`, and the background-verification rules that keep candidates on a site with no live op
 from verifying installs are unchanged.
@@ -591,7 +599,8 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
   version pending, and a job every minute recounts and re-judges what is pending, so degrading or
   promoting such a version waits a minute or two, never on another report coming. The daily job
   recounts every version, as reports age out of the last 30 days.
-- A daily job archives a candidate or degraded version with no ok report in 30 days, and a degraded
+- A daily job archives a candidate or degraded version with no ok report in 30 days (counted from its
+  upload, or from the registry's replay that promoted it out of review), and a degraded
   version older than a live version of the same op, which replaced it. It never archives a live
   version: a newer live one may be a takeover. A live version leaves live only by degrading. The job
   deletes versions archived over 30 days ago, with their reports.
@@ -662,6 +671,20 @@ What these rules leave open:
   disappear from search, site and index answers.
 - An uploaded site `description` and op descriptions are the uploader's words, shown on its page and
   read by agents as data, never as instructions.
+
+## Deploying
+
+Migrations go first, then the Worker: `npx wrangler d1 migrations apply api-anything-registry --remote`
+from `registry/`, then `npx wrangler deploy`. A Worker that reads a table or column its database lacks
+fails the requests that read it, and every read route reads `aliases` (`0013`): a Worker deployed before
+`0012` and `0013` are applied fails search, site, index and home requests until they are. A migration
+only adds tables, columns and indexes, so the Worker already running keeps working on the migrated
+database. Then reseed (`registry/seed.ts`) when the bundled specs changed.
+
+A seed is the whole context of a seeded site: its display fields, login cookie names, pace, notes and
+aliases are the spec's as it stands. A seed whose spec lists no `aliases` clears the site's aliases,
+including ones set through `POST /v1/admin/sites/:name/aliases`; to keep an alias across reseeds, put
+it in the spec in `sites/`.
 
 ## What the registry stores
 

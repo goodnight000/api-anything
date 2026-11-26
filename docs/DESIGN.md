@@ -1744,8 +1744,12 @@ with no example for a required param, or one that is no plain GET is marked `unr
 tried, which counts as no attempt. An ok answer the op's recipe extracts something from makes the
 version a candidate, removes the reason and adds `registryReplay: {at, outcome}` to its evidence, the
 uploader's `cleanReplay` left as sent; anything else leaves it in review, and a version is tried at most
-3 times, a day apart at least. It is no report: it counts toward no promotion and never makes a version
-live. Off whenever `TRY_ENABLED` is.
+3 times, a day apart at least. The attempt is counted before the send, as a claim: only while the version
+is still in review with the attempts and time the queue read saw (D1's `meta.changes` is 1), else
+nothing is sent. Only an attempt that sent no request is taken back, so a refused redirect hop still
+counts. It is no report: it counts toward no promotion and never makes a version live, and `last_ok_at`
+stays unset; the daily archive counts a version it promoted from the promotion (`replayed_at`), as it
+counts a fresh upload from the upload. Off whenever `TRY_ENABLED` is.
 
 **The one question, asked once.** A plugin install, `claude mcp add` or `npm -g` never runs setup, so
 `learn_site` asks the same question the first time it reaches the share step (the holdout answered and

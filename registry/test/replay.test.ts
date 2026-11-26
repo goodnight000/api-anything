@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { after, before, beforeEach, describe, test } from "node:test";
 import { REVIEW_CATEGORIES } from "../../src/review.js";
+import type { D1Database, D1Statement } from "../src/store.js";
 import worker from "../src/worker.js";
 import { evidence, install, op, registry, send, site } from "./helpers.js";
 
@@ -73,6 +74,32 @@ const row = (raw: Raw, hash: string) =>
   };
 
 const tick = (env: Env, at = Date.now()) => worker.scheduled({ scheduledTime: at, cron: MINUTE_CRON }, env);
+
+/**
+ * Runs `during` once, after the next read of the replay queue returns and before the tick acts on it.
+ * Returns the database as it was, for a second tick that is not held up.
+ */
+function onQueueRead(env: Env, during: () => unknown): D1Database {
+  const db = env.DB;
+  let armed = true;
+  const wrap = (s: D1Statement): D1Statement => ({
+    ...s,
+    bind: (...v) => wrap(s.bind(...v)),
+    all: async <T>() => {
+      const r = await s.all<T>();
+      if (armed) {
+        armed = false;
+        await during();
+      }
+      return r;
+    },
+  });
+  env.DB = {
+    prepare: (sql) => (sql.includes("replay_outcome IS NULL OR") ? wrap(db.prepare(sql)) : db.prepare(sql)),
+    batch: (s) => db.batch(s),
+  };
+  return db;
+}
 
 /** A site on its own domain, `n`, with the helpers' read on it. */
 const other = (n: number) => {
@@ -234,6 +261,53 @@ describe("the registry's replay of a skipped clean replay", () => {
     assert.equal(seen.length, 1);
     const left = [a, b].map((v) => row(spent.raw, v.hash)).find((r) => r.status === "review")!;
     assert.equal(left.replays, 0, "a replay the budget held back is no attempt");
+  });
+
+  test("the attempt is a claim: a version blocked after the queue was read is never requested", async () => {
+    const { env, raw } = registry({ TRY_ENABLED: "true" });
+    const { hash } = await held(env);
+    onQueueRead(env, () => {
+      raw.prepare("UPDATE versions SET status = 'blocked' WHERE hash = ?").run(hash);
+    });
+    await tick(env);
+    assert.deepEqual(seen, [], "nothing sent for a version that left review");
+    assert.deepEqual([row(raw, hash).status, row(raw, hash).replays], ["blocked", 0]);
+  });
+
+  test("the attempt is a claim: of two overlapping ticks, only one sends", async () => {
+    const { env, raw } = registry({ TRY_ENABLED: "true" });
+    handle = (_req, res) => res.writeHead(500, { "content-type": "text/plain" }).end("down");
+    const { hash } = await held(env);
+    const at = Date.now();
+    const db = onQueueRead(env, () => tick({ ...env, DB: db }, at));
+    await tick(env, at);
+    assert.equal(seen.length, 1, "the version was requested once");
+    assert.deepEqual([row(raw, hash).status, row(raw, hash).replays], ["review", 1]);
+  });
+
+  test("an attempt that sent a request counts, even when a redirect hop was over the day's sends", async () => {
+    const { env, raw } = registry({ TRY_ENABLED: "true", TRY_PER_DAY_ALL: "1" });
+    handle = (_req, res) => res.writeHead(302, { location: "https://www.example.com/api/search?q=dune&page=1" }).end();
+    const { hash } = await held(env);
+    const t0 = Date.now();
+    for (let d = 0; d < 6; d++) await tick(env, t0 + d * DAY);
+    assert.equal(seen.length, 3, "three attempts, then never again");
+    assert.deepEqual([row(raw, hash).status, row(raw, hash).replays], ["review", 3]);
+  });
+
+  test("a version promoted after a long review gets a fresh candidate's grace from the promotion", async () => {
+    const { env, raw } = registry({ TRY_ENABLED: "true" });
+    const { hash } = await held(env);
+    raw.prepare("UPDATE versions SET created_at = ? WHERE hash = ?").run(new Date(Date.now() - 40 * DAY).toISOString(), hash);
+    const at = Date.now();
+    await tick(env, at);
+    assert.equal(row(raw, hash).status, "candidate");
+    await worker.scheduled({ scheduledTime: at + DAY }, env);
+    assert.equal(row(raw, hash).status, "candidate", "not archived the day after its promotion");
+    const v = raw.prepare("SELECT last_ok_at FROM versions WHERE hash = ?").get(hash) as { last_ok_at: string | null };
+    assert.equal(v.last_ok_at, null, "the replay is no report");
+    await worker.scheduled({ scheduledTime: at + 31 * DAY }, env);
+    assert.equal(row(raw, hash).status, "archived", "with no ok since, archived as a fresh candidate would be");
   });
 });
 

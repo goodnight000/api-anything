@@ -24,7 +24,11 @@ export function d1(): { db: D1Database; raw: DatabaseSync } {
     bind: (...v) => statement(sql, v.map(value)),
     first: async <T>() => (raw.prepare(sql).get(...values) ?? null) as T | null,
     all: async <T>() => ({ results: raw.prepare(sql).all(...values) as T[] }),
-    run: async () => raw.prepare(sql).run(...values),
+    // D1's shape: the rows changed under meta
+    run: async () => {
+      const r = raw.prepare(sql).run(...values);
+      return { success: true, results: [], meta: { changes: Number(r.changes), last_row_id: Number(r.lastInsertRowid) } };
+    },
   });
   const db: D1Database = {
     prepare: (sql) => statement(sql),
