@@ -505,6 +505,28 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       });
     if (p === "/eu/flights")
       return send(res, 200, "text/html; charset=utf-8", FLIGHTS_PAGE(u.searchParams.get("q") ?? ""));
+    // A page sent to an address that names a consent step, which is no consent page: the site is down
+    // there (503), or a bot challenge answers it (with status 200, as an interstitial can).
+    m = p.match(/^\/(eudown|euwall)\/(flights|consent)$/);
+    if (m) {
+      if (m[2] === "flights")
+        return send(res, 302, "text/plain", "", {
+          location: `/${m[1]}/consent?continue=${encodeURIComponent(p + u.search)}`,
+        });
+      return m[1] === "eudown"
+        ? send(
+            res,
+            503,
+            "text/html; charset=utf-8",
+            "<!doctype html><html><head><title>Service unavailable</title></head><body><h1>Service unavailable</h1><p>We use cookies. Back soon.</p></body></html>",
+          )
+        : send(
+            res,
+            200,
+            "text/html; charset=utf-8",
+            '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
+          );
+    }
     if (p === "/api/eu/flights") return json(res, 200, { flights: FLIGHTS[u.searchParams.get("q") ?? ""] ?? [] });
 
     if (p === "/login") {

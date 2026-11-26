@@ -260,6 +260,65 @@ describe("a consent wall at tiers 2 and 3, learning on it, and the window that c
     assert.equal(loadSite("eu-learn"), undefined, "nothing saved");
   });
 
+  test("a run that ends on a consent address with an outage or a challenge is that, not a consent step", async () => {
+    for (const [kind, cls] of [
+      ["eudown", "error"],
+      ["euwall", "blocked"],
+    ] as const) {
+      const site = `${kind}-3`;
+      saveSite(
+        parseSite({
+          name: site,
+          baseUrl: fx.url,
+          operations: [
+            {
+              name: "api",
+              readOnly: true,
+              minTier: 3,
+              request: { method: "GET", url: `${fx.url}/api/${kind}/flights?q=AMS`, headers: {} },
+              slots: [{ param: "q", at: ["query:q"] }],
+              params: [{ name: "q", example: "BER" }],
+              trigger: { url: `${fx.url}/${kind}/flights?q={q}` },
+              match: { method: "GET", path: `/api/${kind}/flights` },
+              response: { extract: "flights" },
+            },
+          ],
+        }),
+      );
+      const r = await call(site, "api", { q: "AMS" }, fast);
+      const said = JSON.stringify(r);
+      assert.equal(r.wall, undefined, said);
+      assert.equal(r.class, cls, said);
+      assert.doesNotMatch(r.reason ?? "", /cookie-consent/, said);
+      if (kind === "eudown") assert.match(r.reason ?? "", /503/, said);
+
+      await assert.rejects(
+        addOperation({
+          site: `${kind}-add`,
+          op: "flights",
+          trigger: { url: `${fx.url}/${kind}/flights?q={q}` },
+          examples: [{ q: "AMS" }, { q: "BER" }],
+          response: { extract: "flights" },
+        }),
+        (e: Error) => !/cookie-consent/.test(e.message),
+      );
+      const learned = await learnSite(
+        {
+          site: `${kind}-learn`,
+          trigger: `${fx.url}/${kind}/flights?q={q}`,
+          args: { q: "AMS" },
+          args2: { q: "BER" },
+          args3: { q: "CDG" },
+          fresh: true,
+        },
+        fast,
+      );
+      assert.equal(learned.ok, false);
+      assert.notEqual(learned.wall, "consent", JSON.stringify(learned));
+      assert.doesNotMatch(learned.error ?? "", /cookie-consent/);
+    }
+  });
+
   test("capture says the page is the consent page", async () => {
     // the CLI runs Chrome on the same profile: this process lets go of it first
     await closeBrowser();
@@ -275,6 +334,20 @@ describe("a consent wall at tiers 2 and 3, learning on it, and the window that c
     assert.equal(c.wall, "consent", out);
     assert.match(c.finalUrl, /\/eu\/consent\?continue=/);
     assert.match(c.next, /cookie-consent page.*login <site> --window/);
+    // an outage or a challenge at a consent address is no consent step
+    for (const kind of ["eudown", "euwall"]) {
+      const o = await new Promise<string>((resolve, reject) =>
+        execFile(
+          process.execPath,
+          ["--import", "tsx", join(ROOT, "src", "cli.ts"), "capture", `${fx.url}/${kind}/flights?q=AMS`],
+          { cwd: ROOT, env: { ...process.env, API_ANYTHING_HOME: HOME } },
+          (err, stdout, stderr) => (err ? reject(new Error(`${err.message}\n${stderr}`)) : resolve(stdout)),
+        ),
+      );
+      const d = JSON.parse(o) as { wall?: string; next: string };
+      assert.equal(d.wall, undefined, o);
+      assert.doesNotMatch(d.next, /cookie-consent/, o);
+    }
   });
 
   test("the user answers once in the window: the choice alone is kept, and every tier answers from then on", async () => {

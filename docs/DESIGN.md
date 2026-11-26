@@ -803,7 +803,9 @@ its query (`continue=`). No site's name is known. It is judged before a JSON rea
 since a consent page links the sign-in page (Google's ServiceLogin button). A bot challenge is judged
 first and stays `blocked`; a non-2xx answer (a 404) is what its status makes it; a write is judged as
 a write. Tier 3 sees it from the run: a read's trigger page that ended there (`consentWall`, its op's
-request never answered or answered with the redirect) is the same `error`, and so is a heal's
+request never answered or answered with the redirect), held to the same bounds (the page's last load
+answered 2xx and is no bot challenge or sign-in page: a 503 there stays the server's `error`, a
+challenge stays `blocked`), is the same `error`, and so is a heal's
 recapture (it stops, as for a sign-in page, and marks nothing stale), `add` (it throws, saving
 nothing), `learn_site` (`wall: "consent"`, `nextCall` `login` `mode: "window"`) and `capture`
 (`wall: "consent"` and a `next` saying so). The call is not healed, not marked stale, starts no
