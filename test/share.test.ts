@@ -1211,6 +1211,28 @@ test("background verification checks the version a job names, even one its site 
   assert.deepEqual(sent, []);
 });
 
+test("background verification reports nothing for a candidate its consent wall answered", async () => {
+  shareOn();
+  const cand = site();
+  fake.sites.set("demo", served(cand, undefined, "candidate"));
+  const hash = hashOf("demo", cand.operations[0]!);
+  fake.jobs = [{ hash, site: "demo", op: "search", args: { q: "walled" } }];
+  const page =
+    '<!doctype html><html><head><title>Before you continue</title></head><body><h1>Before you continue</h1><form action="https://consent.example.com/save" method="post"><button>Reject all</button><button>Accept all</button></form></body></html>';
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.hostname === "consent.example.com")
+      return new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } });
+    return new Response("", {
+      status: 302,
+      headers: { location: `https://consent.example.com/m?continue=${encodeURIComponent(url.href)}` },
+    });
+  }) as typeof fetch;
+  const before = fake.reports().length;
+  assert.equal(await verifyCandidates({ fetchImpl, minIntervalMs: 0, now: new Date("2026-10-29T12:00:00Z") }), 1);
+  assert.deepEqual(fake.reports().slice(before), [], "a consent wall says nothing about the version");
+});
+
 test("background verification stops when the client goes away", async () => {
   shareOn();
   const cand = site();

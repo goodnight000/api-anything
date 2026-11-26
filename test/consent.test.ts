@@ -13,6 +13,7 @@ import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright-core";
 import { browserAvailable, closeBrowser, openBrowser } from "../src/browser.js";
+import { type CaseResult, verifySite } from "../src/checks.js";
 import { cleanCall } from "../src/clean.js";
 import { type CallResult, call } from "../src/execute.js";
 import { addOperation, profileDir } from "../src/heal.js";
@@ -25,6 +26,7 @@ import { cooling, loadSite, saveSite, staleMark } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 import { vetShared } from "../src/vet.js";
 import { type Fixture, FLIGHTS, startFixture } from "./fixture/server.js";
+import { siteEntries } from "./verify-live.js";
 
 const HOME = mkdtempSync(join(tmpdir(), "api-anything-consent-"));
 process.env.API_ANYTHING_HOME = HOME;
@@ -108,6 +110,31 @@ describe("a consent wall at tier 1, cleared once", () => {
           ["/api/eu/flights?q=AMS"],
         );
     }
+  });
+
+  test("verify calls a consent wall inconclusive, as a challenge or a sign-in page, and the live record says so", async () => {
+    const v = await verifySite("eu-t1", fast);
+    const cases = v.results.filter((r): r is CaseResult => "outcome" in r);
+    assert.ok(cases.length >= 3, JSON.stringify(v.results));
+    for (const c of cases) assert.equal(c.outcome, "inconclusive", JSON.stringify(c));
+    assert.deepEqual(v.newlyFailing, [], "a healthy op is put on no failure list");
+    const entries = siteEntries({
+      site: "eu-t1",
+      ops: ["api", "page", "state"],
+      values: ["BER"],
+      at: new Date().toISOString(),
+      output: { ok: true, results: v.results as never },
+    });
+    assert.deepEqual(
+      entries.map((e) => e.result),
+      ["inconclusive", "inconclusive", "inconclusive"],
+    );
+  });
+
+  test("the clean call carries the wall", async () => {
+    const op = loadSite("eu-t1")!.site.operations.find((o) => o.name === "api")!;
+    const r = await cleanCall(op, { q: "AMS" }, { site: "eu-t1", ...fast });
+    assert.deepEqual([r.class, r.wall], ["error", "consent"], JSON.stringify(r));
   });
 
   test("the cookies the consent step set reach tier 1, alone, and keep answering; nothing of them is in the spec", async () => {

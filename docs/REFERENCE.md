@@ -254,7 +254,8 @@ api-anything verify hn-search
 
 `--expect` is `result` (data), `empty` (the site's own no-results) or `input` (the args are
 refused). `verify` reports each case as `pass`, `fail` or `inconclusive`: a challenge, a sign-in
-page, a rate limit or a server that failed or could not be reached tests nothing. Check args are
+page, the site's cookie-consent page, a rate limit or a server that failed or could not be reached
+tests nothing. Check args are
 shared with the spec, so use public values only.
 
 `verify` is made for a job nobody watches:

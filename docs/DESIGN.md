@@ -811,7 +811,8 @@ nothing), `learn_site` (`wall: "consent"`, `nextCall` `login` `mode: "window"`) 
 (`wall: "consent"` and a `next` saying so). The call is not healed, not marked stale, starts no
 cool-down and climbs no tier; an attempt that answered with it learned nothing (`learnedNothing`), so a
 heal that meets it is transient. Nothing about it is reported to the registry (report.ts), since it
-says nothing about the version. A consent page served in place (HTTP 200 at the asked address, an
+says nothing about the version: the clean call (`cleanCall`) carries `wall` too, so background
+verification sends no report for it, and `verify` counts it `inconclusive`. A consent page served in place (HTTP 200 at the asked address, an
 overlay over a page without the data) cannot be told from drift without a site's own rules: it stays
 drift.
 
@@ -2115,8 +2116,8 @@ param set at once, each value chosen so one row the example returned fails it, o
 matches, expecting `empty`, so a param the server ignores shows up as a failing case. `verify` runs
 each read's stored example (expecting `result`) and its checks through `call`, healing as any call
 does, and judges every case: `pass`, `fail`, or `inconclusive` when the answer is `blocked`, `auth`,
-`rate` or a server that failed or could not be reached (`CallResult.server`), which says nothing
-about the op. Each case's answer comes from one version of the op: the one its call resolved, or the
+`rate`, the site's cookie-consent step (`wall: "consent"`) or a server that failed or could not be
+reached (`CallResult.server`), which says nothing about the op. Each case's answer comes from one version of the op: the one its call resolved, or the
 one a heal or the registry put in its place. Its outcomes are kept per op in
 `~/.api-anything/checks/<site>.json`, with a hash of the op as saved when verify ends (in schema
 order; `learnedAt`, `unproven` and `version` aside). Each case is tagged with the hash of the version
