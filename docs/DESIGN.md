@@ -1300,7 +1300,8 @@ attach to. A DevTools endpoint is full control of a browser.
   was neither stopped nor captured). In an attached browser a guarded page is therefore emptied
   with `location.replace("about:blank")`: with its history entry gone it cannot be kept, and it
   unloads under the seal. `test/attach.test.ts` runs the existing write-guard, socket-guard and
-  dialog tests attached, against a browser with pop-ups allowed (a user can allow a site's), since
+  dialog tests attached, and `test/stream.test.ts` whole (its event streams learned and called at
+  every tier, through the DevTools session per page that captures them), against a browser with pop-ups allowed (a user can allow a site's), since
   several of them need the tabs a page opens by script.
 - One api-anything process at a time is attached to a browser, as one holds the profile. Two
   DevTools clients of one browser each take the other's context for the default one, so each sees

@@ -570,4 +570,21 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
     assert.ok((await userCookies(port)).includes(USER_COOKIE));
     assert.equal(sentUserCookie(), false);
   });
+
+  test("the stream tests' browser cases pass in attached mode", { timeout: 900_000 }, async () => {
+    await closeBrowser();
+    const r = await suite(["test/stream.test.ts"]);
+    const n = counts(r.out);
+    const failed = r.out.split("\n").filter((l) => /^\s*not ok /.test(l));
+    assert.equal(r.code, 0, `${failed.join("\n")}\n${r.out.slice(-4000)}`);
+    assert.equal(n.fail, 0, r.out.slice(-4000));
+    assert.equal(n.cancelled, 0);
+    assert.equal(n.skipped, 0, "nothing is skipped for want of a browser");
+    // the file's browser cases, learned and called at every tier, among the rest
+    assert.ok(n.pass >= 30, JSON.stringify(n));
+    assert.match(r.out, /^\s*ok \d+ - learned and called at every tier$/m);
+    assert.deepEqual(await userTabs(port), [tab], "the runs left the user's tab alone and took their own");
+    assert.ok((await userCookies(port)).includes(USER_COOKIE));
+    assert.equal(sentUserCookie(), false);
+  });
 });
