@@ -7,7 +7,7 @@
  */
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { attached } from "./attach.js";
-import { addCookiesToProfile, browserAvailable, clearProfileSite, login } from "./browser.js";
+import { addCookiesToProfile, browserAvailable, clearProfileSite, forgetAttachedSite, login } from "./browser.js";
 import { dropCaptures, profileDir } from "./heal.js";
 import { publicAddress } from "./http.js";
 import {
@@ -551,6 +551,8 @@ export async function logout(target: string): Promise<LoggedOut> {
     return had;
   });
   dropCaptures();
+  // the next attached run starts from the empty jar anyway; one open now must not keep the sign-in meanwhile
+  if (domain && attached()) await forgetAttachedSite(domain).catch(() => {});
   if (!existsSync(profileDir())) return { site, session, profile: "none" };
   // which cookies are the site's is unknown: none only when the profile holds no sign-in of any site
   if (!domain)

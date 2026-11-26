@@ -373,7 +373,9 @@ api-anything is a guest there. It opens its own window, a separate context of th
 works only in it: your tabs, cookies and sign-ins in that browser are never read, navigated or
 cleared, and when it goes idle it closes its own tabs and disconnects, leaving the browser running.
 Its tabs carry the session `api-anything login` stored for your own specs, as api-anything's own
-browser would; a spec you pulled from the catalog gets none. Tier 1 is unchanged. Nothing about any
+browser would; a spec you pulled from the catalog, a bare call, `capture` and `learn_site` get
+none, even right after a call that carried it, and after `logout` no call carries the old sign-in.
+Tier 1 is unchanged. Nothing about any
 site's bot wall is promised or tested against a real site.
 
 To get past a bot challenge or a cookie-consent page there, follow the call's `next`:

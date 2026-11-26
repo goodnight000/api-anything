@@ -19,12 +19,13 @@ import {
   browserChoice,
   clearProfileSite,
   closeBrowser,
+  openBrowser,
   pageFetch,
   profileCookies,
   runTrigger,
 } from "../src/browser.js";
 import { call } from "../src/execute.js";
-import { addOperation, PROFILE_HINT, profileDir } from "../src/heal.js";
+import { addOperation, capturePage, PROFILE_HINT, profileDir } from "../src/heal.js";
 import { claim, lockPath } from "../src/lock.js";
 import { logout } from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
@@ -66,6 +67,17 @@ async function unhandledDuring(run: () => Promise<void>): Promise<string[]> {
   }
   return seen.map(String);
 }
+
+/** A cookie of the user's own spec's jar. */
+const JAR_COOKIE: StoredCookie = {
+  name: "carried",
+  value: "from-the-jar",
+  domain: "127.0.0.1",
+  path: "/",
+  expires: -1,
+  httpOnly: true,
+  secure: false,
+};
 
 const minTier2 = (fx: Fixture) =>
   parseSite({
@@ -202,6 +214,8 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
       method: "GET",
       headers: { "x-csrf-token": ct0.value, authorization: PUBLIC_BEARER },
       profileDir: profileDir(),
+      // the jar the run's cookies were merged into, as a call of the user's own spec passes it
+      jar: r.cookies,
     });
     assert.equal(f.status, 200);
     assert.equal(JSON.parse(f.body).data.user.name, "alice");
@@ -304,6 +318,69 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
     assert.ok((await userCookies(port)).includes(USER_COOKIE), "the user's cookie is still in their browser");
   });
 
+  test("logout while attached leaves none of the site's cookies in api-anything's context, and the next call carries none", async () => {
+    saveSite(minTier2(fx));
+    const session = { ...JAR_COOKIE, name: "session", value: fx.mintSession() };
+    saveSession("attached", { cookies: [session], values: {} });
+    const signedIn = await call("attached", "secret", {}, fast);
+    assert.equal(signedIn.ok, true, JSON.stringify(signedIn));
+    const ctx = await openBrowser({ profileDir: profileDir() });
+    assert.ok(
+      (await ctx.cookies()).some((c) => c.name === "session"),
+      "the call's context holds the jar's cookie",
+    );
+    await logout("attached");
+    assert.deepEqual(
+      (await ctx.cookies()).filter((c) => c.domain.replace(/^\./, "") === "127.0.0.1").map((c) => c.name),
+      [],
+      "the context the call left open holds none of the site's cookies",
+    );
+    const after = await call("attached", "secret", {}, fast);
+    assert.notEqual(after.ok, true, JSON.stringify(after));
+    assert.equal(
+      loadSession("attached").cookies.some((c) => c.name === "session"),
+      false,
+      "no run merged the old sign-in back into the jar",
+    );
+    assert.ok((await userCookies(port)).includes(USER_COOKIE), "the user's own context is untouched");
+  });
+
+  test("a run that carries no stored cookies, right after or during one that carries the jar, carries none of it; neither breaks the other", async () => {
+    const sent = (tag: string) =>
+      fx.calls.filter((c) => c.path.includes(`tag=${tag}`)).map((c) => String(c.headers.cookie ?? ""));
+    const page = (tag: string) => `${fx.url}/api/result-list?tag=${tag}`;
+    const carried = `${JAR_COOKIE.name}=${JAR_COOKIE.value}`;
+    await runTrigger({ url: page("own1"), profileDir: profileDir(), jar: [JAR_COOKIE] });
+    await capturePage({ url: page("bare1") });
+    assert.ok(sent("own1").length && sent("own1").every((h) => h.includes(carried)), JSON.stringify(sent("own1")));
+    assert.ok(sent("bare1").length && sent("bare1").every((h) => !h.includes(carried)), JSON.stringify(sent("bare1")));
+    // at once: the jar's run loads a second page after the bare run has started
+    const own = runTrigger({
+      url: page("own2"),
+      profileDir: profileDir(),
+      jar: [JAR_COOKIE],
+      steps: [
+        { action: "wait", ms: 2000 },
+        { action: "goto", value: page("own3") },
+      ],
+    });
+    await sleep(500);
+    const bare = capturePage({ url: page("bare2") });
+    const [o, b] = await Promise.all([own, bare]);
+    for (const tag of ["own2", "own3"])
+      assert.ok(
+        sent(tag).length && sent(tag).every((h) => h.includes(carried)),
+        `${tag}: ${JSON.stringify(sent(tag))}`,
+      );
+    assert.ok(sent("bare2").length && sent("bare2").every((h) => !h.includes(carried)), JSON.stringify(sent("bare2")));
+    assert.ok(o.cookies.some((c) => c.name === JAR_COOKIE.name));
+    assert.equal(
+      b.cookies.some((c) => c.name === JAR_COOKIE.name),
+      false,
+      "the bare run read none of the jar back",
+    );
+    assert.equal(sentUserCookie(), false);
+  });
   test("idle close and closeBrowser() leave the browser and the user's tab as they were, and take api-anything's tabs", async () => {
     await runTrigger({ url: `${fx.url}/u/alice`, profileDir: profileDir() });
     await pageFetch({ origin: fx.url, url: `${fx.url}/list`, method: "GET", headers: {}, profileDir: profileDir() });

@@ -184,8 +184,7 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
       response: { extract: "data.items" },
     });
     assert.equal(added.operation.name, "learned", added.warnings.join("\n"));
-    // a context still open from a run that carried the jar would hold it
-    await closeBrowser();
+    // the context add's runs used is still open, holding the jar's clearance: learn_site's runs carry none of it
     const learned = await learnSite(
       { site: "gate", trigger: `${fx.url}/gate/{q}`, args: { q: "a" }, args2: { q: "b" }, args3: { q: "c" } },
       fast,

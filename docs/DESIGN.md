@@ -1313,7 +1313,18 @@ attach to. A DevTools endpoint is full control of a browser.
 - Sessions. The context starts empty. For the user's own specs, a call's tier-2 page and its
   trigger run, a heal's recapture and `add`'s runs first get the site's stored cookies, what tier 1
   may send and api-anything's profile would hold already (`jar`); someone else's spec (`shared`),
-  a bare call, `capture` and `learn_site` get none. What a run's pages set is merged into the jar
+  a bare call, `capture` and `learn_site` get none. The context outlives a run (until idle close),
+  so before each run, page fetch and window it holds exactly that of the run's site and nothing
+  else of it (`seed`): the site's cookies are cleared from api-anything's context, then the jar's
+  put in. The site is the registrable domain of the run's page and of each cookie put in, the scope
+  a run's cookies are read back in. Without that, a bare run following one of the user's own spec
+  within the idle window carried the user's session, and a call after `logout` still sent the old
+  sign-in, which a tier-3 run then merged back into the jar. The runs of one process share the
+  context, so a run seeded with other cookies than those in flight on the same site waits for them
+  to end (within its own time budget; a window up to 15 s), then fails as `ProfileInUse`, sent
+  nothing: clearing for it would take theirs. Runs seeded alike run together, sharing what the site
+  sets meanwhile, as in api-anything's own profile. `logout` takes the site's cookies out of an
+  open context at once, after any seeding in progress. What a run's pages set is merged into the jar
   as after any browser run: those cookies are api-anything's context's, never the user's. Tier 1 is
   unchanged: it sends from the sealed session file, and nothing reads the attached browser's
   cookies.
