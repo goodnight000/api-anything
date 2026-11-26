@@ -17,7 +17,7 @@ import { addOperation, capturePage } from "../src/heal.js";
 import { outline } from "../src/outline.js";
 import { loadSession } from "../src/session.js";
 import { type Operation, OperationSchema, type Site } from "../src/spec.js";
-import { parseEventStream, STREAM_IDLE_MS, STREAM_MAX_MS } from "../src/stream.js";
+import { looksLikeEventStream, parseEventStream, STREAM_IDLE_MS, STREAM_MAX_MS } from "../src/stream.js";
 import { vetShared } from "../src/vet.js";
 import { type Fixture, startFixture } from "./fixture/server.js";
 
@@ -109,6 +109,28 @@ describe("an event stream is read like any JSON answer", () => {
     assert.equal(inferShape(parseBody(STREAM))["[].data.items[].name"], "string");
     const o = outline("text/event-stream", STREAM, ["alpha one"]);
     assert.ok(JSON.stringify(o).includes("items"), JSON.stringify(o));
+  });
+
+  test("a line of text that only opens like a stream field is not one", () => {
+    // no line break: a data: URL, a one-line error
+    for (const body of ["data:image/png;base64,iVBORw0KGgo=", "id: 5 not found", ":(", "retry", "event"])
+      assert.equal(looksLikeEventStream(body), false, body);
+    for (const body of [": ping\n\n", 'data: {"a":1}\n\n', "event: tick\r\ndata: 1\r\n\r\n", "data\n\n"])
+      assert.equal(looksLikeEventStream(body), true, JSON.stringify(body));
+    // a read that expects JSON and gets such a line is what it was before streams were read: not an empty list
+    const o = OperationSchema.parse({
+      name: "list",
+      request: { method: "GET", url: "https://s.test/api/list", headers: {} },
+      slots: [],
+      params: [],
+      trigger: { url: "https://s.test/list" },
+      response: { format: "json", extract: "[*]" },
+      readOnly: true,
+    });
+    const answered = (body: string) =>
+      classify(o, { status: 200, headers: { "content-type": "text/plain" }, body }).class;
+    assert.equal(answered("id: 5 not found"), "drift");
+    assert.equal(answered("data:text/plain;base64,aGk="), "drift");
   });
 
   test("a JSON body is never taken for a stream", () => {

@@ -44,9 +44,14 @@ export function streamCut(cut: StreamCut, ms: number): string {
   }
 }
 
-/** A body that is an event stream by its own syntax: it opens with a comment or one of the stream's fields. JSON never does. */
+/**
+ * A body that is an event stream by its own syntax: it opens with a comment or one of the stream's
+ * fields, which JSON never does, and it holds a line break, as every finished stream line does. Without
+ * one it is a line of text that happens to open so (a `data:` URL, an "id: 5 not found"), read as it
+ * always was.
+ */
 export const looksLikeEventStream = (body: string): boolean =>
-  /^\uFEFF?(?::|(?:data|event|id|retry)(?::|\r|\n|$))/.test(body);
+  /^\uFEFF?(?::|(?:data|event|id|retry)(?::|\r|\n))/.test(body) && /[\r\n]/.test(body);
 
 export interface StreamEvent {
   /** the `event:` field, "message" when the event names none */
