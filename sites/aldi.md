@@ -9,3 +9,5 @@ Details are retailer descriptions and advertised specifications, which may chang
 Qualified signed out on 2026-10-26 using exact-document SSR frontend captures with other requests aborted, then tier-1 replay. This does not establish fully hydrated GUI behavior. Source listing: https://www.aldi.co.uk/products/specialbuys/electricals/k/1588161416584101 . The official mobile-app and supplier-intake screen established consumer overlap but no readily usable anonymous technical catalogue API contract.
 
 Full capture IDs, checked inputs, body and artifact hashes, resource receipts, independent comparison and qualification limits are in `docs/research/discovery/aldi-qualified-r1.md`. No account cookies were imported.
+
+The Soup Maker example and the Immersion Blender check answered HTTP 410 by 2026-11-26 (Specialbuys leave the site). They were replaced with two core-range AMBIANO products from the electricals listing, `ambiano-dual-zone-air-fryer-000000000000750527` and `ambiano-warming-plate-000000000000753503`, which answered `applianceDetails` at tier 1. The request and recipe are unchanged.

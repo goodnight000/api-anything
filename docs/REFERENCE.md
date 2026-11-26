@@ -933,7 +933,9 @@ and review their destinations and write declarations. A `readOnly` declaration i
 for a malicious spec, and website text is data, not instructions for the agent.
 
 The offline suite covers the learning, healing, tier and write paths against a local fixture site.
-Individual real sites vary and are not continuously verified.
+Individual real sites vary. The bundled operations are checked daily by a scheduled run
+([verify-live.yml](../.github/workflows/verify-live.yml)), logged out from GitHub's runner, and an
+operation that fails two runs in a row is listed in one tracking issue.
 
 In short:
 
@@ -1054,13 +1056,19 @@ Known limits in detail:
 114 sites and 323 read operations ship with the package (`api-anything sites` from an empty home,
 2026-11-06), and the catalog serves the same ones. They cover selected features, not whole sites.
 On 2026-10-31, called from an empty home with their examples, 97 of the 99 operations that needed no
-account in the first 55 sites answered with data ([release notes](RELEASE-READINESS.md)).
+account in the first 55 sites answered with data ([release notes](RELEASE-READINESS.md)). On
+2026-11-26, `npm run verify:live` from an empty home on a cloud VM: 291 of the 323 passed, 11
+failed, 13 were inconclusive (a rate limit, a challenge or a server error) and 8 were skipped; the
+stale examples it found were replaced the same day.
 `api-anything ops <site>` lists each op's params and caveats, and the
 [catalog](https://api-anything-registry.forth-site.workers.dev) has everything agents shared since.
 
-Known gaps: `google-flights.priceCalendar` answers an internal error since Google changed it, and
-`aldi.applianceDetails`'s example product is gone. `linkedin` needs your account, and `dominos-au`
-ships no examples. Reddit challenges plain HTTP from many networks, so its calls often need the
+Known gaps (2026-11-26): `google-flights.priceCalendar` answers an internal error since Google
+changed it; `trip.listHotels` finds no hotels for destinations whose page puts an FAQ block before
+the hotel list (London, Singapore); `x.getTweet` answered drift from a cloud address, not rechecked
+from a home one. `linkedin` needs your account, and `dominos-au` ships no examples. From cloud
+addresses Booking, YouTube video pages, Allrecipes, Ticketmaster and Wikidata often answer a
+challenge instead of data. Reddit challenges plain HTTP from many networks, so its calls often need the
 browser tier. `dominos-au` came in through `publish` from a contributor, `goodreads` was built by
 the [explorer](../bench/explore/README.md), and `reddit` was the site agents asked for most.
 

@@ -85,6 +85,7 @@ npm run build   # compile src to dist/ (npm install runs it too, through prepare
 npm run demo -- 'agent memory'  # examples/research.mjs against Hacker News (live site)
 npm run smoke:pack  # pack, install the tarball in a temp dir, run its CLI and library (needs the npm registry)
 npm run ci:local    # the same sequence CI runs (lint, check, test, smoke:pack), one command
+npm run verify:live -- [site ...]  # verify every bundled site against the real sites from an empty home: verify-live/health.json and summary.md
 ```
 
 CI runs `lint`, `check`, `test` with `REQUIRE_BROWSER=1` (a missing Chrome fails the run instead
@@ -93,6 +94,12 @@ working tree and the full history on every pull request, a fork's included. The 
 `.gitleaks.toml`: gitleaks' default rules, with a few fake test values allowed by exact value. A
 test that needs a provider-key shape should build it at run time rather than add an exception.
 The `CI` job passes only when every other job did, so it is the one to require.
+
+`.github/workflows/verify-live.yml` runs `verify:live` once a day on GitHub's runner (and by hand
+from the Actions tab), keeps the record and summary as the run's artifact, and keeps one issue,
+"Live verification: failing operations", listing the bundled operations that failed in two
+consecutive runs. An op listed there has a stale example (replace it with a current one, found with
+the site's own search or list op) or is broken (repair it with `heal`, or re-add it).
 
 To release, a maintainer bumps `version` in `package.json`, and to match it in `server.json` (both
 places) and `.claude-plugin/plugin.json` (`test/distribution.test.ts` fails until they agree), in a

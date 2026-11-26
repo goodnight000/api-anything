@@ -2029,6 +2029,33 @@ session value. A preflight is not a case: it sets no exit code and is no part of
 gate, since nothing was sent to judge; `--strict` alone exits 1 for a write whose preflight is not
 `ok`, for a job that wants its writes ready too.
 
+**Live verification (`test/verify-live.ts`, `.github/workflows/verify-live.yml`).** Once a day
+GitHub's own runner runs `verify` over every bundled site against the real sites, so a dead example
+or a changed site shows up before a user finds it by failing. `npm run verify:live` is the whole
+run: an empty `API_ANYTHING_HOME` (a given `--home` must be empty), local-only (no report, no pull),
+a throwaway `API_ANYTHING_KEY` (the OS key store is never touched), `API_ANYTHING_ALLOW_IMPORT`
+removed (logged out), and one `api-anything verify <site>` process per site, in order, so the
+spec's pace, the budget and the cool-downs are the only pacing, as for one user; a site still
+running after `--site-timeout` (20 min) is killed with its browser. It judges nothing itself: each
+op's entry in `health.json` is its worst case in verify's own JSON (a failing case, else an
+inconclusive one, else a passing one), with that case's label, class (`got`), tier and ms, verify's
+reason cut to one line of 200 characters, without what it quotes of the answer (markup or a body
+after a `: `) and with the spec's example and check values replaced by `<arg>`, and the time. A skipped op (or a write's preflight) is `skipped`; a site verify could not
+load fails each of its ops; a verify that crashed, hung, or reported nothing about an op is
+`inconclusive`, since it tested nothing. No args, no answers. The header has the version, the
+commit, the run's start, end and duration, the op totals and verify's case counts summed; a
+Markdown summary of the same (totals, then each failing and inconclusive op) becomes the job
+summary. The run exits 0 once it wrote both, whatever the sites answered (`--fail-on-failures`
+exits 1 when an op failed). The workflow's issue job is the only one that may write (`issues:
+write`, and `actions: read` for the previous run's artifact); it runs no site traffic and no npm
+install, only `node test/verify-live.ts track` and `gh`. An op is reported once it failed in two
+consecutive runs: the previous record is the artifact of the run right before, and without one
+(that run failed, was cancelled, or its artifact expired) nothing is decided and the issue stays as
+it is. One issue, `Live verification: failing operations`, the oldest by GitHub Actions with
+exactly that title: created when the list first has an op, edited in place, reopened, and closed
+when the list empties. It does not report to the catalog: per-op health there needs an identity
+of its own.
+
 **Reports (`report.ts`).** After every `call()` of an op that carries a `version`, with `share` on, a
 report `{hash, outcome, tier, ms}` is queued: ok → `ok`, drift and error → `fail`, auth, blocked, rate
 and input as they are; a call refused before anything was sent (a write without `allowWrites`, a
