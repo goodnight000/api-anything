@@ -60,6 +60,7 @@ Every call answers in fields, so an agent or a script can act without parsing pr
 | `nextCall` | `login` `relearn` `fix_args` `check_site` `allow_writes` ... | the one step to take next; over MCP, with the tool and its args |
 | `nextPage`, `hasMore` | the site's own cursor | how to get the next page of a list |
 | `heal` | `{strategy, changes}` | how a call that repaired the op did it, and what changed in its request; `api-anything revert` undoes it |
+| `wall` | `consent` | with `error`: the site sent the read to its cookie-consent page; `next` says how to answer it once |
 
 `tier` says how the call went: 1 is one plain HTTP request, with no browser. A failure also says
 why (`reason`) and what to do next (`next`).
@@ -504,8 +505,11 @@ go — avoid heavy automated traffic on it. Other ways in:
   the site asks for 2FA or a captcha, or when you don't want to share your browser's session. It is
   also the automatic fallback when nothing is importable. Finish signing in, 2FA included, then close
   the window or press Enter: it does not close itself, because some sites set their login cookie before
-  the second factor is done. It counts only if a login cookie appeared or changed while it was open;
-  otherwise `login` answers `ok: false`, says why, and keeps the session you had.
+  the second factor is done. It counts as a sign-in only if a login cookie appeared or changed while
+  it was open. Without one, the cookies your own choices set there (a cookie-consent answer, a
+  cleared challenge) are kept for the site and `login` answers `ok: true`, `loggedIn: false`, with
+  their names in `kept`; with none of those either, it answers `ok: false`, says why, and keeps the
+  session you had.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
 - `api-anything logout <site|url>` takes what `login` takes and names the site it logged out. It
   deletes the stored session (it needs no key, so it also resets a sealed session whose key is lost),
@@ -983,8 +987,22 @@ Known limits in detail:
   errors. A redirect back to the form that shows an error, or to an address naming one, is
   `error`, because the write may or may not have run. A site that answers a failure with an
   unmarked 200 still reads as `ok`. None of these verdicts sends the write again.
-- A signed-in read redirected to a consent, terms or "verify it's you" page of the same site is
-  `error`. Its `next` names the page, which the user finishes in the browser before running
+- A read redirected to the site's cookie-consent page (Google's `consent.google.com` for a caller in
+  the EU), signed in or not, JSON, html or embedded, at any tier, is `error` with `wall: "consent"`,
+  not drift: it is not healed, not marked stale, and starts no cool-down. For a read learned signed
+  out, `next` asks you to run `api-anything login <site> --window`, make the choice on the site's
+  page there and close the window: the cookies the site set then are kept for that site alone, and
+  later calls send them at every tier. For a signed-in read it names the page to finish in your
+  browser before `api-anything login <site>`. `learn_site`, `add`, `capture` and a heal say the same
+  instead of finding no request. api-anything never answers a consent question for you (no automatic
+  "reject all") and sets no site's consent cookie itself. Only a real redirect to another page of the
+  same site is recognised (its address names a consent step, or the page asks the question and holds
+  the address to go back to); a consent overlay served at the page's own address still reads as
+  drift. From a network that gets the wall, a learned operation's clean replay (no cookies) answers
+  the wall, so it is not shared automatically from there. This was checked against a local fixture
+  only, not against a real site's consent page.
+- A signed-in read redirected to a terms or "verify it's you" page of the same site is `error`. Its
+  `next` names the page, which the user finishes in the browser before running
   `api-anything login <site>`. It is not healed and not marked stale.
 - A param may declare a `pattern` (a regex the whole value must match) and a `hint`, an `enum` of
   the values it takes, and a `min`/`max`; a call whose arg fails one is `input`, and nothing is sent.

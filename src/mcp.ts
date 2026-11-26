@@ -30,6 +30,7 @@ import {
   cookieNames,
   importSession,
   importWarning,
+  keptNote,
   knownGuests,
   resolveLoginTarget,
   strayLogin,
@@ -1031,7 +1032,7 @@ export function createToolset({
     "login",
     {
       description:
-        "Sign in to a site so its operations work; use after a call returns class 'auth'. mode 'import' (default) refreshes the session from the browser profile the user already chose with `api-anything login` (no password); 'window' opens a visible browser for the user to sign in and clear 2FA/captcha by hand: tell the user to close that window when they are signed in. A window still open after about 25 s answers class pending with a job (get_job); a second login for the site meanwhile returns the same job, and the window closes by itself after 10 minutes.",
+        "Sign in to a site so its operations work; use after a call returns class 'auth'. mode 'import' (default) refreshes the session from the browser profile the user already chose with `api-anything login` (no password); 'window' opens a visible browser for the user to sign in and clear 2FA/captcha by hand, or answer a cookie-consent page (a call's wall 'consent'): tell the user to close that window when done. A window still open after about 25 s answers class pending with a job (get_job); a second login for the site meanwhile returns the same job, and the window closes by itself after 10 minutes.",
       inputSchema: {
         site: z.string().optional().describe("site name from list_sites"),
         url: z.string().optional().describe("a full URL, if the site is not yet known (window mode only)"),
@@ -1110,8 +1111,9 @@ export function createToolset({
                 site: t.site,
                 source: "window",
                 cookies: cookieNames(w.cookies),
-                loggedIn: true,
+                loggedIn: !w.kept,
                 renewed: w.renewed,
+                ...(w.kept ? { kept: w.kept, warning: keptNote(t.site, w.kept) } : {}),
                 ...why,
               });
             },
