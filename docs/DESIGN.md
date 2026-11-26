@@ -784,7 +784,44 @@ Every response is classified, never by status code alone:
 | `rate` | 429; any 4xx or 5xx that carries a Retry-After (a 503 in maintenance, a 403 lockout: the server named its wait, so sooner meets it again; a wall's markers still make it `blocked`, a 2xx with one is its answer); "please wait", "rate limit" | back off, report; no heal; the site cools down (Execution ladder) |
 | `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, Anubis, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers; 451 (Unavailable For Legal Reasons: not available from this network or region). A page showing a sign-in form is `auth`, not a wall, when its only challenge marker is one that also rides on ordinary pages (a CAPTCHA widget, a vendor script or header on a challenge status); an interstitial's own structure or title on that page is still a wall; a tier-3 run or a heal's recapture whose trigger fired no matching request and ended on a challenge that did not solve (judged before a sign-in page or a page that is down) | escalate transport tier; then diagnostic `gated`, whose `next` asks for `api-anything login <site> --window`: to clear the challenge in the window, or, for a bare 403 at every tier (no challenge to clear), to see why the site refuses this machine or network. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal. A 451 climbs no tier (a browser on the same network gets the same answer): `retry: "no"`, `nextCall` `report`. The site then cools down (Execution ladder) |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
-| `error` | a write refused in its 2xx answer (see Writes); a signed-in JSON read (it holds a credential ref, or was learned signed in) redirected off its path to an HTML page of the same site with no sign-in form or challenge: a consent, terms or "verify it's you" step, reported with its address and a `next` to finish it in the browser and run `api-anything login <site>` (`nextCall` `login`; the address is the site's own text, so `next` shows it as it shows a spec's address: no part that spells words, and the origin alone past 200 characters) (a real redirect only: an SPA's shell at the request's own address is drift); a tier-1 answer over 32 MiB (a declared length, the bytes streamed, or a zstd body as it decodes), refused before it is read whole: no tier climbs, `retry: "no"`, `nextCall` `report` (a write's `check_site`); an html read's page of more than 200,000 elements (or closing tags, comments and CDATA sections), refused before it is parsed (not drift: a heal would read the same page; `next` says not to retry and `nextCall` is `report`, a write's `check_site`, as for an answer over 32 MiB); an answer whose reading ran past the read deadline (5 s), with the same `next` and `nextCall`, and args whose test against the op's patterns ran past its own (500 ms), before anything is sent (`nextCall` `report`); anything else (a network error names its cause) | return with details; no heal, nothing stale |
+| `error` | a write refused in its 2xx answer (see Writes); a read, signed in or not and in any format (JSON, html, embedded), redirected to the site's cookie-consent step instead of its data (below): `wall: "consent"`, its address in `reason`, a `next` to answer it (`nextCall` `login`, with `mode: "window"` for a public read); a signed-in JSON read (it holds a credential ref, or was learned signed in) redirected off its path to an HTML page of the same site with no sign-in form or challenge: a consent, terms or "verify it's you" step, reported with its address and a `next` to finish it in the browser and run `api-anything login <site>` (`nextCall` `login`; the address is the site's own text, so `next` shows it as it shows a spec's address: no part that spells words, and the origin alone past 200 characters) (a real redirect only: an SPA's shell at the request's own address is drift); a tier-1 answer over 32 MiB (a declared length, the bytes streamed, or a zstd body as it decodes), refused before it is read whole: no tier climbs, `retry: "no"`, `nextCall` `report` (a write's `check_site`); an html read's page of more than 200,000 elements (or closing tags, comments and CDATA sections), refused before it is parsed (not drift: a heal would read the same page; `next` says not to retry and `nextCall` is `report`, a write's `check_site`, as for an answer over 32 MiB); an answer whose reading ran past the read deadline (5 s), with the same `next` and `nextCall`, and args whose test against the op's patterns ran past its own (500 ms), before anything is sent (`nextCall` `report`); anything else (a network error names its cause) | return with details; no heal, nothing stale |
+
+**A consent wall** (`consentStep`). A site may send a visitor it has no cookie choice from to a page
+that asks for one (Google sends an EU visitor's request to `consent.google.com`, issue #84), chosen by
+the caller's network. That page is not the site's change: a read whose data is missing (what would be
+drift), or a JSON read answered with HTML, is `error` with `wall: "consent"` when its request was
+really redirected (tiers 1 and 2 know; a page served at the asked address is judged as before) and
+answered 2xx on a page that: is on the same registrable domain (`consent.<site>` is the same site) at
+another host or path; shows no sign-in form or sign-in wording and is no login path (those stay
+`auth`); and names a consent step in a host label or path segment (`consent`, `gdpr`,
+`cookie-wall`, `cookie-settings`...), or says what a consent page says ("Reject all", "Accept all
+cookies", "Before you continue", "We use cookies") and holds an address of the site to go back to in
+its query (`continue=`). No site's name is known. It is judged before a JSON read's login markers,
+since a consent page links the sign-in page (Google's ServiceLogin button). A bot challenge is judged
+first and stays `blocked`; a non-2xx answer (a 404) is what its status makes it; a write is judged as
+a write. Tier 3 sees it from the run: a read's trigger page that ended there (`consentWall`, its op's
+request never answered or answered with the redirect) is the same `error`, and so is a heal's
+recapture (it stops, as for a sign-in page, and marks nothing stale), `add` (it throws, saving
+nothing), `learn_site` (`wall: "consent"`, `nextCall` `login` `mode: "window"`) and `capture`
+(`wall: "consent"` and a `next` saying so). The call is not healed, not marked stale, starts no
+cool-down and climbs no tier; an attempt that answered with it learned nothing (`learnedNothing`), so a
+heal that meets it is transient. Nothing about it is reported to the registry (report.ts), since it
+says nothing about the version. A consent page served in place (HTTP 200 at the asked address, an
+overlay over a page without the data) cannot be told from drift without a site's own rules: it stays
+drift.
+
+Its `next` leads to a step that works. A public read (no credential ref, learned signed out): the
+user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
+closes the window. The cookies the site set while it was open that are the visitor's own choices
+(`visitorChoices`: new or changed there, none every visitor is given unasked, none that shows a
+sign-in) are added to the site's jar, and nothing else of the profile, so tier 1 sends them; tiers 2
+and 3 send the profile's, which holds them. The spec gains no cookie value and no ref, so a shared spec
+and `vetShared` are unchanged, and the clean replay (`clean.ts`) still sends nothing of the user's:
+from a network the site walls, a consent-walled site's clean replay answers this `error`, and the op
+is not shared automatically from there. A signed-in read's `next` names the page to finish in the
+everyday browser, then `api-anything login <site>` imports it with the session. The tool never answers
+a consent question for the user and sets no site's consent cookie itself: that would be a choice made
+for them, and site-specific.
 
 An error status a 2xx answer carries in place of its data is judged as the HTTP status it stands
 for: a batchexecute RPC whose payload's place holds `[13]` (`[["wrb.fr",null,null,null,null,[13]]]`),
@@ -862,7 +899,8 @@ answers `rate` or `blocked` without sending anything, a write before its ledger 
 (`write: "not_sent"`), with `cooling: true`, `retryAfterMs` counting down to its end and a `reason`
 naming what the site answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
 asks for `api-anything login <site> --window`. Any login for the site (an import, a cookies file, the
-window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. The call
+window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. A consent
+wall (Failure classifier) is `error` and sets none: the site asked a question, it did not say stop. The call
 option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends that one call through
 it: one that succeeds ends it, since the site answered (before a write's readback, which may set it
 again); one the site limits or blocks again sets it anew from that answer, as any call does. MCP has no way to skip it. The idle MCP server's verification of candidates skips a cooling site too.
@@ -2090,7 +2128,11 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   the login among them (CI caught this). The sign-in counts
   only when a login cookie (not a guest name) appeared or changed in between: a profile that already
   held one proves nothing, since it may be the very cookie the site has signed out. Then the jar is
-  replaced and `login` answers `ok: true` with the `renewed` names. Otherwise it answers `ok: false`
+  replaced and `login` answers `ok: true` with the `renewed` names. With no sign-in, the cookies the
+  visitor's own choices set there (a consent answered, a challenge cleared: `visitorChoices`, see
+  "A consent wall" under the classifier) are added to the jar alone, and `login` answers `ok: true`,
+  `loggedIn: false`, with their names in `kept` and a `warning` saying so; the session's `source`
+  stays as it was. With none of those either, it answers `ok: false`
   with why (no login cookie appeared, or the ones held at opening did not change) and keeps the stored
   session. The window does not close itself when a login cookie appears: a site can set its session
   cookie before a second factor, a consent page or the redirect back from an identity provider is done,

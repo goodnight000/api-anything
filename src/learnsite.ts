@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { browserAvailable, ProfileInUse } from "./browser.js";
 import { type Proof, recordCases } from "./checks.js";
-import { botWall, judge } from "./classify.js";
+import { botWall, consentReason, judge } from "./classify.js";
 import { cleanCall } from "./clean.js";
 import { asText } from "./codec.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
@@ -20,6 +20,7 @@ import {
   type CaptureFile,
   CaptureUnavailable,
   capturePage,
+  consentWall,
   fillTrigger,
   loadCapture,
   loginWall,
@@ -136,6 +137,8 @@ export interface LearnSiteResult {
   warnings?: string[];
   captures?: string[];
   saved?: string;
+  /** the trigger page was sent to the site's cookie-consent page: nothing was learned */
+  wall?: "consent";
   error?: string;
   next?: string;
   nextCall?: NextCall;
@@ -618,6 +621,14 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     return failedRun(e);
   }
   const captures = c2 ? [c1.id, c2.id] : [c1.id];
+  // the page was sent to the site's consent step: no request of the data's was made to learn from
+  const consent = consentWall(c1, c1.url);
+  if (consent)
+    return fail(
+      consentReason(consent),
+      `ask the user to run api-anything login ${site} --window, make the choice on the site's page there and close the window; then learn again`,
+      { captures, wall: "consent", nextCall: { action: "login", site, mode: "window" } },
+    );
   // The rule holds for what the page requested, not only for the trigger typed: a request to this
   // machine or the local network (the page's redirect, a request its script sent, a capture of another
   // page) is no part of the run. Never ranked, shown in alternatives, picked, learned or replayed.

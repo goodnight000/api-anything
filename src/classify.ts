@@ -45,6 +45,8 @@ export interface Classified {
    * terms or "verify it's you" step), for a human to finish in the browser
    */
   unfinished?: string;
+  /** with `unfinished`: the page is the site's cookie-consent step (`consentStep`) */
+  wall?: "consent";
   /**
    * drift: picked fields the learned shape typed, which no item carries now, or none with that type.
    * The rest of the data is there: `judge` extracts it, for a call whose example args still carry them.
@@ -523,9 +525,7 @@ function formError(body: string): string | undefined {
  * its shell at the request's own address is drift.
  */
 function unfinishedPage(op: Operation, r: Observed): string | undefined {
-  if (!r.redirected || !r.url) return undefined;
-  const holds = op.slots.some((s) => !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0));
-  if (!holds && !op.learnedLoggedIn) return undefined;
+  if (!r.redirected || !r.url || !signedInRead(op)) return undefined;
   try {
     const to = new URL(r.url);
     const from = new URL(op.request.url);
@@ -535,6 +535,69 @@ function unfinishedPage(op: Operation, r: Observed): string | undefined {
   }
   return r.url;
 }
+
+// A consent step named in a host label or a path segment: consent.<site>, /consent, /gdpr, /cookie-wall.
+const CONSENT_NAME = /consent|gdpr|^cookie[-_]?(wall|choices?|settings|preferences|banner)$/i;
+// What a consent page asks, for a page whose address names no consent step.
+const CONSENT_SAID =
+  /\b(accept|reject|refuse|decline|allow) (all|(all )?cookies)\b|\bcookie (consent|preferences|settings|choices)\b|\bbefore you continue\b|\bwe use cookies\b/i;
+
+/** A query value is an address of the site (`continue=`, `return=`): where the step goes back to. */
+function returnsTo(to: URL, site: string): boolean {
+  for (const [, v] of to.searchParams) {
+    if (!/^(https?:\/\/|\/)/i.test(v)) continue;
+    try {
+      const back = new URL(v, to.origin);
+      if (siteOf(back.hostname) === site && back.href !== to.href) return true;
+    } catch {
+      /* not an address */
+    }
+  }
+  return false;
+}
+
+/**
+ * `landed` is the visitor's cookie-consent step of the site `asked` is on, reached instead of it: a
+ * page of the same site (consent.<site> is the same site) at another address, with no sign-in form or
+ * sign-in wording, whose host label or path segment names a consent step, or which says what a
+ * consent page says and holds an address of the site to go back to. No site's own name is known here.
+ */
+export function consentStep(asked: string, landed: string, body: string): boolean {
+  let from: URL;
+  let to: URL;
+  try {
+    from = new URL(asked);
+    to = new URL(landed);
+  } catch {
+    return false;
+  }
+  const site = siteOf(to.hostname);
+  if (site !== siteOf(from.hostname) || (to.hostname === from.hostname && to.pathname === from.pathname)) return false;
+  if (LOGIN_URL.test(to.pathname) || LOGIN_SAID.test(body) || signInForm(body)) return false;
+  const labels = to.hostname.slice(0, -site.length).split(".").filter(Boolean);
+  const named = [...labels, ...to.pathname.split("/")].some((part) => part && CONSENT_NAME.test(part));
+  return named || (returnsTo(to, site) && CONSENT_SAID.test(body.slice(0, 200_000)));
+}
+
+/** What a read that ended on the site's cookie-consent step at `url` is told. */
+export const consentReason = (url: string) =>
+  `redirected to ${url}, the site's cookie-consent page, instead of the data: the site asks this visitor a question first`;
+
+/**
+ * A read whose request was redirected to the site's cookie-consent step, which answered it (2xx): an
+ * error naming the page, never drift. Only after a real redirect: a page served at the asked address
+ * is judged as it always was.
+ */
+function consentWall(op: Operation, r: Observed): Classified | undefined {
+  if (!op.readOnly || !r.redirected || !r.url || r.status < 200 || r.status >= 300) return undefined;
+  if (!consentStep(op.request.url, r.url, r.body ?? "")) return undefined;
+  return { ...is("error", consentReason(r.url)), unfinished: r.url, wall: "consent" };
+}
+
+/** The op holds a credential or was learned signed in: a page it is sent to instead is the account's to finish. */
+export const signedInRead = (op: Operation) =>
+  op.learnedLoggedIn === true ||
+  op.slots.some((s) => !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0));
 
 /** A path as the learned shape keys it: `a[0].b` and `a[*].b` -> `a[].b`, `a["x.y"]` -> `a.x.y`. */
 export const shapeKey = (path: string) =>
@@ -651,6 +714,7 @@ export function classify(op: Operation, r: Observed): Classified {
   return classifyResponse(op, r, () => parseBody(r.body ?? "", op.response.xssiPrefix));
 }
 
+/** A read's missing data on a page it was redirected to is the site's consent step when that page is one. */
 function classifyResponse(
   op: Operation,
   r: Observed,
@@ -659,6 +723,18 @@ function classifyResponse(
   readPicked = (data: unknown) =>
     op.response.pick?.length && data !== undefined ? pick(data, op.response.pick) : data,
   readHtml = (recipe: HtmlRecipe) => extractHtml(r.body ?? "", recipe),
+): Classified {
+  const c = classifyBody(op, r, readJson, readTarget, readPicked, readHtml);
+  return c.class === "drift" ? (consentWall(op, r) ?? c) : c;
+}
+
+function classifyBody(
+  op: Operation,
+  r: Observed,
+  readJson: () => unknown,
+  readTarget: (data: unknown) => unknown,
+  readPicked: (data: unknown) => unknown,
+  readHtml: (recipe: HtmlRecipe) => ReturnType<typeof extractHtml>,
 ): Classified {
   const body = r.body ?? "";
   const ct = (r.headers["content-type"] ?? "").toLowerCase();
@@ -758,6 +834,9 @@ function classifyResponse(
       return ok(`HTTP ${r.status}, ${body.trim() ? "non-JSON body" : "empty body"}`);
     }
     if (wantsJson) {
+      // before the login markers: a consent page links the sign-in page (Google's ServiceLogin button)
+      const consent = consentWall(op, r);
+      if (consent) return consent;
       if (isHtml && LOGIN.test(body)) return is("auth", "HTML login page where JSON was expected");
       const away = isHtml ? unfinishedPage(op, r) : undefined;
       if (away)

@@ -8,7 +8,7 @@ import { BATCH_CONCURRENCY, BATCH_MAX, type BatchItem, callReads } from "./batch
 import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { parseDuration, sitePace } from "./budget.js";
 import { verifySite } from "./checks.js";
-import { botWall, emptyResults, htmlFinds, loginPath, signInForm } from "./classify.js";
+import { botWall, consentReason, emptyResults, htmlFinds, loginPath, signInForm } from "./classify.js";
 import { launchOf, printConfig } from "./clients.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { describeOperation } from "./describe.js";
@@ -20,6 +20,7 @@ import {
   CaptureUnavailable,
   capturePage,
   captureTrigger,
+  consentWall,
   fillTrigger,
   loadCapture,
   PROFILE_HINT,
@@ -38,6 +39,7 @@ import {
   ImportRefused,
   importSession,
   importWarning,
+  keptNote,
   knownGuests,
   logout,
   resolveLoginTarget,
@@ -659,7 +661,7 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
   const runWindow = async (reason?: string) => {
     needBrowser();
     process.stderr.write(
-      `${reason ? `${reason} ` : ""}Sign in to ${url} in the browser window, then close it or press Enter here.\n`,
+      `${reason ? `${reason} ` : ""}Sign in to ${url} in the browser window (or answer what the site asks there, such as a cookie choice), then close it or press Enter here.\n`,
     );
     const w = await windowLogin(site, url, { loginCookies });
     if (!w.ok)
@@ -668,7 +670,15 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
         source: "window",
         cookies: cookieNames(w.cookies),
       });
-    out({ ok: true, site, source: "window", cookies: cookieNames(w.cookies), loggedIn: true, renewed: w.renewed });
+    out({
+      ok: true,
+      site,
+      source: "window",
+      cookies: cookieNames(w.cookies),
+      loggedIn: !w.kept,
+      renewed: w.renewed,
+      ...(w.kept ? { kept: w.kept, warning: keptNote(site, w.kept) } : {}),
+    });
     return 0;
   };
 
@@ -855,6 +865,8 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
         e?.response && botWall({ status: e.response.status, headers: e.response.headers, body: e.response.body ?? "" }),
     )
     .find(Boolean);
+  // a page the site sent to its consent step holds none of the data's requests yet
+  const consent = wall || v.write ? undefined : consentWall(c, url);
   const page: ReturnType<typeof pageSays> = wall ? {} : pageSays(c, ranked, values);
   const pages = pagesOf(c, values);
   const learn = `${
@@ -869,13 +881,16 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     candidates,
     ...(pages.length ? { pages } : {}),
     ...(wall ? { blocked: wall } : {}),
+    ...(consent ? { wall: "consent" } : {}),
     ...(page.status ? { pageStatus: page.status } : {}),
     ...(stopped.length ? { stopped } : {}),
     next: wall
       ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> --window (clear the challenge in the window), then capture again`
-      : halted?.site.length
-        ? stoppedHint(halted.site, "capture again")
-        : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),
+      : consent
+        ? `${consentReason(consent)}: ask the user to run api-anything login <site> --window, make the choice on the site's page there and close the window, then capture again`
+        : halted?.site.length
+          ? stoppedHint(halted.site, "capture again")
+          : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),
   });
   return 0;
 }
