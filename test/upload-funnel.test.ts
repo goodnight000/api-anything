@@ -6,7 +6,8 @@
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import fs, { mkdtempSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
@@ -286,6 +287,38 @@ test("an op learned again while its clean replay was out is not shared: the repl
   assert.equal(loadSite("demo")!.site.operations[0]!.description, "learned again", "the new op is left as it is");
 });
 
+test("the op that goes up is the op replayed, whatever the store reads in between", async (t) => {
+  // Another process re-learns the op during the replay and restores it before anything compares: each
+  // read named here answers the re-learned op, every other read the file on disk.
+  for (const reads of [/at (plan|exportSite) /, /at exportSite /]) {
+    shareOn();
+    saveSite(site());
+    fake.received.length = 0;
+    const file = join(process.env.API_ANYTHING_HOME!, "sites", "demo.json");
+    const other = JSON.stringify(site({ description: "learned again" }));
+    let replayed = false;
+    const real = fs.readFileSync;
+    t.mock.method(fs, "readFileSync", (path: unknown, ...rest: unknown[]) =>
+      replayed && String(path) === file && reads.test(new Error().stack ?? "")
+        ? other
+        : (real as (...a: unknown[]) => unknown)(path, ...rest),
+    );
+    syncBuiltinESMExports();
+    try {
+      const { fetchImpl } = web(() => {
+        replayed = true;
+        return json({ hits: [{ title: "a puppy" }] });
+      });
+      const [out] = await shareOps("demo", ["search"], { evidence: {}, consent: true, fetchImpl, minIntervalMs: 0 });
+      assert.equal(out!.cleanReplay, "ok", JSON.stringify(out));
+      for (const u of uploads())
+        assert.equal(u.operation.description, undefined, `${reads}: the upload is the op the replay proved`);
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    }
+  }
+});
 test("status says a review is as of the upload and how to ask again; the duplicate's answer refreshes it", async () => {
   shareOn();
   saveSite(site());

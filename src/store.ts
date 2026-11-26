@@ -714,13 +714,14 @@ export const unconfirmedWrite = (r: WriteRecord) =>
  * A shareable copy: example values stripped from the stored request (param slots become `{name}`,
  * or null in a typed JSON leaf) and from params (unless `keepExamples`: a human confirmed they
  * are public), response shapes dropped (their keys can be user data), then scanned against this
- * machine's live session. `strict` adds what `borderlineCredentials` reports to the warnings.
+ * machine's live session. `strict` adds what `borderlineCredentials` reports to the warnings. `spec`: the
+ * site as the caller already read it.
  */
 export function exportSite(
   name: string,
-  o: { keepExamples?: boolean; strict?: boolean } = {},
+  o: { keepExamples?: boolean; strict?: boolean; spec?: Site } = {},
 ): { spec: Site; secrets: string[]; warnings: string[] } {
-  const r = loadSite(name);
+  const r = o.spec ? { site: o.spec } : loadSite(name);
   if (!r) throw new Error(`no site "${name}"`);
   const spec = structuredClone(r.site);
   // where this copy was pulled from, when an op was learned and its registry version are this machine's history
