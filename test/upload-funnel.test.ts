@@ -286,6 +286,31 @@ test("an op learned again while its clean replay was out is not shared: the repl
   assert.equal(loadSite("demo")!.site.operations[0]!.description, "learned again", "the new op is left as it is");
 });
 
+test("status says a review is as of the upload and how to ask again; the duplicate's answer refreshes it", async () => {
+  shareOn();
+  saveSite(site());
+  const { fetchImpl } = web(() => json({ error: "sign in first" }, 401));
+  const [held] = await shareOps("demo", ["search"], { evidence: {}, consent: true, fetchImpl, minIntervalMs: 0 });
+  assert.equal(held!.status, "review", JSON.stringify(held));
+  const p = status("demo").problems.find((x) => x.problem === "review");
+  assert.match(p!.detail, /when it was shared/);
+  assert.match(p!.next, /api-anything publish demo search --yes/, "how to learn whether a maintainer decided since");
+
+  // a maintainer approved it meanwhile: the same version sent again answers its status now
+  fake.onUpload = (u) => ({
+    status: 200,
+    body: { hash: hashOf(u.site.name, OperationSchema.parse(u.operation)), status: "candidate", duplicate: true },
+  });
+  const [again] = await shareOps("demo", ["search"], { evidence: {}, consent: true, fetchImpl, minIntervalMs: 0 });
+  assert.equal(again!.status, "candidate", JSON.stringify(again));
+  assert.equal(loadSite("demo")!.site.operations[0]!.version?.status, "candidate");
+  assert.equal(
+    status("demo").problems.find((x) => x.problem === "review"),
+    undefined,
+    "no review problem once the registry said otherwise",
+  );
+});
+
 test("every reason the registry gives has a category, and an unknown one is other", () => {
   const samples = [
     "its clean replay was skipped, not ok",

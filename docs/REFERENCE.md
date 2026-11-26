@@ -946,7 +946,9 @@ will run with `--yes`. An upload the catalog holds for review is served only to 
 approves it: each op's outcome has a `reason` with every cause in words, `held` (each cause and its
 category), and a `next`. The one cause you can fix is a missing example (`add` it again with
 `--example`, then publish); otherwise `next` says there is nothing to do but wait, since publishing the
-same op again changes nothing. `status` shows it as a `review` problem.
+same op again changes nothing. `status` shows it as a `review` problem, as the catalog answered when you
+published: it asks the catalog nothing, so its `next` says to publish the op again to see whether a
+maintainer has decided since (the answer to the same version sent again is its status now).
 
 Your agent does the first two on its own: `find_sites` searches the catalog, and calling a site this
 machine doesn't have fetches it, reads only. A new operation is a candidate until installs other than

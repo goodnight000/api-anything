@@ -339,8 +339,9 @@ function siteStatus(name: string, now: number, named: boolean): { status: SiteSt
       problem({
         op: opName,
         problem: "review",
-        detail: `the registry held its upload (${op.version.hash.slice(0, 12)}) for review: served only to this install until a maintainer approves it${why.length ? `, because ${why.join("; ")}` : ""}`,
-        next: nextStep(categories, { site: name, op }),
+        // the record is the upload's answer and nothing since: status asks the registry nothing
+        detail: `the registry held its upload (${op.version.hash.slice(0, 12)}) for review when it was shared: served only to this install until a maintainer approves it${why.length ? `, because ${why.join("; ")}` : ""}`,
+        next: `${nextStep(categories, { site: name, op })}. This is the registry's answer when it was shared; to see whether a maintainer decided since, run api-anything publish ${name} ${opName} --yes: the same version sent again changes nothing there and answers its status now`,
       });
     }
     const rec = record[opName];

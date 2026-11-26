@@ -2072,7 +2072,9 @@ count) and `next`. The only step that changes anything is a new version that pas
 for a skipped replay that lacks an example gets the `add ... --example` and `publish --yes` that make
 one; anything else is "nothing to do but wait for a maintainer", since a re-upload of the same version
 is a duplicate. The local op's `version` keeps the categories (`review`), so `status` shows a
-`review` problem with the same words and `next` from the local files alone; `learn_site`'s `next`
+`review` problem with the same words and `next` from the local files alone, as of the upload's answer: nothing
+refreshes it but another answer to an upload of it, so the `next` adds `publish <site> <op> --yes`, whose
+duplicate answer carries the version's status now and replaces the record; `learn_site`'s `next`
 carries them, and `publish --yes` names the ops held.
 
 **Publish.** `api-anything publish <site> [op ...]` is the human's way to share: without `--yes` it
