@@ -172,7 +172,7 @@ describe("API_ANYTHING_CDP refused before anything connects", () => {
 
   /** A local server that answers /json/version as a browser's DevTools endpoint does, and nothing else. */
   const fakeDevTools = async () => {
-    const server = httpServer((req, res) => {
+    const server = httpServer((_req, res) => {
       const { port } = server.address() as AddressInfo;
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/fake` }));
