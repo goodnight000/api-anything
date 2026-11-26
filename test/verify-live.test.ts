@@ -106,6 +106,33 @@ test("a reason is one short line", () => {
   assert.match(reason, /^answered drift: x+…$/);
 });
 
+test("a reason keeps verify's words and drops the page text it quotes", () => {
+  const reasons = [
+    "HTTP 403 with no login or challenge markers: <body class=theme-beta><div>page text</div>",
+    'HTTP 200 carrying batchexecute error 13 (INTERNAL), judged as HTTP 500: )]}\' 269 [["wrb.fr",null]]',
+    'HTTP 400: {"error":"bad date"}',
+    "not sent: shop answered blocked (HTTP 403: <!doctype html> <title>Denied</title>), so nothing goes to it until later",
+  ];
+  const e = siteEntries(
+    run({
+      ops: ["a", "b", "c", "d"],
+      output: {
+        ok: false,
+        results: reasons.map((reason, i) => caseRow("abcd"[i]!, "example", "inconclusive", { got: "blocked", reason })),
+      },
+    }),
+  );
+  assert.deepEqual(
+    e.map((x) => x.reason),
+    [
+      "HTTP 403 with no login or challenge markers: …",
+      "HTTP 200 carrying batchexecute error 13 (INTERNAL), judged as HTTP 500: …",
+      "HTTP 400: …",
+      "not sent: shop answered blocked (HTTP 403: …",
+    ],
+  );
+});
+
 test("a site verify could not load fails every op; a run that did not finish tests nothing", () => {
   const broken = siteEntries(
     run({ ops: ["a", "b"], output: { ok: false, results: [{ site: "shop", ok: false, error: 'no site "shop"' }] } }),

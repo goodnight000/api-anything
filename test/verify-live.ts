@@ -87,8 +87,15 @@ export interface SiteRun {
 
 const REASON_CHARS = 200;
 
+/**
+ * Verify's reason on one line, without what it quotes of the answer (a page's markup, a JSON body,
+ * after "<label>: ") and with the spec's arg values replaced: the record holds outcomes, not answers.
+ */
 function shortReason(text: string, values: string[]): string {
-  let s = text.replace(/\s+/g, " ").trim();
+  let s = text
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/(: )[<{[)].*$/, "$1…");
   const forms = values
     .filter((v) => v.length >= 3)
     .flatMap((v) => [v, encodeURIComponent(v)])

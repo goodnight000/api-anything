@@ -1936,8 +1936,8 @@ spec's pace, the budget and the cool-downs are the only pacing, as for one user;
 running after `--site-timeout` (20 min) is killed with its browser. It judges nothing itself: each
 op's entry in `health.json` is its worst case in verify's own JSON (a failing case, else an
 inconclusive one, else a passing one), with that case's label, class (`got`), tier and ms, verify's
-reason cut to one line of 200 characters with the spec's example and check values replaced by
-`<arg>`, and the time. A skipped op (or a write's preflight) is `skipped`; a site verify could not
+reason cut to one line of 200 characters, without what it quotes of the answer (markup or a body
+after a `: `) and with the spec's example and check values replaced by `<arg>`, and the time. A skipped op (or a write's preflight) is `skipped`; a site verify could not
 load fails each of its ops; a verify that crashed, hung, or reported nothing about an op is
 `inconclusive`, since it tested nothing. No args, no answers. The header has the version, the
 commit, the run's start, end and duration, the op totals and verify's case counts summed; a
