@@ -1975,7 +1975,12 @@ their hosts.
 
 **Search.** `api-anything search <words | domain | url>` and MCP `find_sites` ask `GET /v1/search`
 and merge the answer with the specs on this machine (the user's, pulled and bundled) as `installed`,
-the local copy winning, so a site learned here and never shared is found too; a registry that cannot
+the local copy winning, so a site learned here and never shared is found too. A registry match of a
+site installed here (same name and domain) still finds it, as the installed site, by what the
+registry matched (an alias added after this copy was pulled). For a domain or URL query the
+registry's matches keep its order, a site with a live op before one without, then score, in the places
+they hold among this machine's specs, which stay where score puts them; a words query ranks by score
+alone. A registry that cannot
 be reached, or that has not answered within 8 s (`SEARCH_TIMEOUT_MS`; the request is sent before the
 local specs are read, so the two overlap), leaves the local ones with a `registryError`, and one that rate-limited the search adds
 `retryAfterMs` (its Retry-After), with a `next` that says to wait that long and search again. The registry is sent no more of the query than

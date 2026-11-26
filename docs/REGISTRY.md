@@ -79,7 +79,9 @@ local-only and how to turn it off (`setup --no-local-only --share-only`, or unse
      own domain;
    - a domain or URL query also finds a site by one of its **aliases** (below), ranked below a site
      that calls that domain itself; among confirmed sites the exact domain comes first, and a confirmed
-     site still ranks above one with only candidates;
+     site still ranks above one with only candidates. The client keeps that order among the
+     registry's matches; a site installed on its machine is ranked by score, and found by the
+     registry's match too (an alias its older copy lacks);
    - `GET /v1/index`, the home page list and the sitemap leave such a site out. Its page
      (`/sites/:name`) still renders, marked `noindex`.
    Lexical ranking is shared with the client (`src/search.ts`). Unmatched constraint words do not
