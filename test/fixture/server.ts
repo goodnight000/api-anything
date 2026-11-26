@@ -887,6 +887,17 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
           return script(viaFetch("/api/live/idle"));
         case "/live/error":
           return script(viaFetch("/api/live/error"));
+        // a frame of another site (localhost, not 127.0.0.1), which the browser runs in a process of its
+        // own: its stream reaches the run's page only through Playwright, not the page's DevTools session
+        case "/live/framed":
+          return html(
+            200,
+            `<!doctype html><html><body><iframe src="http://localhost:${port}/live/big?mb=${u.searchParams.get("mb") ?? 3}"></iframe></body></html>`,
+          );
+        case "/live/big":
+          return script(
+            `fetch("/api/live/plain?mode=big&mb="+(new URLSearchParams(location.search).get("mb")||3),{headers:{accept:"text/event-stream"}}).then(async r=>{${read}})`,
+          );
         case "/live/ask":
         case "/live/ask-plain": {
           const path = p === "/live/ask" ? "/api/live/ask" : "/api/live/ask-plain";
@@ -952,6 +963,12 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
         // heartbeats keep it open, and are not events
         timers.add(setInterval(() => res.write(": ping\n\n"), 500));
         return;
+      }
+      if (kind === "big") {
+        // a finite stream of `mb` events of a MiB each
+        const event = `data: ${"x".repeat(1 << 20)}\n\n`;
+        for (let i = 0, n = Number(u.searchParams.get("mb") ?? 3); i < n; i++) res.write(event);
+        return void res.end();
       }
       if (kind === "ask") {
         const asked = String(JSON.parse(body || "{}").q ?? "");

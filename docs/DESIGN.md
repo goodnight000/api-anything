@@ -1471,7 +1471,11 @@ refused: a stream has no length). At tier 1 a zstd body that Node 22's fetch han
 compressed is decoded as it arrives, so the idle bound reads its lines, a cut keeps what was decoded,
 and the 32 MiB bound counts what it decodes to; a Node with no zstd decoder (before 22.15) fails the
 read with an `error` saying the encoding could not be read, for an answer of any type, never its
-compressed bytes as the body. What arrived before the bound is the answer and the connection is
+compressed bytes as the body. A browser run reads a page's stream on the page's own DevTools session
+as it arrives; one that session does not hand over (a frame of another site runs in a process of its
+own) is not read at all, since Playwright's read of a response buffers the whole body with no cap on
+its size: the exchange is cut, its `truncated` saying it was not read, and a call on it is `error`
+(no event arrived). What arrived before the bound is the answer and the connection is
 closed; the read says why it stopped in `truncated` ("the event stream was still open after 10 s, so
 it was read no further"), which the call's result carries with the view's own note, and a capture's
 exchange keeps it. A cut answer is `ok` when the recipe found data in what arrived. One cut before

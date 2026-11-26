@@ -14,6 +14,7 @@ import { classify, judge } from "../src/classify.js";
 import { call } from "../src/execute.js";
 import { capOutput, extract, inferShape, parseBody, pick } from "../src/extract.js";
 import { addOperation, capturePage } from "../src/heal.js";
+import { MAX_BODY_BYTES } from "../src/http.js";
 import { outline } from "../src/outline.js";
 import { loadSession } from "../src/session.js";
 import { type Operation, OperationSchema, type Site } from "../src/spec.js";
@@ -442,6 +443,16 @@ describe("against the fixture", () => {
       const o = await cli("inspect", c.id, String(e.id), "--outline", "--example", "q=alpha one");
       assert.equal(o.code, 0, o.stderr);
       assert.match(o.stdout, /items/);
+    });
+
+    test("a stream the page's DevTools session does not see is not read whole with no cap: the exchange is cut, saying why", async () => {
+      // 3 MiB, under the cap: the read that would have buffered it has no cap of its own
+      const c = await capturePage({ url: `${fx.url}/live/framed?q=alpha&mb=3` });
+      const e = c.exchanges.find((x) => x.request.url.includes("/api/live/plain?mode=big"));
+      if (!e?.response) throw new Error(`no stream captured: ${c.exchanges.map((x) => x.request.url).join(", ")}`);
+      const shown = JSON.stringify({ ...e.response, body: e.response.body?.slice(0, 80), length: e.response.body?.length });
+      assert.equal(e.response.body, undefined, shown);
+      assert.match(e.response.truncated ?? "", /did not hand the event stream over as it arrived.*not read/, shown);
     });
 
     test("a capture of a page whose stream never ends, or goes idle, finishes within the bound, marked cut", async () => {
