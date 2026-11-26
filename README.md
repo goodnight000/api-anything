@@ -211,6 +211,12 @@ requested on the [catalog homepage](https://api-anything-registry.forth-site.wor
 | [Benchmark](bench/README.md) · [Demos](docs/demos/README.md) | how every number here was measured; recorded runs with transcripts and tapes |
 | [Contributing](CONTRIBUTING.md) · [MIT license](LICENSE) | add a site spec, run the checks |
 
+## Who made this
+
+API Anything is made by [Charles Zheng](https://charleszheng.com), who also builds
+[Forth](https://getforth.co). Say hi on [X](https://x.com/Charles_Zheng00) or
+[LinkedIn](https://www.linkedin.com/in/charles-zheng-3234211aa).
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=goodnight000/api-anything&type=date&legend=bottom-right">
