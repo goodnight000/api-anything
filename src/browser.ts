@@ -1,24 +1,54 @@
 /**
  * The browser layer: an installed Chromium (Google Chrome by default, or Brave, Edge, Chromium,
  * Vivaldi, Arc, or any `API_ANYTHING_BROWSER`) via playwright-core, one persistent profile per
- * process. Produces raw Exchanges for the learner (tier 3 / create / heal) and tier-2 page fetches.
+ * process; or, with `API_ANYTHING_CDP`, a context of api-anything's own in a browser the user runs.
+ * Produces raw Exchanges for the learner (tier 3 / create / heal) and tier-2 page fetches.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { basename, join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
-import type { BrowserContext, Cookie, chromium, Dialog, Frame, Page, Request, Response, Route } from "playwright-core";
+import type {
+  Browser,
+  BrowserContext,
+  Cookie,
+  chromium,
+  Dialog,
+  Frame,
+  Page,
+  Request,
+  Response,
+  Route,
+} from "playwright-core";
+import {
+  ATTACH_MS,
+  AttachError,
+  attachEndpoint,
+  attached,
+  attachLock,
+  attachSetting,
+  ownProfileRefused,
+} from "./attach.js";
 import { botWall } from "./classify.js";
 import { MAX_BODY_BYTES } from "./http.js";
+import { claim } from "./lock.js";
 import { browserProxy, proxied } from "./proxy.js";
 import { SIGN_IN_AUTOCOMPLETE, SIGN_IN_REFUSAL } from "./secrets.js";
 import { home, siteOf, writePrivate } from "./session.js";
 import type { Request as Hop } from "./spec.js";
 import type { CaptureResult, Exchange, SeenDialog, StoredCookie, TriggerStep } from "./types.js";
 
-let current: { profileDir: string; headless: boolean; ctx: Promise<BrowserContext> } | undefined;
+let current: { key: string; ctx: Promise<BrowserContext>; close: () => Promise<void> } | undefined;
 let headlessUA: string | undefined;
 const originPages = new Map<string, OriginPage>();
+/** the contexts api-anything opened in an attached browser (API_ANYTHING_CDP) */
+const guests = new WeakSet<BrowserContext>();
+/** attached browsers api-anything is disconnecting from itself */
+const leaving = new WeakSet<Browser>();
+/** each attached browser's hold on its lock (one process at a time) */
+const locks = new WeakMap<Browser, () => void>();
+/** how many times an attached browser went away on its own: a call that saw one says so */
+let losses = 0;
 
 // A browser locks a profile to one process. A long-lived process (the MCP server) releases it
 // after this much idle time (an agent's calls are seconds apart, so the browser would mostly
@@ -29,10 +59,11 @@ const LOCKED = /ProcessSingleton|profile (directory )?is already in use|Singleto
 
 /** Another process holds api-anything's browser profile. */
 export class ProfileInUse extends Error {
-  constructor(dir: string) {
-    super(
-      `the api-anything browser profile is in use by another process (an MCP server or another api-anything command): ${dir}`,
-    );
+  constructor(
+    dir: string,
+    message = `the api-anything browser profile is in use by another process (an MCP server or another api-anything command): ${dir}`,
+  ) {
+    super(message);
     this.name = "ProfileInUse";
   }
 }
@@ -189,8 +220,8 @@ export function browserChoice(): { name: string; bin: string } | undefined {
   return undefined;
 }
 
-/** Checked up front so callers can skip cleanly. */
-export const browserAvailable = (): boolean => !!browserChoice();
+/** Checked up front so callers can skip cleanly. An attached browser counts: attaching says what is wrong with it. */
+export const browserAvailable = (): boolean => attached() || !!browserChoice();
 
 // Default headless UA says "HeadlessChrome/<v>" and x.com answers 403. sec-ch-ua already
 // carries the browser's name, so only the UA string needs the fix.
@@ -238,7 +269,8 @@ export async function headlessUserAgent(): Promise<string> {
 
 /**
  * The process-wide persistent context. A different profileDir or headless mode closes the old one
- * first, since Chrome locks a profile to one running instance.
+ * first, since Chrome locks a profile to one running instance. With API_ANYTHING_CDP it is a context
+ * of api-anything's own in the attached browser instead, whatever the profileDir and mode.
  */
 export function openBrowser({
   profileDir,
@@ -247,14 +279,31 @@ export function openBrowser({
   profileDir: string;
   headless?: boolean;
 }): Promise<BrowserContext> {
-  if (current && current.profileDir === profileDir && current.headless === headless) {
+  const cdp = attachSetting();
+  const key = cdp ? `attached ${cdp}` : `${headless ? "headless" : "headed"} ${profileDir}`;
+  if (current && current.key === key) {
     if (users === 0) scheduleIdleClose();
     return current.ctx;
   }
   clearTimeout(idleTimer);
   const prev = current;
+  if (cdp) {
+    const ctx = (async () => {
+      if (prev) await prev.close();
+      const c = await guest();
+      const gone = () => {
+        if (current?.ctx !== ctx) return;
+        current = undefined;
+        originPages.clear();
+      };
+      c.on("close", gone);
+      c.browser()?.on("disconnected", gone);
+      return c;
+    })();
+    return track({ key, ctx, close: () => leave(ctx) });
+  }
   const ctx = (async () => {
-    if (prev) await closeContext(prev.ctx);
+    if (prev) await prev.close();
     if (headless) headlessUA ??= await headlessUserAgent();
     const proxy = browserProxy();
     const c = await launch(profileDir, {
@@ -275,7 +324,13 @@ export function openBrowser({
     });
     return c;
   })();
-  current = { profileDir, headless, ctx };
+  return track({ key, ctx, close: () => closeContext(ctx) });
+}
+
+/** Make `entry` the process's browser, idle-closed once it is up and unused, forgotten if it fails. */
+function track(entry: NonNullable<typeof current>): Promise<BrowserContext> {
+  const { ctx } = entry;
+  current = entry;
   void ctx.then(
     () => {
       if (users === 0 && current?.ctx === ctx) scheduleIdleClose();
@@ -285,6 +340,85 @@ export function openBrowser({
     },
   );
   return ctx;
+}
+
+const firstLine = (e: unknown) => (e as Error).message.split("\n")[0]!;
+
+/**
+ * Attach to the browser API_ANYTHING_CDP names, and open a context of api-anything's own in it. The
+ * user's tabs, cookies, storage and service workers are in their default context, never in this one,
+ * and what api-anything installs on a context (routes, the socket guard, the service-worker block)
+ * reaches its own pages only. Throws AttachError when nothing of the call can have been sent.
+ */
+async function guest(): Promise<BrowserContext> {
+  const endpoint = await attachEndpoint();
+  const { host } = new URL(endpoint);
+  // One process at a time, as with the profile: another DevTools client takes this one's tabs for the
+  // browser's own and answers their dialogs (seen: a confirm a write's learning accepts, dismissed).
+  const release = await claim(attachLock(host), LOCK_WAIT_MS);
+  if (!release)
+    throw new ProfileInUse(
+      host,
+      `the browser at ${host} (API_ANYTHING_CDP) is in use by another api-anything process (an MCP server or another api-anything command)`,
+    );
+  const { chromium } = await import("playwright-core");
+  let browser: Browser;
+  try {
+    // noDefaults: Playwright leaves the user's own context as it is (no emulated media, no downloads policy)
+    browser = await chromium.connectOverCDP(endpoint, { timeout: ATTACH_MS, noDefaults: true });
+  } catch (e) {
+    release();
+    throw new AttachError(
+      `could not attach to the browser at API_ANYTHING_CDP: ${firstLine(e)}`,
+      "check that the browser is running with --remote-debugging-port, or unset API_ANYTHING_CDP",
+    );
+  }
+  locks.set(browser, release);
+  browser.on("disconnected", () => {
+    release();
+    if (!leaving.has(browser)) losses++;
+  });
+  try {
+    // A service worker's fetches bypass routing (so write interception): in a fresh context none is registered, and none can be.
+    const c = await browser.newContext({ serviceWorkers: "block", viewport: null });
+    guests.add(c);
+    return c;
+  } catch (e) {
+    leaving.add(browser);
+    await within(browser.close(), undefined);
+    throw new AttachError(
+      `the browser at API_ANYTHING_CDP would not open a context for api-anything: ${firstLine(e)}`,
+      "attach to a Chromium browser, or unset API_ANYTHING_CDP",
+    );
+  }
+}
+
+/** Close api-anything's own context (its tabs only), then disconnect: the browser keeps running. */
+async function leave(ctx: Promise<BrowserContext>): Promise<void> {
+  const c = await ctx.catch(() => undefined);
+  const browser = c?.browser();
+  if (!c || !browser) return;
+  leaving.add(browser);
+  await within(c.close(), undefined);
+  await within(browser.close(), undefined);
+  // the disconnect lets go of it too, unless the browser did not answer
+  locks.get(browser)?.();
+}
+
+/** The jar's cookies for a run in api-anything's context of an attached browser; its own profile holds them already. */
+async function seed(ctx: BrowserContext, jar: StoredCookie[] = []): Promise<void> {
+  if (!guests.has(ctx)) return;
+  const now = Date.now() / 1000;
+  // one at a time: the browser refuses a whole batch for one cookie it will not take
+  for (const c of jar)
+    if (!(c.expires > 0 && c.expires <= now)) await ctx.addCookies([toPlaywright(c)]).catch(() => {});
+}
+
+/** What a call that saw an attached browser go away throws: the reason first, of the same kind. */
+function lost(e: unknown, before: number): unknown {
+  if (losses === before || e instanceof AttachError) return e;
+  const message = `the attached browser (API_ANYTHING_CDP) went away during the call: ${firstLine(e)}`;
+  return e instanceof PageUnreachable ? new PageUnreachable(message) : new Error(message);
 }
 
 /**
@@ -318,7 +452,7 @@ export async function closeBrowser(): Promise<void> {
   const c = current;
   current = undefined;
   originPages.clear();
-  if (c) await closeContext(c.ctx);
+  if (c) await c.close();
 }
 
 /**
@@ -361,6 +495,7 @@ export async function profileCookies({
   url: string;
   profileDir: string;
 }): Promise<StoredCookie[]> {
+  if (attached()) throw ownProfileRefused("reading the profile's cookies");
   const release = hold();
   try {
     const ctx = await openBrowser({ profileDir });
@@ -370,25 +505,26 @@ export async function profileCookies({
   }
 }
 
+// Playwright wants a domain that starts with a dot or an exact host; a leading-dot domain plus path is safe.
+const toPlaywright = (c: StoredCookie) => ({
+  name: c.name,
+  value: c.value,
+  domain: c.domain,
+  path: c.path || "/",
+  expires: c.expires > 0 ? c.expires : undefined,
+  httpOnly: c.httpOnly,
+  secure: c.secure,
+  sameSite: c.sameSite,
+});
+
 /** Put imported cookies into api-anything's own Chrome profile, so tier 2/3 and heals are logged in too. */
 export async function addCookiesToProfile(cookies: StoredCookie[], profileDir: string): Promise<void> {
+  if (attached()) throw ownProfileRefused("putting cookies into the profile");
   if (!cookies.length) return;
   const release = hold();
   try {
     const ctx = await openBrowser({ profileDir });
-    // Playwright wants a domain that starts with a dot or an exact host; a leading-dot domain plus path is safe.
-    await ctx.addCookies(
-      cookies.map((c) => ({
-        name: c.name,
-        value: c.value,
-        domain: c.domain,
-        path: c.path || "/",
-        expires: c.expires > 0 ? c.expires : undefined,
-        httpOnly: c.httpOnly,
-        secure: c.secure,
-        sameSite: c.sameSite,
-      })),
-    );
+    await ctx.addCookies(cookies.map(toPlaywright));
   } finally {
     release();
   }
@@ -402,6 +538,8 @@ export async function addCookiesToProfile(cookies: StoredCookie[], profileDir: s
  * answers whether the storage was.
  */
 export async function clearProfileSite(site: string, profileDir: string, origins: string[] = []): Promise<boolean> {
+  // the attached browser's cookies and storage are the user's, and never cleared
+  if (attached()) throw ownProfileRefused("clearing the site from the profile");
   const release = hold();
   try {
     const ctx = await openBrowser({ profileDir });
@@ -629,6 +767,19 @@ async function tap(
   };
 }
 
+/**
+ * Leave a page for about:blank in an attached browser, where the back/forward cache is on (a browser
+ * api-anything launches has it off): a document left by a plain navigation is kept, frozen, and what
+ * its pagehide handler sends can come after the run has stopped waiting for it (seen: a handler that
+ * takes 400 ms). Replaced, its history entry is gone, so it cannot be kept and it unloads first.
+ */
+async function replaceWithBlank(p: Page): Promise<void> {
+  const left = p.waitForURL("about:blank", { timeout: SEAL_MS });
+  // the navigation ends the call it starts: its rejection says nothing
+  void p.evaluate(() => location.replace("about:blank")).catch(() => {});
+  await left;
+}
+
 export interface TriggerOptions {
   url: string;
   steps?: TriggerStep[];
@@ -659,6 +810,8 @@ export interface TriggerOptions {
   settleMs?: number;
   /** overall budget; also the per-action Playwright timeout (default TRIGGER_BUDGET_MS) */
   timeoutMs?: number;
+  /** attached (API_ANYTHING_CDP) only: the stored cookies the run may carry, put into api-anything's context first */
+  jar?: StoredCookie[];
 }
 
 /**
@@ -741,6 +894,15 @@ function requestBody(req: Request): string | undefined {
 
 /** Load the trigger in the browser and return every exchange it caused, with bodies and cookies. */
 export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
+  const before = losses;
+  try {
+    return await trigger(o);
+  } catch (e) {
+    throw lost(e, before);
+  }
+}
+
+async function trigger(o: TriggerOptions): Promise<CaptureResult> {
   const timeout = o.timeoutMs ?? TRIGGER_BUDGET_MS;
   const deadline = Date.now() + timeout;
   const release = hold();
@@ -749,6 +911,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   let tabs: Tabs | undefined;
   try {
     ctx = await openBrowser(o);
+    await seed(ctx, o.jar);
     // a guarded run does not start without the browser's record of who opens which tab
     if (o.intercept) tabs = await tabsOf(ctx);
     page = await ctx.newPage();
@@ -1089,13 +1252,17 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       const tapOf = (p: Page) => within(Promise.resolve(taps.get(p)), undefined);
       const emptied = new Set<Page>();
       for (const end = Date.now() + 3 * SEAL_MS; Date.now() < end; ) {
+        // an attached browser that went away has no tab left to empty, and reports none closing
+        if (guests.has(ctx) && !ctx.browser()?.isConnected()) break;
         await within(Promise.all([...adopting, ...taps.values()]), []);
         const fresh = [...own].filter((p) => !emptied.has(p) && !p.isClosed());
         for (const p of fresh) {
           emptied.add(p);
           // A round trip through the new document, then (in `answered`) through the browser:
           // whatever the old one sent as it unloaded has been paused and failed before either returns.
-          const blank = p.goto("about:blank", { timeout: SEAL_MS }).then(() => true);
+          const blank = (guests.has(ctx) ? replaceWithBlank(p) : p.goto("about:blank", { timeout: SEAL_MS })).then(
+            () => true,
+          );
           if (await within(blank, false))
             await within(
               p.evaluate(() => 0),
@@ -1421,11 +1588,23 @@ export async function pageFetch(o: {
   credentials?: "include" | "omit";
   /** waits for the site's send slot, once Chrome is up: its start overlaps the wait */
   pace?: () => Promise<void>;
+  /** attached (API_ANYTHING_CDP) only: the stored cookies the fetch may carry, put into api-anything's context first */
+  jar?: StoredCookie[];
 }): Promise<PageFetchResult> {
+  const before = losses;
+  try {
+    return await fetchInPage(o);
+  } catch (e) {
+    throw lost(e, before);
+  }
+}
+
+async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetchResult> {
   const timeoutMs = o.timeoutMs ?? 30_000;
   const release = hold();
   try {
     const ctx = await openBrowser(o);
+    await seed(ctx, o.jar);
     await o.pace?.();
     const once = async (entry: OriginPage, hop: Hop, left: number) => {
       const { page } = entry;
@@ -1584,6 +1763,7 @@ export async function login({
   profileDir: string;
   waitForEnter?: boolean;
 }): Promise<{ opened: StoredCookie[]; closed: StoredCookie[] }> {
+  if (attached()) throw ownProfileRefused("the sign-in window");
   const release = hold();
   try {
     return await loginWindow(url, profileDir, waitForEnter);

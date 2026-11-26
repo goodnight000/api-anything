@@ -4,6 +4,7 @@
  */
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { AttachError, attached } from "./attach.js";
 import {
   atStep,
   browserAvailable,
@@ -79,7 +80,7 @@ import {
   templateHash,
   updateSite,
 } from "./store.js";
-import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
+import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
 import {
   badAddress,
   graphqlDocuments,
@@ -94,6 +95,19 @@ import {
 } from "./vet.js";
 
 export const profileDir = () => join(home(), "profile");
+
+/**
+ * The stored cookies a run in an attached browser (API_ANYTHING_CDP) starts with, where api-anything's
+ * own profile would hold them: none for someone else's spec, and none when the jar cannot be read.
+ */
+function attachedJar(site: string, shared = false): StoredCookie[] | undefined {
+  if (!attached() || shared) return undefined;
+  try {
+    return loadSession(site).cookies;
+  } catch {
+    return undefined;
+  }
+}
 
 /** One transport try, judged. `ambiguous`: no response came back, so a write may have run. */
 export interface Attempt {
@@ -614,7 +628,14 @@ export async function runOpTrigger(
   // Intercepted, a write's confirm sends nothing, so learning accepts it. For real, only what its
   // learning recorded is accepted, the question asked with this call's values; a read accepts none.
   const confirm = o.intercept ? () => true : once ? recordedConfirms(op.trigger.confirms ?? [], args) : undefined;
-  const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit, confirm });
+  const capture = await runTrigger({
+    ...t,
+    profileDir: profileDir(),
+    intercept,
+    match: isHit,
+    confirm,
+    jar: attachedJar(site, shared),
+  });
   const hits = capture.exchanges.filter(isHit);
   // a real write's answer is a request that left: a repeat that was stopped answers nothing
   const sent = o.intercept || op.readOnly ? hits : hits.filter((e) => !e.aborted);
@@ -1314,6 +1335,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
             ? learnGuard(i.match)
             : undefined,
         confirm: i.write ? () => true : undefined,
+        jar: attachedJar(i.site),
       });
       const saved = saveCapture({ url: t.url, steps: t.steps, softFrom: t.softFrom, write: i.write }, r);
       captures.push(saved.id);
@@ -2040,6 +2062,9 @@ export async function healOperation(
         transient: true,
         reason,
       };
+    // nor when the attached browser was refused or did not answer
+    if (e instanceof AttachError)
+      return { outcome: "failed", attempt: { tier: 3, class: "error", reason, hint: e.next }, transient: true, reason };
     // the page did not load: nothing it would have sent was seen
     if (e instanceof PageUnreachable)
       return { outcome: "failed", attempt: { tier: 3, class: "error", reason, server: true }, transient: true, reason };

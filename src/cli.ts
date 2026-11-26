@@ -4,6 +4,7 @@ import { createReadStream, existsSync, readdirSync, readFileSync, writeFileSync 
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { z } from "zod";
+import { AttachError } from "./attach.js";
 import { BATCH_CONCURRENCY, BATCH_MAX, type BatchItem, callReads } from "./batch.js";
 import { browserAvailable, closeBrowser, ProfileInUse } from "./browser.js";
 import { parseDuration, sitePace } from "./budget.js";
@@ -2172,7 +2173,9 @@ try {
   out({ ok: false, error: oneLine((e as Error).message), ...(f?.extra ?? {}) });
   const next =
     f?.next ??
-    (e instanceof CaptureUnavailable || e instanceof SealError || e instanceof LockBusy ? e.next : undefined) ??
+    (e instanceof CaptureUnavailable || e instanceof SealError || e instanceof LockBusy || e instanceof AttachError
+      ? e.next
+      : undefined) ??
     (e instanceof ProfileInUse
       ? PROFILE_HINT
       : e instanceof LocalOnlyError

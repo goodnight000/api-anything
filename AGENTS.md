@@ -19,12 +19,13 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/extract.ts` | parse, extract, pick, cap |
 | `src/deadline.ts` | the time limit on reading an answer and on testing a call's args: synchronous work stopped from outside (Node's `vm` timeout); Node only, so no module the registry Worker bundles imports it |
 | `src/http.ts` | tier 1: fill the template, send with Node fetch |
-| `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login |
+| `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login; or a context of its own in an attached browser |
+| `src/attach.ts` | `API_ANYTHING_CDP`: the loopback DevTools endpoint of a browser the user runs, checked before anything connects; `AttachError`; the machine-wide lock's path |
 | `src/proxy.ts` | `API_ANYTHING_PROXY`: site traffic through an outbound proxy, the same rules for tier 1 (`siteFetch`) and Chrome; catalog traffic never |
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |
 | `src/execute.ts` | `call()`: the tier ladder, classifier actions, heal guards, write rules |
 | `src/seal.ts` | AES-256-GCM sealing of session and capture files; the data key from the OS store or `API_ANYTHING_KEY`; the no-key fallback |
-| `src/lock.ts` | the cross-process lock beside a file: an exclusive SQLite transaction the OS releases when its holder dies; `LockBusy` |
+| `src/lock.ts` | the cross-process lock beside a file: an exclusive SQLite transaction the OS releases when its holder dies; `LockBusy`; `claim`, a hold across async work |
 | `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, write ledger, call log, export |
 | `src/status.ts` | `status`: each op's health from the local files only, each problem with its `next` |
 | `src/checks.ts` | `verify`: run each read's example and checks, judge pass/fail/inconclusive, keep the record `publish` gates on |

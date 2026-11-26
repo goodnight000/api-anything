@@ -4,6 +4,7 @@
  * reactive only.
  */
 import { randomBytes } from "node:crypto";
+import { AttachError } from "./attach.js";
 import {
   browserAvailable,
   type PageFetchResult,
@@ -836,6 +837,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
           // the page's own cookies, unless they may not go (`bare`)
           ...(none ? { credentials: "omit" as const } : {}),
           pace: () => pace(ctx.site, ctx.opts.minIntervalMs, ctx.budget),
+          // attached: what tier 1 may send of the user's own spec; someone else's spec gets none put in
+          ...(ctx.shared ? {} : { jar: session.cookies }),
           // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
           redirect: async (from, status, location, taken) => {
             const next = nextHop(o, session, from, status, location, taken);
@@ -901,6 +904,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     if (e instanceof LookupFailed) return { tier, ...e.judged, unsent: true };
     // nothing was sent when the browser could not start
     if (e instanceof ProfileInUse) return { tier, class: "error", reason: e.message, hint: PROFILE_HINT, unsent: true };
+    // the attached browser (API_ANYTHING_CDP) was refused or did not answer: nothing was sent
+    if (e instanceof AttachError) return { tier, class: "error", reason: e.message, hint: e.next, unsent: true };
     // the send slot's lock stayed busy (reserveSend): nothing was sent, and a retry may get it
     if (e instanceof SendSlotBusy) return { tier, class: "error", reason: e.message, hint: e.next, unsent: true };
     // any other busy lock may be one taken after the send (saving what it answered): a write may have run
