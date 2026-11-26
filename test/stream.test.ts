@@ -14,7 +14,6 @@ import { classify, judge } from "../src/classify.js";
 import { call } from "../src/execute.js";
 import { capOutput, extract, inferShape, parseBody, pick } from "../src/extract.js";
 import { addOperation, capturePage } from "../src/heal.js";
-import { MAX_BODY_BYTES } from "../src/http.js";
 import { outline } from "../src/outline.js";
 import { loadSession } from "../src/session.js";
 import { type Operation, OperationSchema, type Site } from "../src/spec.js";
@@ -463,7 +462,11 @@ describe("against the fixture", () => {
       const c = await capturePage({ url: `${fx.url}/live/framed?q=alpha&mb=3` });
       const e = c.exchanges.find((x) => x.request.url.includes("/api/live/plain?mode=big"));
       if (!e?.response) throw new Error(`no stream captured: ${c.exchanges.map((x) => x.request.url).join(", ")}`);
-      const shown = JSON.stringify({ ...e.response, body: e.response.body?.slice(0, 80), length: e.response.body?.length });
+      const shown = JSON.stringify({
+        ...e.response,
+        body: e.response.body?.slice(0, 80),
+        length: e.response.body?.length,
+      });
       assert.equal(e.response.body, undefined, shown);
       assert.match(e.response.truncated ?? "", /did not hand the event stream over as it arrived.*not read/, shown);
     });

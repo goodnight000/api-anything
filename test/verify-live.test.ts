@@ -270,10 +270,7 @@ test("the issue body lists each op failing twice, with the latest run", () => {
   const now = health();
   const body = issueBody(now, persistentFailures(now, only("shop", "item", "fail"))!);
   assert.match(body, /1 bundled operation failed in two consecutive/);
-  assert.match(
-    body,
-    /\| `shop\.item` \| example \| input \(tier 1\) \| no item <arg> at https:\/\/shop\.test\/… \|/,
-  );
+  assert.match(body, /\| `shop\.item` \| example \| input \(tier 1\) \| no item <arg> at https:\/\/shop\.test\/… \|/);
   assert.match(body, /\[the run\]\(https:\/\/github\.com\/o\/r\/actions\/runs\/1\)/);
   assert.match(body, /1 pass, 1 fail, 2 inconclusive, 1 skipped/);
   assert.match(issueBody(now, []), /No bundled operation failed in two consecutive runs/);

@@ -827,7 +827,8 @@ function zstdPieces(make: () => Transform, cap: number) {
         settled = true;
         // what a write decoded may still be on its way to "data"
         setImmediate(() => {
-          if (failed && !over) return reject(new Error(`the answer's zstd encoding could not be read: ${failed.message}`));
+          if (failed && !over)
+            return reject(new Error(`the answer's zstd encoding could not be read: ${failed.message}`));
           const bytes = Buffer.concat(out);
           out = [];
           resolve({ bytes, over });

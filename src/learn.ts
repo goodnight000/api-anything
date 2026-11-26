@@ -2135,7 +2135,8 @@ function derivedSlots(
       continue;
     }
     if (two) {
-      const v2 = l.exchange2 && getPath(tryParse(l.exchange2.response?.body, l.exchange2.response?.contentType), c.path);
+      const v2 =
+        l.exchange2 && getPath(tryParse(l.exchange2.response?.body, l.exchange2.response?.contentType), c.path);
       if (v2 === undefined || v2 === null || typeof v2 === "object" || asText(v2) === c.leaf.value) {
         unproven.set(k, `${where}, but run 2's lookup holds no other value there`);
         continue;

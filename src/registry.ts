@@ -815,7 +815,9 @@ export async function search(
       // the registry's copy of this very site may be found by more (an alias added since this copy)
       const theirs = shared.get(s.name);
       const also =
-        theirs && theirs.domain === siteOf(new URL(s.baseUrl).hostname) ? matchQuery(entryOf(theirs), query) : undefined;
+        theirs && theirs.domain === siteOf(new URL(s.baseUrl).hostname)
+          ? matchQuery(entryOf(theirs), query)
+          : undefined;
       return {
         found: withInterfaces(localFound(s)),
         match: also && also.score > own.score ? also : own,
@@ -861,17 +863,15 @@ export async function search(
     const theirs = ranked.filter((x) => !x.local).sort((a, b) => Number(b.live) - Number(a.live) || byScore(a, b));
     for (let i = 0, j = 0; i < ranked.length; i++) if (!ranked[i]!.local) ranked[i] = theirs[j++]!;
   }
-  const matches = ranked
-    .slice(0, limit)
-    .map(({ found, match }) => ({
-      ...found,
-      matched: match.matched,
-      unmatched: match.unmatched,
-      operations: found.operations.map((op) => ({
-        ...op,
-        ...operationMatch({ op: op.signature, description: op.description }, query),
-      })),
-    }));
+  const matches = ranked.slice(0, limit).map(({ found, match }) => ({
+    ...found,
+    matched: match.matched,
+    unmatched: match.unmatched,
+    operations: found.operations.map((op) => ({
+      ...op,
+      ...operationMatch({ op: op.signature, description: op.description }, query),
+    })),
+  }));
   const uncovered = matches.length ? undefined : domainOf(query);
   const related = uncovered ? relatedSites(uncovered, local, remoteRelated) : [];
   return {

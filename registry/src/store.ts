@@ -753,10 +753,7 @@ export async function replayQueue(
 
 /** Records the outcome of a replay of a version still in review; the attempt itself is `claimReplay`'s. */
 export const markReplay = (db: D1Database, hash: string, outcome: string) =>
-  db
-    .prepare("UPDATE versions SET replay_outcome = ? WHERE hash = ? AND status = 'review'")
-    .bind(outcome, hash)
-    .run();
+  db.prepare("UPDATE versions SET replay_outcome = ? WHERE hash = ? AND status = 'review'").bind(outcome, hash).run();
 
 /**
  * Claims the next attempt at a version: it counts the attempt and its time, and succeeds only while the

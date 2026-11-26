@@ -298,7 +298,9 @@ describe("the registry's replay of a skipped clean replay", () => {
   test("a version promoted after a long review gets a fresh candidate's grace from the promotion", async () => {
     const { env, raw } = registry({ TRY_ENABLED: "true" });
     const { hash } = await held(env);
-    raw.prepare("UPDATE versions SET created_at = ? WHERE hash = ?").run(new Date(Date.now() - 40 * DAY).toISOString(), hash);
+    raw
+      .prepare("UPDATE versions SET created_at = ? WHERE hash = ?")
+      .run(new Date(Date.now() - 40 * DAY).toISOString(), hash);
     const at = Date.now();
     await tick(env, at);
     assert.equal(row(raw, hash).status, "candidate");

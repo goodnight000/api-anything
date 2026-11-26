@@ -27,7 +27,11 @@ export function d1(): { db: D1Database; raw: DatabaseSync } {
     // D1's shape: the rows changed under meta
     run: async () => {
       const r = raw.prepare(sql).run(...values);
-      return { success: true, results: [], meta: { changes: Number(r.changes), last_row_id: Number(r.lastInsertRowid) } };
+      return {
+        success: true,
+        results: [],
+        meta: { changes: Number(r.changes), last_row_id: Number(r.lastInsertRowid) },
+      };
     },
   });
   const db: D1Database = {
