@@ -27,7 +27,8 @@ export interface Fixture {
   /** every /api/* hit, in order */
   calls: FixtureCall[];
   /** current queryIds and bundle hash, for assertions */
-  state: { userQueryId: string; createQueryId: string; build: string };
+  /** `lateSeen`: the Sec-Fetch-Site of each load of /late/target, which tells a link's navigation from a typed one */
+  state: { userQueryId: string; createQueryId: string; build: string; lateSeen: string[] };
   /** invalidate one /private session token (server-side logout) */
   revoke(token: string): void;
   /** mint a fresh valid session token, as /login would (stands in for a re-login in the browser) */
@@ -207,7 +208,12 @@ function cookies(req: IncomingMessage): Record<string, string> {
 }
 
 export async function startFixture(): Promise<Fixture> {
-  const state = { userQueryId: id22(), createQueryId: id22(), build: randomBytes(4).toString("hex") };
+  const state = {
+    userQueryId: id22(),
+    createQueryId: id22(),
+    build: randomBytes(4).toString("hex"),
+    lateSeen: [] as string[],
+  };
   const calls: FixtureCall[] = [];
   const seenSigs = new Set<string>();
   const revoked = new Set<string>();
@@ -271,6 +277,16 @@ export async function startFixture(): Promise<Fixture> {
     let m: RegExpMatchArray | null;
     if (p === "/") return html(200, page(state.build, LIST_USERS.map((n) => `<a href="/u/${n}">${n}</a>`).join(" ")));
     if (/^\/u\/[^/]+$/.test(p)) return html(200, page(state.build));
+    // A link whose own navigation starts late: its handler waits before it leaves the page.
+    if (p === "/late")
+      return html(
+        200,
+        `<!doctype html><html><body><a id="go" href="/late/target">target</a><script>document.getElementById("go").addEventListener("click",e=>{e.preventDefault();setTimeout(()=>location.assign("/late/target"),400)})</script></body></html>`,
+      );
+    if (p === "/late/target") {
+      state.lateSeen.push(String(req.headers["sec-fetch-site"]));
+      return html(200, `<!doctype html><html><body><h1 id="arrived">target</h1></body></html>`);
+    }
     if (p === "/search" || p === "/cal") return html(200, page(state.build));
     // A sign-in kept in localStorage, as a single-page app keeps its token: the page says what it found, then stores one.
     if (p === "/keeps-token")

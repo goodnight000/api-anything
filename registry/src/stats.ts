@@ -2,7 +2,8 @@
  * The public aggregate stats (`GET /v1/stats`, the home page's strip) and which sites installs taught.
  * Only counts leave here: never a key, a network hash or anything that tells one install from another.
  */
-import type { ServedSite } from "../../src/registry-api.js";
+import type { ServedSite, Status } from "../../src/registry-api.js";
+import { REVIEW_CATEGORIES, type ReviewCategory, reviewCategory } from "../../src/review.js";
 import { confirmed } from "./catalog.js";
 import { SERVED, successRate } from "./rules.js";
 import { type D1Database, UNCOVERED } from "./store.js";
@@ -46,6 +47,39 @@ export interface PublicStats {
   community: { sites: number; operations: number; uploadsLast30Days: number };
   /** domains asked for in the demand window that no site covers */
   wanted: number;
+  /**
+   * versions installs uploaded in the last 30 days: by their status now, and the reasons of those in
+   * review by category (review.ts), each version once in each of its categories. Never a reason's own
+   * text, which can name a host or a cookie of what someone learned
+   */
+  uploads: { last30Days: number; byStatus: Record<Status, number>; reviewReasons: Record<ReviewCategory, number> };
+}
+
+const STATUSES: Status[] = ["candidate", "live", "degraded", "review", "archived", "blocked"];
+
+async function uploadFunnel(db: D1Database, since: string): Promise<PublicStats["uploads"]> {
+  const byStatus = Object.fromEntries(STATUSES.map((s) => [s, 0])) as Record<Status, number>;
+  const rows = await db
+    .prepare("SELECT status, COUNT(*) AS n FROM versions WHERE created_at >= ? AND uploader <> ? GROUP BY status")
+    .bind(since, SEED)
+    .all<{ status: Status; n: number }>();
+  for (const r of rows.results) if (Object.hasOwn(byStatus, r.status)) byStatus[r.status] = r.n;
+  const reviewReasons = Object.fromEntries(REVIEW_CATEGORIES.map((c) => [c, 0])) as Record<ReviewCategory, number>;
+  const held = await db
+    .prepare("SELECT reasons FROM versions WHERE status = 'review' AND created_at >= ? AND uploader <> ?")
+    .bind(since, SEED)
+    .all<{ reasons: string | null }>();
+  for (const r of held.results) {
+    let reasons: unknown;
+    try {
+      reasons = r.reasons ? JSON.parse(r.reasons) : [];
+    } catch {
+      reasons = [];
+    }
+    const found = new Set(Array.isArray(reasons) ? reasons.map((x) => reviewCategory(String(x))) : []);
+    for (const c of found) reviewReasons[c]++;
+  }
+  return { last30Days: Object.values(byStatus).reduce((a, b) => a + b, 0), byStatus, reviewReasons };
 }
 
 const DAY = 86_400_000;
@@ -264,5 +298,6 @@ export async function publicStats(
       uploadsLast30Days: uploads?.n ?? 0,
     },
     wanted: wanted?.n ?? 0,
+    uploads: await uploadFunnel(db, ago(30)),
   };
 }

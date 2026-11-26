@@ -12,6 +12,7 @@ import {
   headlessUserAgent,
   pageFetch,
   runTrigger,
+  takenOver,
   waitReport,
 } from "../src/browser.js";
 import { learnGuard } from "../src/heal.js";
@@ -99,6 +100,28 @@ describe("browser", { skip: !browserAvailable() && "no Chromium browser installe
     const gql = r.exchanges.find((e) => e.request.url.includes("/UserByName?"));
     assert.match(decodeURIComponent(gql?.request.url ?? ""), /"name":"bob"/);
     assert.equal(r.finalUrl, `${fx.url}/u/bob`);
+  });
+
+  test("softFrom waits for a link whose navigation starts late, instead of loading the target itself", async () => {
+    // the link leaves the page 400 ms after its click: a page that looks quiet at once has not routed yet
+    fx.state.lateSeen.length = 0;
+    const r = await runTrigger({ url: `${fx.url}/late/target`, softFrom: `${fx.url}/late`, profileDir });
+    assert.equal(r.finalUrl, `${fx.url}/late/target`);
+    // one load, and the page's own: a load typed into the address bar comes from no site
+    assert.deepEqual(fx.state.lateSeen, ["same-origin"]);
+  });
+
+  test("takenOver: a load interrupted by a navigation to its own address, and no other failure", () => {
+    const u = "http://127.0.0.1:43327/u/bob";
+    // Playwright's words, as a run under load reported them
+    const said = (to: string) =>
+      `page.goto: Navigation to "${u}" is interrupted by another navigation to "${to}"\nCall log:\n  - navigating to "${u}"`;
+    assert.equal(takenOver(said(u), u), true);
+    assert.equal(takenOver(said(u), "http://127.0.0.1:43327/u/bob#top"), false);
+    assert.equal(takenOver(said("http://127.0.0.1:43327/login"), u), false, "sent somewhere else");
+    assert.equal(takenOver(said("about:blank"), u), false);
+    assert.equal(takenOver("page.goto: net::ERR_CONNECTION_REFUSED", u), false);
+    assert.equal(takenOver(said(u), "not a url"), false);
   });
 
   test("softFrom on a client-routed SPA stays in the app: through its own link, or history + popstate", async () => {

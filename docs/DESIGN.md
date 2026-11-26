@@ -1583,9 +1583,10 @@ records no attempt, `learn_site` asks no sharing question, and a call (CLI or MC
 lacks says it is local-only and how to turn that off. `test/local-only.test.ts` points the registry at a
 localhost server that counts connections and runs each path with local-only on: none connects.
 
-**The catalog's one request to a site.** The service never calls a site for an install: every call runs
+**The catalog's requests to a site.** The service never calls a site for an install: every call runs
 on the user's machine, from its address and with its sessions, which is what lets the ladder reach sites
-that block datacenters. The single exception is a visitor's try (`GET /v1/try/:site/:op`,
+that block datacenters. There are two exceptions, and neither calls for an install: the registry's
+replay of a missing clean replay (below), and a visitor's try (`GET /v1/try/:site/:op`,
 `registry/src/try.ts`; docs/REGISTRY.md "Trying an op from the catalog"), so that someone without Node 22
 can see what an op answers before installing. It is narrow on purpose, because each try is a request the
 catalog sends in its own name from Cloudflare's addresses: only ops in a list in the code (a few bundled
@@ -1599,6 +1600,22 @@ takes from, an 8 s timeout, a 1 MB cap, and a 10-minute cache.
 It reuses `buildRequest`, `judge` and `capOutput`, so its answer is a `CallResult` (with `via:
 "catalog-try"`). The Worker var `TRY_ENABLED` turns it off without a code change. A try reports nothing:
 it says how the site answers Cloudflare, not an install, so it counts toward no promotion.
+
+**The registry's replay of a missing clean replay.** The other request the Worker sends
+(`registry/src/replay.ts`; docs/REGISTRY.md "Replaying a skipped clean replay") supplies evidence an
+upload lacked: a version held for review for one reason, `its clean replay was skipped, not ok`, from a
+client older than the one that runs the replay itself (Publish, below) or one that could not run it then.
+The every-minute cron replays a few such versions once each through try's sender (`fetchCapped`) and its
+guards (`sendRefusal`: a plain GET at `minTier` 1 with no ref, lookup or `public` name, learned signed
+out, https on port 443 to a public host on its site's domain; every redirect hop to the op's own origin;
+the timeout, the size cap and the day's total of sends), with the op's published examples. It asks the
+review rules again as they stand, with an ok replay: a version they would hold for anything else, one
+with no example for a required param, or one that is no plain GET is marked `unreplayable` and never
+tried, which counts as no attempt. An ok answer the op's recipe extracts something from makes the
+version a candidate, removes the reason and adds `registryReplay: {at, outcome}` to its evidence, the
+uploader's `cleanReplay` left as sent; anything else leaves it in review, and a version is tried at most
+3 times, a day apart at least. It is no report: it counts toward no promotion and never makes a version
+live. Off whenever `TRY_ENABLED` is.
 
 **The one question, asked once.** A plugin install, `claude mcp add` or `npm -g` never runs setup, so
 `learn_site` asks the same question the first time it reaches the share step (the holdout answered and
@@ -1893,6 +1910,34 @@ check `learn_site` records from its holdout call (`purpose: "learn_site holdout"
 whose values the agent chose as neither of the user's examples; a check recorded with
 `api-anything check` needs consent. It is sent signed to `POST /v1/versions`, and the answer's hash and status
 become the local op's `version`.
+
+**The clean replay at upload.** An op about to go up with no clean replay on record (the caller's
+evidence, as learn_site and a heal-back pass it, or what a learn_site proved of this version,
+`proofOf`) gets one first, in `shareOps`: `replayClean`, `cleanCall` with the op's own examples, so an op
+made with `add` goes up `ok`, `blocked` or `failed` instead of `skipped`. It runs only for an op that
+goes up: with `consent`, or automatically when sharing is on and the op would be public with an ok
+replay and holds nothing of the user's own. Local-only, sharing off or unanswered, and an op that waits
+for a yes send nothing to the site. It cannot run (`review.ts` `unreplayable`) on a write, an op at
+`minTier` above 1 (plain HTTP says nothing of a page the browser must run) or one with no example or
+default for a required param: that op goes up `skipped`, as before. It is one request, at the site's pace
+and inside its budget (`sitePace`, `budgetCheck`) and cool-down; a site that is cooling down, a spent
+budget, or the site answering `rate` (which starts a cool-down, as after any call) sends no upload now,
+since a re-upload of the same version is a duplicate that changes nothing: the outcome says so with a
+`next`. An op learned over MCP or a pulled site's op goes only to public addresses (`publicOnly`). The
+result is not kept: a second share of the same op replays again. A failed replay still uploads; the
+registry holds it, and the outcome carries `cleanReplay` and `cleanReason`. `publish`'s preview sends
+nothing to the site and says per op what the replay will be (`cleanReplay`: on record, `skipped` and
+why, or "will run on publish").
+
+**Held for review.** An upload the registry answers `review` comes back from `shareOps` with `reason`
+(served only to this install until a maintainer approves it, and each registry reason in words),
+`held` (each reason, its category and its words: `review.ts`, the fixed categories the registry's stats
+count) and `next`. The only step that changes anything is a new version that passes: a read held only
+for a skipped replay that lacks an example gets the `add ... --example` and `publish --yes` that make
+one; anything else is "nothing to do but wait for a maintainer", since a re-upload of the same version
+is a duplicate. The local op's `version` keeps the categories (`review`), so `status` shows a
+`review` problem with the same words and `next` from the local files alone; `learn_site`'s `next`
+carries them, and `publish --yes` names the ops held.
 
 **Publish.** `api-anything publish <site> [op ...]` is the human's way to share: without `--yes` it
 previews each upload exactly as it would be sent, what was stripped, every warning, what may be the

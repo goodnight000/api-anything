@@ -1,8 +1,16 @@
 /** The registry's SQL over D1. Only the D1 surface below is used, so a test can stand in for it (test/d1.ts). */
-import type { Evidence, Outcome, SiteContext, Status } from "../../src/registry-api.js";
+import {
+  type Evidence,
+  type Outcome,
+  requestSig,
+  type SiteContext,
+  type Status,
+  triggerSig,
+} from "../../src/registry-api.js";
 import type { Operation } from "../../src/spec.js";
 import { interfaceAddress } from "../../src/vet.js";
 import { ABOUT_OP, type Archivable, type Facts, SERVED } from "./rules.js";
+import type { SiteHeld } from "./upload.js";
 
 export interface D1Statement {
   bind(...values: unknown[]): D1Statement;
@@ -52,6 +60,14 @@ export interface VersionRow {
   stats_at: string | null;
   /** 1 while a report waits for a recount that was held back */
   pending: number;
+  /** what its uploader's client proved (Evidence), as JSON */
+  evidence: string;
+  /** the claim (fingerprint) it answers */
+  claim?: string | null;
+  /** the registry's own clean replays of it (replay.ts): attempts made, the last one's time and outcome */
+  replays?: number;
+  replayed_at?: string | null;
+  replay_outcome?: string | null;
 }
 
 /** A version's recent reports, counted: each install once, by its latest outcome. */
@@ -398,6 +414,31 @@ export async function siteOps(
 }
 
 /**
+ * What the registry holds of `site` for an upload of the op `opName`, as `reviewReasons` reads it.
+ * `bound`: the site's row, when the name is taken.
+ */
+export async function siteHeld(
+  db: D1Database,
+  site: Pick<SiteContext, "name" | "domain">,
+  bound: SiteRow | null,
+  opName: string,
+): Promise<SiteHeld> {
+  const ops = await siteOps(db, site.name, site.domain);
+  const loginCookies = bound?.login_cookies ? (JSON.parse(bound.login_cookies) as string[]).length > 0 : false;
+  const live = await incumbent(db, site.name, opName);
+  // what it sends and opens is read from its stored operation: a row's `sig` holds only what its uploader declared
+  const liveOp = live ? (JSON.parse(live.operation) as Operation) : undefined;
+  return {
+    opNames: ops.opNames,
+    login: loginCookies || ops.loginOp,
+    established: ops.established,
+    ...(live && liveOp
+      ? { incumbent: { match: live.sig, request: requestSig(liveOp), trigger: triggerSig(liveOp) } }
+      : {}),
+  };
+}
+
+/**
  * An op's incumbent: of its live and degraded versions, the one live the longest, with its match signature
  * and its operation. Degraded counts, so degrading the incumbent first does not move the reference.
  */
@@ -672,3 +713,63 @@ export async function interfacesOf(
   for (const [d, list] of out) out.set(d, list.sort((a, b) => b.confirmations - a.confirmations).slice(0, 10));
   return out;
 }
+
+/* ------------------------------------------------------------------ replays */
+
+/** A replay's outcome that keeps a version out of the queue for good, counted as no attempt. */
+export const UNREPLAYABLE = "unreplayable";
+
+/**
+ * Review versions held for `reasons` (JSON, as stored) and nothing else, oldest first, with fewer than
+ * `maxAttempts` replays, the last one before `dueBefore`, and none found unreplayable.
+ */
+export async function replayQueue(
+  db: D1Database,
+  reasons: string,
+  maxAttempts: number,
+  dueBefore: string,
+  limit: number,
+): Promise<VersionRow[]> {
+  return (
+    await db
+      .prepare(
+        `SELECT * FROM versions WHERE status = 'review' AND reasons = ? AND replays < ?
+          AND (replay_outcome IS NULL OR replay_outcome <> '${UNREPLAYABLE}')
+          AND (replayed_at IS NULL OR replayed_at <= ?)
+        ORDER BY replays, created_at LIMIT ?`,
+      )
+      .bind(reasons, maxAttempts, dueBefore, limit)
+      .all<VersionRow>()
+  ).results;
+}
+
+/** Records a replay of a version still in review: `counted` adds an attempt and its time. */
+export const markReplay = (db: D1Database, hash: string, outcome: string, at: string, counted: boolean) =>
+  db
+    .prepare(
+      "UPDATE versions SET replay_outcome = ?, replays = replays + ?, replayed_at = CASE WHEN ? THEN ? ELSE replayed_at END WHERE hash = ? AND status = 'review'",
+    )
+    .bind(outcome, counted ? 1 : 0, counted ? 1 : 0, at, hash)
+    .run();
+
+/** Takes back the count of a replay that was never sent: the version's attempts, time and outcome as `was` holds them. */
+export const restoreReplay = (db: D1Database, was: VersionRow) =>
+  db
+    .prepare(
+      "UPDATE versions SET replays = ?, replayed_at = ?, replay_outcome = ? WHERE hash = ? AND status = 'review'",
+    )
+    .bind(was.replays ?? 0, was.replayed_at ?? null, was.replay_outcome ?? null, was.hash)
+    .run();
+
+/**
+ * A replay that answered ok (its attempt is counted already, when it started): the version becomes a
+ * candidate with no reason, its evidence says so. Only
+ * while it is still in review for `reasons` alone: a maintainer's decision in between stands.
+ */
+export const promoteReplayed = (db: D1Database, hash: string, reasons: string, evidence: Evidence, at: string) =>
+  db
+    .prepare(
+      "UPDATE versions SET status = 'candidate', reasons = NULL, evidence = ?, updated_at = ?, replayed_at = ?, replay_outcome = 'ok' WHERE hash = ? AND status = 'review' AND reasons = ?",
+    )
+    .bind(JSON.stringify(evidence), at, at, hash, reasons)
+    .run();

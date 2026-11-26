@@ -986,6 +986,9 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       else if (yes === undefined)
         next = `ask the user whether to share ${op} with the catalog (${shared.reason ?? "it needs their yes"})${found ? `, showing them what may be theirs: ${found.join("; ")}` : ""}; only on their yes, run: ${publish}`;
     }
+    // held for review: `shared.reason` says why, and this what to do about it
+    if (shared.shared && shared.status === "review" && shared.next)
+      next = `tell the user: ${shared.reason}; ${shared.next}`;
     if (!shared.shared && !loadSettings().askedAt && !localOnly()) {
       next = next
         ? `${next}. ${ASK}`
