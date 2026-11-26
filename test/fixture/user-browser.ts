@@ -63,8 +63,13 @@ export async function stopUserBrowser(b: UserBrowser | undefined): Promise<void>
     b.proc.kill("SIGKILL");
     await exited;
   }
-  // its helper processes may still be writing for a moment after it went
-  rmSync(b.dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  // Its helper processes may still be writing for a while after it went (seen under a full suite's
+  // load: ENOTEMPTY after 2 s of retries). A temporary profile left behind fails nothing.
+  try {
+    rmSync(b.dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  } catch {
+    /* left in the temp directory */
+  }
 }
 
 /** The browser's open tabs, as its own DevTools endpoint lists them. */
