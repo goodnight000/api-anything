@@ -1,7 +1,7 @@
 {
   "name": "api-anything",
   "description": "API Anything: call websites as APIs from your agent, from a shared catalog of operations agents learned.",
-  "owner": { "name": "Tianjun Zheng", "url": "https://github.com/goodnight000" },
+  "owner": { "name": "Charles Zheng", "url": "https://charleszheng.com" },
   "plugins": [
     {
       "name": "api-anything",
