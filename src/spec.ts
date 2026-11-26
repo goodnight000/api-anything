@@ -312,6 +312,12 @@ export const SiteSchema = z.object({
   /** cookie names whose presence means logged in (overrides the heuristic) */
   loginCookies: z.array(z.string()).optional(),
   /**
+   * Other registrable domains people know the site by (imdb.com for a spec whose requests go to
+   * media-imdb.com): a search by one finds the site. A search key only, never a host an op may call, a
+   * cookie's site or a session's (vet.ts `aliasProblems`).
+   */
+  aliases: z.array(z.string()).optional(),
+  /**
    * The site's request budget, over the default pacing: a longer gap between sends, and a cap on
    * requests an hour. A call that would exceed it answers `rate` without sending. API_ANYTHING_PACE overrides it.
    */

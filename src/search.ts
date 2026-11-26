@@ -48,6 +48,8 @@ export const IndexEntrySchema = z.object({
   description: text.optional(),
   /** the registrable domains the spec's ops send to or open: what a search by domain or URL matches */
   domains: z.array(HOST).max(50),
+  /** other domains the site is known by (spec.ts `aliases`): matched too, below `domains` */
+  aliases: z.array(HOST).max(LIMITS.aliases).optional(),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   operations: z.array(IndexOpSchema).max(LIMITS.operations),
 });
@@ -63,6 +65,7 @@ export function indexEntry(site: Site, text: string): IndexEntry {
     domains: [
       ...new Set([new URL(site.baseUrl).hostname, ...site.operations.flatMap(hostsOf)].map((h) => siteOf(h))),
     ].sort(),
+    ...(site.aliases?.length ? { aliases: [...site.aliases].sort() } : {}),
     sha256: createHash("sha256").update(text).digest("hex"),
     operations: site.operations.map((op) => ({
       ...summarize(op),
@@ -101,7 +104,7 @@ export function domainOf(query: string): string | undefined {
   }
 }
 
-type SearchEntry = Pick<IndexEntry, "site" | "displayName" | "description" | "domains"> & {
+type SearchEntry = Pick<IndexEntry, "site" | "displayName" | "description" | "domains" | "aliases"> & {
   operations: { op: string; description?: string }[];
 };
 
@@ -144,13 +147,17 @@ export function operationMatch(op: SearchEntry["operations"][number], query: str
   return { matched, unmatched };
 }
 
+/** A domain or URL query's score: on a domain the site's ops call, or on one it is known by, ranked below. */
+const DOMAIN_SCORE = 100;
+const ALIAS_SCORE = 90;
+
 /** Shared lexical ranking and its explanation, for the client and Worker. */
 export function matchQuery(e: SearchEntry, query: string): QueryMatch & { score: number } {
   const domain = domainOf(query);
-  if (domain)
-    return e.domains.includes(domain)
-      ? { score: 100, matched: [domain], unmatched: [] }
-      : { score: 0, matched: [], unmatched: [domain] };
+  if (domain) {
+    const score = e.domains.includes(domain) ? DOMAIN_SCORE : e.aliases?.includes(domain) ? ALIAS_SCORE : 0;
+    return score ? { score, matched: [domain], unmatched: [] } : { score: 0, matched: [], unmatched: [domain] };
+  }
   const name = words(e.site);
   const title = words(`${e.displayName ?? ""} ${e.domains.join(" ")}`);
   const about = words(e.description ?? "");
@@ -169,3 +176,18 @@ export function matchQuery(e: SearchEntry, query: string): QueryMatch & { score:
 }
 
 export const score = (e: SearchEntry, query: string): number => matchQuery(e, query).score;
+
+/**
+ * Whether two registrable domains are one brand in two regions: on ICANN public suffixes that differ, with
+ * the same label before each (amazon.in and amazon.com, example.co.uk and example.com.au), by the Public
+ * Suffix List. A domain on a private suffix (foo.github.io) is someone's own, related to nothing.
+ */
+export function relatedDomain(a: string, b: string): boolean {
+  const icann = (d: string) => {
+    const p = parse(d, { allowPrivateDomains: true });
+    return p.domain === d && p.isIcann && !p.isPrivate && p.domainWithoutSuffix ? p : undefined;
+  };
+  const x = icann(a);
+  const y = icann(b);
+  return !!x && !!y && x.domainWithoutSuffix === y.domainWithoutSuffix && x.publicSuffix !== y.publicSuffix;
+}

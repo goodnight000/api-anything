@@ -554,6 +554,10 @@ export const wantDomain = (db: D1Database, domain: string, network: string, now:
     .bind(domain, network, now)
     .run();
 
+/** A demand row no site covers: none is on its domain, and none is known by it (an alias). */
+export const UNCOVERED =
+  "NOT EXISTS (SELECT 1 FROM sites s WHERE s.domain = d.domain) AND NOT EXISTS (SELECT 1 FROM aliases a WHERE a.domain = d.domain)";
+
 /** Domains asked for since `since` that no shared site answers yet, by how many networks asked. */
 export async function demandList(
   db: D1Database,
@@ -563,7 +567,7 @@ export async function demandList(
   const { results } = await db
     .prepare(
       `SELECT d.domain, COUNT(*) AS networks, MAX(d.at) AS lastAt FROM demand d
-       WHERE d.at >= ? AND NOT EXISTS (SELECT 1 FROM sites s WHERE s.domain = d.domain)
+       WHERE d.at >= ? AND ${UNCOVERED}
        GROUP BY d.domain ORDER BY networks DESC, lastAt DESC LIMIT ?`,
     )
     .bind(since, limit)
@@ -575,11 +579,8 @@ export async function demandList(
 export const demandFor = async (db: D1Database, domain: string, since: string) =>
   (
     await db
-      .prepare(
-        `SELECT COUNT(*) AS networks FROM demand WHERE domain = ? AND at >= ?
-         AND NOT EXISTS (SELECT 1 FROM sites s WHERE s.domain = ?)`,
-      )
-      .bind(domain, since, domain)
+      .prepare(`SELECT COUNT(*) AS networks FROM demand d WHERE d.domain = ? AND d.at >= ? AND ${UNCOVERED}`)
+      .bind(domain, since)
       .first<{ networks: number }>()
   )?.networks ?? 0;
 
@@ -591,6 +592,30 @@ export const sitesOn = async (db: D1Database, domain: string) =>
       .bind(domain)
       .all<{ name: string }>()
   ).results.map((r) => r.name);
+
+/* ------------------------------------------------------------------ aliases */
+
+/** Every site's aliases, by site name, each list sorted. */
+export async function aliasesBySite(db: D1Database, site?: string): Promise<Map<string, string[]>> {
+  const { results } = await db
+    .prepare(`SELECT domain, site FROM aliases${site ? " WHERE site = ?" : ""} ORDER BY domain`)
+    .bind(...(site ? [site] : []))
+    .all<{ domain: string; site: string }>();
+  const out = new Map<string, string[]>();
+  for (const r of results) out.set(r.site, [...(out.get(r.site) ?? []), r.domain]);
+  return out;
+}
+
+/** The site known by `domain`, if any. */
+export const aliasOwner = async (db: D1Database, domain: string) =>
+  (await db.prepare("SELECT site FROM aliases WHERE domain = ?").bind(domain).first<{ site: string }>())?.site;
+
+/** Replaces a site's aliases with `domains`. */
+export const setAliases = (db: D1Database, site: string, domains: string[]) =>
+  db.batch([
+    db.prepare("DELETE FROM aliases WHERE site = ?").bind(site),
+    ...domains.map((d) => db.prepare("INSERT INTO aliases (domain, site) VALUES (?, ?)").bind(d, site)),
+  ]);
 
 export const forgetDemand = (db: D1Database, before: string) =>
   db.prepare("DELETE FROM demand WHERE at < ?").bind(before).run();

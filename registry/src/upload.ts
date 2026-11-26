@@ -22,6 +22,13 @@ export const SiteContextSchema = z.object({
   notes: z.string().optional(),
 });
 
+/**
+ * A seed's site: an upload's, with the aliases a maintainer gives it. An upload's are dropped with every
+ * other field `SiteContextSchema` does not name: an alias says searches for a domain should get the site,
+ * which is no stranger's to say.
+ */
+export const SeedSiteSchema = SiteContextSchema.extend({ aliases: z.array(z.string().max(253)).max(50).optional() });
+
 const Tier = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 const UploadSchema = z.object({
   site: SiteContextSchema,
@@ -78,6 +85,7 @@ export function refusals(site: SiteContext, ops: Operation[]): string[] {
     description: site.description,
     loginCookies: site.loginCookies,
     pace: site.pace,
+    aliases: site.aliases,
     operations: ops,
   });
   if (!spec.success) return issues(spec.error);

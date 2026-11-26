@@ -32,6 +32,9 @@ are how to polish a site by hand, for `sites/` or before you publish one:
    - set `displayName` and `description`;
    - add a `description` to each op and param;
    - add `loginCookies` (the cookie names that mean "signed in") if the site needs an account;
+   - add `aliases` when the ops call a domain people don't type (`imdb` calls media-imdb.com, so
+     `"aliases": ["imdb.com"]`): only a domain the site's own trigger URLs or notes name, so a search
+     for it finds the site. An alias is a search key, never a host the ops may call;
    - check that the kept `example` values are public and harmless (a well-known account, not
      yours), so `verify` works for others.
 5. Write `sites/<site>.md`, the notes every `ops` and `list_operations` call sends: only what a
