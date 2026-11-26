@@ -359,7 +359,9 @@ An ok answer that the op's own recipe extracts something from (not an empty list
 `candidate`: the reason goes, and its evidence gains `registryReplay: {at, outcome: "ok"}` beside the
 uploader's `cleanReplay`, which stays as sent. Anything else (an error status, an empty answer, a
 redirect off its origin, a timeout) leaves it in review and counts an attempt; a version is tried at
-most 3 times, at least a day apart, and never after. An upload cannot claim a replay: the upload schema
+most 3 times, at least a day apart, and never after. The attempt is counted before the request leaves, so
+a version whose answer ends the tick (the Worker's own limits, on a body and a recipe its uploader chose)
+is not first in line again the next minute; only a send the day's budget refused is taken back. An upload cannot claim a replay: the upload schema
 has no such field. The replay is evidence, not a report: it counts toward no promotion, never makes a
 version `live`, and the background-verification rules that keep candidates on a site with no live op
 from verifying installs are unchanged.
