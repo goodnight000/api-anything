@@ -27,11 +27,12 @@ import {
   attached,
   attachLock,
   attachSetting,
+  lockRefused,
   ownProfileRefused,
 } from "./attach.js";
 import { botWall } from "./classify.js";
 import { MAX_BODY_BYTES } from "./http.js";
-import { claim } from "./lock.js";
+import { claim, lockPath } from "./lock.js";
 import { browserProxy, proxied } from "./proxy.js";
 import { SIGN_IN_AUTOCOMPLETE, SIGN_IN_REFUSAL } from "./secrets.js";
 import { home, siteOf, writePrivate } from "./session.js";
@@ -356,7 +357,10 @@ async function guest(): Promise<BrowserContext> {
   const { host } = new URL(endpoint);
   // One process at a time, as with the profile: another DevTools client takes this one's tabs for the
   // browser's own and answers their dialogs (seen: a confirm a write's learning accepts, dismissed).
-  const release = await claim(attachLock(host), LOCK_WAIT_MS);
+  const file = attachLock(host);
+  const release = await claim(file, LOCK_WAIT_MS).catch((e) => {
+    throw lockRefused(host, lockPath(file), e);
+  });
   if (!release)
     throw new ProfileInUse(
       host,
@@ -406,13 +410,101 @@ async function leave(ctx: Promise<BrowserContext>): Promise<void> {
   locks.get(browser)?.();
 }
 
-/** The jar's cookies for a run in api-anything's context of an attached browser; its own profile holds them already. */
-async function seed(ctx: BrowserContext, jar: StoredCookie[] = []): Promise<void> {
-  if (!guests.has(ctx)) return;
+/** A run in api-anything's context of an attached browser, by the cookies of one site it was seeded with. */
+interface Carry {
+  site: string;
+  /** the cookies put in, or "none" for a run that carries no stored cookies */
+  key: string;
+  runs: number;
+  /** the site cleared and the cookies put in */
+  ready: Promise<void>;
+  freed: Promise<void>;
+  free: () => void;
+}
+/** per attached context, per site: the runs in flight and what they were seeded with */
+const carrying = new WeakMap<BrowserContext, Map<string, Carry>>();
+
+/** A registrable domain and every host under it, as a cookie's domain names one. */
+const under = (site: string) => new RegExp(`(^|\\.)${site.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
+/**
+ * Put into api-anything's context of an attached browser what a run may carry, and nothing else of
+ * its site: the site's cookies are cleared, then `jar`'s are added (undefined: a run that may carry
+ * none). The site is the registrable domain of `url` and of each cookie put in, the scope a run's
+ * cookies are read back in. The context is shared by the process's runs, so one seeded otherwise
+ * waits (up to `waitMs`, then ProfileInUse) for those in flight on the same site to end: clearing
+ * for it would take their cookies. One seeded alike joins them, as in api-anything's own profile.
+ * Returns what the run calls when it ends. In api-anything's own profile nothing happens: it holds
+ * the jar already.
+ */
+async function seed(ctx: BrowserContext, url: string, jar: StoredCookie[] | undefined, waitMs: number) {
+  if (!guests.has(ctx)) return () => {};
   const now = Date.now() / 1000;
-  // one at a time: the browser refuses a whole batch for one cookie it will not take
-  for (const c of jar)
-    if (!(c.expires > 0 && c.expires <= now)) await ctx.addCookies([toPlaywright(c)]).catch(() => {});
+  const live = (jar ?? []).filter((c) => !(c.expires > 0 && c.expires <= now));
+  const key = jar
+    ? JSON.stringify(live.map((c) => [c.name, c.domain.toLowerCase(), c.path || "/", c.value]).sort())
+    : "none";
+  const host = (d: string) => d.replace(/^\./, "").toLowerCase();
+  const sites = [...new Set([new URL(url).hostname, ...live.map((c) => c.domain)].map((h) => siteOf(host(h))))];
+  const held = carrying.get(ctx) ?? new Map<string, Carry>();
+  carrying.set(ctx, held);
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const other = sites.map((s) => held.get(s)).find((c) => c && c.key !== key);
+    if (!other) break;
+    const left = until - Date.now();
+    const ended = other.freed.then(() => true);
+    const freed = left > 0 && (await within(ended, false, left));
+    if (!freed)
+      throw new ProfileInUse(
+        other.site,
+        `api-anything's context in the attached browser (API_ANYTHING_CDP) stayed in use by another call to ${other.site} that carries other cookies`,
+      );
+  }
+  const fresh = sites.filter((s) => !held.has(s));
+  const ready = (async () => {
+    for (const s of fresh) await ctx.clearCookies({ domain: under(s) });
+    // one at a time: the browser refuses a whole batch for one cookie it will not take
+    for (const c of live)
+      if (fresh.includes(siteOf(host(c.domain)))) await ctx.addCookies([toPlaywright(c)]).catch(() => {});
+  })();
+  for (const site of fresh) {
+    let free = () => {};
+    const freed = new Promise<void>((r) => (free = r));
+    held.set(site, { site, key, runs: 0, ready, freed, free });
+  }
+  const mine = sites.map((s) => held.get(s)!);
+  for (const c of mine) c.runs++;
+  let ended = false;
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    for (const c of mine)
+      if (--c.runs === 0) {
+        if (held.get(c.site) === c) held.delete(c.site);
+        c.free();
+      }
+  };
+  try {
+    await Promise.all(mine.map((c) => c.ready));
+  } catch (e) {
+    end();
+    throw e;
+  }
+  return end;
+}
+
+/**
+ * Attached: take `site`'s cookies out of api-anything's context in the browser, if one is open
+ * (`logout`). A run being seeded is let finish first, so nothing it puts in comes after. The user's
+ * own context is not touched.
+ */
+export async function forgetAttachedSite(site: string): Promise<void> {
+  const ctx = current?.key.startsWith("attached ") ? await current.ctx.catch(() => undefined) : undefined;
+  if (!ctx || !guests.has(ctx)) return;
+  const s = siteOf(site.toLowerCase());
+  await Promise.allSettled([...(carrying.get(ctx)?.values() ?? [])].filter((c) => c.site === s).map((c) => c.ready));
+  await ctx.clearCookies({ domain: under(s) });
 }
 
 /** What a call that saw an attached browser go away throws: the reason first, of the same kind. */
@@ -1046,13 +1138,18 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
 async function trigger(o: TriggerOptions): Promise<CaptureResult> {
   const timeout = o.timeoutMs ?? TRIGGER_BUDGET_MS;
   const deadline = Date.now() + timeout;
-  const release = hold();
+  const using = hold();
+  let uncarry = () => {};
+  const release = () => {
+    uncarry();
+    using();
+  };
   let ctx: BrowserContext;
   let page: Page;
   let tabs: Tabs | undefined;
   try {
     ctx = await openBrowser(o);
-    await seed(ctx, o.jar);
+    uncarry = await seed(ctx, o.url, o.jar, Math.max(0, deadline - Date.now()));
     // a guarded run does not start without the browser's record of who opens which tab
     if (o.intercept) tabs = await tabsOf(ctx);
     page = await ctx.newPage();
@@ -1812,9 +1909,10 @@ export async function pageFetch(o: {
 async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetchResult> {
   const timeoutMs = o.timeoutMs ?? 30_000;
   const release = hold();
+  let uncarry = () => {};
   try {
     const ctx = await openBrowser(o);
-    await seed(ctx, o.jar);
+    uncarry = await seed(ctx, o.url, o.jar, timeoutMs);
     await o.pace?.();
     const once = async (entry: OriginPage, hop: Hop, left: number) => {
       const { page } = entry;
@@ -2021,6 +2119,7 @@ async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetc
       throw e;
     }
   } finally {
+    uncarry();
     release();
   }
 }
@@ -2066,10 +2165,17 @@ async function loginWindow(
 ): Promise<{ opened: StoredCookie[]; closed: StoredCookie[] }> {
   const ctx = await openBrowser({ profileDir, headless: false });
   const own = guests.has(ctx);
-  await seed(ctx, jar);
-  const opened = siteCookies(await ctx.cookies(), url);
-  // attached: a tab of its own, never a page a call is using, shown in front where the browser lets it
-  const page = own ? await ctx.newPage() : (ctx.pages()[0] ?? (await ctx.newPage()));
+  const uncarry = await seed(ctx, url, jar, LOCK_WAIT_MS);
+  let opened: StoredCookie[];
+  let page: Page;
+  try {
+    opened = siteCookies(await ctx.cookies(), url);
+    // attached: a tab of its own, never a page a call is using, shown in front where the browser lets it
+    page = own ? await ctx.newPage() : (ctx.pages()[0] ?? (await ctx.newPage()));
+  } catch (e) {
+    uncarry();
+    throw e;
+  }
   if (own) await within(page.bringToFront(), undefined);
   // Playwright answers the window's dialogs, not the human: leaving or closing a page is never refused
   // (a dismissed beforeunload would keep it open), an alert is only read, a confirm or prompt declined.
@@ -2152,6 +2258,7 @@ async function loginWindow(
       process.stdin.off("data", onEnter);
       process.stdin.pause();
     }
+    uncarry();
     await closeBrowser();
   }
   return { opened, closed: siteCookies(snapshot, url) };

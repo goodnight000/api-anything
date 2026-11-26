@@ -373,7 +373,9 @@ api-anything is a guest there. It opens its own window, a separate context of th
 works only in it: your tabs, cookies and sign-ins in that browser are never read, navigated or
 cleared, and when it goes idle it closes its own tabs and disconnects, leaving the browser running.
 Its tabs carry the session `api-anything login` stored for your own specs, as api-anything's own
-browser would; a spec you pulled from the catalog gets none. Tier 1 is unchanged. Nothing about any
+browser would; a spec you pulled from the catalog, a bare call, `capture` and `learn_site` get
+none, even right after a call that carried it, and after `logout` no call carries the old sign-in.
+Tier 1 is unchanged. Nothing about any
 site's bot wall is promised or tested against a real site.
 
 To get past a bot challenge or a cookie-consent page there, follow the call's `next`:
@@ -396,8 +398,11 @@ Attached mode refuses, with a reason and a `next`:
   only), refreshing cookies from it on `auth`, and clearing it on `logout` (`logout` still
   removes the stored session, and says when api-anything's own profile kept the site's cookies;
   unset the variable and log out again to clear them);
-- a second api-anything process while one is attached: it waits up to 15 s, then fails with a
-  hint, as with the profile. Keep other automation off the port while api-anything uses it.
+- a second api-anything process of the same OS user while one is attached: it waits up to 15 s,
+  then fails with a hint, as with the profile. Keep other automation off the port while
+  api-anything uses it. The lock is kept in a directory of your own in the temp directory
+  (`api-anything-<uid>`), so another user's never gets in your way; a lock or directory there that
+  cannot be used is refused with a `next`.
 
 ### Health: `api-anything status [site]`
 
@@ -558,8 +563,12 @@ go — avoid heavy automated traffic on it. Other ways in:
   the second factor is done. It counts as a sign-in only if a login cookie appeared or changed while
   it was open. Without one, the cookies your own choices set there (a cookie-consent answer, a
   cleared challenge) are kept for the site and `login` answers `ok: true`, `loggedIn: false`, with
-  their names in `kept`; with none of those either, it answers `ok: false`, says why, and keeps the
-  session you had.
+  their names in `kept`, a `warning` and a `next`. Analytics and advertising cookies never count as
+  a choice. A kept cookie whose name api-anything cannot tell from a session cookie is said to maybe
+  carry an account, and `next` says what to do either way: retry the call if you answered a consent
+  page or cleared a challenge; if you signed in, list the session cookie's name in the spec's
+  `loginCookies` and open the window again. With none of those either, it answers `ok: false`, says
+  why, and keeps the session you had.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
 - `api-anything logout <site|url>` takes what `login` takes and names the site it logged out. It
   deletes the stored session (it needs no key, so it also resets a sealed session whose key is lost),

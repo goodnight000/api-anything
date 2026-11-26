@@ -816,8 +816,8 @@ drift.
 Its `next` leads to a step that works. A public read (no credential ref, learned signed out): the
 user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
 closes the window. The cookies the site set while it was open that are the visitor's own choices
-(`visitorChoices`: new or changed there, none every visitor is given unasked, none that shows a
-sign-in) are added to the site's jar, and nothing else of the profile, so tier 1 sends them; tiers 2
+(`visitorChoices`: new or changed there, none every visitor is given unasked, no analytics,
+advertising or CSRF name, none that shows a sign-in) are added to the site's jar, and nothing else of the profile, so tier 1 sends them; tiers 2
 and 3 send the profile's, which holds them. The spec gains no cookie value and no ref, so a shared spec
 and `vetShared` are unchanged, and the clean replay (`clean.ts`) still sends nothing of the user's:
 from a network the site walls, a consent-walled site's clean replay answers this `error`, and the op
@@ -1300,20 +1300,39 @@ attach to. A DevTools endpoint is full control of a browser.
   was neither stopped nor captured). In an attached browser a guarded page is therefore emptied
   with `location.replace("about:blank")`: with its history entry gone it cannot be kept, and it
   unloads under the seal. `test/attach.test.ts` runs the existing write-guard, socket-guard and
-  dialog tests attached, against a browser with pop-ups allowed (a user can allow a site's), since
+  dialog tests attached, and `test/stream.test.ts` whole (its event streams learned and called at
+  every tier, through the DevTools session per page that captures them), against a browser with pop-ups allowed (a user can allow a site's), since
   several of them need the tabs a page opens by script.
 - One api-anything process at a time is attached to a browser, as one holds the profile. Two
   DevTools clients of one browser each take the other's context for the default one, so each sees
   the other's tabs as tabs of the browser and answers their dialogs (seen: two test processes
   attached at once dismissed each other's confirms, and an order a read's learning should have
-  stopped reached the server). The lock is machine-wide, in the temp directory, keyed by the
-  address and port, not under a home; another process waits up to 15 s for it, then fails as
-  `ProfileInUse` does. A DevTools client that is not api-anything is not excluded: keep other
+  stopped reached the server). The lock is per OS user, keyed by the address and port, not under a
+  home: `api-anything-<uid>/api-anything-cdp-<host>_<port>.lk` in the temp directory, a directory
+  of the user's own (0700; one that is not a directory, is another user's, or is open to others is
+  refused as `AttachError` with a `next`). It used to be in the temp directory itself, which Linux
+  shares: once one user had attached to a port, another user's every attached call failed with
+  SQLite's "unable to open database file" and no `next`. A lock file that cannot be opened is
+  refused as `AttachError` with a `next` too, nothing sent. Another process of the same user waits
+  up to 15 s for it, then fails as `ProfileInUse` does. Two OS users attached to one browser at once
+  are not kept apart: each would need the other's DevTools port, which is full control of the
+  browser either way. A DevTools client that is not api-anything is not excluded: keep other
   automation off the port while api-anything uses it.
 - Sessions. The context starts empty. For the user's own specs, a call's tier-2 page and its
   trigger run, a heal's recapture and `add`'s runs first get the site's stored cookies, what tier 1
   may send and api-anything's profile would hold already (`jar`); someone else's spec (`shared`),
-  a bare call, `capture` and `learn_site` get none. What a run's pages set is merged into the jar
+  a bare call, `capture` and `learn_site` get none. The context outlives a run (until idle close),
+  so before each run, page fetch and window it holds exactly that of the run's site and nothing
+  else of it (`seed`): the site's cookies are cleared from api-anything's context, then the jar's
+  put in. The site is the registrable domain of the run's page and of each cookie put in, the scope
+  a run's cookies are read back in. Without that, a bare run following one of the user's own spec
+  within the idle window carried the user's session, and a call after `logout` still sent the old
+  sign-in, which a tier-3 run then merged back into the jar. The runs of one process share the
+  context, so a run seeded with other cookies than those in flight on the same site waits for them
+  to end (within its own time budget; a window up to 15 s), then fails as `ProfileInUse`, sent
+  nothing: clearing for it would take theirs. Runs seeded alike run together, sharing what the site
+  sets meanwhile, as in api-anything's own profile. `logout` takes the site's cookies out of an
+  open context at once, after any seeding in progress. What a run's pages set is merged into the jar
   as after any browser run: those cookies are api-anything's context's, never the user's. Tier 1 is
   unchanged: it sends from the sealed session file, and nothing reads the attached browser's
   cookies.
@@ -2372,8 +2391,19 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   replaced and `login` answers `ok: true` with the `renewed` names. With no sign-in, the cookies the
   visitor's own choices set there (a consent answered, a challenge cleared: `visitorChoices`, see
   "A consent wall" under the classifier) are added to the jar alone, and `login` answers `ok: true`,
-  `loggedIn: false`, with their names in `kept` and a `warning` saying so; the session's `source`
-  stays as it was. With none of those either, it answers `ok: false`
+  `loggedIn: false`, with their names in `kept`, a `warning` and a `next` (`windowAnswer`, the
+  same over MCP and on the CLI, which exits 0); the session's `source` stays as it was. Analytics,
+  advertising and CSRF names (`UNASKED_COOKIE`) are never a choice: a window in which only those
+  appeared keeps nothing (before, a user who closed the window on a site with analytics got
+  `ok: true`, and an agent that came from `auth` retried into `auth` again). A kept cookie whose
+  name is a known consent or challenge record (`ANSWER_COOKIE`) is described as one, and `next`
+  says to retry the call. Any other kept name may carry an account (`mayCarryAccount`): a sign-in
+  whose session cookie no rule knows (PHPSESSID, connect.sid, JSESSIONID) looks the same as a
+  consent cookie of a name no rule knows. Such a cookie is never called a consent: the `warning`
+  says it may carry an account, and `next` covers both cases, retrying the call if the user
+  answered a consent page or cleared a challenge, and listing the name that is the sign-in in the
+  spec's `loginCookies` and opening the window again if they signed in. A session holding such a
+  cookie is never judged public (`isPublic`), as any other. With none of those either, it answers `ok: false`
   with why (no login cookie appeared, or the ones held at opening did not change) and keeps the stored
   session. The window does not close itself when a login cookie appears: a site can set its session
   cookie before a second factor, a consent page or the redirect back from an identity provider is done,

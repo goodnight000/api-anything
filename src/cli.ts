@@ -40,11 +40,11 @@ import {
   ImportRefused,
   importSession,
   importWarning,
-  keptNote,
   knownGuests,
   logout,
   resolveLoginTarget,
   strayLogin,
+  windowAnswer,
   windowLogin,
   windowRetry,
 } from "./login.js";
@@ -672,15 +672,7 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
         source: "window",
         cookies: cookieNames(w.cookies),
       });
-    out({
-      ok: true,
-      site,
-      source: "window",
-      cookies: cookieNames(w.cookies),
-      loggedIn: !w.kept,
-      renewed: w.renewed,
-      ...(w.kept ? { kept: w.kept, warning: keptNote(site, w.kept) } : {}),
-    });
+    out(windowAnswer(site, w, `api-anything login ${site} --window`));
     return 0;
   };
 

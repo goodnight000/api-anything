@@ -4,6 +4,7 @@
  * so only a loopback one is used, and nothing is ever discovered: unset, nothing here runs.
  */
 import { lookup } from "node:dns/promises";
+import { lstatSync, mkdirSync } from "node:fs";
 import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -57,11 +58,46 @@ export const learnAgain = (again: string, what: string, site = "<site>", op = "<
 const loopback = (ip: string) => (isIP(ip) === 4 ? ip.startsWith("127.") : ip === "::1" || /^::ffff:127\./i.test(ip));
 
 /**
- * The lock one api-anything process holds while it is attached to the browser at `host` (host:port).
- * Machine-wide, not under a home: two processes driving one browser see each other's tabs as the
- * browser's own and answer their dialogs, whichever home each runs from.
+ * The directory of this OS user's attach locks: one of its own in the temp directory, 0700. The temp
+ * directory is shared on Linux, so a lock there that another user made would be one this process may
+ * not open (seen: "unable to open database file" on every attached call), and one this user made would
+ * lock the other out. Throws AttachError when what is there is not a directory of this user's alone.
+ * Windows has no uid, and its temp directory is the user's own.
  */
-export const attachLock = (host: string) => join(tmpdir(), `api-anything-cdp-${host.replace(/[^\w.-]/g, "_")}`);
+function lockDir(): string {
+  const uid = process.getuid?.();
+  if (uid === undefined) return tmpdir();
+  const dir = join(tmpdir(), `api-anything-${uid}`);
+  const refused = (why: string) =>
+    new AttachError(
+      `${dir}, where api-anything keeps the lock that lets one of its processes at a time use an attached browser, is not a directory of this user's alone: ${why}`,
+      `remove ${dir}, or set TMPDIR to a directory of your own, then retry`,
+    );
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw refused((e as Error).message);
+  }
+  const s = lstatSync(dir);
+  if (!s.isDirectory()) throw refused("it is not a directory");
+  if (s.uid !== uid) throw refused(`another user (uid ${s.uid}) owns it`);
+  if (s.mode & 0o077) throw refused(`other users may use it (mode ${(s.mode & 0o777).toString(8)})`);
+  return dir;
+}
+
+/**
+ * The lock one api-anything process holds while it is attached to the browser at `host` (host:port).
+ * Per OS user, not under a home: two processes driving one browser see each other's tabs as the
+ * browser's own and answer their dialogs, whichever home each runs from. Throws AttachError (above).
+ */
+export const attachLock = (host: string) => join(lockDir(), `api-anything-cdp-${host.replace(/[^\w.-]/g, "_")}`);
+
+/** What a lock that could not be opened or held is (`claim` threw): a refusal with nothing sent. */
+export const lockRefused = (host: string, file: string, e: unknown) =>
+  new AttachError(
+    `the lock that lets one api-anything process at a time use the browser at ${host} (API_ANYTHING_CDP) could not be opened: ${file}: ${(e as Error).message.split("\n")[0]}`,
+    `check that ${file} is this user's own file and can be written (remove it if it is not, while no api-anything process uses that browser), then retry`,
+  );
 
 /** How long attaching may take: the endpoint's answer, then the connection. */
 export const ATTACH_MS = 5000;
