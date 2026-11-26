@@ -1142,10 +1142,11 @@ function learnOrExplain(
 }
 
 /** The recipe finds data in this body (a non-empty list, or a value). */
-function resolves(spec: ResponseSpec, body: string | undefined): boolean {
+function resolves(spec: ResponseSpec, answer: Exchange["response"]): boolean {
+  const body = answer?.body;
   if (!body) return false;
   try {
-    const d = within(() => extract(spec, body), DEADLINE.read);
+    const d = within(() => extract(spec, body, undefined, answer.contentType), DEADLINE.read);
     return d !== undefined && d !== null && !(Array.isArray(d) && !d.length);
   } catch {
     return false;
@@ -1423,7 +1424,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       guestCookies: loadSession(i.site).guestCookies,
       public: i.public,
       // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
-      ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
+      ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response) } : {}),
     });
   let learned: ReturnType<typeof learn>;
   // said when the stored examples do not fit the capture

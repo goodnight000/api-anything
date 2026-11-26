@@ -1013,7 +1013,9 @@ Known limits in detail:
 - An answer that arrives as server-sent events (`text/event-stream`, from an `EventSource` or a
   `fetch`) is learned, called at every tier and healed like JSON: its body reads as a list of
   `{event, id, data}` (`data` parsed when it is a JSON object or array, else text), so a recipe
-  reaches in with `[*]` (`--extract '[*].data.items'`). Each read of a stream stops when it ends,
+  reaches in with `[*]` (`--extract '[*].data.items'`). The answer's content type decides: a
+  `text/event-stream` answer is always read as a stream (one that ended with no events is `[]`), an
+  answer of any other type never is. Each read of a stream stops when it ends,
   after 3 s with no event (heartbeat comments do not count), after 10 s, or past 32 MiB. A stream cut
   that way answers with what arrived, `ok` when the recipe found data there, and `truncated` says
   which bound stopped it ("the event stream was still open after 10 s, so it was read no further");

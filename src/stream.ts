@@ -53,6 +53,14 @@ export function streamCut(cut: StreamCut, ms: number): string {
 export const looksLikeEventStream = (body: string): boolean =>
   /^\uFEFF?(?::|(?:data|event|id|retry)(?::|\r|\n))/.test(body) && /[\r\n]/.test(body);
 
+/**
+ * Whether a body is read as an event stream. Its content type decides wherever there is one (a live
+ * answer, a captured exchange): `text/event-stream` always is, whatever its first line and even empty;
+ * any other type never is. Only a body that comes with no content type at all is judged by its syntax.
+ */
+export const readsAsEventStream = (body: string, contentType?: string | null): boolean =>
+  contentType?.trim() ? isEventStream(contentType) : looksLikeEventStream(body.trimStart());
+
 export interface StreamEvent {
   /** the `event:` field, "message" when the event names none */
   event: string;

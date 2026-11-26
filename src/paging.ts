@@ -96,7 +96,7 @@ function nameAt(steps: string[]): string | undefined {
 function nextAt(first: Exchange, value: string, steps: string[]): string | undefined {
   let root: unknown;
   try {
-    root = parseBody(first.response?.body ?? "");
+    root = parseBody(first.response?.body ?? "", undefined, first.response?.contentType);
   } catch {
     return undefined;
   }

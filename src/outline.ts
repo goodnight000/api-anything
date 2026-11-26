@@ -302,7 +302,7 @@ export function outline(contentType: string, body: string, examples: string[]): 
   const values = examples.map((v) => v.toLowerCase()).filter((v) => v.length >= 3);
   if (!/html/i.test(contentType)) {
     try {
-      const data = parseBody(body);
+      const data = parseBody(body, undefined, contentType);
       return data && typeof data === "object" ? { json: outlineJson(data, values) } : undefined;
     } catch {
       return undefined;

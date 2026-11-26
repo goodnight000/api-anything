@@ -1440,10 +1440,16 @@ An answer that arrives as server-sent events (`text/event-stream`: an `EventSour
 XHR whose answer has that content type) is one decoded layer of the body, as an XSSI prefix or
 length-prefixed chunks are: `parseBody` turns it into a JSON list of events, so `extract`, `pick`,
 the output cap, `--outline`, the learned shape and the classifier read it with no code of their own.
-It is told by its own syntax (the body opens with a comment or one of the stream's fields, which no
-JSON does, and holds a line break, as every finished stream line does), so a captured, stored or
-replayed body needs no content type to be read. One line of text that only opens so (a `data:` URL,
-"id: 5 not found") is no stream, and is judged as it was before streams were read. Each event is
+Its content type decides wherever the body came with one (a live answer at every tier, the registry's
+try and replay, a captured exchange; `readsAsEventStream`): `text/event-stream` is always read as a
+stream, whatever its first line (`extension: v`) and even empty (a stream that ended with no events is
+an empty list), and any other content type never is, so a `text/plain` 200 that reads
+`data: temporarily unavailable` is `drift: response is not JSON`, as before streams were read. Only a
+body with no content type at all (a response with no Content-Type header, an exchange whose
+`contentType` is empty, a JSON value in a site's storage) is told by its own syntax: it opens with a
+comment or one of the stream's fields, which no JSON does, and holds a line break, as every finished
+stream line does; one line of text that only opens so (a `data:` URL, "id: 5 not found") is no stream.
+Each event is
 `{event, id?, data}`, dispatched by the WHATWG rules: lines end with CRLF, LF or CR; a `:` line is a
 comment; `data:` lines join with a line feed; one space after the colon is dropped; `retry:` and
 unknown fields are ignored; an `id:` carries over to later events (one holding a NUL is ignored, an

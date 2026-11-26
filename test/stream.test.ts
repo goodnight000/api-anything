@@ -139,6 +139,51 @@ describe("an event stream is read like any JSON answer", () => {
   });
 });
 
+describe("the content type decides whether a body is a stream, wherever there is one", () => {
+  const read = (response: Record<string, unknown>) =>
+    OperationSchema.parse({
+      name: "list",
+      request: { method: "GET", url: "https://s.test/api/list", headers: {} },
+      slots: [],
+      params: [],
+      trigger: { url: "https://s.test/list" },
+      response: { format: "json", ...response },
+      readOnly: true,
+    });
+
+  test("text/event-stream is a stream whatever its first line, and one that ended with no bytes is an empty list", () => {
+    const body = "extension: v\ndata: hello\n\n";
+    assert.equal(looksLikeEventStream(body), false, "the syntax alone would not say so");
+    assert.deepEqual(parseBody(body, undefined, "text/event-stream"), [{ event: "message", data: "hello" }]);
+    const j = judge(read({}), { status: 200, headers: sse, body });
+    assert.equal(j.class, "ok", j.reason);
+    assert.deepEqual(j.data, [{ event: "message", data: "hello" }]);
+    assert.deepEqual(parseBody("", undefined, "text/event-stream; charset=utf-8"), []);
+    const ended = judge(op(), answer(""));
+    assert.deepEqual([ended.class, ended.reason], ["ok", "no results"]);
+    // a capture's exchange: its outline reads the events too
+    assert.ok(JSON.stringify(outline("text/event-stream", body, [])).includes("data"));
+  });
+
+  test("any other content type is never a stream: plain text that opens like a field is not JSON", () => {
+    for (const body of ["data: temporarily unavailable\n", ": maintenance\n", "id: 5 not found\n"]) {
+      assert.throws(() => parseBody(body, undefined, "text/plain"), body);
+      for (const o of [read({}), read({ extract: "[*]" })]) {
+        const c = classify(o, { status: 200, headers: { "content-type": "text/plain" }, body });
+        assert.equal(c.class, "drift", `${JSON.stringify(body)}: ${c.reason}`);
+        assert.match(c.reason, /not JSON/);
+      }
+      assert.equal(outline("text/plain", body, []), undefined, body);
+    }
+  });
+
+  test("only a body that comes with no content type at all is judged by its syntax", () => {
+    assert.deepEqual(parseBody(STREAM), EVENTS);
+    assert.deepEqual(parseBody(STREAM, undefined, ""), EVENTS);
+    assert.equal(classify(read({ extract: "[*]" }), { status: 200, headers: {}, body: STREAM }).class, "ok");
+  });
+});
+
 const op = (over: Record<string, unknown> = {}): Operation =>
   OperationSchema.parse({
     name: "search",
