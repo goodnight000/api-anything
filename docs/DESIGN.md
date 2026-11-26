@@ -1472,10 +1472,21 @@ the two continuations are independent, and `hasMore` describes the site only.
 
 ## Spec files and where they live
 
-One JSON file per site: `{ name, displayName, baseUrl, description, pace?, operations[] }`, zod-validated
+One JSON file per site: `{ name, displayName, baseUrl, description, pace?, aliases?, operations[] }`, zod-validated
 (`pace` is the site's budget, under Execution ladder; an op's `response.key` names what tells its
 items apart for `changes`, and the shared rules require it to be a path to one value in a field the
 recipe returns).
+`aliases` lists the other registrable domains people know the site by, when that is not the domain of
+where its requests go: the bundled `imdb` calls `v3.sg.media-imdb.com` and lists `["imdb.com"]`. A
+search by domain or URL (`matchQuery`, the client's and the registry's) matches the site's own domains
+first and then its aliases, so `imdb.com` and `https://www.imdb.com/title/...` find `imdb`. An alias is
+a search key and nothing else: never a host an op may call (one sending to it is off the spec's own site,
+as without it), never part of `siteOf`, never a cookie's, a login's or a session's site
+(`resolveLoginTarget` and the cookie jar ignore it), and `learn_site` never saves a page on an alias's
+domain into the site, since its ops would then call that domain. The shared rules (`aliasProblems`)
+require each to be a clean registrable domain on a public suffix as demand records one, not the site's
+own, listed once, at most 10. A version's hash covers the site's name and the op only, so adding an
+alias changes no version. The registry takes aliases from a maintainer only (docs/REGISTRY.md "Aliases").
 Site names are case-insensitive (lower-cased), so one file never gets two sets of state.
 Resolution order: `~/.api-anything/sites/<site>.json` (user-created and healed copies win) → a
 pulled `~/.api-anything/registry/<site>.json` → the bundled `sites/<site>.json` (community). A heal
@@ -1776,7 +1787,11 @@ status, with `registry` health and `local` verification separated as in pull, so
 whether to call one next. An installed copy keeps its own call metadata and gains registry health only
 for the same site name, domain and op name; that health names the registry's version, not necessarily
 the installed one. With no registry answer its health is unknown, even if the installed op records a
-version's status. No new probes run. A registry match reaches the agent as text, so it is held to
+version's status. No new probes run. A domain or URL query matches a site's `aliases` too, below its
+own domains, and a match lists them; beside no match, `related` names sites of another region
+(`relatedDomain`: the domain differs only in an ICANN public suffix), this machine's and the
+registry's, each checked here and given the client's own note: a hint for the user, never a site to call
+for the asked domain. A registry match reaches the agent as text, so it is held to
 the shared rules' limits (a site name as `safeName` allows, op and param names the rules allow, an op
 signature, texts of at most 500 characters, at most 50 ops); one that breaks them is dropped, not
 the rest. The registry ranks its own matches; local specs are scored here: a domain or URL query

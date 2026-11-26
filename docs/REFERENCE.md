@@ -74,6 +74,21 @@ suggestions, not guarantees for uncovered constraints. Try the existing capabili
 values, or broaden the query, before learning a new site. Check each match's `domain` first.
 Unconfirmed registry sites still require a domain or URL query.
 
+A site's `domain` is where its requests go, which is not always the domain people type. A spec's
+`aliases` list the other registrable domains it is known by: the bundled `imdb` calls
+media-imdb.com and lists `imdb.com`, so `search imdb.com` or a `https://www.imdb.com/...` URL finds
+it, with `matched: ["imdb.com"]` and the match's `aliases`. A site on that domain itself ranks first.
+An alias is a search key only: it gives the site's ops no host to call, and no cookie, login or session
+of that domain (`login imdb.com` is not `imdb`'s session; `learn_site` will not save an imdb.com page
+into `imdb`). The registry takes aliases from a maintainer only, never from an upload. `sites` and
+`list_sites` show them.
+
+A domain search that matches nothing may answer `related`: sites of another region, whose domain
+differs from the asked one only in the public suffix (amazon.com, as `amazon`, for `amazon.in`). Each
+says it does not cover the asked domain: they are other sites with other data, a hint to show the user,
+never an operation to call for that domain. A site on a private suffix (`foo.github.io`) is related to
+nothing.
+
 Each search op, and each op in `pull <site>` output, separates evidence:
 
 - `registry`: the registry version's `hash`, `status`, `confirmations`, `successRate` (0–1) and
@@ -913,7 +928,8 @@ In short:
   public hosts and learns only requests to such addresses, and an operation it saved goes only to
   them afterwards, redirects included; a page on this machine or the local network is learned by
   you, with `api-anything learn` or `add`. It saves into a site only when the page is on that
-  site's domain, and replaces an operation only by learning its own page again.
+  site's domain (an alias is not: it is a search key, never a host the site's ops call), and replaces
+  an operation only by learning its own page again.
 - A shared operation is someone else's work. Candidates are served marked as such until other
   installs confirm them, and an operation that worked for others can still fail for you (a
   different region, a block on your network).
