@@ -88,14 +88,26 @@ export interface SiteRun {
 const REASON_CHARS = 200;
 
 /**
- * Verify's reason on one line, without what it quotes of the answer (a page's markup, a JSON body,
- * after "<label>: ") and with the spec's arg values replaced: the record holds outcomes, not answers.
+ * Verify's reason on one line, with nothing a site sent in it: the record holds outcomes, not answers.
+ * Every reason that quotes an answer (classify.ts `snippet`, a GraphQL message, an error event, a
+ * parser's complaint) does it after a ": ", so what follows the first one goes, whatever it opens with;
+ * an address keeps its origin, since its path and query are the site's to write; the spec's arg values
+ * are replaced. Losing detail is fine: the whole reason is one `verify` away. `own`: this script's words
+ * before verify's, kept whole.
  */
-function shortReason(text: string, values: string[]): string {
-  let s = text
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/(: )[<{[)].*$/, "$1…");
+function shortReason(text: string, values: string[], own = ""): string {
+  let s = text.replace(/\s+/g, " ").trim();
+  const said = s.indexOf(": ");
+  if (said >= 0) s = `${s.slice(0, said + 2)}…`;
+  s = own + s;
+  s = s.replace(/\bhttps?:\/\/[^\s,)]+/gi, (u) => {
+    try {
+      const url = new URL(u);
+      return url.pathname === "/" && !url.search && !url.hash ? url.origin : `${url.origin}/…`;
+    } catch {
+      return "…";
+    }
+  });
   const forms = values
     .filter((v) => v.length >= 3)
     .flatMap((v) => [v, encodeURIComponent(v)])
@@ -107,7 +119,7 @@ function shortReason(text: string, values: string[]): string {
 /** Each op's entry from its site's verify: the worst of its cases decides (fail, inconclusive, pass). */
 export function siteEntries(run: SiteRun): Entry[] {
   const { site, at } = run;
-  const reason = (t: string) => shortReason(t, run.values);
+  const reason = (t: string, own?: string) => shortReason(t, run.values, own);
   if (!run.output)
     return run.ops.map((op) => ({
       site,
@@ -125,7 +137,7 @@ export function siteEntries(run: SiteRun): Entry[] {
         op,
         result: "fail",
         class: "error",
-        reason: reason(`verify could not run the site: ${broken.error}`),
+        reason: reason(String(broken.error), "verify could not run the site: "),
         at,
       };
     const mine = rows.filter((r) => r.op === op);
