@@ -30,7 +30,8 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/checks.ts` | `verify`: run each read's example and checks, judge pass/fail/inconclusive, keep the record `publish` gates on |
 | `src/vet.ts` | the shared rules a spec someone else wrote must pass: on pull, publish, load and in CI |
 | `src/registry.ts` | the registry service's client (`docs/REGISTRY.md`, wire contract `src/registry-api.ts`): `pull`, `search`, the bundled upgrade |
-| `src/publish.ts`, `src/share.ts` | what an upload sends and the scans before it (`publish` previews it); `shareOps` sends what the rules allow, signed; the heal-back |
+| `src/publish.ts`, `src/share.ts` | what an upload sends and the scans before it (`publish` previews it); `shareOps` sends what the rules allow, signed, after the clean replay nothing on record proved; the heal-back |
+| `src/review.ts` | why the registry holds a version for review: the fixed categories `/v1/stats` counts, and the words and `next` an uploader is shown; pure, the Worker bundles it |
 | `src/report.ts`, `src/background.ts` | reports of calls of registry versions, in the background, and `shutdown` (a library caller's bounded wait for them); an idle MCP server's verification of candidates |
 | `src/snapshots.ts`, `src/changes.ts`, `src/budget.ts` | a read's cache entry and watchers' baselines (keyed by args and session, never naming either); what changed between two answers; a site's request budget |
 | `src/registry-api.ts` | the wire contract with the registry service: endpoints' types, request signing, version hashing |
@@ -47,7 +48,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/serve.ts`, `src/openapi.ts` | `serve`: MCP over HTTP, REST endpoints that run the MCP tools' own handlers (`createToolset`), the token, Origin and Host guards; the OpenAPI 3.1 document (docs/SERVE.md) |
 | `src/jobs.ts` | an MCP call still running at its deadline answers with a job; identical calls join it |
 | `src/clients.ts` | `mcp --print-config`: how each MCP client adds the server, with absolute paths |
-| `registry/` | the registry service: a Cloudflare Worker with D1 (docs/REGISTRY.md) |
+| `registry/` | the registry service: a Cloudflare Worker with D1 (docs/REGISTRY.md); `registry/src/replay.ts` replays a version held only for a skipped clean replay |
 | `skills/api-anything/` | the agent skill: a short `SKILL.md` core, and `references/` for authoring and writes; it never restates a tool description or `--help` |
 
 ## Rules

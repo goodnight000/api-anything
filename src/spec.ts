@@ -288,9 +288,10 @@ export const OperationSchema = z.object({
   unproven: z.object({ params: z.array(z.string()), reason: z.string() }).optional(),
   /**
    * The registry version this op is (its hash) and the status the registry gave it, set by `pull` and
-   * `shareOps`. This machine's record, like `learnedAt`: never uploaded, hashed or exported.
+   * `shareOps`; `review`: why an upload of this install's was held for review, by category (review.ts).
+   * This machine's record, like `learnedAt`: never uploaded, hashed or exported.
    */
-  version: z.object({ hash: z.string(), status: z.string() }).optional(),
+  version: z.object({ hash: z.string(), status: z.string(), review: z.array(z.string()).optional() }).optional(),
   /**
    * An agent learned this op over MCP (`learn_site`), where page text may have chosen the page. Tiers 1
    * and 2 send it, and follow its redirects, only to https addresses on public hosts, as they do for a

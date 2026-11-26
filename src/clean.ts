@@ -3,6 +3,7 @@
  * learnsite.ts's clean replay asks it before an op is shared automatically, and background verification
  * asks it of someone else's candidate, so neither ever sends the user's sessions.
  */
+import { BudgetSpent, type SendBudget } from "./budget.js";
 import { type Class, judge } from "./classify.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { withDefaults } from "./http.js";
@@ -15,6 +16,9 @@ export interface CleanResult {
   reason: string;
   data?: unknown;
   status?: number;
+  retryAfterMs?: number;
+  /** the site's budget refused the send: nothing went */
+  budget?: true;
   ms: number;
 }
 
@@ -28,6 +32,8 @@ export async function cleanCall(
     minIntervalMs?: number;
     /** someone else's op (background verification): only https to public addresses, every redirect hop too (`SendOptions.publicOnly`) */
     publicOnly?: boolean;
+    /** the site's budget, checked and counted at the send */
+    budget?: SendBudget;
   },
 ): Promise<CleanResult> {
   const t0 = performance.now();
@@ -40,6 +46,7 @@ export async function cleanCall(
       timeoutMs: o.timeoutMs ?? 20_000,
       minIntervalMs: o.minIntervalMs,
       publicOnly: o.publicOnly,
+      budget: o.budget,
     });
     let j: ReturnType<typeof judge>;
     try {
@@ -54,9 +61,18 @@ export async function cleanCall(
       reason: j.reason,
       ...(j.data !== undefined ? { data: j.data } : {}),
       status: r.status,
+      ...(j.retryAfterMs !== undefined ? { retryAfterMs: j.retryAfterMs } : {}),
       ms: r.ms,
     };
   } catch (e) {
+    if (e instanceof BudgetSpent)
+      return {
+        class: "rate",
+        reason: e.message,
+        retryAfterMs: e.retryAfterMs,
+        budget: true,
+        ms: Math.round(performance.now() - t0),
+      };
     if (e instanceof LookupFailed)
       return {
         class: e.judged.class,

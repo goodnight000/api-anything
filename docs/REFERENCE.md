@@ -364,7 +364,10 @@ nothing and needs no browser. Output is one line of JSON:
   `API_ANYTHING_KEY`), `settings` (`settings.json` cannot be read, so this install is local-only until
   it is fixed or replaced), `login` (the site's session has no browser sign-in on record while one
   for its host is saved under the host's name, from a login run before the site was added: `next`
-  names the login that records it for the site). `next` is phrased as a call's `next`;
+  names the login that records it for the site), `review` (this install's upload of the op is held for
+  review, served only to this install; the op's `review` gives its version and the causes by category,
+  and `next` the step there is, most often none but waiting for a maintainer). `next` is phrased as a
+  call's `next`;
 - `storage`: whether session and capture files are sealed here, `{sealed: true, key}` with the key's
   source, or `{sealed: false, why, chosen}`. Finding out may create the key in the OS store, as the
   first save would.
@@ -815,8 +818,9 @@ against the local test site the suite uses. No write operation is bundled.
 ## What leaves your machine
 
 Calls run on your machine, your network and your sessions. The catalog stores specs and counts
-reports; it never proxies your calls. Its only request to a site is the "try it" endpoint for a few
-public operations ([REGISTRY.md](REGISTRY.md)), which a visitor runs from the catalog's page.
+reports; it never proxies your calls. Its requests to a site are the "try it" endpoint for a few
+public operations ([REGISTRY.md](REGISTRY.md)), which a visitor runs from the catalog's page, and one
+replay with no cookies of an uploaded read that arrived without one (at most 3 tries).
 
 Whether sharing is on or off, a search goes to the catalog: the words your agent passes to
 `find_sites`, and the name of a shared site it calls before this machine has it. Only plain words
@@ -834,7 +838,9 @@ With sharing on:
 - **Operations learned from public pages.** Shared automatically only when it is a read, it was
   learned signed out, and the replay with no cookies answered (with the data, or with a bot wall
   such as Anubis or Cloudflare, which each caller's browser passes on its own). Its stored example
-  is the agent's second value and its check is the third, never the value you asked for.
+  is the agent's second value and its check is the third, never the value you asked for. An op you
+  made with `add` gets that replay when it is shared (`publish --yes`): one request to the site with
+  its stored examples and none of your cookies, at the site's pace and budget.
 - **An operation that needed your login**, or one that may hold something of yours (an email
   address, an id, a value typed into the page), goes only after you say yes, or once 3 installs on
   3 networks learned exactly the same thing.
@@ -879,6 +885,14 @@ api-anything publish hn-demo                                        # preview on
 api-anything publish hn-demo --strict-scan                          # and warn of borderline values
 api-anything publish hn-demo --yes                                  # upload, signed by this install
 ```
+
+The preview sends nothing to the site; its `cleanReplay` says per op whether the replay with no cookies
+is on record, cannot run (a write, an op that needs the browser, a required param with no example) or
+will run with `--yes`. An upload the catalog holds for review is served only to you until a maintainer
+approves it: each op's outcome has a `reason` with every cause in words, `held` (each cause and its
+category), and a `next`. The one cause you can fix is a missing example (`add` it again with
+`--example`, then publish); otherwise `next` says there is nothing to do but wait, since publishing the
+same op again changes nothing. `status` shows it as a `review` problem.
 
 Your agent does the first two on its own: `find_sites` searches the catalog, and calling a site this
 machine doesn't have fetches it, reads only. A new operation is a candidate until installs other than
