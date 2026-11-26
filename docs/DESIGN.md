@@ -1467,7 +1467,11 @@ it stops once it has ended, sent no event for 3 s (`STREAM_IDLE_MS`: comment lin
 not count; long enough for a generator's slow first event), been read for 10 s (`STREAM_MAX_MS`: a
 call reads one per tier it tries, and three fit in the default 30 s timeout and in the 25 s an MCP
 call waits before handing back a job), or passed 32 MiB (`MAX_BODY_BYTES`, kept rather than
-refused: a stream has no length). What arrived before the bound is the answer and the connection is
+refused: a stream has no length). At tier 1 a zstd body that Node 22's fetch hands back still
+compressed is decoded as it arrives, so the idle bound reads its lines, a cut keeps what was decoded,
+and the 32 MiB bound counts what it decodes to; a Node with no zstd decoder (before 22.15) fails the
+read with an `error` saying the encoding could not be read, for an answer of any type, never its
+compressed bytes as the body. What arrived before the bound is the answer and the connection is
 closed; the read says why it stopped in `truncated` ("the event stream was still open after 10 s, so
 it was read no further"), which the call's result carries with the view's own note, and a capture's
 exchange keeps it. A cut answer is `ok` when the recipe found data in what arrived. One cut before

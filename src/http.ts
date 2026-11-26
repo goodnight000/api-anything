@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIPv4, isIPv6 } from "node:net";
+import type { Transform } from "node:stream";
 import * as zlib from "node:zlib";
 import type { SendBudget } from "./budget.js";
 import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
@@ -703,10 +704,13 @@ const STREAM_MARGIN_MS = 250;
 /**
  * An event stream's body, read until it ends, sends no event for `STREAM_IDLE_MS`, has been read for
  * `STREAM_MAX_MS` (or `budgetMs`, when less is left of the request's time), or passes
- * `MAX_BODY_BYTES`; a bound keeps what arrived before it, and closes the connection.
+ * `MAX_BODY_BYTES`; a bound keeps what arrived before it, and closes the connection. A zstd body that
+ * fetch left compressed (`unzstd`) is decoded as it arrives, so the idle bound reads its lines and a
+ * cut keeps what was decoded; the bytes bound counts what it decodes to.
  */
 async function readStream(res: Response, budgetMs: number): Promise<{ raw: Uint8Array; truncated?: string }> {
-  if (!res.body) return { raw: new Uint8Array(await res.arrayBuffer()) };
+  const encoding = res.headers.get("content-encoding");
+  if (!res.body) return { raw: unzstd(new Uint8Array(await res.arrayBuffer()), encoding) };
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   const chunks: Uint8Array[] = [];
@@ -716,46 +720,143 @@ async function readStream(res: Response, budgetMs: number): Promise<{ raw: Uint8
   let total = 0;
   let cut: StreamCut | undefined;
   let pending: ReturnType<typeof reader.read> | undefined;
-  for (;;) {
-    const idleAt = last + STREAM_IDLE_MS;
-    const wait = Math.min(idleAt, end) - Date.now();
-    if (wait <= 0) {
-      cut = idleAt < end ? "idle" : "time";
-      break;
+  // the first bytes say whether fetch decoded it already: held until there are enough to tell
+  let head: Uint8Array | undefined = /\bzstd\b/i.test(encoding ?? "") ? new Uint8Array(0) : undefined;
+  let zstd: ReturnType<typeof zstdPieces> | undefined;
+  const take = async (piece: Uint8Array): Promise<{ bytes: Uint8Array; over?: boolean }> => {
+    if (head) {
+      head = Buffer.concat([head, piece]);
+      if (head.byteLength < 4) return { bytes: new Uint8Array(0) };
+      piece = head;
+      head = undefined;
+      if (zstdFrame(piece)) {
+        if (!zstdCodec.stream) throw noZstd();
+        zstd = zstdPieces(zstdCodec.stream, MAX_BODY_BYTES);
+      }
     }
-    pending ??= reader.read();
-    let timer: NodeJS.Timeout | undefined;
-    const got = await Promise.race([
-      pending,
-      new Promise<undefined>((r) => {
-        timer = setTimeout(() => r(undefined), wait);
-      }),
-    ]).finally(() => clearTimeout(timer));
-    if (!got) continue;
-    pending = undefined;
-    if (got.done) break;
-    total += got.value.byteLength;
-    if (total > MAX_BODY_BYTES) {
-      cut = "bytes";
-      break;
+    return zstd ? zstd.write(piece) : { bytes: piece };
+  };
+  const keep = (got: { bytes: Uint8Array; over?: boolean }): boolean => {
+    total += got.bytes.byteLength;
+    if (got.over || total > MAX_BODY_BYTES) return false;
+    chunks.push(got.bytes);
+    if (got.bytes.byteLength && carriesField(decoder.decode(got.bytes, { stream: true }))) last = Date.now();
+    return true;
+  };
+  try {
+    for (;;) {
+      const idleAt = last + STREAM_IDLE_MS;
+      const wait = Math.min(idleAt, end) - Date.now();
+      if (wait <= 0) {
+        cut = idleAt < end ? "idle" : "time";
+        break;
+      }
+      pending ??= reader.read();
+      let timer: NodeJS.Timeout | undefined;
+      const got = await Promise.race([
+        pending,
+        new Promise<undefined>((r) => {
+          timer = setTimeout(() => r(undefined), wait);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      if (!got) continue;
+      pending = undefined;
+      if (got.done) {
+        // fewer than 4 bytes in all are no zstd frame
+        if (head?.byteLength) keep({ bytes: head });
+        else if (zstd && !keep(await zstd.end())) cut = "bytes";
+        break;
+      }
+      if (!keep(await take(got.value))) {
+        cut = "bytes";
+        break;
+      }
     }
-    chunks.push(got.value);
-    if (carriesField(decoder.decode(got.value, { stream: true }))) last = Date.now();
+  } catch (e) {
+    await reader.cancel().catch(() => {});
+    zstd?.close();
+    throw e;
   }
-  if (cut) await reader.cancel().catch(() => {});
+  if (cut) {
+    await reader.cancel().catch(() => {});
+    zstd?.close();
+  }
   return { raw: Buffer.concat(chunks), ...(cut ? { truncated: streamCut(cut, Date.now() - start) } : {}) };
+}
+
+/** zlib's zstd decoders, where this Node has them (22.15 and later); a test takes them away. */
+export const zstdCodec: {
+  stream?: () => Transform;
+  sync?: (buf: Uint8Array, o: { maxOutputLength: number }) => Uint8Array;
+} = { stream: zlib.createZstdDecompress, sync: zlib.zstdDecompressSync };
+
+const zstdFrame = (b: Uint8Array) => b[0] === 0x28 && b[1] === 0xb5 && b[2] === 0x2f && b[3] === 0xfd;
+
+/** Read as it came, the body would be its compressed bytes: a wrong answer that says nothing of why. */
+const noZstd = () =>
+  new Error(
+    `the answer is zstd-encoded and this Node (${process.version}) has no zstd decoder (22.15 and later have one), so its body could not be read`,
+  );
+
+/**
+ * A zstd decoder fed a stream's pieces as they arrive: each write answers what its piece decoded to,
+ * `over` once all of them pass `cap` (the decoder stops there: a few KB of zstd expand to gigabytes).
+ */
+function zstdPieces(make: () => Transform, cap: number) {
+  const d = make();
+  let out: Buffer[] = [];
+  let size = 0;
+  let over = false;
+  let failed: Error | undefined;
+  d.on("data", (b: Buffer) => {
+    if (over) return;
+    size += b.byteLength;
+    if (size > cap) {
+      over = true;
+      d.destroy();
+    } else out.push(b);
+  });
+  d.on("error", (e) => {
+    failed ??= e;
+  });
+  const settle = (begin: (done: () => void) => void) =>
+    new Promise<{ bytes: Uint8Array; over: boolean }>((resolve, reject) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        // what a write decoded may still be on its way to "data"
+        setImmediate(() => {
+          if (failed && !over) return reject(new Error(`the answer's zstd encoding could not be read: ${failed.message}`));
+          const bytes = Buffer.concat(out);
+          out = [];
+          resolve({ bytes, over });
+        });
+      };
+      d.once("close", done);
+      begin(done);
+    });
+  return {
+    write: (piece: Uint8Array) => settle((done) => d.write(piece, () => done())),
+    end: () =>
+      settle((done) => {
+        d.once("end", done);
+        d.end();
+      }),
+    close: () => d.destroy(),
+  };
 }
 
 /**
  * Node 22's fetch hands back a zstd body still compressed (24 and later decode it). Decode it here
- * when that happened; zlib has zstd from 22.15, before that the body stays as it came. The output is
+ * when that happened; zlib has zstd from 22.15, and before that the call fails saying so. The output is
  * bounded too: a few KB of zstd expand to gigabytes.
  */
 function unzstd(buf: Uint8Array, encoding: string | null): Uint8Array {
-  const compressed = buf[0] === 0x28 && buf[1] === 0xb5 && buf[2] === 0x2f && buf[3] === 0xfd;
-  if (!compressed || !/\bzstd\b/i.test(encoding ?? "")) return buf;
+  if (!zstdFrame(buf) || !/\bzstd\b/i.test(encoding ?? "")) return buf;
+  if (!zstdCodec.sync) throw noZstd();
   try {
-    return zlib.zstdDecompressSync?.(buf, { maxOutputLength: MAX_BODY_BYTES }) ?? buf;
+    return zstdCodec.sync(buf, { maxOutputLength: MAX_BODY_BYTES });
   } catch (e) {
     if ((e as { code?: string }).code === "ERR_BUFFER_TOO_LARGE")
       throw new BodyTooLarge(
