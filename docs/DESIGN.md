@@ -803,13 +803,16 @@ its query (`continue=`). No site's name is known. It is judged before a JSON rea
 since a consent page links the sign-in page (Google's ServiceLogin button). A bot challenge is judged
 first and stays `blocked`; a non-2xx answer (a 404) is what its status makes it; a write is judged as
 a write. Tier 3 sees it from the run: a read's trigger page that ended there (`consentWall`, its op's
-request never answered or answered with the redirect) is the same `error`, and so is a heal's
+request never answered or answered with the redirect), held to the same bounds (the page's last load
+answered 2xx and is no bot challenge or sign-in page: a 503 there stays the server's `error`, a
+challenge stays `blocked`), is the same `error`, and so is a heal's
 recapture (it stops, as for a sign-in page, and marks nothing stale), `add` (it throws, saving
 nothing), `learn_site` (`wall: "consent"`, `nextCall` `login` `mode: "window"`) and `capture`
 (`wall: "consent"` and a `next` saying so). The call is not healed, not marked stale, starts no
 cool-down and climbs no tier; an attempt that answered with it learned nothing (`learnedNothing`), so a
 heal that meets it is transient. Nothing about it is reported to the registry (report.ts), since it
-says nothing about the version. A consent page served in place (HTTP 200 at the asked address, an
+says nothing about the version: the clean call (`cleanCall`) carries `wall` too, so background
+verification sends no report for it, and `verify` counts it `inconclusive`. A consent page served in place (HTTP 200 at the asked address, an
 overlay over a page without the data) cannot be told from drift without a site's own rules: it stays
 drift.
 
@@ -1481,10 +1484,16 @@ An answer that arrives as server-sent events (`text/event-stream`: an `EventSour
 XHR whose answer has that content type) is one decoded layer of the body, as an XSSI prefix or
 length-prefixed chunks are: `parseBody` turns it into a JSON list of events, so `extract`, `pick`,
 the output cap, `--outline`, the learned shape and the classifier read it with no code of their own.
-It is told by its own syntax (the body opens with a comment or one of the stream's fields, which no
-JSON does, and holds a line break, as every finished stream line does), so a captured, stored or
-replayed body needs no content type to be read. One line of text that only opens so (a `data:` URL,
-"id: 5 not found") is no stream, and is judged as it was before streams were read. Each event is
+Its content type decides wherever the body came with one (a live answer at every tier, the registry's
+try and replay, a captured exchange; `readsAsEventStream`): `text/event-stream` is always read as a
+stream, whatever its first line (`extension: v`) and even empty (a stream that ended with no events is
+an empty list), and any other content type never is, so a `text/plain` 200 that reads
+`data: temporarily unavailable` is `drift: response is not JSON`, as before streams were read. Only a
+body with no content type at all (a response with no Content-Type header, an exchange whose
+`contentType` is empty, a JSON value in a site's storage) is told by its own syntax: it opens with a
+comment or one of the stream's fields, which no JSON does, and holds a line break, as every finished
+stream line does; one line of text that only opens so (a `data:` URL, "id: 5 not found") is no stream.
+Each event is
 `{event, id?, data}`, dispatched by the WHATWG rules: lines end with CRLF, LF or CR; a `:` line is a
 comment; `data:` lines join with a line feed; one space after the colon is dropped; `retry:` and
 unknown fields are ignored; an `id:` carries over to later events (one holding a NUL is ignored, an
@@ -1502,7 +1511,15 @@ it stops once it has ended, sent no event for 3 s (`STREAM_IDLE_MS`: comment lin
 not count; long enough for a generator's slow first event), been read for 10 s (`STREAM_MAX_MS`: a
 call reads one per tier it tries, and three fit in the default 30 s timeout and in the 25 s an MCP
 call waits before handing back a job), or passed 32 MiB (`MAX_BODY_BYTES`, kept rather than
-refused: a stream has no length). What arrived before the bound is the answer and the connection is
+refused: a stream has no length). At tier 1 a zstd body that Node 22's fetch hands back still
+compressed is decoded as it arrives, so the idle bound reads its lines, a cut keeps what was decoded,
+and the 32 MiB bound counts what it decodes to; a Node with no zstd decoder (before 22.15) fails the
+read with an `error` saying the encoding could not be read, for an answer of any type, never its
+compressed bytes as the body. A browser run reads a page's stream on the page's own DevTools session
+as it arrives; one that session does not hand over (a frame of another site runs in a process of its
+own) is not read at all, since Playwright's read of a response buffers the whole body with no cap on
+its size: the exchange is cut, its `truncated` saying it was not read, and a call on it is `error`
+(no event arrived). What arrived before the bound is the answer and the connection is
 closed; the read says why it stopped in `truncated` ("the event stream was still open after 10 s, so
 it was read no further"), which the call's result carries with the view's own note, and a capture's
 exchange keeps it. A cut answer is `ok` when the recipe found data in what arrived. One cut before
@@ -1620,8 +1637,9 @@ default: a plain call writes none.
   and the site's `baseUrl`: an edit, a heal or a raised `minTier` is a miss) and at a tier the call's
   `maxTier` allows, the call answers it with `cached: true` and `ageMs`, sending nothing, before the
   cool-down or the budget is consulted; it is not a call of the site, so it adds no call-log line and
-  no report. Every read that sends with `maxAgeMs` or `changes` and gets an `ok` answer refreshes the
-  cache entry. Only an `ok` answer is ever kept, so a failure is never served, and a failed call
+  no report. A kept answer that was an event stream cut at a bound keeps its `truncated`, and a hit
+  answers with it, so a cut answer never comes back looking whole. Every read that sends with
+  `maxAgeMs` or `changes` and gets an `ok` answer refreshes the cache entry. Only an `ok` answer is ever kept, so a failure is never served, and a failed call
   leaves the last ok answer in place. A write is never kept or served (each call is the user's
   action), whatever it is passed; neither is a write's readback. A `maxAgeMs` call never moves a baseline.
 - `changes` (CLI `--changes`): the answer gains `changes`, against the baseline of the call's watcher,
@@ -1646,7 +1664,8 @@ default: a plain call writes none.
   view's `maxChars`: the longest of the three lists loses its last entries, and `truncated` counts
   them, saying they are not reported again. When the answer cannot be kept as the baseline (too
   large, a home that cannot be written, a session that changed during the call), the call stays `ok` and `changes` says `retained: false` with
-  a `reason`: the next call compares with the one before. `changesOnly` (CLI `--changes-only`) answers
+  a `reason`: the next call compares with the one before. A baseline that was a stream cut at a bound
+  makes `changes` say so in `sinceTruncated` (its `truncated`): what it lacked shows as added. `changesOnly` (CLI `--changes-only`) answers
   `changes` with no `data` and keeps no result view, for polling at a few tokens a run; it is a read's
   option, and a write keeps its `data`. A cached answer compared with a baseline it already is reports
   nothing changed.
@@ -1785,8 +1804,12 @@ with no example for a required param, or one that is no plain GET is marked `unr
 tried, which counts as no attempt. An ok answer the op's recipe extracts something from makes the
 version a candidate, removes the reason and adds `registryReplay: {at, outcome}` to its evidence, the
 uploader's `cleanReplay` left as sent; anything else leaves it in review, and a version is tried at most
-3 times, a day apart at least. It is no report: it counts toward no promotion and never makes a version
-live. Off whenever `TRY_ENABLED` is.
+3 times, a day apart at least. The attempt is counted before the send, as a claim: only while the version
+is still in review with the attempts and time the queue read saw (D1's `meta.changes` is 1), else
+nothing is sent. Only an attempt that sent no request is taken back, so a refused redirect hop still
+counts. It is no report: it counts toward no promotion and never makes a version live, and `last_ok_at`
+stays unset; the daily archive counts a version it promoted from the promotion (`replayed_at`), as it
+counts a fresh upload from the upload. Off whenever `TRY_ENABLED` is.
 
 **The one question, asked once.** A plugin install, `claude mcp add` or `npm -g` never runs setup, so
 `learn_site` asks the same question the first time it reaches the share step (the holdout answered and
@@ -1993,7 +2016,12 @@ their hosts.
 
 **Search.** `api-anything search <words | domain | url>` and MCP `find_sites` ask `GET /v1/search`
 and merge the answer with the specs on this machine (the user's, pulled and bundled) as `installed`,
-the local copy winning, so a site learned here and never shared is found too; a registry that cannot
+the local copy winning, so a site learned here and never shared is found too. A registry match of a
+site installed here (same name and domain) still finds it, as the installed site, by what the
+registry matched (an alias added after this copy was pulled). For a domain or URL query the
+registry's matches keep its order, a site with a live op before one without, then score, in the places
+they hold among this machine's specs, which stay where score puts them; a words query ranks by score
+alone. A registry that cannot
 be reached, or that has not answered within 8 s (`SEARCH_TIMEOUT_MS`; the request is sent before the
 local specs are read, so the two overlap), leaves the local ones with a `registryError`, and one that rate-limited the search adds
 `retryAfterMs` (its Retry-After), with a `next` that says to wait that long and search again. The registry is sent no more of the query than
@@ -2095,7 +2123,9 @@ and inside its budget (`sitePace`, `budgetCheck`) and cool-down; a site that is 
 budget, or the site answering `rate` (which starts a cool-down, as after any call) sends no upload now,
 since a re-upload of the same version is a duplicate that changes nothing: the outcome says so with a
 `next`. An op learned over MCP or a pulled site's op goes only to public addresses (`publicOnly`). The
-result is not kept: a second share of the same op replays again. A failed replay still uploads; the
+result is not kept: a second share of the same op replays again. What goes up is the op that was
+replayed: when the stored op changed while the request was out (another process learned or healed it),
+nothing goes up, and the outcome says why with a `next` to publish again. A failed replay still uploads; the
 registry holds it, and the outcome carries `cleanReplay` and `cleanReason`. `publish`'s preview sends
 nothing to the site and says per op what the replay will be (`cleanReplay`: on record, `skipped` and
 why, or "will run on publish").
@@ -2107,7 +2137,9 @@ count) and `next`. The only step that changes anything is a new version that pas
 for a skipped replay that lacks an example gets the `add ... --example` and `publish --yes` that make
 one; anything else is "nothing to do but wait for a maintainer", since a re-upload of the same version
 is a duplicate. The local op's `version` keeps the categories (`review`), so `status` shows a
-`review` problem with the same words and `next` from the local files alone; `learn_site`'s `next`
+`review` problem with the same words and `next` from the local files alone, as of the upload's answer: nothing
+refreshes it but another answer to an upload of it, so the `next` adds `publish <site> <op> --yes`, whose
+duplicate answer carries the version's status now and replaces the record; `learn_site`'s `next`
 carries them, and `publish --yes` names the ops held.
 
 **Publish.** `api-anything publish <site> [op ...]` is the human's way to share: without `--yes` it
@@ -2130,8 +2162,8 @@ param set at once, each value chosen so one row the example returned fails it, o
 matches, expecting `empty`, so a param the server ignores shows up as a failing case. `verify` runs
 each read's stored example (expecting `result`) and its checks through `call`, healing as any call
 does, and judges every case: `pass`, `fail`, or `inconclusive` when the answer is `blocked`, `auth`,
-`rate` or a server that failed or could not be reached (`CallResult.server`), which says nothing
-about the op. Each case's answer comes from one version of the op: the one its call resolved, or the
+`rate`, the site's cookie-consent step (`wall: "consent"`) or a server that failed or could not be
+reached (`CallResult.server`), which says nothing about the op. Each case's answer comes from one version of the op: the one its call resolved, or the
 one a heal or the registry put in its place. Its outcomes are kept per op in
 `~/.api-anything/checks/<site>.json`, with a hash of the op as saved when verify ends (in schema
 order; `learnedAt`, `unproven` and `version` aside). Each case is tagged with the hash of the version
@@ -2205,8 +2237,10 @@ spec's pace, the budget and the cool-downs are the only pacing, as for one user;
 running after `--site-timeout` (20 min) is killed with its browser. It judges nothing itself: each
 op's entry in `health.json` is its worst case in verify's own JSON (a failing case, else an
 inconclusive one, else a passing one), with that case's label, class (`got`), tier and ms, verify's
-reason cut to one line of 200 characters, without what it quotes of the answer (markup or a body
-after a `: `) and with the spec's example and check values replaced by `<arg>`, and the time. A skipped op (or a write's preflight) is `skipped`; a site verify could not
+reason cut to one line of 200 characters with nothing a site sent in it (every reason that quotes an
+answer, its markup, a body, plain text, a GraphQL message or an error event, does it after a `: `, so
+what follows the first one goes; an address keeps only its origin) and with the spec's example and
+check values replaced by `<arg>`, and the time. A skipped op (or a write's preflight) is `skipped`; a site verify could not
 load fails each of its ops; a verify that crashed, hung, or reported nothing about an op is
 `inconclusive`, since it tested nothing. No args, no answers. The header has the version, the
 commit, the run's start, end and duration, the op totals and verify's case counts summed; a

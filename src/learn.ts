@@ -289,7 +289,7 @@ function isAck(e: Exchange): boolean {
     typeof v === "boolean" ||
     (typeof v === "string" && /^\w{0,8}$/.test(v)) ||
     (typeof v === "object" && Object.values(v).every(flags));
-  const data = tryParse(body);
+  const data = tryParse(body, r.contentType);
   return flags(data === undefined ? body : data);
 }
 
@@ -363,10 +363,11 @@ function shortCarrier(examples: [string, string][], short: [string, string][], s
   };
 }
 
-function tryParse(body: string | undefined): unknown {
+/** `contentType`: the answer's, for a body that is one (`parseBody`). */
+function tryParse(body: string | undefined, contentType?: string): unknown {
   if (!body) return undefined;
   try {
-    return parseBody(body);
+    return parseBody(body, undefined, contentType);
   } catch {
     return undefined;
   }
@@ -406,7 +407,7 @@ export function rankCandidates(
         .map(([k]) => k);
       const urlHits = values.filter(([k, v]) => !hits.includes(k) && has(v, leaves(v))).length;
       const body = e.response?.body ?? "";
-      const parsed = tryParse(body);
+      const parsed = tryParse(body, e.response?.contentType);
       const json = parsed !== null && typeof parsed === "object";
       const status = e.response?.status;
       const lower = values.length ? body.toLowerCase() : "";
@@ -1687,7 +1688,7 @@ function learnResponse(e: Exchange, values: string[], warnings: string[]): Respo
   if (!r) return { format: "json" };
   const body = r.body ?? "";
   const xssiPrefix = xssiOf(body);
-  const data = tryParse(body);
+  const data = tryParse(body, r.contentType);
   if (data !== null && typeof data === "object") {
     const extract = suggestExtract(data, values);
     return {
@@ -1995,7 +1996,7 @@ export function lookedUp(
       );
     })
     .flatMap((x) => {
-      const data = tryParse(x.response?.body);
+      const data = tryParse(x.response?.body, x.response?.contentType);
       return data !== null && typeof data === "object" ? [{ x, paths: scalarPaths(data) }] : [];
     })
     .reverse();
@@ -2134,7 +2135,8 @@ function derivedSlots(
       continue;
     }
     if (two) {
-      const v2 = l.exchange2 && getPath(tryParse(l.exchange2.response?.body), c.path);
+      const v2 =
+        l.exchange2 && getPath(tryParse(l.exchange2.response?.body, l.exchange2.response?.contentType), c.path);
       if (v2 === undefined || v2 === null || typeof v2 === "object" || asText(v2) === c.leaf.value) {
         unproven.set(k, `${where}, but run 2's lookup holds no other value there`);
         continue;

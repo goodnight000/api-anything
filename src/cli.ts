@@ -971,7 +971,7 @@ function cmdInspect({ v, pos }: Parsed): number {
     if (data === undefined) throw nothing("the --embedded regex found no JSON");
   } else if (!/html/i.test(e.response?.contentType ?? "")) {
     try {
-      data = extract({ format: "json" }, body);
+      data = extract({ format: "json" }, body, undefined, e.response?.contentType);
     } catch {
       // not JSON: show the text
     }

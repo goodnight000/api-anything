@@ -19,6 +19,8 @@ export interface CleanResult {
   retryAfterMs?: number;
   /** the site's budget refused the send: nothing went */
   budget?: true;
+  /** with `error`: the answer was the site's cookie-consent step (classify.ts), which says nothing of the op */
+  wall?: "consent";
   ms: number;
 }
 
@@ -62,6 +64,7 @@ export async function cleanCall(
       ...(j.data !== undefined ? { data: j.data } : {}),
       status: r.status,
       ...(j.retryAfterMs !== undefined ? { retryAfterMs: j.retryAfterMs } : {}),
+      ...(j.wall ? { wall: j.wall } : {}),
       ms: r.ms,
     };
   } catch (e) {

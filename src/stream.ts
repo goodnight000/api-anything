@@ -19,8 +19,8 @@ export const STREAM_IDLE_MS = 3000;
  */
 export const STREAM_MAX_MS = 10_000;
 
-/** Why a read stopped before the stream ended. */
-export type StreamCut = "idle" | "time" | "bytes" | "ended";
+/** Why a read stopped before the stream ended; `unread`: it never started (browser.ts). */
+export type StreamCut = "idle" | "time" | "bytes" | "ended" | "unread";
 
 /** A response's content type says it is an event stream. */
 export const isEventStream = (contentType: string | null | undefined): boolean =>
@@ -41,6 +41,8 @@ export function streamCut(cut: StreamCut, ms: number): string {
       return "the event stream passed the cap on a response's size, so it was read no further";
     case "ended":
       return `the browser run ended with the event stream still open after ${s} s`;
+    case "unread":
+      return "the browser did not hand the event stream over as it arrived, and read whole it has no cap on its size, so it was not read";
   }
 }
 
@@ -52,6 +54,14 @@ export function streamCut(cut: StreamCut, ms: number): string {
  */
 export const looksLikeEventStream = (body: string): boolean =>
   /^\uFEFF?(?::|(?:data|event|id|retry)(?::|\r|\n))/.test(body) && /[\r\n]/.test(body);
+
+/**
+ * Whether a body is read as an event stream. Its content type decides wherever there is one (a live
+ * answer, a captured exchange): `text/event-stream` always is, whatever its first line and even empty;
+ * any other type never is. Only a body that comes with no content type at all is judged by its syntax.
+ */
+export const readsAsEventStream = (body: string, contentType?: string | null): boolean =>
+  contentType?.trim() ? isEventStream(contentType) : looksLikeEventStream(body.trimStart());
 
 export interface StreamEvent {
   /** the `event:` field, "message" when the event names none */

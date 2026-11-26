@@ -16,6 +16,7 @@ import {
   ReadWrites,
   resolver,
   send,
+  zstdCodec,
 } from "../src/http.js";
 import type { Session } from "../src/session.js";
 import { type Operation, OperationSchema } from "../src/spec.js";
@@ -388,6 +389,103 @@ test("send: a zstd body that decodes past the cap is refused, not inflated", {
     minIntervalMs: 0,
   });
   assert.equal(r.body, '{"ok":true}');
+});
+
+/** Each text compressed into one zstd frame and flushed after it, so a decoder can read each piece as it comes. */
+async function zstdFlushed(texts: string[]): Promise<Buffer[]> {
+  const z = zlib.createZstdCompress();
+  let got: Buffer[] = [];
+  z.on("data", (b: Buffer) => got.push(b));
+  const pieces: Buffer[] = [];
+  for (const t of texts) {
+    z.write(t);
+    await new Promise<void>((r) => z.flush(() => r()));
+    await new Promise((r) => setImmediate(r));
+    pieces.push(Buffer.concat(got));
+    got = [];
+  }
+  z.destroy();
+  return pieces;
+}
+
+const streamed = { "content-type": "text/event-stream", "content-encoding": "zstd" };
+
+test("send: a zstd event stream is decoded as it arrives, so the idle bound reads its lines and a cut keeps them", {
+  skip: !zlib.createZstdCompress && "Node 22.15 or newer has zstd",
+}, async () => {
+  const [event, ...pings] = await zstdFlushed([`data: {"n":1}\n\n`, ...Array(12).fill(": ping\n\n")]);
+  let timer: NodeJS.Timeout | undefined;
+  const fetchImpl = (async () =>
+    new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(event);
+          // heartbeats every half second: comments, which hold no stream open
+          timer = setInterval(() => (pings.length ? c.enqueue(pings.shift()) : clearInterval(timer)), 500);
+        },
+        cancel: () => clearInterval(timer),
+      }),
+      { status: 200, headers: streamed },
+    )) as unknown as typeof fetch;
+  const t0 = Date.now();
+  const r = await send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+    site: "zst",
+    fetchImpl,
+    minIntervalMs: 0,
+  });
+  const took = Date.now() - t0;
+  clearInterval(timer);
+  assert.ok(r.body.startsWith('data: {"n":1}\n\n: ping\n\n'), JSON.stringify(r.body.slice(0, 80)));
+  assert.match(r.truncated ?? "", /sent no event for 3 s/);
+  assert.ok(took < 3000 + 2000, `took ${took} ms: the heartbeats were read as events`);
+
+  // a finite one, compressed whole
+  const whole = zlib.zstdCompressSync(Buffer.from('event: result\ndata: {"a":1}\n\n'));
+  const done = await send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+    site: "zst",
+    fetchImpl: (async () => new Response(whole, { status: 200, headers: streamed })) as unknown as typeof fetch,
+    minIntervalMs: 0,
+  });
+  assert.equal(done.body, 'event: result\ndata: {"a":1}\n\n');
+  assert.equal(done.truncated, undefined);
+
+  // the bytes bound counts what it decodes to: a few KB that expand past the cap stop there
+  const bomb = zlib.zstdCompressSync(Buffer.alloc(2 * MAX_BODY_BYTES, ":"));
+  const capped = await send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+    site: "zst",
+    fetchImpl: (async () => new Response(bomb, { status: 200, headers: streamed })) as unknown as typeof fetch,
+    minIntervalMs: 0,
+  });
+  assert.match(capped.truncated ?? "", /passed the cap/);
+  assert.ok(capped.body.length <= MAX_BODY_BYTES);
+});
+
+test("send: a zstd answer this Node has no decoder for is an error that says so, never its compressed bytes", {
+  skip: !zlib.zstdCompressSync && "Node 22.15 or newer has zstd",
+}, async () => {
+  const body = zlib.zstdCompressSync(Buffer.from('data: {"a":1}\n\n'));
+  const saved = { ...zstdCodec };
+  zstdCodec.stream = undefined;
+  zstdCodec.sync = undefined;
+  try {
+    for (const type of ["text/event-stream", "application/json"])
+      await assert.rejects(
+        () =>
+          send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+            site: "zst",
+            fetchImpl: (async () =>
+              new Response(body, {
+                status: 200,
+                headers: { "content-type": type, "content-encoding": "zstd" },
+              })) as unknown as typeof fetch,
+            minIntervalMs: 0,
+          }),
+        /zstd-encoded.*no zstd decoder/,
+        type,
+      );
+  } finally {
+    Object.assign(zstdCodec, saved);
+  }
 });
 
 test("send against a local server: GET has no body, per-site pacing, timeout", async () => {

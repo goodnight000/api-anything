@@ -2,7 +2,7 @@
 import { type HTMLElement, parse as parseHtml } from "node-html-parser";
 import { jsonValueEnd, parseJson } from "./codec.js";
 import type { ResponseSpec } from "./spec.js";
-import { looksLikeEventStream, parseEventStream } from "./stream.js";
+import { parseEventStream, readsAsEventStream } from "./stream.js";
 
 export const XSSI = ")]}'";
 // Anti-JSON-hijacking prefixes: Google's, Meta's /ajax/* and older Google/Facebook APIs.
@@ -14,11 +14,12 @@ export const xssiOf = (body: string) => PREFIXES.find((p) => body.trimStart().st
 /**
  * Strip the XSSI prefix and parse JSON losslessly. Google `rt=c` length-prefixed chunks, and
  * Meta-style bodies that repeat the prefix before each JSON value, become an array. A server-sent
- * event stream becomes its list of events (stream.ts).
+ * event stream becomes its list of events (stream.ts `readsAsEventStream`: `contentType` decides
+ * when the body came with one).
  */
-export function parseBody(body: string, xssiPrefix?: string): unknown {
+export function parseBody(body: string, xssiPrefix?: string, contentType?: string): unknown {
   let text = body.trimStart();
-  if (looksLikeEventStream(text)) return parseEventStream(text);
+  if (readsAsEventStream(text, contentType)) return parseEventStream(text);
   const prefix = xssiPrefix ?? xssiOf(text) ?? "";
   if (prefix && text.startsWith(prefix)) text = text.slice(prefix.length);
   text = text.trim();
@@ -465,12 +466,15 @@ export function extractEmbedded(body: string, regex: string): unknown {
   }
 }
 
-/** Body -> extracted value per the op's response spec. Undefined when the extract path is missing. */
-export function extract(res: ResponseSpec, body: string, base?: string): unknown {
+/**
+ * Body -> extracted value per the op's response spec. Undefined when the extract path is missing.
+ * `contentType`: the answer's, when it came with one (`parseBody`).
+ */
+export function extract(res: ResponseSpec, body: string, base?: string, contentType?: string): unknown {
   let data: unknown;
   if (res.format === "html") data = res.html ? extractHtml(body, res.html, base) : body;
   else if (res.format === "embedded") data = res.embedded ? extractEmbedded(body, res.embedded.regex) : undefined;
-  else data = parseBody(body, res.xssiPrefix);
+  else data = parseBody(body, res.xssiPrefix, contentType);
   if (res.extract && data !== undefined) data = getPath(data, res.extract);
   if (res.pick?.length && data !== undefined) data = pick(data, res.pick);
   return data;

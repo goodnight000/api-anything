@@ -16,7 +16,8 @@ export interface D1Statement {
   bind(...values: unknown[]): D1Statement;
   first<T = Record<string, unknown>>(): Promise<T | null>;
   all<T = Record<string, unknown>>(): Promise<{ results: T[] }>;
-  run(): Promise<unknown>;
+  /** D1's result of a statement run: `meta.changes` is the rows it changed */
+  run(): Promise<{ meta: { changes: number } }>;
 }
 export interface D1Database {
   prepare(sql: string): D1Statement;
@@ -492,10 +493,15 @@ export async function archiveCandidates(db: D1Database): Promise<(Archivable & {
   const rows = (
     await db
       .prepare(
-        `SELECT hash, site, op_name, status, created_at, last_ok_at FROM versions WHERE status IN (${SERVED.map(() => "?").join(", ")})`,
+        `SELECT hash, site, op_name, status, created_at, last_ok_at, replayed_at, replay_outcome FROM versions WHERE status IN (${SERVED.map(() => "?").join(", ")})`,
       )
       .bind(...SERVED)
-      .all<Pick<VersionRow, "hash" | "site" | "op_name" | "status" | "created_at" | "last_ok_at">>()
+      .all<
+        Pick<
+          VersionRow,
+          "hash" | "site" | "op_name" | "status" | "created_at" | "last_ok_at" | "replayed_at" | "replay_outcome"
+        >
+      >()
   ).results;
   return rows.map((r) => ({
     hash: r.hash,
@@ -504,6 +510,8 @@ export async function archiveCandidates(db: D1Database): Promise<(Archivable & {
     status: r.status,
     createdAt: r.created_at,
     ...(r.last_ok_at ? { lastOkAt: r.last_ok_at } : {}),
+    // a served version whose replay was ok is one the replay promoted (replay.ts), then
+    ...(r.replay_outcome === "ok" && r.replayed_at ? { promotedAt: r.replayed_at } : {}),
   }));
 }
 
@@ -743,22 +751,35 @@ export async function replayQueue(
   ).results;
 }
 
-/** Records a replay of a version still in review: `counted` adds an attempt and its time. */
-export const markReplay = (db: D1Database, hash: string, outcome: string, at: string, counted: boolean) =>
-  db
-    .prepare(
-      "UPDATE versions SET replay_outcome = ?, replays = replays + ?, replayed_at = CASE WHEN ? THEN ? ELSE replayed_at END WHERE hash = ? AND status = 'review'",
-    )
-    .bind(outcome, counted ? 1 : 0, counted ? 1 : 0, at, hash)
-    .run();
+/** Records the outcome of a replay of a version still in review; the attempt itself is `claimReplay`'s. */
+export const markReplay = (db: D1Database, hash: string, outcome: string) =>
+  db.prepare("UPDATE versions SET replay_outcome = ? WHERE hash = ? AND status = 'review'").bind(outcome, hash).run();
 
-/** Takes back the count of a replay that was never sent: the version's attempts, time and outcome as `was` holds them. */
-export const restoreReplay = (db: D1Database, was: VersionRow) =>
+/**
+ * Claims the next attempt at a version: it counts the attempt and its time, and succeeds only while the
+ * version is still in review for `reasons` alone with the attempts and time `was` holds (what the queue
+ * read saw). False when another tick or a maintainer got there first: then nothing may be sent.
+ */
+export async function claimReplay(db: D1Database, was: VersionRow, reasons: string, outcome: string, at: string) {
+  const r = await db
+    .prepare(
+      "UPDATE versions SET replay_outcome = ?, replays = replays + 1, replayed_at = ? WHERE hash = ? AND status = 'review' AND reasons = ? AND replays = ? AND replayed_at IS ?",
+    )
+    .bind(outcome, at, was.hash, reasons, was.replays ?? 0, was.replayed_at ?? null)
+    .run();
+  return r.meta.changes === 1;
+}
+
+/**
+ * Takes back the attempt `claimReplay` counted at `at`, for a replay that sent nothing: the version's
+ * attempts, time and outcome as `was` holds them.
+ */
+export const restoreReplay = (db: D1Database, was: VersionRow, at: string) =>
   db
     .prepare(
-      "UPDATE versions SET replays = ?, replayed_at = ?, replay_outcome = ? WHERE hash = ? AND status = 'review'",
+      "UPDATE versions SET replays = ?, replayed_at = ?, replay_outcome = ? WHERE hash = ? AND status = 'review' AND replays = ? AND replayed_at = ?",
     )
-    .bind(was.replays ?? 0, was.replayed_at ?? null, was.replay_outcome ?? null, was.hash)
+    .bind(was.replays ?? 0, was.replayed_at ?? null, was.replay_outcome ?? null, was.hash, (was.replays ?? 0) + 1, at)
     .run();
 
 /**

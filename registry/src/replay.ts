@@ -13,6 +13,7 @@ import type { Evidence } from "../../src/registry-api.js";
 import type { Operation } from "../../src/spec.js";
 import { vetShared } from "../../src/vet.js";
 import {
+  claimReplay,
   context,
   count,
   getSite,
@@ -73,7 +74,7 @@ async function unreplayable(env: TryEnv, v: VersionRow, op: Operation): Promise<
 /**
  * One tick's replays: at most `perTick`, one per site, while TRY_ENABLED is on. Each request is
  * counted against the replays' day and the catalog's sends a day (TRY_PER_DAY_ALL, shared with
- * `/v1/try`); once either is spent, the tick stops and nothing is counted as an attempt.
+ * `/v1/try`); once either is spent, the tick stops, and an attempt that had sent nothing yet is not counted.
  */
 export async function replaySkipped(env: TryEnv, now: number): Promise<{ tried: number; promoted: number }> {
   const done = { tried: 0, promoted: 0 };
@@ -94,7 +95,7 @@ export async function replaySkipped(env: TryEnv, now: number): Promise<{ tried: 
     try {
       op = JSON.parse(v.operation) as Operation;
     } catch {
-      await markReplay(db, v.hash, UNREPLAYABLE, at, false);
+      await markReplay(db, v.hash, UNREPLAYABLE);
       continue;
     }
     const why = await unreplayable(env, v, op);
@@ -106,29 +107,38 @@ export async function replaySkipped(env: TryEnv, now: number): Promise<{ tried: 
     }
     const origin = httpsOrigin(op.request.url);
     if (!req || !origin || req.method !== "GET" || httpsOrigin(req.url) !== origin) {
-      await markReplay(db, v.hash, UNREPLAYABLE, at, false);
+      await markReplay(db, v.hash, UNREPLAYABLE);
       continue;
     }
-    sites.add(v.site);
     // only the op's own literal headers, and no cookie
     const { cookie: _c, host: _h, "content-length": _l, ...headers } = req.headers;
-    const reserve = async () =>
-      (await count(db, "all", "replay:day", dayHour, 1)) <= perDay &&
-      (await count(db, "all", "try:day", dayHour, 1)) <= l.allPerDay;
+    let sent = false;
+    const reserve = async () => {
+      const ok =
+        (await count(db, "all", "replay:day", dayHour, 1)) <= perDay &&
+        (await count(db, "all", "try:day", dayHour, 1)) <= l.allPerDay;
+      sent ||= ok;
+      return ok;
+    };
     // Counted before the send: an answer that ends the tick (the Worker's CPU or time limit, on a body
     // and a recipe their uploader chose) would otherwise leave the version first in line every minute.
-    await markReplay(db, v.hash, STARTED, at, true);
+    // And a claim: a version a maintainer decided on, or another tick took, since the queue read is not sent.
+    if (!(await claimReplay(db, v, SKIPPED_ONLY, STARTED, at))) continue;
+    sites.add(v.site);
     let outcome: string;
+    let spent = false;
     try {
       const up = await fetchCapped(req.url, headers, new Set([origin]), l, reserve);
       const j = judge(op, up);
       outcome = j.class === "ok" ? (empty(j.data) ? "empty" : "ok") : j.class;
     } catch (e) {
-      if (e instanceof OverCap) {
-        // the day's sends were spent: this was no attempt
-        await restoreReplay(db, v);
+      spent = e instanceof OverCap;
+      if (spent && !sent) {
+        // the day's sends were spent before anything went: this was no attempt
+        await restoreReplay(db, v, at);
         break;
       }
+      // a redirect hop over the day's sends still sent its first request: that attempt stands
       outcome = "error";
     }
     done.tried++;
@@ -136,7 +146,8 @@ export async function replaySkipped(env: TryEnv, now: number): Promise<{ tried: 
       const evidence = JSON.parse(v.evidence) as Evidence;
       await promoteReplayed(db, v.hash, SKIPPED_ONLY, { ...evidence, registryReplay: { at, outcome: "ok" } }, at);
       done.promoted++;
-    } else await markReplay(db, v.hash, outcome, at, false);
+    } else await markReplay(db, v.hash, outcome);
+    if (spent) break;
   }
   return done;
 }

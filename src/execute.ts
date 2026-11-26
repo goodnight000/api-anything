@@ -1511,6 +1511,8 @@ function shape(
       data: out.data,
       ...(out.nextPage !== undefined ? { nextPage: out.nextPage } : {}),
       ...(out.hasMore !== undefined ? { hasMore: out.hasMore } : {}),
+      // the stream's own cut (the view's is added below): an answer kept, and served, says it
+      ...(out.truncated ? { truncated: out.truncated } : {}),
     };
     const at = hit?.at ?? clock.now();
     if (!hit) saveSnapshot(keep.cache, { at, op: keep.op, ...(out.tier ? { tier: out.tier } : {}), ...kept });
@@ -1520,11 +1522,13 @@ function shape(
         // a baseline of another recipe answers another shape: no comparison, a new start
         const base = prev && prev.op === keep.recipe ? prev : undefined;
         // a cache entry older than the baseline would move it back
-        if (base && base.at > at) return { out: changesOf(asAnswer(base, opts), now, base.at, op.response.key) };
-        return {
-          out: base ? changesOf(asAnswer(base, opts), now, base.at, op.response.key) : { first: true as const },
-          next: { at, op: keep.recipe, ...kept },
+        const compared = base && {
+          ...changesOf(asAnswer(base, opts), now, base.at, op.response.key),
+          // what a cut baseline lacked shows as added: the comparison says it was cut
+          ...(base.truncated ? { sinceTruncated: base.truncated } : {}),
         };
+        if (compared && base.at > at) return { out: compared };
+        return { out: compared || { first: true as const }, next: { at, op: keep.recipe, ...kept } };
       });
       changes = swapped.out;
       if (swapped.saved && !swapped.saved.kept)
@@ -1781,6 +1785,7 @@ async function run(
           data: hit.data,
           ...(hit.nextPage !== undefined ? { nextPage: hit.nextPage } : {}),
           ...(hit.hasMore !== undefined ? { hasMore: hit.hasMore } : {}),
+          ...(hit.truncated ? { truncated: hit.truncated } : {}),
           cached: true,
           ageMs,
           ms: Date.now() - t0,

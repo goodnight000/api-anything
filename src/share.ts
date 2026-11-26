@@ -217,6 +217,19 @@ export async function shareOps(
           out.push({ ...base, ...replayed, shared: false, reason: `refused: ${op.errors.join("; ")}` });
           continue;
         }
+        // plan read the site again: an op another process learned or healed meanwhile is not the one replayed
+        const now = loadSite(p.site)?.site.operations.find((x) => x.name === op.op);
+        if (JSON.stringify(now) !== JSON.stringify(mine)) {
+          out.push({
+            ...base,
+            ...replayed,
+            shared: false,
+            reason:
+              "the op changed while its clean replay was out (learned or healed again): the replay proved the op it replaced, so nothing went up",
+            next: `run api-anything publish ${p.site} ${op.op} --yes again to replay and share the op as it is now`,
+          });
+          continue;
+        }
       }
       // the replay did not show it public: an automatic share waits for the user's yes
       if (!o.consent && !op.public) {

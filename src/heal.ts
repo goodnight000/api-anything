@@ -616,10 +616,18 @@ export function loginWall(capture: CaptureResult, triggerUrl: string): string | 
   return password || /(log|sign)[-_]?in|\/accounts\/login|\/i\/flow\/login/i.test(f.pathname) ? f.pathname : undefined;
 }
 
-/** The final page of a run, when the trigger was redirected to the site's cookie-consent step (`consentStep`). */
+/**
+ * The final page of a run, when the trigger was redirected to the site's cookie-consent step
+ * (`consentStep`). As the tier-1 classifier holds it: only a 2xx page that is no bot challenge (and
+ * no sign-in page, which `consentStep` refuses); an outage or a challenge there stays what it is.
+ */
 export function consentWall(capture: CaptureResult, triggerUrl: string): string | undefined {
-  const doc = capture.exchanges.filter((e) => e.resourceType === "document" && e.response?.body).at(-1);
-  return consentStep(triggerUrl, capture.finalUrl, doc?.response?.body ?? "") ? capture.finalUrl : undefined;
+  const doc =
+    lastLoad(capture) ??
+    capture.exchanges.filter((e) => e.resourceType === "document" && e.response?.body).at(-1)?.response;
+  if (!doc || doc.status < 200 || doc.status >= 300) return undefined;
+  if (botWall({ status: doc.status, headers: doc.headers, body: doc.body ?? "" })) return undefined;
+  return consentStep(triggerUrl, capture.finalUrl, doc.body ?? "") ? capture.finalUrl : undefined;
 }
 
 /** A read that ended on the site's cookie-consent page at `url`: an error, which nothing heals. */
@@ -1142,10 +1150,11 @@ function learnOrExplain(
 }
 
 /** The recipe finds data in this body (a non-empty list, or a value). */
-function resolves(spec: ResponseSpec, body: string | undefined): boolean {
+function resolves(spec: ResponseSpec, answer: Exchange["response"]): boolean {
+  const body = answer?.body;
   if (!body) return false;
   try {
-    const d = within(() => extract(spec, body), DEADLINE.read);
+    const d = within(() => extract(spec, body, undefined, answer.contentType), DEADLINE.read);
     return d !== undefined && d !== null && !(Array.isArray(d) && !d.length);
   } catch {
     return false;
@@ -1423,7 +1432,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       guestCookies: loadSession(i.site).guestCookies,
       public: i.public,
       // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
-      ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
+      ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response) } : {}),
     });
   let learned: ReturnType<typeof learn>;
   // said when the stored examples do not fit the capture

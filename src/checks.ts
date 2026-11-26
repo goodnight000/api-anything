@@ -71,12 +71,12 @@ const isEmpty = (d: unknown) =>
   (typeof d === "object" && !Array.isArray(d) && !Object.keys(d as object).length);
 
 /**
- * A challenge, a sign-in page, a rate limit or a server that failed or could not be reached says
- * nothing about the op: inconclusive, counted neither way.
+ * A challenge, a sign-in page, the site's cookie-consent step, a rate limit or a server that failed or
+ * could not be reached says nothing about the op: inconclusive, counted neither way.
  */
 export function judgeCase(expect: Check["expect"], r: CallResult): { outcome: Outcome; got: string } {
   const got = r.ok ? (isEmpty(r.data) ? "empty" : "result") : r.class === "input" ? "input" : r.class;
-  if (!r.ok && (r.class === "blocked" || r.class === "auth" || r.class === "rate" || r.server))
+  if (!r.ok && (r.class === "blocked" || r.class === "auth" || r.class === "rate" || r.server || r.wall))
     return { outcome: "inconclusive", got };
   return { outcome: got === expect ? "pass" : "fail", got };
 }

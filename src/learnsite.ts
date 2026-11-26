@@ -264,11 +264,18 @@ function lookedUpData(run: CaptureFile, args: Args): { id: number; why: string }
 }
 
 /** The recipe reads something out of this answer. */
-function resolves(r: Recipe, body: string | undefined): boolean {
+function resolves(r: Recipe, answer: Exchange["response"]): boolean {
+  const body = answer?.body;
   if (!body) return false;
   try {
     const d = within(
-      () => extract({ format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r }, body),
+      () =>
+        extract(
+          { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r },
+          body,
+          undefined,
+          answer.contentType,
+        ),
       DEADLINE.read,
     );
     return !empty(d);
@@ -707,7 +714,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     // a request that is no read is picked only when nothing else would do, and then refused below
     const reads = [...options.filter((x) => !refusal(x.request)), ...options.filter((x) => refusal(x.request))];
     chosen = told
-      ? (reads.find((x) => resolves(given, exchange(x.request)?.response?.body)) ?? reads[0])
+      ? (reads.find((x) => resolves(given, exchange(x.request)?.response)) ?? reads[0])
       : reads.find((x) => x.recipe);
   }
   const page = c1.exchanges.filter((e) => e.resourceType === "document" && e.response).at(-1)?.response;

@@ -170,6 +170,65 @@ test("a registry match found by an alias keeps it, and a pull writes the served 
   assert.deepEqual(loadSite("suggest")!.site.aliases, ["example.org"]);
 });
 
+const found = (name: string, domain: string, status: "live" | "candidate", aliases: string[] = []) => ({
+  name,
+  domain,
+  aliases,
+  operations: [
+    {
+      name: "search",
+      signature: "search(q)",
+      status,
+      confirmations: status === "live" ? 2 : 0,
+      params: [{ name: "q", type: "string", required: true }],
+    },
+  ],
+});
+
+test("an installed copy that lacks an alias the registry added later is found by it, as the installed site", async () => {
+  // this machine's copy predates the alias
+  const site = spec();
+  assert.equal(site.aliases, undefined);
+  fake.matches = [found("suggest", "example.net", "live", ["example.org"])];
+  for (const q of ["example.org", "https://www.example.org/titles"]) {
+    const r = await search(q, { local: [site] });
+    assert.equal(r.matches.length, 1, JSON.stringify(r.matches));
+    assert.deepEqual([r.matches[0]?.site, r.matches[0]?.installed], ["suggest", true], q);
+    assert.deepEqual(r.matches[0]?.matched, ["example.org"]);
+  }
+});
+
+test("by domain, a confirmed registry site ranks above an unconfirmed one, then score; this machine's own keep their place", async () => {
+  // the registry's order: the confirmed site found by an alias (90), then the unconfirmed one on the domain (100)
+  fake.matches = [found("suggest", "example.net", "live", ["example.com"]), found("films", "example.com", "candidate")];
+  const r = await search("example.com", { local: [] });
+  assert.deepEqual(
+    r.matches.map((m) => m.site),
+    ["suggest", "films"],
+  );
+  // by words the registry finds only confirmed sites: score alone, as before
+  fake.matches = [found("films", "example.com", "live"), found("suggest", "example.net", "live")];
+  assert.deepEqual(
+    (await search("films search", { local: [] })).matches.map((m) => m.site),
+    ["films", "suggest"],
+  );
+  // a spec of this machine's on the domain stays where score and name put it: here second, after films
+  fake.matches = [found("suggest", "example.net", "live", ["example.com"]), found("films", "example.com", "candidate")];
+  const own = spec(
+    { name: "mine", baseUrl: "https://www.example.com" },
+    {
+      request: { method: "GET", url: "https://www.example.com/find?q=dune", headers: {} },
+      slots: [{ param: "q", at: ["query:q"] }],
+      trigger: { url: "https://www.example.com/find?q={q}" },
+      match: { host: "www.example.com", path: "/find" },
+    },
+  );
+  assert.deepEqual(
+    (await search("example.com", { local: [own] })).matches.map((m) => m.site),
+    ["suggest", "mine", "films"],
+  );
+});
+
 test("an alias gives an op no new host, no cookie and no session", async () => {
   const imdb = bundled("imdb");
   // an op that calls the alias is still off the spec's own site

@@ -48,7 +48,7 @@ const run = (over: Partial<SiteRun> = {}): SiteRun => ({
       caseRow("search", "check 1", "pass", { args: { q: "tea kettle" }, purpose: "a second query" }),
       caseRow("item", "example", "fail", {
         got: "input",
-        reason: "HTTP 404: not found at https://shop.test/p/blue-widget-0042",
+        reason: "no item blue-widget-0042 at https://shop.test/p/blue-widget-0042",
         ms: 80,
       }),
       caseRow("item", "check 1", "inconclusive", { got: "rate", reason: "rate limited" }),
@@ -92,18 +92,18 @@ test("an entry carries no args, purposes or answers, and its reason names no arg
   const entries = siteEntries(run());
   const text = JSON.stringify(entries);
   assert.doesNotMatch(text, /tea kettle|blue-widget-0042|a second query|"args"|"purpose"|"next"/);
-  assert.equal(byOp(entries).item!.reason, "HTTP 404: not found at https://shop.test/p/<arg>");
+  assert.equal(byOp(entries).item!.reason, "no item <arg> at https://shop.test/…");
 });
 
 test("a reason is one short line", () => {
-  const long = `answered drift:\n  ${"x".repeat(500)}`;
+  const long = `answered drift\n  ${"x".repeat(500)}`;
   const e = siteEntries(
     run({ output: { ok: false, results: [caseRow("search", "example", "fail", { reason: long })] } }),
   );
   const reason = byOp(e).search!.reason!;
   assert.ok(reason.length <= 200, `${reason.length} chars`);
   assert.doesNotMatch(reason, /\n/);
-  assert.match(reason, /^answered drift: x+…$/);
+  assert.match(reason, /^answered drift x+…$/);
 });
 
 test("a reason keeps verify's words and drops the page text it quotes", () => {
@@ -128,8 +128,35 @@ test("a reason keeps verify's words and drops the page text it quotes", () => {
       "HTTP 403 with no login or challenge markers: …",
       "HTTP 200 carrying batchexecute error 13 (INTERNAL), judged as HTTP 500: …",
       "HTTP 400: …",
-      "not sent: shop answered blocked (HTTP 403: …",
+      "not sent: …",
     ],
+  );
+});
+
+test("no text a site sent reaches the record: verify's own words and the status, and an address's origin", () => {
+  const said: [string, string][] = [
+    ["HTTP 503: The service is offline for maintenance.", "HTTP 503: …"],
+    ["HTTP 429 (retry after 60 s): Slow down, friend", "HTTP 429 (retry after 60 s): …"],
+    ["GraphQL: Viewer quota exceeded for this account", "GraphQL: …"],
+    ["the event stream sent an error event: model overloaded, try later", "the event stream sent an error event: …"],
+    ["response is not JSON: Service temporarily down", "response is not JSON: …"],
+    [
+      "redirected to https://shop.test/consent?continue=%2Fp&note=Hello%20there, the site's cookie-consent page, instead of the data: the site asks this visitor a question first",
+      "redirected to https://shop.test/…, the site's cookie-consent page, instead of the data: …",
+    ],
+  ];
+  const e = siteEntries(
+    run({
+      ops: said.map((_, i) => `op${i}`),
+      output: {
+        ok: false,
+        results: said.map(([reason], i) => caseRow(`op${i}`, "example", "fail", { got: "error", reason })),
+      },
+    }),
+  );
+  assert.deepEqual(
+    e.map((x) => x.reason),
+    said.map(([, kept]) => kept),
   );
 });
 
@@ -192,7 +219,7 @@ test("the summary gives totals, then each failing and inconclusive op with its r
   assert.match(md, /\| pass \| 1 \|/);
   assert.match(md, /\| fail \| 1 \|/);
   const failing = md.slice(md.indexOf("### Failing"), md.indexOf("### Inconclusive"));
-  assert.match(failing, /`shop\.item` \| example \| input \| 1 \| HTTP 404: not found/);
+  assert.match(failing, /`shop\.item` \| example \| input \| 1 \| no item <arg>/);
   const inconclusive = md.slice(md.indexOf("### Inconclusive"));
   assert.match(inconclusive, /`shop\.deals`/);
   assert.match(inconclusive, /`shop\.gone`/);
@@ -243,10 +270,7 @@ test("the issue body lists each op failing twice, with the latest run", () => {
   const now = health();
   const body = issueBody(now, persistentFailures(now, only("shop", "item", "fail"))!);
   assert.match(body, /1 bundled operation failed in two consecutive/);
-  assert.match(
-    body,
-    /\| `shop\.item` \| example \| input \(tier 1\) \| HTTP 404: not found at https:\/\/shop\.test\/p\/<arg> \|/,
-  );
+  assert.match(body, /\| `shop\.item` \| example \| input \(tier 1\) \| no item <arg> at https:\/\/shop\.test\/… \|/);
   assert.match(body, /\[the run\]\(https:\/\/github\.com\/o\/r\/actions\/runs\/1\)/);
   assert.match(body, /1 pass, 1 fail, 2 inconclusive, 1 skipped/);
   assert.match(issueBody(now, []), /No bundled operation failed in two consecutive runs/);

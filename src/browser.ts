@@ -1379,13 +1379,9 @@ async function trigger(o: TriggerOptions): Promise<CaptureResult> {
     const tapped = s && (await readTapped(s, deadline, stopped));
     if (s) t!.drop(s);
     if (tapped) return tapped;
-    // Playwright's own read, which settles once the body has ended: a stream that finished, or nothing
-    const start = Date.now();
-    const late = new Promise<undefined>((r) =>
-      setTimeout(() => r(undefined), Math.max(0, Math.min(STREAM_MAX_MS, deadline - start))).unref(),
-    );
-    const body = await Promise.race([res.text().catch(() => undefined), stopped.then(() => undefined), late]);
-    return body === undefined ? { truncated: streamCut("time", Date.now() - start) } : { body };
+    // Playwright's own read buffers the whole body with no cap on its size (a frame of another site's
+    // process streams past the page's session): no stream is read that way, and the exchange says so
+    return { truncated: streamCut("unread", 0) };
   };
   // Bodies must be read here: after the next navigation the browser discards them.
   const onResponse = (res: Response) => {

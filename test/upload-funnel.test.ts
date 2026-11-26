@@ -269,6 +269,48 @@ test("a site cooling down, over its budget, or answering rate gets no replay now
   assert.equal(uploads().length, 1, "only the paced site's first replay went up");
 });
 
+test("an op learned again while its clean replay was out is not shared: the replay proved the one it replaced", async () => {
+  shareOn();
+  saveSite(site());
+  const { asked, fetchImpl } = web(() => {
+    // another process re-learns the op while the request is in flight
+    saveSite(site({ description: "learned again" }));
+    return json({ hits: [{ title: "a puppy" }] });
+  });
+  const [out] = await shareOps("demo", ["search"], { evidence: {}, consent: true, fetchImpl, minIntervalMs: 0 });
+  assert.equal(asked.length, 1);
+  assert.equal(out!.shared, false, JSON.stringify(out));
+  assert.match(out!.reason!, /changed while its clean replay was out/);
+  assert.match(out!.next!, /api-anything publish demo search --yes/);
+  assert.equal(uploads().length, 0, "nothing went up with an ok another op earned");
+  assert.equal(loadSite("demo")!.site.operations[0]!.description, "learned again", "the new op is left as it is");
+});
+
+test("status says a review is as of the upload and how to ask again; the duplicate's answer refreshes it", async () => {
+  shareOn();
+  saveSite(site());
+  const { fetchImpl } = web(() => json({ error: "sign in first" }, 401));
+  const [held] = await shareOps("demo", ["search"], { evidence: {}, consent: true, fetchImpl, minIntervalMs: 0 });
+  assert.equal(held!.status, "review", JSON.stringify(held));
+  const p = status("demo").problems.find((x) => x.problem === "review");
+  assert.match(p!.detail, /when it was shared/);
+  assert.match(p!.next, /api-anything publish demo search --yes/, "how to learn whether a maintainer decided since");
+
+  // a maintainer approved it meanwhile: the same version sent again answers its status now
+  fake.onUpload = (u) => ({
+    status: 200,
+    body: { hash: hashOf(u.site.name, OperationSchema.parse(u.operation)), status: "candidate", duplicate: true },
+  });
+  const [again] = await shareOps("demo", ["search"], { evidence: {}, consent: true, fetchImpl, minIntervalMs: 0 });
+  assert.equal(again!.status, "candidate", JSON.stringify(again));
+  assert.equal(loadSite("demo")!.site.operations[0]!.version?.status, "candidate");
+  assert.equal(
+    status("demo").problems.find((x) => x.problem === "review"),
+    undefined,
+    "no review problem once the registry said otherwise",
+  );
+});
+
 test("every reason the registry gives has a category, and an unknown one is other", () => {
   const samples = [
     "its clean replay was skipped, not ok",

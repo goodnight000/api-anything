@@ -254,7 +254,8 @@ api-anything verify hn-search
 
 `--expect` is `result` (data), `empty` (the site's own no-results) or `input` (the args are
 refused). `verify` reports each case as `pass`, `fail` or `inconclusive`: a challenge, a sign-in
-page, a rate limit or a server that failed or could not be reached tests nothing. Check args are
+page, the site's cookie-consent page, a rate limit or a server that failed or could not be reached
+tests nothing. Check args are
 shared with the spec, so use public values only.
 
 `verify` is made for a job nobody watches:
@@ -967,7 +968,9 @@ will run with `--yes`. An upload the catalog holds for review is served only to 
 approves it: each op's outcome has a `reason` with every cause in words, `held` (each cause and its
 category), and a `next`. The one cause you can fix is a missing example (`add` it again with
 `--example`, then publish); otherwise `next` says there is nothing to do but wait, since publishing the
-same op again changes nothing. `status` shows it as a `review` problem.
+same op again changes nothing. `status` shows it as a `review` problem, as the catalog answered when you
+published: it asks the catalog nothing, so its `next` says to publish the op again to see whether a
+maintainer has decided since (the answer to the same version sent again is its status now).
 
 Your agent does the first two on its own: `find_sites` searches the catalog, and calling a site this
 machine doesn't have fetches it, reads only. A new operation is a candidate until installs other than
@@ -1032,7 +1035,9 @@ Known limits in detail:
 - An answer that arrives as server-sent events (`text/event-stream`, from an `EventSource` or a
   `fetch`) is learned, called at every tier and healed like JSON: its body reads as a list of
   `{event, id, data}` (`data` parsed when it is a JSON object or array, else text), so a recipe
-  reaches in with `[*]` (`--extract '[*].data.items'`). Each read of a stream stops when it ends,
+  reaches in with `[*]` (`--extract '[*].data.items'`). The answer's content type decides: a
+  `text/event-stream` answer is always read as a stream (one that ended with no events is `[]`), an
+  answer of any other type never is. Each read of a stream stops when it ends,
   after 3 s with no event (heartbeat comments do not count), after 10 s, or past 32 MiB. A stream cut
   that way answers with what arrived, `ok` when the recipe found data there, and `truncated` says
   which bound stopped it ("the event stream was still open after 10 s, so it was read no further");

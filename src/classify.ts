@@ -19,7 +19,7 @@ import {
 } from "./extract.js";
 import { siteOf } from "./session.js";
 import type { Operation, ResponseSpec } from "./spec.js";
-import { looksLikeEventStream, type StreamEvent } from "./stream.js";
+import { readsAsEventStream, type StreamEvent } from "./stream.js";
 
 export type Class = "ok" | "drift" | "auth" | "rate" | "blocked" | "input" | "error";
 export interface Classified {
@@ -718,7 +718,7 @@ function mentionsParam(op: Operation, body: string): boolean {
 }
 
 export function classify(op: Operation, r: Observed): Classified {
-  return classifyResponse(op, r, () => parseBody(r.body ?? "", op.response.xssiPrefix));
+  return classifyResponse(op, r, () => parseBody(r.body ?? "", op.response.xssiPrefix, r.headers["content-type"]));
 }
 
 /** A read's missing data on a page it was redirected to is the site's consent step when that page is one. */
@@ -749,7 +749,7 @@ function classifyResponse(
  * an error too: nothing has been answered yet.
  */
 function streamVerdict(r: Observed, data: unknown): Classified | undefined {
-  if (!Array.isArray(data) || !looksLikeEventStream((r.body ?? "").trimStart())) return undefined;
+  if (!Array.isArray(data) || !readsAsEventStream(r.body ?? "", r.headers["content-type"])) return undefined;
   const failed = (data as StreamEvent[]).find((e) => e?.event === "error");
   if (failed) {
     const said = typeof failed.data === "string" ? failed.data : (JSON.stringify(failed.data) ?? "");
@@ -1024,7 +1024,7 @@ export function judge(op: Operation, r: Observed): Judged {
   let items: ReturnType<typeof extractHtml> | undefined;
   const readJson = () => {
     if (!read) {
-      parsed = parseBody(r.body ?? "", op.response.xssiPrefix);
+      parsed = parseBody(r.body ?? "", op.response.xssiPrefix, r.headers["content-type"]);
       read = true;
     }
     return parsed;

@@ -139,6 +139,51 @@ describe("an event stream is read like any JSON answer", () => {
   });
 });
 
+describe("the content type decides whether a body is a stream, wherever there is one", () => {
+  const read = (response: Record<string, unknown>) =>
+    OperationSchema.parse({
+      name: "list",
+      request: { method: "GET", url: "https://s.test/api/list", headers: {} },
+      slots: [],
+      params: [],
+      trigger: { url: "https://s.test/list" },
+      response: { format: "json", ...response },
+      readOnly: true,
+    });
+
+  test("text/event-stream is a stream whatever its first line, and one that ended with no bytes is an empty list", () => {
+    const body = "extension: v\ndata: hello\n\n";
+    assert.equal(looksLikeEventStream(body), false, "the syntax alone would not say so");
+    assert.deepEqual(parseBody(body, undefined, "text/event-stream"), [{ event: "message", data: "hello" }]);
+    const j = judge(read({}), { status: 200, headers: sse, body });
+    assert.equal(j.class, "ok", j.reason);
+    assert.deepEqual(j.data, [{ event: "message", data: "hello" }]);
+    assert.deepEqual(parseBody("", undefined, "text/event-stream; charset=utf-8"), []);
+    const ended = judge(op(), answer(""));
+    assert.deepEqual([ended.class, ended.reason], ["ok", "no results"]);
+    // a capture's exchange: its outline reads the events too
+    assert.ok(JSON.stringify(outline("text/event-stream", body, [])).includes("data"));
+  });
+
+  test("any other content type is never a stream: plain text that opens like a field is not JSON", () => {
+    for (const body of ["data: temporarily unavailable\n", ": maintenance\n", "id: 5 not found\n"]) {
+      assert.throws(() => parseBody(body, undefined, "text/plain"), body);
+      for (const o of [read({}), read({ extract: "[*]" })]) {
+        const c = classify(o, { status: 200, headers: { "content-type": "text/plain" }, body });
+        assert.equal(c.class, "drift", `${JSON.stringify(body)}: ${c.reason}`);
+        assert.match(c.reason, /not JSON/);
+      }
+      assert.equal(outline("text/plain", body, []), undefined, body);
+    }
+  });
+
+  test("only a body that comes with no content type at all is judged by its syntax", () => {
+    assert.deepEqual(parseBody(STREAM), EVENTS);
+    assert.deepEqual(parseBody(STREAM, undefined, ""), EVENTS);
+    assert.equal(classify(read({ extract: "[*]" }), { status: 200, headers: {}, body: STREAM }).class, "ok");
+  });
+});
+
 const op = (over: Record<string, unknown> = {}): Operation =>
   OperationSchema.parse({
     name: "search",
@@ -316,6 +361,19 @@ describe("against the fixture", () => {
       assert.ok(took < STREAM_IDLE_MS + 4000, `took ${took} ms`);
     });
 
+    test("a cached answer of a cut stream says it was cut, and so does a comparison with one", async () => {
+      const keep = { ...one, ignoreCoolDown: true, maxAgeMs: 60_000, changes: true };
+      const first = await call(SITE, "idle", { q: "lima" }, keep);
+      assert.match(first.truncated ?? "", /no event for 3 s/, JSON.stringify(first));
+      const hit = await call(SITE, "idle", { q: "lima" }, { ...one, maxAgeMs: 60_000 });
+      assert.equal(hit.cached, true, JSON.stringify(hit));
+      assert.deepEqual(hit.data, first.data);
+      assert.equal(hit.truncated, first.truncated, "the cache entry says what its answer said");
+      const next = await call(SITE, "idle", { q: "lima" }, { ...one, ignoreCoolDown: true, changes: true });
+      const changes = next.changes as { sinceTruncated?: string } | undefined;
+      assert.equal(changes?.sinceTruncated, first.truncated, JSON.stringify(next.changes));
+    });
+
     test("an error event, a rate limit, a challenge and an empty stream each get their class", async () => {
       // each call past the cool-down the one before it starts
       const past = { ...one, ignoreCoolDown: true };
@@ -397,6 +455,20 @@ describe("against the fixture", () => {
       const o = await cli("inspect", c.id, String(e.id), "--outline", "--example", "q=alpha one");
       assert.equal(o.code, 0, o.stderr);
       assert.match(o.stdout, /items/);
+    });
+
+    test("a stream the page's DevTools session does not see is not read whole with no cap: the exchange is cut, saying why", async () => {
+      // 3 MiB, under the cap: the read that would have buffered it has no cap of its own
+      const c = await capturePage({ url: `${fx.url}/live/framed?q=alpha&mb=3` });
+      const e = c.exchanges.find((x) => x.request.url.includes("/api/live/plain?mode=big"));
+      if (!e?.response) throw new Error(`no stream captured: ${c.exchanges.map((x) => x.request.url).join(", ")}`);
+      const shown = JSON.stringify({
+        ...e.response,
+        body: e.response.body?.slice(0, 80),
+        length: e.response.body?.length,
+      });
+      assert.equal(e.response.body, undefined, shown);
+      assert.match(e.response.truncated ?? "", /did not hand the event stream over as it arrived.*not read/, shown);
     });
 
     test("a capture of a page whose stream never ends, or goes idle, finishes within the bound, marked cut", async () => {

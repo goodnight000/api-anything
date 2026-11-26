@@ -802,12 +802,29 @@ export async function search(
       })),
     };
   };
+  const entryOf = (m: (typeof remote)[number]) => ({
+    ...m,
+    site: m.name,
+    domains: [m.domain],
+    operations: m.operations.map((x) => ({ ...x, op: x.signature })),
+  });
+  const shared = new Map(remote.map((m) => [m.name, m]));
   const scored = [
-    ...local.map((s) => ({
-      found: withInterfaces(localFound(s)),
-      match: matchQuery(indexEntry(s, ""), query),
-      local: true,
-    })),
+    ...local.map((s) => {
+      const own = matchQuery(indexEntry(s, ""), query);
+      // the registry's copy of this very site may be found by more (an alias added since this copy)
+      const theirs = shared.get(s.name);
+      const also =
+        theirs && theirs.domain === siteOf(new URL(s.baseUrl).hostname)
+          ? matchQuery(entryOf(theirs), query)
+          : undefined;
+      return {
+        found: withInterfaces(localFound(s)),
+        match: also && also.score > own.score ? also : own,
+        local: true,
+        live: false,
+      };
+    }),
     ...remote
       .filter((m) => !installed.has(m.name))
       .map((m) => ({
@@ -829,28 +846,32 @@ export async function search(
           })),
           ...(m.interfaces?.length ? { interfaces: m.interfaces } : {}),
         },
-        match: matchQuery(
-          { ...m, site: m.name, domains: [m.domain], operations: m.operations.map((x) => ({ ...x, op: x.signature })) },
-          query,
-        ),
+        match: matchQuery(entryOf(m), query),
         local: false,
+        // the registry's rule (registry/src/catalog.ts): a site some other install confirmed ranks first
+        live: m.operations.some((op) => op.status === "live"),
       })),
   ];
   const best = Math.max(0, ...scored.map((x) => x.match.score));
+  const byScore = (a: (typeof scored)[number], b: (typeof scored)[number]) =>
+    b.match.score - a.match.score || a.found.site.localeCompare(b.found.site);
   // a local site far behind the best answer matched a stray word; the registry already chose its own
-  const matches = scored
-    .filter((x) => !x.local || (x.match.score > 0 && x.match.score * 3 >= best))
-    .sort((a, b) => b.match.score - a.match.score || a.found.site.localeCompare(b.found.site))
-    .slice(0, limit)
-    .map(({ found, match }) => ({
-      ...found,
-      matched: match.matched,
-      unmatched: match.unmatched,
-      operations: found.operations.map((op) => ({
-        ...op,
-        ...operationMatch({ op: op.signature, description: op.description }, query),
-      })),
-    }));
+  const ranked = scored.filter((x) => !x.local || (x.match.score > 0 && x.match.score * 3 >= best)).sort(byScore);
+  // By domain, the registry's sites go confirmed first, then by score, in the places they hold among
+  // this machine's specs, which keep theirs.
+  if (domainOf(query)) {
+    const theirs = ranked.filter((x) => !x.local).sort((a, b) => Number(b.live) - Number(a.live) || byScore(a, b));
+    for (let i = 0, j = 0; i < ranked.length; i++) if (!ranked[i]!.local) ranked[i] = theirs[j++]!;
+  }
+  const matches = ranked.slice(0, limit).map(({ found, match }) => ({
+    ...found,
+    matched: match.matched,
+    unmatched: match.unmatched,
+    operations: found.operations.map((op) => ({
+      ...op,
+      ...operationMatch({ op: op.signature, description: op.description }, query),
+    })),
+  }));
   const uncovered = matches.length ? undefined : domainOf(query);
   const related = uncovered ? relatedSites(uncovered, local, remoteRelated) : [];
   return {
