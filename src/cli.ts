@@ -1010,7 +1010,14 @@ function cmdInspect({ v, pos }: Parsed): number {
       url: shown(e.request.url),
       ...(shownBody !== undefined ? { body: capOutput(shownBody, 4000).data } : {}),
     },
-    ...(e.response ? { status: e.response.status, type: e.response.contentType } : { aborted: !!e.aborted }),
+    ...(e.response
+      ? {
+          status: e.response.status,
+          type: e.response.contentType,
+          // an event stream read to a bound: the body is what arrived before it
+          ...(e.response.truncated ? { cut: e.response.truncated } : {}),
+        }
+      : { aborted: !!e.aborted }),
     ...capOutput(unlayer(data)),
     ...(note ? { note } : {}),
   });

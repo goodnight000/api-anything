@@ -125,7 +125,10 @@ Input: the captured exchanges plus one or two example arg sets. Output: an Opera
 1. **Pick the request.** Use the `match` if given (then nothing in the pool counts as noise). Otherwise
    take the candidates that carry the example values (searched at every decoded layer) and return
    JSON-ish data, drop noise (subresource assets, analytics, beacons; a document or XHR whose path ends
-   in `.js` is not an asset), and rank them. A data-less answer (empty 2xx, `{"success":true}`, `OK`)
+   in `.js` is not an asset), and rank them. An event stream (an `EventSource`'s, or a fetch's answered
+   `text/event-stream`) is a candidate like an XHR: its body is the list of its events (see Streamed
+   answers), so the example values, the outline, paging and checks find it as they find JSON. A
+   WebSocket's messages are never one. A data-less answer (empty 2xx, `{"success":true}`, `OK`)
    ranks below every real answer: a read's answer is data. With a response recipe (`--html`, `--embedded`,
    `--extract`), a candidate the recipe resolves on wins over a beacon that echoes the page URL. The
    agent confirms which one when it's ambiguous. A read picked this way whose answer is data-less
@@ -784,7 +787,7 @@ Every response is classified, never by status code alone:
 | `rate` | 429; any 4xx or 5xx that carries a Retry-After (a 503 in maintenance, a 403 lockout: the server named its wait, so sooner meets it again; a wall's markers still make it `blocked`, a 2xx with one is its answer); "please wait", "rate limit" | back off, report; no heal; the site cools down (Execution ladder) |
 | `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, Anubis, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers; 451 (Unavailable For Legal Reasons: not available from this network or region). A page showing a sign-in form is `auth`, not a wall, when its only challenge marker is one that also rides on ordinary pages (a CAPTCHA widget, a vendor script or header on a challenge status); an interstitial's own structure or title on that page is still a wall; a tier-3 run or a heal's recapture whose trigger fired no matching request and ended on a challenge that did not solve (judged before a sign-in page or a page that is down) | escalate transport tier; then diagnostic `gated`, whose `next` asks for `api-anything login <site> --window`: to clear the challenge in the window, or, for a bare 403 at every tier (no challenge to clear), to see why the site refuses this machine or network. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal. A 451 climbs no tier (a browser on the same network gets the same answer): `retry: "no"`, `nextCall` `report`. The site then cools down (Execution ladder) |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
-| `error` | a write refused in its 2xx answer (see Writes); a read, signed in or not and in any format (JSON, html, embedded), redirected to the site's cookie-consent step instead of its data (below): `wall: "consent"`, its address in `reason`, a `next` to answer it (`nextCall` `login`, with `mode: "window"` for a public read); a signed-in JSON read (it holds a credential ref, or was learned signed in) redirected off its path to an HTML page of the same site with no sign-in form or challenge: a consent, terms or "verify it's you" step, reported with its address and a `next` to finish it in the browser and run `api-anything login <site>` (`nextCall` `login`; the address is the site's own text, so `next` shows it as it shows a spec's address: no part that spells words, and the origin alone past 200 characters) (a real redirect only: an SPA's shell at the request's own address is drift); a tier-1 answer over 32 MiB (a declared length, the bytes streamed, or a zstd body as it decodes), refused before it is read whole: no tier climbs, `retry: "no"`, `nextCall` `report` (a write's `check_site`); an html read's page of more than 200,000 elements (or closing tags, comments and CDATA sections), refused before it is parsed (not drift: a heal would read the same page; `next` says not to retry and `nextCall` is `report`, a write's `check_site`, as for an answer over 32 MiB); an answer whose reading ran past the read deadline (5 s), with the same `next` and `nextCall`, and args whose test against the op's patterns ran past its own (500 ms), before anything is sent (`nextCall` `report`); anything else (a network error names its cause) | return with details; no heal, nothing stale |
+| `error` | a write refused in its 2xx answer (see Writes); a read, signed in or not and in any format (JSON, html, embedded), redirected to the site's cookie-consent step instead of its data (below): `wall: "consent"`, its address in `reason`, a `next` to answer it (`nextCall` `login`, with `mode: "window"` for a public read); a signed-in JSON read (it holds a credential ref, or was learned signed in) redirected off its path to an HTML page of the same site with no sign-in form or challenge: a consent, terms or "verify it's you" step, reported with its address and a `next` to finish it in the browser and run `api-anything login <site>` (`nextCall` `login`; the address is the site's own text, so `next` shows it as it shows a spec's address: no part that spells words, and the origin alone past 200 characters) (a real redirect only: an SPA's shell at the request's own address is drift); a tier-1 answer over 32 MiB (a declared length, the bytes streamed, or a zstd body as it decodes), refused before it is read whole: no tier climbs, `retry: "no"`, `nextCall` `report` (a write's `check_site`); an html read's page of more than 200,000 elements (or closing tags, comments and CDATA sections), refused before it is parsed (not drift: a heal would read the same page; `next` says not to retry and `nextCall` is `report`, a write's `check_site`, as for an answer over 32 MiB); an event stream that sent an `error` event (its words can make it `auth` or `rate`), one cut at its bound before any event, or whose recipe found nothing in what arrived before the bound (not drift: the data may come later; see Streamed answers); an answer whose reading ran past the read deadline (5 s), with the same `next` and `nextCall`, and args whose test against the op's patterns ran past its own (500 ms), before anything is sent (`nextCall` `report`); anything else (a network error names its cause) | return with details; no heal, nothing stale |
 
 **A consent wall** (`consentStep`). A site may send a visitor it has no cookie choice from to a page
 that asks for one (Google sends an EU visitor's request to `consent.google.com`, issue #84), chosen by
@@ -942,6 +945,10 @@ context to the registry and back (REGISTRY.md). `ops` and `list_operations` show
 | 1 | Node `fetch` + domain/path-scoped cookie jar + session values; redirects followed by hand under the redirect policy below (cookies set on a hop ride on the next); Set-Cookie answers are merged into the jar; the body is decoded with its declared charset | default |
 | 2 | `fetch()` inside a real page on the site origin (real TLS, cookies, sec-fetch); redirects one hop at a time under the same policy | tier 1 `blocked`, or op `minTier: 2` |
 | 3 | run the trigger in the browser, capture the matched response | op `minTier: 3`, or after a heal fails for reads |
+
+Each tier reads an event-stream answer to its end or to the bounds of Streamed answers (Response
+extraction), never longer, so a stream that never ends cannot hold a call or an MCP server: the
+answer is what arrived, with `truncated` saying which bound stopped it.
 
 One redirect policy, for tiers 1 and 2 (`nextHop`). A write follows no redirect that would send it
 again (see writes above), so a write behind a 307/308 fails where it worked before. A request is taken
@@ -1197,7 +1204,8 @@ send a request again (its own scripts, a retry after a navigation or a connectio
 - Capture listens on the context, keeps the run's own pages and the popups they open (closed
   afterwards), and reads bodies **inside the response handler** (bodies vanish after navigation).
   The document body is kept raw. Pages load to `domcontentloaded` (a hung tracker or a download URL
-  doesn't fail the run). The run waits for the network to go quiet, ignoring streams, an endpoint's
+  doesn't fail the run). An event stream's body is read as it arrives, to the bounds of Streamed
+  answers, on a DevTools session of the run's own. The run waits for the network to go quiet, ignoring streams, an endpoint's
   repeats (beacons, polling), requests open over 3 s, and the previous document's requests once the
   page starts a new one (they never finish; their bodies get 2 s); with an op's match it ends soon after that
   request answers; with no XHR yet it waits up to 2 s more for a deferred one. When the page it
@@ -1426,6 +1434,53 @@ not the initial shortened preview. This recovers oversized strings, objects, and
 without a new site request. Changing the projection in JSON-fragment mode requires restarting
 at offset 0. Missing, expired, or evicted ids fail locally and never rerun the call.
 
+### Streamed answers (`stream.ts`)
+
+An answer that arrives as server-sent events (`text/event-stream`: an `EventSource`, or a `fetch` or
+XHR whose answer has that content type) is one decoded layer of the body, as an XSSI prefix or
+length-prefixed chunks are: `parseBody` turns it into a JSON list of events, so `extract`, `pick`,
+the output cap, `--outline`, the learned shape and the classifier read it with no code of their own.
+It is told by its own syntax (the body opens with a comment or one of the stream's fields, which no
+JSON does), so a captured, stored or replayed body needs no content type to be read. Each event is
+`{event, id?, data}`, dispatched by the WHATWG rules: lines end with CRLF, LF or CR; a `:` line is a
+comment; `data:` lines join with a line feed; one space after the colon is dropped; `retry:` and
+unknown fields are ignored; an `id:` carries over to later events (one holding a NUL is ignored, an
+empty one clears it); an event with no data is not dispatched and its name defaults to `message`;
+what follows the last blank line (an event still arriving) is dropped. `data` that is a JSON object
+or array is parsed (big integers kept as digits); anything else stays text, so a stream of text
+tokens keeps one type and the shape check does not see `"12"` and `"hello"` as a change. A recipe
+reaches into the events with `[*]`: `[*].data.items` is every event's items, an event without them
+skipped. Since the learned shape marks a field optional when another item of a list lacks it, and a
+stream's events differ by kind (results, then `done`), the shape check sees less in a stream than in
+a list of like items; an extract path that no event holds, or a pick no item carries, is still drift.
+
+A stream may never end, so every read of one is bounded, the same at each tier and in a capture:
+it stops once it has ended, sent no event for 3 s (`STREAM_IDLE_MS`: comment lines, a heartbeat, do
+not count; long enough for a generator's slow first event), been read for 10 s (`STREAM_MAX_MS`: a
+call reads one per tier it tries, and three fit in the default 30 s timeout and in the 25 s an MCP
+call waits before handing back a job), or passed 32 MiB (`MAX_BODY_BYTES`, kept rather than
+refused: a stream has no length). What arrived before the bound is the answer and the connection is
+closed; the read says why it stopped in `truncated` ("the event stream was still open after 10 s, so
+it was read no further"), which the call's result carries with the view's own note, and a capture's
+exchange keeps it. A cut answer is `ok` when the recipe found data in what arrived. One cut before
+any event arrived, or whose recipe found nothing in what arrived, is `error`, not drift: the data may
+come later in the stream, and a heal would read the same. An `error` event is the stream saying the
+answer failed: the call is `error` whatever came before it (its words can make it `auth` or `rate`,
+as a refusal's do), and nothing is healed. An empty stream is what an empty JSON list is; a rate
+limit or a challenge answered instead of the stream gets its own class. A stream changes nothing of
+what counts as a write: the guards decide on the request, before any answer.
+
+Tier 1 reads the body with a timer per read, inside what is left of the request's timeout. Tier 2
+reads it the same way inside the page's own `fetch()`, then cancels the reader. A trigger run (tier
+3, `capture`, `add`, `learn_site`, a heal's recapture) puts a DevTools session of its own on each of
+its pages before the first document and asks the browser to stream each event-stream response's
+body to it (`Network.streamResourceContent`) as it arrives, since Playwright's `text()` settles only
+once a body has ended and never reads an EventSource's; the page gets every byte as before. A stream
+is not "still loading": the run does not wait for it to go quiet, and its read is not cut by the 5 s
+grace other bodies get. With an op's match the run waits for the op's own stream to its bound and
+stops the others where they are; with none (learning) it waits for each to its bound, inside the
+run's deadline. WebSocket messages are not answers: a page's socket sends are guarded (Writes), and
+what a socket receives is never captured.
 For HTML-only pages, `response.format:
 "html"` with a selector recipe `{ items: "<css>", fields: { name: "<css>[@attr]" } }` parsed
 in Node; a field written `all:<css>[@attr]` returns every match as a list (a book's genres). An

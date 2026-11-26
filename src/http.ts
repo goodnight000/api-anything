@@ -10,6 +10,7 @@ import { CleartextRefused, refuseCleartext, siteFetch } from "./proxy.js";
 import { cookieHeaderFor, cookieValue, insecureSet, parseSetCookie, type Session } from "./session.js";
 import type { Match, Operation, Param, Request } from "./spec.js";
 import { reserveSend } from "./store.js";
+import { carriesField, isEventStream, STREAM_IDLE_MS, STREAM_MAX_MS, type StreamCut, streamCut } from "./stream.js";
 import type { StoredCookie } from "./types.js";
 import { badAddress, graphqlDocuments, writesGraphql } from "./vet.js";
 
@@ -37,6 +38,8 @@ export interface Sent {
   redirected?: boolean;
   /** cookies the answers set (every hop), for the jar */
   setCookies?: StoredCookie[];
+  /** the body is the part of an event stream read before a bound: why it stopped (stream.ts) */
+  truncated?: string;
 }
 
 /** `jar` with each of `set` in place of the cookie of its name, domain and path, as a browser keeps them. */
@@ -630,9 +633,15 @@ export async function send(
         refuseCleartextHop(hop.url, refs || !!cookie, res.status);
         continue;
       }
-      const raw = await readCappedBody(res);
-      const text = decodeBody(unzstd(raw, res.headers.get("content-encoding")), res.headers.get("content-type") ?? "");
+      const type = res.headers.get("content-type") ?? "";
+      // a stream is read to its end or a bound, inside what is left of the request's timeout
+      const streamed = isEventStream(type)
+        ? await readStream(res, timeoutMs - (performance.now() - t0) - STREAM_MARGIN_MS)
+        : undefined;
+      const raw = streamed?.raw ?? (await readCappedBody(res));
+      const text = decodeBody(streamed ? raw : unzstd(raw, res.headers.get("content-encoding")), type);
       return {
+        ...(streamed?.truncated ? { truncated: streamed.truncated } : {}),
         status: res.status,
         headers: Object.fromEntries(res.headers),
         body: text,
@@ -686,6 +695,55 @@ async function readCappedBody(res: Response): Promise<Uint8Array> {
     chunks.push(value);
   }
   return Buffer.concat(chunks);
+}
+
+/** What a stream's read leaves of the request's timeout: it stops before the abort would throw away what arrived. */
+const STREAM_MARGIN_MS = 250;
+
+/**
+ * An event stream's body, read until it ends, sends no event for `STREAM_IDLE_MS`, has been read for
+ * `STREAM_MAX_MS` (or `budgetMs`, when less is left of the request's time), or passes
+ * `MAX_BODY_BYTES`; a bound keeps what arrived before it, and closes the connection.
+ */
+async function readStream(res: Response, budgetMs: number): Promise<{ raw: Uint8Array; truncated?: string }> {
+  if (!res.body) return { raw: new Uint8Array(await res.arrayBuffer()) };
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
+  const start = Date.now();
+  const end = start + Math.max(0, Math.min(STREAM_MAX_MS, budgetMs));
+  let last = start;
+  let total = 0;
+  let cut: StreamCut | undefined;
+  let pending: ReturnType<typeof reader.read> | undefined;
+  for (;;) {
+    const idleAt = last + STREAM_IDLE_MS;
+    const wait = Math.min(idleAt, end) - Date.now();
+    if (wait <= 0) {
+      cut = idleAt < end ? "idle" : "time";
+      break;
+    }
+    pending ??= reader.read();
+    let timer: NodeJS.Timeout | undefined;
+    const got = await Promise.race([
+      pending,
+      new Promise<undefined>((r) => {
+        timer = setTimeout(() => r(undefined), wait);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (!got) continue;
+    pending = undefined;
+    if (got.done) break;
+    total += got.value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      cut = "bytes";
+      break;
+    }
+    chunks.push(got.value);
+    if (carriesField(decoder.decode(got.value, { stream: true }))) last = Date.now();
+  }
+  if (cut) await reader.cancel().catch(() => {});
+  return { raw: Buffer.concat(chunks), ...(cut ? { truncated: streamCut(cut, Date.now() - start) } : {}) };
 }
 
 /**
