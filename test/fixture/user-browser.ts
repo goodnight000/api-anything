@@ -41,7 +41,8 @@ export async function startUserBrowser(bin: string, port: number, url: string): 
       ...(process.env.DISPLAY ? [] : ["--headless=new"]),
       url,
     ],
-    { stdio: "ignore" },
+    // a process group of its own, so stopping it stops its helper processes too
+    { stdio: "ignore", detached: true },
   );
   for (const end = Date.now() + 20_000; Date.now() < end; ) {
     if (proc.exitCode !== null) throw new Error(`the browser exited with ${proc.exitCode}`);
@@ -53,20 +54,29 @@ export async function startUserBrowser(bin: string, port: number, url: string): 
     }
     await sleep(100);
   }
-  proc.kill("SIGKILL");
+  kill(proc);
   throw new Error("the browser did not open its DevTools port");
 }
+/** The browser and every helper process it started (a killed browser's orphaned helpers keep writing to its profile). */
+function kill(proc: ChildProcess): void {
+  try {
+    process.kill(-proc.pid!, "SIGKILL");
+  } catch {
+    proc.kill("SIGKILL");
+  }
+}
+
 export async function stopUserBrowser(b: UserBrowser | undefined): Promise<void> {
   if (!b) return;
   if (b.proc.exitCode === null && b.proc.signalCode === null) {
     const exited = new Promise((r) => b.proc.once("exit", r));
-    b.proc.kill("SIGKILL");
+    kill(b.proc);
     await exited;
   }
-  // Its helper processes may still be writing for a while after it went (seen under a full suite's
-  // load: ENOTEMPTY after 2 s of retries). A temporary profile left behind fails nothing.
+  // Its helpers may still be writing for a moment after they went (seen under a full suite's load:
+  // ENOTEMPTY). A temporary profile left behind fails nothing.
   try {
-    rmSync(b.dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    rmSync(b.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   } catch {
     /* left in the temp directory */
   }
