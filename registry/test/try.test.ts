@@ -1,5 +1,5 @@
 /**
- * GET /v1/try: the catalog's one request to a site. Upstream is a local server standing in for
+ * GET /v1/try: the catalog's request to a site for a visitor. Upstream is a local server standing in for
  * en.wikipedia.org: fetch is pointed at it, so nothing leaves localhost.
  */
 import assert from "node:assert/strict";

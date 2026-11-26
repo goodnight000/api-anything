@@ -77,6 +77,9 @@ local-only and how to turn it off (`setup --no-local-only --share-only`, or unse
    - a site with a live op always ranks above a site with only candidates, whatever the score;
    - words never find a site with no live op. A domain or URL query finds it when it names the site's
      own domain;
+   - a domain or URL query also finds a site by one of its **aliases** (below), ranked below a site
+     that calls that domain itself; among confirmed sites the exact domain comes first, and a confirmed
+     site still ranks above one with only candidates;
    - `GET /v1/index`, the home page list and the sitemap leave such a site out. Its page
      (`/sites/:name`) still renders, marked `noindex`.
    Lexical ranking is shared with the client (`src/search.ts`). Unmatched constraint words do not
@@ -86,6 +89,31 @@ local-only and how to turn it off (`setup --no-local-only --share-only`, or unse
    broadening before learning, not that the uncovered constraints are supported.
    `find_sites.nextCall` is `list_operations {site}` (read its notes first), or `list_sites {}` on
    no match, rather than an incomplete call or learn request.
+
+   **Aliases.** A site's `domain` is the registrable domain of where its requests go, which is not
+   always the one people type: the bundled `imdb` calls `v3.sg.media-imdb.com`, so its domain is
+   media-imdb.com. Its `aliases` (`["imdb.com"]`) are the other registrable domains it is known by: a
+   search for `imdb.com` or `https://www.imdb.com/title/...` finds it, with `matched: ["imdb.com"]`, and
+   the match, `GET /v1/sites/:name` and `GET /v1/index` list them. An alias is a claim that searches for a
+   domain should get this site, so only a maintainer makes one: a seed carries its spec's `aliases`, and
+   `POST /v1/admin/sites/:name/aliases {aliases}` (the maintainer's token) replaces a site's, `[]`
+   clearing them. An upload's are dropped unread, so a site an install first shared has none, and no
+   upload adds or changes one on any site. Each must be a clean registrable domain as demand records one,
+   not the site's own, at most 10; one that is already another site's alias, or the domain of another
+   site the registry serves, is refused (one the site already holds stays through a reseed). An alias
+   is a search key only: never a host an op may call (an op sending to it is off its site, so review),
+   never part of `siteOf`, never a cookie's or a session's site, never a domain `sharedName` answers for.
+
+   **Another region's site.** A domain search that matches nothing may carry `related` beside the empty
+   `matches`: at most 3 confirmed sites whose domain or alias differs from the asked one only in the
+   public suffix (`relatedDomain`: amazon.com for amazon.in, example.com.au for example.co.uk, the label
+   before the suffix the same by the Public Suffix List), each `{name, domain, displayName?, note}` with a
+   note that it does not cover the asked domain. Only ICANN suffixes count: a site on a private suffix
+   (foo.github.io) is someone's own and related to nothing. It is another site with other data, so it is
+   no match: demand is still recorded for the asked domain, which stays on the wanted list. The client
+   checks each entry against the asked domain again, adds this machine's own related sites, and
+   `find_sites` and `search` show them as `related`, with a `next` that says nothing covers the domain
+   and not to call them for it.
 2. `call_operation` on a site that is not installed fetches it (`GET /v1/sites/:name`) first. Of a
    site fetched this way only the reads run until a human runs `api-anything pull` (the `by: "agent"`
    mark, as before). An op of a fetched or pulled site that is still a `candidate` is called with none of
@@ -139,7 +167,11 @@ local-only and how to turn it off (`setup --no-local-only --share-only`, or unse
    example and holdout, never the user's own request. An automatic upload carries no checks but
    learn_site's holdout and none of the user's own `<site>.md` notes: a check recorded with
    `api-anything check`, or notes the user wrote, go only with their yes (`publish --yes`). A pulled
-   site's notes came from the registry and go back with its heal.
+   site's notes came from the registry and go back with its heal. An op made with `add` (no
+   `learn_site` proof) gets its clean replay from `shareOps` when it is shared, so it goes up `ok`,
+   `blocked` or `failed`; only an op no replay can run on (a write, `minTier` above 1, a required param
+   with no example) goes up `skipped`. An upload the registry holds for review comes back with every
+   reason in words and its category, and a `next` (DESIGN.md "Held for review").
 5. A new site's name is its registrable domain with dots as dashes (`crates-io` for crates.io,
    `lobste-rs` for lobste.rs); a site the registry already holds keeps its name (a seed's: goodreads.com
    is `goodreads`), and a new op uploaded under another name on that domain goes to review. So
@@ -157,7 +189,9 @@ domain or a URL that matches no site records that query's registrable domain wit
 that asked; words are never recorded, since they are a person's and the list is public. `GET /v1/demand`
 (cached 60 s) and the home page list the domains asked for in the last 30 days that no site covers yet,
 by how many distinct networks asked, so one network asking a thousand times counts once. A domain
-leaves the list once a site for it is shared; the daily job deletes records older than 90 days.
+leaves the list once a site for it is shared, or a site is known by it (an alias: a search for it then
+matches, so none is recorded either); the daily job deletes records older than 90 days. A `related`
+site of another region covers nothing: its asked domain is recorded and listed as before.
 
 Only a public domain is recorded. An IP address, `localhost`, a single label, a name under a suffix
 outside the public list (`.internal`, `.local`, `.lan`, `.test`, `.example`, `.invalid`) or under `.arpa`
@@ -174,7 +208,7 @@ A demand domain is someone's search, so only a clean registrable domain (lowerca
 no host, port or path: what a search records) still in demand gets a page; anything else is a 404, so no input creates
 one. A domain fewer than 2 networks asked for (`WANTED_INDEX_NETWORKS`) is marked `noindex` and left out
 of the sitemap: one network's search is too thin a page to list. Once a served site covers the domain,
-its wanted page answers 301 to the site's page.
+on it or by an alias, its wanted page answers 301 to the site's page.
 
 ## Public stats and credit
 
@@ -192,7 +226,12 @@ one install from another, no key and no network hash:
   "calls": { "last7Days": 2300, "ok": 2010, "okRate": 0.93 },
   "sites": { "live": 55, "operations": 140 },
   "community": { "sites": 6, "operations": 19, "uploadsLast30Days": 33 },
-  "wanted": 18 }
+  "wanted": 18,
+  "uploads": { "last30Days": 264,
+    "byStatus": { "candidate": 132, "live": 5, "degraded": 0, "review": 127, "archived": 0, "blocked": 0 },
+    "reviewReasons": { "clean-replay-skipped": 95, "clean-replay-failed": 4, "signed-in": 4, "write": 0,
+      "post-read": 14, "own-credential": 7, "cookie-lookup": 0, "login-site": 0, "established-site": 10,
+      "differs-from-live": 0, "public-values": 5, "off-site": 0, "secret-scan": 0, "other": 0 } } }
 ```
 
 - `installs`: `last7Days` and `last30Days` are distinct keys that reported, uploaded, claimed or reported
@@ -221,6 +260,11 @@ one install from another, no key and no network hash:
   maintainer's seed) first shared, and the live ops whose served version an install uploaded; and the
   versions installs uploaded in 30 days, any status.
 - `wanted`: domains on the demand list.
+- `uploads`: the versions installs (not a seed) uploaded in the last 30 days, by their status now, and the
+  reasons of those in review by category, each version once in each category its reasons fall in
+  (`src/review.ts`, a fixed set; every category is listed, zeros included). Never a reason's own text,
+  which can name a host, a cookie or an op someone learned. So the queue is visible: how much is held,
+  and for what.
 
 The home page shows a strip from the same counts ("N installs active this week · M calls this week · A of
 S installs seen made a call that worked · K sites taught by the community") when they could be read, and
@@ -288,6 +332,39 @@ answer them, and why it is short: every op on it is a request the catalog makes 
 switch it off without a code change, set `TRY_ENABLED` to `false` among the Worker's variables in the
 dashboard (takes effect at once; the next deploy restores `registry/wrangler.jsonc`'s value), or in that
 file and deploy. To drop one op, remove it from `TRY_OPS`.
+
+## Replaying a skipped clean replay
+
+Most versions held for review were held for one reason: `its clean replay was skipped, not ok`, the
+upload of an op made with `add` by a client that did not replay it (clients from this one on replay it
+themselves). For those, and only those, the Worker sends the replay (`registry/src/replay.ts`), from
+the every-minute cron:
+
+- only a version in `review` whose stored reasons are exactly that one, and that the review rules, asked
+  again as they stand with an ok replay, hold for nothing else (a site that gained a login or a live
+  version of the op since holds it for more). Not a claim's answer or a seed;
+- only a request try would send (`sendRefusal`): `readOnly`, a GET, `minTier` 1, not learned signed
+  in, no `cookie:`/`session:` ref, lookup or `public` name, https on port 443 to a public host on the
+  registrable domain of the site's `baseUrl`, passing `vetShared`; filled from the op's published
+  examples, so a required param needs one. A version that fails any of these is marked `unreplayable`,
+  never tried, and no attempt is counted;
+- through try's sender: an empty jar and only the op's literal headers, every redirect hop to the op's
+  own origin (at most 2), the whole exchange under `TRY_TIMEOUT_MS` and `TRY_MAX_BYTES`, each send taken
+  from `TRY_PER_DAY_ALL` and from the replays' own day (200, `REPLAY_PER_DAY`); once either is spent
+  the tick stops and counts nothing;
+- at most 3 a tick (`REPLAY_PER_TICK`), one per site, and only while `TRY_ENABLED` is `true`. A tick
+  waits at most a few timeouts, and a failure in it never holds up the recounts before it.
+
+An ok answer that the op's own recipe extracts something from (not an empty list) makes the version a
+`candidate`: the reason goes, and its evidence gains `registryReplay: {at, outcome: "ok"}` beside the
+uploader's `cleanReplay`, which stays as sent. Anything else (an error status, an empty answer, a
+redirect off its origin, a timeout) leaves it in review and counts an attempt; a version is tried at
+most 3 times, at least a day apart, and never after. The attempt is counted before the request leaves, so
+a version whose answer ends the tick (the Worker's own limits, on a body and a recipe its uploader chose)
+is not first in line again the next minute; only a send the day's budget refused is taken back. An upload cannot claim a replay: the upload schema
+has no such field. The replay is evidence, not a report: it counts toward no promotion, never makes a
+version `live`, and the background-verification rules that keep candidates on a site with no live op
+from verifying installs are unchanged.
 
 ## Pages for search engines
 
@@ -426,7 +503,8 @@ job at once.
 Only public reads are promoted by reports. A version is `review`, served to its uploader only until a
 maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
 
-- was learned while signed in, or its clean replay was neither ok nor a bot wall;
+- was learned while signed in, or its clean replay was neither ok nor a bot wall (a version held for a
+  skipped replay alone may get it from the registry: "Replaying a skipped clean replay");
 - writes, or is a read sent with a method other than GET or HEAD. The one exception is a POST that
   carries only GraphQL query documents: a JSON body whose every item holds a `query` document with
   nothing beside it but `variables` and `operationName` and no key twice, sent as `application/json` or
@@ -525,7 +603,8 @@ maintainer sets its status (`POST /v1/admin/versions/:hash`), when it:
   `crates-io` for crates.io, `lobste-rs` for lobste.rs, `git-xyz` for git.xyz. Otherwise the upload is
   refused with 422 and the reason. A name is unique by construction and cannot take another site's
   brand. A maintainer's seed is exempt (`goodreads`, `dominos-au`).
-- An uploaded `displayName` is ignored: a site nobody seeded is titled by its domain.
+- An uploaded `displayName` is ignored: a site nobody seeded is titled by its domain. So are uploaded
+  `aliases`: a stranger's upload naming google.com never answers a search for it ("Aliases" above).
 - The server runs `vetShared` and the export secret scan on every upload, and refuses a spec over 256 KB.
   It checks the declared length first, then reads the body as a stream that stops at the cap. A request
   missing a signature header or with a stale timestamp is refused before any of its body is read.
@@ -588,16 +667,19 @@ What these rules leave open:
 
 D1 tables: `sites` (name, domain, display fields, login cookie names, the site's `pace` budget,
 notes, first uploader; the first upload or a seed sets them, and `GET /v1/sites/:name` serves them
-with the ops, `pace` held to the shared rules' bounds on the way in and again on pull), `versions` (hash, site,
+with the ops, `pace` held to the shared rules' bounds on the way in and again on pull), `aliases`
+(domain, site: the other domains a site is known by, one site per domain; only a seed or the admin
+route writes them, never an upload), `versions` (hash, site,
 op name, match signature, operation JSON, parent, status, uploader and its network hash, evidence,
-timestamps including when it first went live, its report counts), `reports`
+timestamps including when it first went live, its report counts, the registry's replays of it: attempts,
+the last one's time and outcome class), `reports`
 (hash, key, network hash, outcome, tier, at), `keys` (public key, first seen, counts, first accepted ok), `rates` (hourly
 counters, kept for a day), `claims` (fingerprint, site, key, network hash, name hash, at), `demand`
 (registrable domain, network hash, at; deleted after 90 days), `interfaces` and `interface_reports`
 (url, domain, kind; key, network hash, at), `calls` (UTC day, outcome, count; deleted after 90 days),
 `snapshots` (the public stats' install funnel as last counted: counts only). No args, no response data,
 no IP addresses. A try (`/v1/try`) stores only its counters in `rates`; the cache holds its answer for 10
-minutes.
+minutes. A replay stores its outcome class on the version and its counters in `rates`.
 
 About the caller, the registry keeps its reports, keyed by install key and time, and nothing else:
 no account, no IP address (a network is a salted hash, used to count distinct networks and for rate

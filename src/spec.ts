@@ -288,9 +288,10 @@ export const OperationSchema = z.object({
   unproven: z.object({ params: z.array(z.string()), reason: z.string() }).optional(),
   /**
    * The registry version this op is (its hash) and the status the registry gave it, set by `pull` and
-   * `shareOps`. This machine's record, like `learnedAt`: never uploaded, hashed or exported.
+   * `shareOps`; `review`: why an upload of this install's was held for review, by category (review.ts).
+   * This machine's record, like `learnedAt`: never uploaded, hashed or exported.
    */
-  version: z.object({ hash: z.string(), status: z.string() }).optional(),
+  version: z.object({ hash: z.string(), status: z.string(), review: z.array(z.string()).optional() }).optional(),
   /**
    * An agent learned this op over MCP (`learn_site`), where page text may have chosen the page. Tiers 1
    * and 2 send it, and follow its redirects, only to https addresses on public hosts, as they do for a
@@ -311,6 +312,12 @@ export const SiteSchema = z.object({
   description: z.string().optional(),
   /** cookie names whose presence means logged in (overrides the heuristic) */
   loginCookies: z.array(z.string()).optional(),
+  /**
+   * Other registrable domains people know the site by (imdb.com for a spec whose requests go to
+   * media-imdb.com): a search by one finds the site. A search key only, never a host an op may call, a
+   * cookie's site or a session's (vet.ts `aliasProblems`).
+   */
+  aliases: z.array(z.string()).optional(),
   /**
    * The site's request budget, over the default pacing: a longer gap between sends, and a cap on
    * requests an hour. A call that would exceed it answers `rate` without sending. API_ANYTHING_PACE overrides it.

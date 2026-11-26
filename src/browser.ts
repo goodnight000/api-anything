@@ -820,6 +820,15 @@ export interface TriggerOptions {
  */
 export const TRIGGER_BUDGET_MS = 30_000;
 
+/** How long a soft navigation is given to show its first request or a new address before the page is taken for unrouted. */
+const SOFT_ROUTE_GRACE_MS = 1000;
+
+/** Whether a failed load of `url` says another navigation to that same address interrupted it. */
+export function takenOver(message: string, url: string): boolean {
+  const other = /interrupted by another navigation to "([^"]+)"/.exec(message)?.[1];
+  return !!other && URL.canParse(other) && URL.canParse(url) && new URL(other).href === new URL(url).href;
+}
+
 /** A page load that treats "this URL is a download" as loaded (the request is still captured). */
 async function goto(page: Page, url: string, referer?: string): Promise<void> {
   try {
@@ -1312,10 +1321,23 @@ async function trigger(o: TriggerOptions): Promise<CaptureResult> {
         }
       }, o.url);
       await within(routing, undefined);
+      // A route's first request can lag its click (a handler that waits, a busy machine), and a page that
+      // looks quiet at once has not shown yet whether it routed: taken for unrouted, it gets a second
+      // load of the same address, which the link's own navigation then interrupts.
+      const shown = Math.min(deadline, Date.now() + SOFT_ROUTE_GRACE_MS);
+      while (Date.now() < shown && exchanges.length === before && page.url() === from) await sleep(50);
       await idle(5000);
       // ponytail: "fired anything" is the routed signal; a page whose analytics fire on pushState fools it.
       const routed = exchanges.slice(before).some((e) => ["xhr", "fetch", "document"].includes(e.resourceType));
-      if (!routed) await goto(page, o.url, from);
+      if (!routed)
+        await goto(page, o.url, from).catch(async (e: Error) => {
+          // a navigation of the page's own that began later still and took this load over: it is on its
+          // way to the same address, so that load is the one to wait for
+          if (!takenOver(e.message, o.url)) throw e;
+          await page.waitForLoadState("domcontentloaded").catch((x: Error) => {
+            throw new PageUnreachable(x.message);
+          });
+        });
     } else {
       await goto(page, o.url);
     }

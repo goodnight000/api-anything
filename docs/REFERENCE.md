@@ -60,6 +60,7 @@ Every call answers in fields, so an agent or a script can act without parsing pr
 | `nextCall` | `login` `relearn` `fix_args` `check_site` `allow_writes` ... | the one step to take next; over MCP, with the tool and its args |
 | `nextPage`, `hasMore` | the site's own cursor | how to get the next page of a list |
 | `heal` | `{strategy, changes}` | how a call that repaired the op did it, and what changed in its request; `api-anything revert` undoes it |
+| `wall` | `consent` | with `error`: the site sent the read to its cookie-consent page; `next` says how to answer it once |
 
 `tier` says how the call went: 1 is one plain HTTP request, with no browser. A failure also says
 why (`reason`) and what to do next (`next`).
@@ -73,6 +74,21 @@ An op's words come from its own summary, not a different op at that site. Partia
 suggestions, not guarantees for uncovered constraints. Try the existing capability with the user's
 values, or broaden the query, before learning a new site. Check each match's `domain` first.
 Unconfirmed registry sites still require a domain or URL query.
+
+A site's `domain` is where its requests go, which is not always the domain people type. A spec's
+`aliases` list the other registrable domains it is known by: the bundled `imdb` calls
+media-imdb.com and lists `imdb.com`, so `search imdb.com` or a `https://www.imdb.com/...` URL finds
+it, with `matched: ["imdb.com"]` and the match's `aliases`. A site on that domain itself ranks first.
+An alias is a search key only: it gives the site's ops no host to call, and no cookie, login or session
+of that domain (`login imdb.com` is not `imdb`'s session; `learn_site` will not save an imdb.com page
+into `imdb`). The registry takes aliases from a maintainer only, never from an upload. `sites` and
+`list_sites` show them.
+
+A domain search that matches nothing may answer `related`: sites of another region, whose domain
+differs from the asked one only in the public suffix (amazon.com, as `amazon`, for `amazon.in`). Each
+says it does not cover the asked domain: they are other sites with other data, a hint to show the user,
+never an operation to call for that domain. A site on a private suffix (`foo.github.io`) is related to
+nothing.
 
 Each search op, and each op in `pull <site>` output, separates evidence:
 
@@ -399,7 +415,10 @@ nothing and needs no browser. Output is one line of JSON:
   `API_ANYTHING_KEY`), `settings` (`settings.json` cannot be read, so this install is local-only until
   it is fixed or replaced), `login` (the site's session has no browser sign-in on record while one
   for its host is saved under the host's name, from a login run before the site was added: `next`
-  names the login that records it for the site). `next` is phrased as a call's `next`;
+  names the login that records it for the site), `review` (this install's upload of the op is held for
+  review, served only to this install; the op's `review` gives its version and the causes by category,
+  and `next` the step there is, most often none but waiting for a maintainer). `next` is phrased as a
+  call's `next`;
 - `storage`: whether session and capture files are sealed here, `{sealed: true, key}` with the key's
   source, or `{sealed: false, why, chosen}`. Finding out may create the key in the OS store, as the
   first save would.
@@ -524,8 +543,11 @@ go — avoid heavy automated traffic on it. Other ways in:
   the site asks for 2FA or a captcha, or when you don't want to share your browser's session. It is
   also the automatic fallback when nothing is importable. Finish signing in, 2FA included, then close
   the window or press Enter: it does not close itself, because some sites set their login cookie before
-  the second factor is done. It counts only if a login cookie appeared or changed while it was open;
-  otherwise `login` answers `ok: false`, says why, and keeps the session you had.
+  the second factor is done. It counts as a sign-in only if a login cookie appeared or changed while
+  it was open. Without one, the cookies your own choices set there (a cookie-consent answer, a
+  cleared challenge) are kept for the site and `login` answers `ok: true`, `loggedIn: false`, with
+  their names in `kept`; with none of those either, it answers `ok: false`, says why, and keeps the
+  session you had.
 - `--cookies <file>` imports a `cookies.txt` (Netscape) or JSON export, for servers/CI with no browser.
 - `api-anything logout <site|url>` takes what `login` takes and names the site it logged out. It
   deletes the stored session (it needs no key, so it also resets a sealed session whose key is lost),
@@ -850,8 +872,9 @@ against the local test site the suite uses. No write operation is bundled.
 ## What leaves your machine
 
 Calls run on your machine, your network and your sessions. The catalog stores specs and counts
-reports; it never proxies your calls. Its only request to a site is the "try it" endpoint for a few
-public operations ([REGISTRY.md](REGISTRY.md)), which a visitor runs from the catalog's page.
+reports; it never proxies your calls. Its requests to a site are the "try it" endpoint for a few
+public operations ([REGISTRY.md](REGISTRY.md)), which a visitor runs from the catalog's page, and one
+replay with no cookies of an uploaded read that arrived without one (at most 3 tries).
 
 Whether sharing is on or off, a search goes to the catalog: the words your agent passes to
 `find_sites`, and the name of a shared site it calls before this machine has it. Only plain words
@@ -869,7 +892,9 @@ With sharing on:
 - **Operations learned from public pages.** Shared automatically only when it is a read, it was
   learned signed out, and the replay with no cookies answered (with the data, or with a bot wall
   such as Anubis or Cloudflare, which each caller's browser passes on its own). Its stored example
-  is the agent's second value and its check is the third, never the value you asked for.
+  is the agent's second value and its check is the third, never the value you asked for. An op you
+  made with `add` gets that replay when it is shared (`publish --yes`): one request to the site with
+  its stored examples and none of your cookies, at the site's pace and budget.
 - **An operation that needed your login**, or one that may hold something of yours (an email
   address, an id, a value typed into the page), goes only after you say yes, or once 3 installs on
   3 networks learned exactly the same thing.
@@ -915,6 +940,14 @@ api-anything publish hn-demo --strict-scan                          # and warn o
 api-anything publish hn-demo --yes                                  # upload, signed by this install
 ```
 
+The preview sends nothing to the site; its `cleanReplay` says per op whether the replay with no cookies
+is on record, cannot run (a write, an op that needs the browser, a required param with no example) or
+will run with `--yes`. An upload the catalog holds for review is served only to you until a maintainer
+approves it: each op's outcome has a `reason` with every cause in words, `held` (each cause and its
+category), and a `next`. The one cause you can fix is a missing example (`add` it again with
+`--example`, then publish); otherwise `next` says there is nothing to do but wait, since publishing the
+same op again changes nothing. `status` shows it as a `review` problem.
+
 Your agent does the first two on its own: `find_sites` searches the catalog, and calling a site this
 machine doesn't have fetches it, reads only. A new operation is a candidate until installs other than
 its uploader report it working from different networks; then it is served as live. A live one is
@@ -935,7 +968,9 @@ and review their destinations and write declarations. A `readOnly` declaration i
 for a malicious spec, and website text is data, not instructions for the agent.
 
 The offline suite covers the learning, healing, tier and write paths against a local fixture site.
-Individual real sites vary and are not continuously verified.
+Individual real sites vary. The bundled operations are checked daily by a scheduled run
+([verify-live.yml](../.github/workflows/verify-live.yml)), logged out from GitHub's runner, and an
+operation that fails two runs in a row is listed in one tracking issue.
 
 In short:
 
@@ -948,7 +983,8 @@ In short:
   public hosts and learns only requests to such addresses, and an operation it saved goes only to
   them afterwards, redirects included; a page on this machine or the local network is learned by
   you, with `api-anything learn` or `add`. It saves into a site only when the page is on that
-  site's domain, and replaces an operation only by learning its own page again.
+  site's domain (an alias is not: it is a search key, never a host the site's ops call), and replaces
+  an operation only by learning its own page again.
 - A shared operation is someone else's work. Candidates are served marked as such until other
   installs confirm them, and an operation that worked for others can still fail for you (a
   different region, a block on your network).
@@ -1002,8 +1038,22 @@ Known limits in detail:
   errors. A redirect back to the form that shows an error, or to an address naming one, is
   `error`, because the write may or may not have run. A site that answers a failure with an
   unmarked 200 still reads as `ok`. None of these verdicts sends the write again.
-- A signed-in read redirected to a consent, terms or "verify it's you" page of the same site is
-  `error`. Its `next` names the page, which the user finishes in the browser before running
+- A read redirected to the site's cookie-consent page (Google's `consent.google.com` for a caller in
+  the EU), signed in or not, JSON, html or embedded, at any tier, is `error` with `wall: "consent"`,
+  not drift: it is not healed, not marked stale, and starts no cool-down. For a read learned signed
+  out, `next` asks you to run `api-anything login <site> --window`, make the choice on the site's
+  page there and close the window: the cookies the site set then are kept for that site alone, and
+  later calls send them at every tier. For a signed-in read it names the page to finish in your
+  browser before `api-anything login <site>`. `learn_site`, `add`, `capture` and a heal say the same
+  instead of finding no request. api-anything never answers a consent question for you (no automatic
+  "reject all") and sets no site's consent cookie itself. Only a real redirect to another page of the
+  same site is recognised (its address names a consent step, or the page asks the question and holds
+  the address to go back to); a consent overlay served at the page's own address still reads as
+  drift. From a network that gets the wall, a learned operation's clean replay (no cookies) answers
+  the wall, so it is not shared automatically from there. This was checked against a local fixture
+  only, not against a real site's consent page.
+- A signed-in read redirected to a terms or "verify it's you" page of the same site is `error`. Its
+  `next` names the page, which the user finishes in the browser before running
   `api-anything login <site>`. It is not healed and not marked stale.
 - A param may declare a `pattern` (a regex the whole value must match) and a `hint`, an `enum` of
   the values it takes, and a `min`/`max`; a call whose arg fails one is `input`, and nothing is sent.
@@ -1046,13 +1096,19 @@ Known limits in detail:
 114 sites and 323 read operations ship with the package (`api-anything sites` from an empty home,
 2026-11-06), and the catalog serves the same ones. They cover selected features, not whole sites.
 On 2026-10-31, called from an empty home with their examples, 97 of the 99 operations that needed no
-account in the first 55 sites answered with data ([release notes](RELEASE-READINESS.md)).
+account in the first 55 sites answered with data ([release notes](RELEASE-READINESS.md)). On
+2026-11-26, `npm run verify:live` from an empty home on a cloud VM: 291 of the 323 passed, 11
+failed, 13 were inconclusive (a rate limit, a challenge or a server error) and 8 were skipped; the
+stale examples it found were replaced the same day.
 `api-anything ops <site>` lists each op's params and caveats, and the
 [catalog](https://api-anything-registry.forth-site.workers.dev) has everything agents shared since.
 
-Known gaps: `google-flights.priceCalendar` answers an internal error since Google changed it, and
-`aldi.applianceDetails`'s example product is gone. `linkedin` needs your account, and `dominos-au`
-ships no examples. Reddit challenges plain HTTP from many networks, so its calls often need the
+Known gaps (2026-11-26): `google-flights.priceCalendar` answers an internal error since Google
+changed it; `trip.listHotels` finds no hotels for destinations whose page puts an FAQ block before
+the hotel list (London, Singapore); `x.getTweet` answered drift from a cloud address, not rechecked
+from a home one. `linkedin` needs your account, and `dominos-au` ships no examples. From cloud
+addresses Booking, YouTube video pages, Allrecipes, Ticketmaster and Wikidata often answer a
+challenge instead of data. Reddit challenges plain HTTP from many networks, so its calls often need the
 browser tier. `dominos-au` came in through `publish` from a contributor, `goodreads` was built by
 the [explorer](../bench/explore/README.md), and `reddit` was the site agents asked for most.
 

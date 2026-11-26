@@ -784,7 +784,44 @@ Every response is classified, never by status code alone:
 | `rate` | 429; any 4xx or 5xx that carries a Retry-After (a 503 in maintenance, a 403 lockout: the server named its wait, so sooner meets it again; a wall's markers still make it `blocked`, a 2xx with one is its answer); "please wait", "rate limit" | back off, report; no heal; the site cools down (Execution ladder) |
 | `blocked` | challenge pages (Cloudflare, Akamai, DataDome, PerimeterX, AWS WAF, Amazon, Imperva, Kasada, Anubis, self-solving JS challenges, reCAPTCHA; an interstitial's title even on a big page, unless the op's html/embedded recipe finds its data there: "Robot check-in: how our robots work"), even at 200. The interstitial's own structure counts at any status; a vendor script that also rides on ordinary pages (AWS WAF's challenge.js, DataDome's tags.js, Imperva's resource script, Kasada's ips.js and `x-kpsdk-*` headers) counts only on a challenge status (202, 403, 405, 429, 503); a bare 403 with no markers; 451 (Unavailable For Legal Reasons: not available from this network or region). A page showing a sign-in form is `auth`, not a wall, when its only challenge marker is one that also rides on ordinary pages (a CAPTCHA widget, a vendor script or header on a challenge status); an interstitial's own structure or title on that page is still a wall; a tier-3 run or a heal's recapture whose trigger fired no matching request and ended on a challenge that did not solve (judged before a sign-in page or a page that is down) | escalate transport tier; then diagnostic `gated`, whose `next` asks for `api-anything login <site> --window`: to clear the challenge in the window, or, for a bare 403 at every tier (no challenge to clear), to see why the site refuses this machine or network. A read's bare 403 first replays the example args once at the same tier: if they answer, the call is `input` (a private or missing entity), with no climb and no heal. A 451 climbs no tier (a browser on the same network gets the same answer): `retry: "no"`, `nextCall` `report`. The site then cools down (Execution ladder) |
 | `input` | 400 with validation error mentioning a param; 404 with the param in the path; a read's 404, empty 2xx or missing data while the example args still answer; a GraphQL not-found; an unknown arg name | return the error to the caller |
-| `error` | a write refused in its 2xx answer (see Writes); a signed-in JSON read (it holds a credential ref, or was learned signed in) redirected off its path to an HTML page of the same site with no sign-in form or challenge: a consent, terms or "verify it's you" step, reported with its address and a `next` to finish it in the browser and run `api-anything login <site>` (`nextCall` `login`; the address is the site's own text, so `next` shows it as it shows a spec's address: no part that spells words, and the origin alone past 200 characters) (a real redirect only: an SPA's shell at the request's own address is drift); a tier-1 answer over 32 MiB (a declared length, the bytes streamed, or a zstd body as it decodes), refused before it is read whole: no tier climbs, `retry: "no"`, `nextCall` `report` (a write's `check_site`); an html read's page of more than 200,000 elements (or closing tags, comments and CDATA sections), refused before it is parsed (not drift: a heal would read the same page; `next` says not to retry and `nextCall` is `report`, a write's `check_site`, as for an answer over 32 MiB); an answer whose reading ran past the read deadline (5 s), with the same `next` and `nextCall`, and args whose test against the op's patterns ran past its own (500 ms), before anything is sent (`nextCall` `report`); anything else (a network error names its cause) | return with details; no heal, nothing stale |
+| `error` | a write refused in its 2xx answer (see Writes); a read, signed in or not and in any format (JSON, html, embedded), redirected to the site's cookie-consent step instead of its data (below): `wall: "consent"`, its address in `reason`, a `next` to answer it (`nextCall` `login`, with `mode: "window"` for a public read); a signed-in JSON read (it holds a credential ref, or was learned signed in) redirected off its path to an HTML page of the same site with no sign-in form or challenge: a consent, terms or "verify it's you" step, reported with its address and a `next` to finish it in the browser and run `api-anything login <site>` (`nextCall` `login`; the address is the site's own text, so `next` shows it as it shows a spec's address: no part that spells words, and the origin alone past 200 characters) (a real redirect only: an SPA's shell at the request's own address is drift); a tier-1 answer over 32 MiB (a declared length, the bytes streamed, or a zstd body as it decodes), refused before it is read whole: no tier climbs, `retry: "no"`, `nextCall` `report` (a write's `check_site`); an html read's page of more than 200,000 elements (or closing tags, comments and CDATA sections), refused before it is parsed (not drift: a heal would read the same page; `next` says not to retry and `nextCall` is `report`, a write's `check_site`, as for an answer over 32 MiB); an answer whose reading ran past the read deadline (5 s), with the same `next` and `nextCall`, and args whose test against the op's patterns ran past its own (500 ms), before anything is sent (`nextCall` `report`); anything else (a network error names its cause) | return with details; no heal, nothing stale |
+
+**A consent wall** (`consentStep`). A site may send a visitor it has no cookie choice from to a page
+that asks for one (Google sends an EU visitor's request to `consent.google.com`, issue #84), chosen by
+the caller's network. That page is not the site's change: a read whose data is missing (what would be
+drift), or a JSON read answered with HTML, is `error` with `wall: "consent"` when its request was
+really redirected (tiers 1 and 2 know; a page served at the asked address is judged as before) and
+answered 2xx on a page that: is on the same registrable domain (`consent.<site>` is the same site) at
+another host or path; shows no sign-in form or sign-in wording and is no login path (those stay
+`auth`); and names a consent step in a host label or path segment (`consent`, `gdpr`,
+`cookie-wall`, `cookie-settings`...), or says what a consent page says ("Reject all", "Accept all
+cookies", "Before you continue", "We use cookies") and holds an address of the site to go back to in
+its query (`continue=`). No site's name is known. It is judged before a JSON read's login markers,
+since a consent page links the sign-in page (Google's ServiceLogin button). A bot challenge is judged
+first and stays `blocked`; a non-2xx answer (a 404) is what its status makes it; a write is judged as
+a write. Tier 3 sees it from the run: a read's trigger page that ended there (`consentWall`, its op's
+request never answered or answered with the redirect) is the same `error`, and so is a heal's
+recapture (it stops, as for a sign-in page, and marks nothing stale), `add` (it throws, saving
+nothing), `learn_site` (`wall: "consent"`, `nextCall` `login` `mode: "window"`) and `capture`
+(`wall: "consent"` and a `next` saying so). The call is not healed, not marked stale, starts no
+cool-down and climbs no tier; an attempt that answered with it learned nothing (`learnedNothing`), so a
+heal that meets it is transient. Nothing about it is reported to the registry (report.ts), since it
+says nothing about the version. A consent page served in place (HTTP 200 at the asked address, an
+overlay over a page without the data) cannot be told from drift without a site's own rules: it stays
+drift.
+
+Its `next` leads to a step that works. A public read (no credential ref, learned signed out): the
+user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
+closes the window. The cookies the site set while it was open that are the visitor's own choices
+(`visitorChoices`: new or changed there, none every visitor is given unasked, none that shows a
+sign-in) are added to the site's jar, and nothing else of the profile, so tier 1 sends them; tiers 2
+and 3 send the profile's, which holds them. The spec gains no cookie value and no ref, so a shared spec
+and `vetShared` are unchanged, and the clean replay (`clean.ts`) still sends nothing of the user's:
+from a network the site walls, a consent-walled site's clean replay answers this `error`, and the op
+is not shared automatically from there. A signed-in read's `next` names the page to finish in the
+everyday browser, then `api-anything login <site>` imports it with the session. The tool never answers
+a consent question for the user and sets no site's consent cookie itself: that would be a choice made
+for them, and site-specific.
 
 An error status a 2xx answer carries in place of its data is judged as the HTTP status it stands
 for: a batchexecute RPC whose payload's place holds `[13]` (`[["wrb.fr",null,null,null,null,[13]]]`),
@@ -862,7 +899,8 @@ answers `rate` or `blocked` without sending anything, a write before its ledger 
 (`write: "not_sent"`), with `cooling: true`, `retryAfterMs` counting down to its end and a `reason`
 naming what the site answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
 asks for `api-anything login <site> --window`. Any login for the site (an import, a cookies file, the
-window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. The call
+window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. A consent
+wall (Failure classifier) is `error` and sets none: the site asked a question, it did not say stop. The call
 option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends that one call through
 it: one that succeeds ends it, since the site answered (before a write's readback, which may set it
 again); one the site limits or blocks again sets it anew from that answer, as any call does. MCP has no way to skip it. The idle MCP server's verification of candidates skips a cooling site too.
@@ -1207,7 +1245,12 @@ send a request again (its own scripts, a retry after a navigation or a connectio
 - `softFrom` loads the neutral page, then navigates in-app: a link the app rendered is clicked
   (its router handles it); otherwise `history.pushState` + `popstate`, which client routers listen
   to. Only if nothing fired does it load the URL. An injected `<a>` is not routed by React Router,
-  TanStack or Comet, so it would be a second full page load that fires no data XHR.
+  TanStack or Comet, so it would be a second full page load that fires no data XHR. "Nothing fired"
+  is judged after the page had up to 1 s to show a first request or a new address: a route's
+  request can lag its click (a handler that waits, a busy machine), and a page taken for unrouted
+  too early got a second load of the same address, which the link's own navigation then interrupted
+  (`PageUnreachable`, seen in the suite under load). A load that such a navigation still interrupts
+  waits for that navigation instead of failing.
 - Service workers are blocked in the profile: their fetches bypass routing and capture.
 - Known gap: shared workers are not guarded. A shared worker's requests reach no route, no page's
   tap and no capture, so a write a guarded page hands to one (started from a URL, a blob: or data:
@@ -1540,10 +1583,21 @@ the two continuations are independent, and `hasMore` describes the site only.
 
 ## Spec files and where they live
 
-One JSON file per site: `{ name, displayName, baseUrl, description, pace?, operations[] }`, zod-validated
+One JSON file per site: `{ name, displayName, baseUrl, description, pace?, aliases?, operations[] }`, zod-validated
 (`pace` is the site's budget, under Execution ladder; an op's `response.key` names what tells its
 items apart for `changes`, and the shared rules require it to be a path to one value in a field the
 recipe returns).
+`aliases` lists the other registrable domains people know the site by, when that is not the domain of
+where its requests go: the bundled `imdb` calls `v3.sg.media-imdb.com` and lists `["imdb.com"]`. A
+search by domain or URL (`matchQuery`, the client's and the registry's) matches the site's own domains
+first and then its aliases, so `imdb.com` and `https://www.imdb.com/title/...` find `imdb`. An alias is
+a search key and nothing else: never a host an op may call (one sending to it is off the spec's own site,
+as without it), never part of `siteOf`, never a cookie's, a login's or a session's site
+(`resolveLoginTarget` and the cookie jar ignore it), and `learn_site` never saves a page on an alias's
+domain into the site, since its ops would then call that domain. The shared rules (`aliasProblems`)
+require each to be a clean registrable domain on a public suffix as demand records one, not the site's
+own, listed once, at most 10. A version's hash covers the site's name and the op only, so adding an
+alias changes no version. The registry takes aliases from a maintainer only (docs/REGISTRY.md "Aliases").
 Site names are case-insensitive (lower-cased), so one file never gets two sets of state.
 Resolution order: `~/.api-anything/sites/<site>.json` (user-created and healed copies win) → a
 pulled `~/.api-anything/registry/<site>.json` → the bundled `sites/<site>.json` (community). A heal
@@ -1602,9 +1656,10 @@ records no attempt, `learn_site` asks no sharing question, and a call (CLI or MC
 lacks says it is local-only and how to turn that off. `test/local-only.test.ts` points the registry at a
 localhost server that counts connections and runs each path with local-only on: none connects.
 
-**The catalog's one request to a site.** The service never calls a site for an install: every call runs
+**The catalog's requests to a site.** The service never calls a site for an install: every call runs
 on the user's machine, from its address and with its sessions, which is what lets the ladder reach sites
-that block datacenters. The single exception is a visitor's try (`GET /v1/try/:site/:op`,
+that block datacenters. There are two exceptions, and neither calls for an install: the registry's
+replay of a missing clean replay (below), and a visitor's try (`GET /v1/try/:site/:op`,
 `registry/src/try.ts`; docs/REGISTRY.md "Trying an op from the catalog"), so that someone without Node 22
 can see what an op answers before installing. It is narrow on purpose, because each try is a request the
 catalog sends in its own name from Cloudflare's addresses: only ops in a list in the code (a few bundled
@@ -1618,6 +1673,22 @@ takes from, an 8 s timeout, a 1 MB cap, and a 10-minute cache.
 It reuses `buildRequest`, `judge` and `capOutput`, so its answer is a `CallResult` (with `via:
 "catalog-try"`). The Worker var `TRY_ENABLED` turns it off without a code change. A try reports nothing:
 it says how the site answers Cloudflare, not an install, so it counts toward no promotion.
+
+**The registry's replay of a missing clean replay.** The other request the Worker sends
+(`registry/src/replay.ts`; docs/REGISTRY.md "Replaying a skipped clean replay") supplies evidence an
+upload lacked: a version held for review for one reason, `its clean replay was skipped, not ok`, from a
+client older than the one that runs the replay itself (Publish, below) or one that could not run it then.
+The every-minute cron replays a few such versions once each through try's sender (`fetchCapped`) and its
+guards (`sendRefusal`: a plain GET at `minTier` 1 with no ref, lookup or `public` name, learned signed
+out, https on port 443 to a public host on its site's domain; every redirect hop to the op's own origin;
+the timeout, the size cap and the day's total of sends), with the op's published examples. It asks the
+review rules again as they stand, with an ok replay: a version they would hold for anything else, one
+with no example for a required param, or one that is no plain GET is marked `unreplayable` and never
+tried, which counts as no attempt. An ok answer the op's recipe extracts something from makes the
+version a candidate, removes the reason and adds `registryReplay: {at, outcome}` to its evidence, the
+uploader's `cleanReplay` left as sent; anything else leaves it in review, and a version is tried at most
+3 times, a day apart at least. It is no report: it counts toward no promotion and never makes a version
+live. Off whenever `TRY_ENABLED` is.
 
 **The one question, asked once.** A plugin install, `claude mcp add` or `npm -g` never runs setup, so
 `learn_site` asks the same question the first time it reaches the share step (the holdout answered and
@@ -1844,7 +1915,11 @@ status, with `registry` health and `local` verification separated as in pull, so
 whether to call one next. An installed copy keeps its own call metadata and gains registry health only
 for the same site name, domain and op name; that health names the registry's version, not necessarily
 the installed one. With no registry answer its health is unknown, even if the installed op records a
-version's status. No new probes run. A registry match reaches the agent as text, so it is held to
+version's status. No new probes run. A domain or URL query matches a site's `aliases` too, below its
+own domains, and a match lists them; beside no match, `related` names sites of another region
+(`relatedDomain`: the domain differs only in an ICANN public suffix), this machine's and the
+registry's, each checked here and given the client's own note: a hint for the user, never a site to call
+for the asked domain. A registry match reaches the agent as text, so it is held to
 the shared rules' limits (a site name as `safeName` allows, op and param names the rules allow, an op
 signature, texts of at most 500 characters, at most 50 ops); one that breaks them is dropped, not
 the rest. The registry ranks its own matches; local specs are scored here: a domain or URL query
@@ -1908,6 +1983,34 @@ check `learn_site` records from its holdout call (`purpose: "learn_site holdout"
 whose values the agent chose as neither of the user's examples; a check recorded with
 `api-anything check` needs consent. It is sent signed to `POST /v1/versions`, and the answer's hash and status
 become the local op's `version`.
+
+**The clean replay at upload.** An op about to go up with no clean replay on record (the caller's
+evidence, as learn_site and a heal-back pass it, or what a learn_site proved of this version,
+`proofOf`) gets one first, in `shareOps`: `replayClean`, `cleanCall` with the op's own examples, so an op
+made with `add` goes up `ok`, `blocked` or `failed` instead of `skipped`. It runs only for an op that
+goes up: with `consent`, or automatically when sharing is on and the op would be public with an ok
+replay and holds nothing of the user's own. Local-only, sharing off or unanswered, and an op that waits
+for a yes send nothing to the site. It cannot run (`review.ts` `unreplayable`) on a write, an op at
+`minTier` above 1 (plain HTTP says nothing of a page the browser must run) or one with no example or
+default for a required param: that op goes up `skipped`, as before. It is one request, at the site's pace
+and inside its budget (`sitePace`, `budgetCheck`) and cool-down; a site that is cooling down, a spent
+budget, or the site answering `rate` (which starts a cool-down, as after any call) sends no upload now,
+since a re-upload of the same version is a duplicate that changes nothing: the outcome says so with a
+`next`. An op learned over MCP or a pulled site's op goes only to public addresses (`publicOnly`). The
+result is not kept: a second share of the same op replays again. A failed replay still uploads; the
+registry holds it, and the outcome carries `cleanReplay` and `cleanReason`. `publish`'s preview sends
+nothing to the site and says per op what the replay will be (`cleanReplay`: on record, `skipped` and
+why, or "will run on publish").
+
+**Held for review.** An upload the registry answers `review` comes back from `shareOps` with `reason`
+(served only to this install until a maintainer approves it, and each registry reason in words),
+`held` (each reason, its category and its words: `review.ts`, the fixed categories the registry's stats
+count) and `next`. The only step that changes anything is a new version that passes: a read held only
+for a skipped replay that lacks an example gets the `add ... --example` and `publish --yes` that make
+one; anything else is "nothing to do but wait for a maintainer", since a re-upload of the same version
+is a duplicate. The local op's `version` keeps the categories (`review`), so `status` shows a
+`review` problem with the same words and `next` from the local files alone; `learn_site`'s `next`
+carries them, and `publish --yes` names the ops held.
 
 **Publish.** `api-anything publish <site> [op ...]` is the human's way to share: without `--yes` it
 previews each upload exactly as it would be sent, what was stripped, every warning, what may be the
@@ -1993,6 +2096,33 @@ needs is in place and the readback passed. The built request is dropped, and the
 session value. A preflight is not a case: it sets no exit code and is no part of the record or the
 gate, since nothing was sent to judge; `--strict` alone exits 1 for a write whose preflight is not
 `ok`, for a job that wants its writes ready too.
+
+**Live verification (`test/verify-live.ts`, `.github/workflows/verify-live.yml`).** Once a day
+GitHub's own runner runs `verify` over every bundled site against the real sites, so a dead example
+or a changed site shows up before a user finds it by failing. `npm run verify:live` is the whole
+run: an empty `API_ANYTHING_HOME` (a given `--home` must be empty), local-only (no report, no pull),
+a throwaway `API_ANYTHING_KEY` (the OS key store is never touched), `API_ANYTHING_ALLOW_IMPORT`
+removed (logged out), and one `api-anything verify <site>` process per site, in order, so the
+spec's pace, the budget and the cool-downs are the only pacing, as for one user; a site still
+running after `--site-timeout` (20 min) is killed with its browser. It judges nothing itself: each
+op's entry in `health.json` is its worst case in verify's own JSON (a failing case, else an
+inconclusive one, else a passing one), with that case's label, class (`got`), tier and ms, verify's
+reason cut to one line of 200 characters, without what it quotes of the answer (markup or a body
+after a `: `) and with the spec's example and check values replaced by `<arg>`, and the time. A skipped op (or a write's preflight) is `skipped`; a site verify could not
+load fails each of its ops; a verify that crashed, hung, or reported nothing about an op is
+`inconclusive`, since it tested nothing. No args, no answers. The header has the version, the
+commit, the run's start, end and duration, the op totals and verify's case counts summed; a
+Markdown summary of the same (totals, then each failing and inconclusive op) becomes the job
+summary. The run exits 0 once it wrote both, whatever the sites answered (`--fail-on-failures`
+exits 1 when an op failed). The workflow's issue job is the only one that may write (`issues:
+write`, and `actions: read` for the previous run's artifact); it runs no site traffic and no npm
+install, only `node test/verify-live.ts track` and `gh`. An op is reported once it failed in two
+consecutive runs: the previous record is the artifact of the run right before, and without one
+(that run failed, was cancelled, or its artifact expired) nothing is decided and the issue stays as
+it is. One issue, `Live verification: failing operations`, the oldest by GitHub Actions with
+exactly that title: created when the list first has an op, edited in place, reopened, and closed
+when the list empties. It does not report to the catalog: per-op health there needs an identity
+of its own.
 
 **Reports (`report.ts`).** After every `call()` of an op that carries a `version`, with `share` on, a
 report `{hash, outcome, tier, ms}` is queued: ok → `ok`, drift and error → `fail`, auth, blocked, rate
@@ -2159,7 +2289,11 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   the login among them (CI caught this). The sign-in counts
   only when a login cookie (not a guest name) appeared or changed in between: a profile that already
   held one proves nothing, since it may be the very cookie the site has signed out. Then the jar is
-  replaced and `login` answers `ok: true` with the `renewed` names. Otherwise it answers `ok: false`
+  replaced and `login` answers `ok: true` with the `renewed` names. With no sign-in, the cookies the
+  visitor's own choices set there (a consent answered, a challenge cleared: `visitorChoices`, see
+  "A consent wall" under the classifier) are added to the jar alone, and `login` answers `ok: true`,
+  `loggedIn: false`, with their names in `kept` and a `warning` saying so; the session's `source`
+  stays as it was. With none of those either, it answers `ok: false`
   with why (no login cookie appeared, or the ones held at opening did not change) and keeps the stored
   session. The window does not close itself when a login cookie appears: a site can set its session
   cookie before a second factor, a consent page or the redirect back from an identity provider is done,

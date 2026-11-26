@@ -77,7 +77,7 @@
           "type": "string",
           "required": true,
           "description": "Complete final job-link segment, including its JR requisition suffix, copied from a public Workday employer job link.",
-          "example": "Technical-Consultant_JR-0110821"
+          "example": "Senior-Technical-Consultant--Integrations---Higher-Education---Nonprofit_JR-0111391"
         }
       ],
       "readOnly": true,
@@ -86,17 +86,17 @@
       "checks": [
         {
           "args": {
-            "job": "Web-Designer_JR-0110973"
+            "job": "Senior-AI-Engineer---Sana_JR-0107620"
           },
           "expect": "result",
-          "purpose": "Separate public catalog entry for a USA CA remote web-design role."
+          "purpose": "Separate public catalog entry for an onsite Stockholm engineering role."
         },
         {
           "args": {
-            "job": "Digital-Project-Consultant_JR-0110941"
+            "job": "Customer-Success-Manager_JR-0111679"
           },
           "expect": "result",
-          "purpose": "Separate Seattle digital-project role differs in title, location and requisition."
+          "purpose": "Separate Chicago customer-success role with additional locations differs in title, location and requisition."
         }
       ]
     }

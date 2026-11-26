@@ -25,6 +25,7 @@ import {
   type ImportApproval,
   loadSession,
   loggedIn,
+  mergeCapture,
   parseSetCookie,
   renewedSignIn,
   type Session,
@@ -397,13 +398,38 @@ export async function reimportIfBrowser(
 }
 
 export type WindowLogin =
-  | { ok: true; cookies: StoredCookie[]; renewed: string[] }
+  /** `kept`: no sign-in, but the names of the cookies the visitor's choices set, added to the jar (`visitorChoices`) */
+  | { ok: true; cookies: StoredCookie[]; renewed: string[]; kept?: string[] }
   | { ok: false; cookies: StoredCookie[]; reason: string };
+
+/**
+ * The cookies a window set that are the visitor's own answer to the page (a cookie-consent choice, a
+ * cleared challenge): new or changed while it was open, not ones every visitor is given unasked
+ * (`guest`), and none that shows a sign-in.
+ */
+export function visitorChoices(
+  opened: StoredCookie[],
+  closed: StoredCookie[],
+  guest: string[],
+  loginCookies?: string[],
+): StoredCookie[] {
+  const key = (c: StoredCookie) => [c.name, c.domain.toLowerCase(), c.path, c.value].join("\0");
+  const had = new Set(opened.map(key));
+  return closed.filter(
+    (c) => c.value && !had.has(key(c)) && !guest.includes(c.name) && !signInCookies([c], loginCookies, guest).length,
+  );
+}
+
+/** What a window that kept a visitor's choices and no sign-in says. */
+export const keptNote = (site: string, kept: string[]) =>
+  `no sign-in seen; kept what the site set while the window was open (${kept.join(", ")}), the visitor's own choices such as a cookie consent: calls of ${site} now send them`;
 
 /**
  * The visible-window sign-in. It counts only when login cookies appear or change while the window is
  * open (guest names aside), since a profile that already held them proves nothing: they may be the
- * ones the site has signed out. Only then is the jar replaced; otherwise the stored session stays.
+ * ones the site has signed out. Only then is the jar replaced. With no sign-in, the cookies the
+ * visitor's choices set there (`visitorChoices`: a consent answered) are added to the jar, and
+ * nothing else of the profile; with none of those either, the stored session stays.
  * `publicOnly`: an address an agent gave over MCP, whose probe asks only public addresses.
  */
 export async function windowLogin(
@@ -424,6 +450,11 @@ export async function windowLogin(
       saveSession(site, { ...s, cookies: closed, source: "window", guestCookies: union(s.guestCookies, guest) });
     });
     return { ok: true, cookies: closed, renewed };
+  }
+  const chosen = visitorChoices(opened, closed, guest, o.loginCookies);
+  if (chosen.length) {
+    mergeCapture(site, chosen);
+    return { ok: true, cookies: closed, renewed: [], kept: cookieNames(chosen) };
   }
   const held = cookieNames(signInCookies(opened, o.loginCookies, guest));
   const visitors = guest.filter((n) => closed.some((c) => c.name === n));

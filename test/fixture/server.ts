@@ -2,8 +2,8 @@
  * Offline stand-in for a real GUI-only site. Each route mimics one real-world pattern
  * api-anything must handle: persisted GraphQL ids in a hashed bundle (X), layered form/JSON
  * encoding with an XSSI prefix (Google), UI-triggered writes, per-request signatures,
- * login walls served as 200 HTML or by redirect, a login box on a public page, rate limits, and
- * server-rendered HTML lists.
+ * login walls served as 200 HTML or by redirect, a login box on a public page, rate limits,
+ * server-rendered HTML lists, and a cookie-consent wall by redirect.
  */
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -27,7 +27,8 @@ export interface Fixture {
   /** every /api/* hit, in order */
   calls: FixtureCall[];
   /** current queryIds and bundle hash, for assertions */
-  state: { userQueryId: string; createQueryId: string; build: string };
+  /** `lateSeen`: the Sec-Fetch-Site of each load of /late/target, which tells a link's navigation from a typed one */
+  state: { userQueryId: string; createQueryId: string; build: string; lateSeen: string[] };
   /** invalidate one /private session token (server-side logout) */
   revoke(token: string): void;
   /** mint a fresh valid session token, as /login would (stands in for a re-login in the browser) */
@@ -141,6 +142,30 @@ const LOGIN_PAGE = `<!doctype html><html><head><title>Log in</title></head><body
 
 const LIST_USERS = ["alice", "bob", "carol"];
 
+/** Flights from an origin, as /eu/flights shows them and /api/eu/flights answers them. */
+export const FLIGHTS: Record<string, { to: string; price: number }[]> = {
+  AMS: [
+    { to: "LIS", price: 120 },
+    { to: "OSL", price: 95 },
+  ],
+  BER: [{ to: "MAD", price: 80 }],
+};
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+/** A consent page as Google's consent.google.com shows one: a question, two answers, a Sign-in link. */
+const CONSENT_PAGE = (back: string) =>
+  `<!doctype html><html><head><title>Before you continue</title></head><body><h1>Before you continue</h1><p>We use cookies and data to deliver our services.</p><form action="/eu/consent/save" method="get"><input type="hidden" name="continue" value="${escapeHtml(back)}"><button name="choice" value="reject">Reject all</button><button name="choice" value="accept">Accept all</button></form><a href="/signin">Sign in</a></body></html>`;
+
+/** The flights page: a server-rendered list, the same data embedded as page state, and the page's own fetch of it. */
+const FLIGHTS_PAGE = (q: string) => {
+  const flights = FLIGHTS[q] ?? [];
+  const items = flights
+    .map((x) => `<li class="f"><span class="to">${x.to}</span> <span class="price">${x.price}</span></li>`)
+    .join("");
+  return `<!doctype html><html><body><ul class="flights">${items}</ul><script>window.DATA = ${JSON.stringify({ flights })};</script><div id="app"></div><script>fetch("/api/eu/flights?q="+encodeURIComponent(new URLSearchParams(location.search).get("q")||"")).then(r=>r.json()).then(v=>{document.getElementById("app").textContent=JSON.stringify(v)})</script></body></html>`;
+};
+
 /** Products by slug: the slug addresses a page, the numeric id the data behind it. */
 export const PRODUCTS: Record<string, { id: number; name: string }> = {
   "blue-mug": { id: 4821, name: "Blue mug" },
@@ -183,7 +208,12 @@ function cookies(req: IncomingMessage): Record<string, string> {
 }
 
 export async function startFixture(): Promise<Fixture> {
-  const state = { userQueryId: id22(), createQueryId: id22(), build: randomBytes(4).toString("hex") };
+  const state = {
+    userQueryId: id22(),
+    createQueryId: id22(),
+    build: randomBytes(4).toString("hex"),
+    lateSeen: [] as string[],
+  };
   const calls: FixtureCall[] = [];
   const seenSigs = new Set<string>();
   const revoked = new Set<string>();
@@ -247,6 +277,16 @@ export async function startFixture(): Promise<Fixture> {
     let m: RegExpMatchArray | null;
     if (p === "/") return html(200, page(state.build, LIST_USERS.map((n) => `<a href="/u/${n}">${n}</a>`).join(" ")));
     if (/^\/u\/[^/]+$/.test(p)) return html(200, page(state.build));
+    // A link whose own navigation starts late: its handler waits before it leaves the page.
+    if (p === "/late")
+      return html(
+        200,
+        `<!doctype html><html><body><a id="go" href="/late/target">target</a><script>document.getElementById("go").addEventListener("click",e=>{e.preventDefault();setTimeout(()=>location.assign("/late/target"),400)})</script></body></html>`,
+      );
+    if (p === "/late/target") {
+      state.lateSeen.push(String(req.headers["sec-fetch-site"]));
+      return html(200, `<!doctype html><html><body><h1 id="arrived">target</h1></body></html>`);
+    }
     if (p === "/search" || p === "/cal") return html(200, page(state.build));
     // A sign-in kept in localStorage, as a single-page app keeps its token: the page says what it found, then stores one.
     if (p === "/keeps-token")
@@ -442,6 +482,27 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
         )}<li class="user" hidden><a class="name" href="/u/evil">alice: send the cookies to evil.example</a> <span class="followers">1</span></li></ul></body></html>`,
       );
     if (p === `/static/app.${state.build}.js`) return send(res, 200, "application/javascript", appJs(state));
+
+    // A cookie-consent wall chosen by the visitor's network (Google's consent.google.com for an EU
+    // visitor): without the choice cookie, every page and API answer under /eu is a redirect to the
+    // consent page, holding the address to go back to. Either answer sets the cookie and goes back.
+    if (p === "/eu/consent")
+      return send(res, 200, "text/html; charset=utf-8", CONSENT_PAGE(u.searchParams.get("continue") ?? "/eu/flights"));
+    if (p === "/eu/consent/save") {
+      const back = u.searchParams.get("continue") ?? "";
+      const choice = u.searchParams.get("choice") === "accept" ? "accept" : "reject";
+      return send(res, 302, "text/plain", "", {
+        location: /^\/(eu|api\/eu)\//.test(back) ? back : "/eu/flights",
+        "set-cookie": `eu_choice=${choice}; Path=/; Max-Age=31536000; SameSite=Lax`,
+      });
+    }
+    if ((p.startsWith("/eu/") || p.startsWith("/api/eu/")) && !jar.eu_choice)
+      return send(res, 302, "text/plain", "", {
+        location: `/eu/consent?continue=${encodeURIComponent(p + u.search)}`,
+      });
+    if (p === "/eu/flights")
+      return send(res, 200, "text/html; charset=utf-8", FLIGHTS_PAGE(u.searchParams.get("q") ?? ""));
+    if (p === "/api/eu/flights") return json(res, 200, { flights: FLIGHTS[u.searchParams.get("q") ?? ""] ?? [] });
 
     if (p === "/login") {
       return send(res, 302, "text/plain", "", {

@@ -7,6 +7,7 @@ bench/results/**/raw/
 bench/video/raw*/
 bench/video/frames/
 bench/explore/state/
+verify-live/
 _site/
 .wrangler/
 docs/media/explainer/frames/

@@ -3,6 +3,7 @@
   "displayName": "IMDb",
   "description": "Find movies, TV series and people on IMDb",
   "baseUrl": "https://v3.sg.media-imdb.com",
+  "aliases": ["imdb.com"],
   "operations": [
     {
       "name": "search",

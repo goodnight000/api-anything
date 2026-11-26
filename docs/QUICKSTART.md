@@ -215,6 +215,10 @@ means an issue or forum post only. Checked in October 2026.
   more (table above). No tool waits longer than about 25 seconds before it answers.
 - **The client asks for approval before every read.** Restart it so it loads the current tool list:
   `call_operation` is advertised read-only, and only `call_write_operation` asks.
+- **A read answers `error` with `wall: "consent"`.** The site sent it to its cookie-consent page
+  (sites do this for callers in the EU). Have the user run `api-anything login <site> --window`
+  (MCP: `login` with mode `"window"`), make the choice on the site's page and close the window;
+  then call again. api-anything does not answer the question for them.
 - **`login` with mode `"window"` answers `pending`.** The window is open for the user. Tell them to
   sign in and close it, then call `get_job`. A second `login` meanwhile returns the same job, and
   the window closes by itself after 10 minutes.

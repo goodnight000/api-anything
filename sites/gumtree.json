@@ -107,11 +107,11 @@
         {
           "args": {
             "category": "folding-bikes",
-            "slug": "blue-brompton-6-speed-2021-c-line",
-            "adId": "1803924977"
+            "slug": "brompton-bike-",
+            "adId": "1805382186"
           },
           "expect": "result",
-          "purpose": "Reserved source-linked third listing differs from both learning examples."
+          "purpose": "A folding-bike listing: a third category, slug and listing identity, different from the example and check 1."
         }
       ]
     }

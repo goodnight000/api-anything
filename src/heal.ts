@@ -14,7 +14,7 @@ import {
   TRIGGER_BUDGET_MS,
   waitReport,
 } from "./browser.js";
-import { botWall, type Class, judge, type Observed, pickedShape } from "./classify.js";
+import { botWall, type Class, consentReason, consentStep, judge, type Observed, pickedShape } from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, type Step, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
@@ -142,6 +142,10 @@ export interface Attempt {
   retryAfterMs?: number;
   /** the step `hint` asks for, when it is not the class's usual one; see CallResult.nextCall */
   step?: NextAction;
+  /** the same-site page the request was sent to instead of its data; see Classified.unfinished */
+  unfinished?: string;
+  /** with `unfinished`: that page is the site's cookie-consent step */
+  wall?: "consent";
 }
 
 export const PROFILE_HINT =
@@ -524,6 +528,8 @@ export interface TriggerRun {
   unsaved?: string;
   /** the trigger landed on a sign-in page instead of the content */
   loginWall?: string;
+  /** a read's trigger was redirected to the site's cookie-consent page, at this address, instead of the content */
+  consent?: string;
   /** a write's own request was sent again by the page this many times, and stopped each time */
   repeats?: number;
   /** a write's own request was answered with a redirect that would have sent it again, and was stopped */
@@ -608,6 +614,21 @@ export function loginWall(capture: CaptureResult, triggerUrl: string): string | 
   return password || /(log|sign)[-_]?in|\/accounts\/login|\/i\/flow\/login/i.test(f.pathname) ? f.pathname : undefined;
 }
 
+/** The final page of a run, when the trigger was redirected to the site's cookie-consent step (`consentStep`). */
+export function consentWall(capture: CaptureResult, triggerUrl: string): string | undefined {
+  const doc = capture.exchanges.filter((e) => e.resourceType === "document" && e.response?.body).at(-1);
+  return consentStep(triggerUrl, capture.finalUrl, doc?.response?.body ?? "") ? capture.finalUrl : undefined;
+}
+
+/** A read that ended on the site's cookie-consent page at `url`: an error, which nothing heals. */
+export const consentAttempt = (tier: Attempt["tier"], url: string): Attempt => ({
+  tier,
+  class: "error",
+  reason: consentReason(url),
+  unfinished: url,
+  wall: "consent",
+});
+
 /** Run an op's trigger with args in the shared profile and refresh the session from it. */
 export async function runOpTrigger(
   site: string,
@@ -658,6 +679,7 @@ export async function runOpTrigger(
   // a redirect is no answer: where the page ended up says what it was
   const hop = matched?.response && matched.response.status >= 300 && matched.response.status < 400;
   const wall = matched?.response && !hop ? undefined : loginWall(capture, t.url);
+  const consent = op.readOnly && !(matched?.response && !hop) ? consentWall(capture, t.url) : undefined;
   const { repeats, resends, others } = once?.stopped ?? {};
   const stopped = [...(others ?? [])];
   const left = [...(once?.left ?? [])];
@@ -667,6 +689,7 @@ export async function runOpTrigger(
     values,
     ...(unsaved ? { unsaved } : {}),
     ...(wall ? { loginWall: wall } : {}),
+    ...(consent ? { consent } : {}),
     ...(repeats ? { repeats } : {}),
     ...(resends ? { resends } : {}),
     ...(stopped.length || left.length ? { others: { stopped, left } } : {}),
@@ -1354,6 +1377,11 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       throw new Error(
         `the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${i.site}; then add again`,
       );
+    const consent = i.write ? undefined : consentWall(run1, fillTrigger(trigger, ex1).url);
+    if (consent)
+      throw new Error(
+        `${consentReason(consent)}. Ask the user to run api-anything login ${i.site} --window, make the choice on the site's page there and close the window; then add again`,
+      );
     run2 = await run(ex2 ?? ex1);
   }
   const flags = i.response ?? {};
@@ -1866,7 +1894,9 @@ export type HealResult =
 // A check answered with these, or with the server's own failure, says nothing about the candidate:
 // stop, and don't spend a browser run on it.
 const STOP: ReadonlySet<Class> = new Set(["rate", "blocked", "auth"]);
-export const learnedNothing = (a: Pick<Attempt, "class" | "server">) => STOP.has(a.class) || !!a.server;
+// A page the site wants finished first (a consent step) says nothing about the request either.
+export const learnedNothing = (a: Pick<Attempt, "class" | "server" | "unfinished">) =>
+  STOP.has(a.class) || !!a.server || !!a.unfinished;
 
 function saveHealed(
   site: string,
@@ -2079,6 +2109,10 @@ export async function healOperation(
       attempt: { tier: 3, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` },
       reason: `the trigger landed on a sign-in page (${run.loginWall})`,
     };
+  }
+  if (run.consent) {
+    const a = consentAttempt(3, run.consent);
+    return { outcome: "failed", transient: true, attempt: a, reason: a.reason };
   }
   // A read learns from what left the browser. What its guard stopped is not the read's request: learned,
   // it would be replayed from here as one (seen: a GET read healed into the POST its click sends).

@@ -43,6 +43,11 @@ export interface SiteContext {
   pace?: { minIntervalMs?: number; perHour?: number };
   /** caller notes (the `<site>.md` text before `## Maintainer notes`), at most 8 KB */
   notes?: string;
+  /**
+   * other registrable domains the site is known by (spec.ts `aliases`), which a search by one matches.
+   * A maintainer's word only, from a seed or the admin route: the registry never takes them from an upload.
+   */
+  aliases?: string[];
 }
 
 /** What the uploader's client proved before uploading (see learnsite.ts and share.ts). */
@@ -61,6 +66,11 @@ export interface Evidence {
   tier?: 1 | 2 | 3;
   /** a heal: the version this one repairs */
   healedFrom?: string;
+  /**
+   * the registry's own clean replay of a version its uploader sent none for (registry/src/replay.ts):
+   * set by the registry only, never taken from an upload. Evidence alone: no report, no promotion
+   */
+  registryReplay?: { at: string; outcome: "ok" };
 }
 
 /** POST /v1/versions (signed). The operation is stored as sent, keyed by its hash. */
@@ -216,6 +226,28 @@ export interface SearchMatch {
   unmatched?: string[];
   /** the site's own agent interfaces; a domain search finds a site that has only these, with no operations */
   interfaces?: ServedInterface[];
+  /** other domains the site is known by: a domain search matches one too, below a site on that domain */
+  aliases?: string[];
+}
+
+/**
+ * A confirmed site of another region beside a domain search that matched nothing: its domain (or an alias)
+ * differs from the asked one only in the public suffix (`relatedDomain`). Another site with other data: a
+ * hint for the person, never an answer to call for the asked domain.
+ */
+export interface RelatedSite {
+  name: string;
+  /** the related domain: the site's own, or the alias of it that is related */
+  domain: string;
+  displayName?: string;
+  /** says it does not cover the asked domain */
+  note: string;
+}
+
+/** GET /v1/search: `related` only beside no match */
+export interface SearchAnswer {
+  matches: SearchMatch[];
+  related?: RelatedSite[];
 }
 
 /** POST /v1/reports (signed), at most 50 per request */

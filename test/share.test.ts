@@ -1078,6 +1078,26 @@ test("a heal that keeps a value of the call that healed it is not shared back", 
   assert.doesNotMatch(JSON.stringify(u!.operation.request), /jane/);
 });
 
+test("a call answered by the site's cookie-consent page reports nothing about the version", async () => {
+  shareOn();
+  const spec = site();
+  saveSite(spec);
+  const hash = "d".repeat(64);
+  const was = { ...spec.operations[0]!, version: { hash, status: "live" } };
+  const walled = { ok: false, class: "error", wall: "consent", tier: 1, ms: 5 } as CallResult;
+  afterCall("demo", was, "registry", walled);
+  await settle(5000);
+  assert.equal(fake.reports().length, 0, "the page asked this visitor a question: no word on the version");
+  // the same error without the wall is the version's failure, as before
+  const { wall: _, ...failed } = walled;
+  afterCall("demo", was, "registry", failed as CallResult);
+  await settle(5000);
+  assert.deepEqual(
+    fake.reports().map((r) => [r.hash, r.outcome]),
+    [[hash, "fail"]],
+  );
+});
+
 test("spelled: a call's value in what a heal learned, in the encodings a page copies it in", () => {
   const args = { q: "Jane Private Lookup", id: 48213, exact: true, tags: ["rare-orchids"], n: "ab" };
   const hit = (text: string) => spelled({ url: `https://www.example.com/api?${text}` }, args);

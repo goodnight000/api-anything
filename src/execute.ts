@@ -15,13 +15,14 @@ import {
 } from "./browser.js";
 import { BudgetSpent, limited, PaceConfigError, type SendBudget, sitePace } from "./budget.js";
 import { type Changes, capChanges, changesOf } from "./changes.js";
-import { type Class, judge } from "./classify.js";
+import { type Class, judge, signedInRead } from "./classify.js";
 import { asText, fillTemplate, templateRefs } from "./codec.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { getPath, MAX_PAGE_ELEMENTS } from "./extract.js";
 import {
   type Attempt,
   challengePage,
+  consentAttempt,
   cutShort,
   fillTrigger,
   firedNothing,
@@ -265,6 +266,11 @@ export interface CallResult {
   retryAfterMs?: number;
   /** failures only: `next` as data */
   nextCall?: NextCall;
+  /**
+   * `error` only: the site redirected the read to its cookie-consent page instead of the data. The
+   * operation is fine; the visitor has a question to answer (`next`)
+   */
+  wall?: "consent";
   /** the server failed or could not be reached: the answer says nothing about the request or the args */
   server?: true;
   /** the site cools down after a rate limit or block: nothing was sent, so no version of the op answered */
@@ -484,9 +490,19 @@ function writeStatus(log: Attempt[]): WriteStatus {
   return "not_sent";
 }
 
-/** The step an attempt's own facts ask for, before the class's usual one. */
-export function stepOf(a: Attempt): Partial<Result> {
+/**
+ * The step an attempt's own facts ask for, before the class's usual one. `op`: whose read it was, for
+ * a page the site wants finished first (a public read's consent step is answered in a window).
+ */
+export function stepOf(a: Attempt, op?: Operation): Partial<Result> {
   const wait = a.retryAfterMs !== undefined ? { retryAfterMs: a.retryAfterMs } : {};
+  if (a.unfinished) {
+    const windowed = a.wall === "consent" && !!op && !signedInRead(op);
+    return {
+      ...(a.wall ? { wall: a.wall } : {}),
+      nextCall: { action: "login", ...(windowed ? { mode: "window" as const } : {}) },
+    };
+  }
   if (a.hint === PROFILE_HINT) return { ...wait, nextCall: { action: "retry" }, retry: "after_wait" };
   // refused to this network or region: no tier, login or wait changes that
   if (a.class === "blocked" && a.status === 451) return { nextCall: { action: "report" }, retry: "no" };
@@ -558,6 +574,7 @@ function nextFor(
   if (c === "ok") return undefined;
   if (c === "refused")
     return "only if the user asked for this write: rerun with --allow-writes (MCP: start the server with --allow-writes)";
+  if (a?.unfinished) return unfinishedNext(site, op, a.unfinished, a.wall);
   if (a?.hint) return a.hint;
   // A write the server may have run: never invite a second send.
   const ran = !op.readOnly && a !== undefined && statusOf(a) === "may_have_applied";
@@ -585,6 +602,21 @@ function nextFor(
     default:
       return "retry once; if it fails the same way, stop and report the reason";
   }
+}
+
+/**
+ * What to do about a read sent to a page the site wants finished first. The address is the site's own
+ * text (where its redirect led): shown as a spec's address is. A signed-in read's session is the
+ * everyday browser's, and so is the page to finish; a public read's consent is answered in a window
+ * of api-anything's own, whose new cookies are kept for the site (login.ts `windowLogin`).
+ */
+function unfinishedNext(site: string, op: Operation, at: string, wall?: "consent"): string {
+  const shown = shownAddress(at);
+  if (wall !== "consent")
+    return `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${shown} in their browser and finish it, then run api-anything login ${site}; then retry once`;
+  if (signedInRead(op))
+    return `the site asks for a cookie-consent choice first: ask the user to open ${shown} in their browser and finish it, then run api-anything login ${site}; then retry once`;
+  return `the site asks this visitor for a cookie-consent choice first (${shown}), which api-anything never makes for the user: ask the user to run api-anything login ${site} --window, make the choice on the site's page there and close the window (the cookies the site sets then are kept for ${site}); then retry once`;
 }
 
 function success(a: Attempt, extra: Partial<Result> = {}): Result {
@@ -744,6 +776,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       const answer = run.matched && judgeExchange(op, run.matched);
       // the op's request was redirected and the run ended on a sign-in page: that page is the answer
       const judged = answer && answer.class === "error" && run.loginWall ? undefined : answer;
+      // the trigger page itself was sent to the site's consent step, so the op's own request never fired
+      const consent = run.consent && judged?.class !== "ok" ? consentAttempt(tier, run.consent) : undefined;
       // The page is told nothing of a redirect that was stopped, its status included: this is the answer.
       const resent: Attempt | undefined = run.resends
         ? {
@@ -755,6 +789,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
           }
         : undefined;
       const a: Attempt =
+        consent ||
         judged ||
         resent ||
         challengePage(run.capture) ||
@@ -851,17 +886,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       r = await viaPage(await derive(op, viaPage));
     }
     const j = within(() => judge(op, r), DEADLINE.read);
-    const hint = j.unfinished
-      ? // the address is the site's own text (where its redirect led): shown as a spec's address is
-        `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${shownAddress(j.unfinished)} in their browser and finish it, then run api-anything login ${ctx.site}; then retry once`
-      : undefined;
-    return pageTooLarge(op, {
-      tier,
-      status: r.status,
-      ...(r.redirected ? { redirected: true } : {}),
-      ...j,
-      ...(hint ? { hint, step: "login" as const } : {}),
-    });
+    return pageTooLarge(op, { tier, status: r.status, ...(r.redirected ? { redirected: true } : {}), ...j });
   } catch (thrown) {
     // nothing was sent: the call ends with the budget's answer (`run`)
     if (thrown instanceof BudgetSpent) throw thrown;
@@ -1047,7 +1072,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     tier: b.tier,
     reason: b.reason,
     next: nextFor(b.class, ctx.site, op, b),
-    ...stepOf(b),
+    ...stepOf(b, op),
     ...(b.server ? { server: true as const } : {}),
     ...extra,
   });
@@ -1889,7 +1914,7 @@ async function run(
       reason,
       next: nextFor(x.class, siteName, op, x, signIn?.text),
       ...(x.class === "auth" && signIn ? { nextCall: signIn.step } : {}),
-      ...stepOf(x),
+      ...stepOf(x, op),
       ...(x.server ? { server: true as const } : {}),
     });
   // A send the budget refuses, at any tier or retry, ends the call: nothing more went.
@@ -2140,7 +2165,7 @@ export async function heal(
       next: recipe
         ? `if the site works in a browser, re-learn the response recipe: api-anything add ${siteName} ${op.name} ... --extract <path> (api-anything capture <trigger url> shows the response); otherwise report it`
         : nextFor(b.class, siteName, op, b),
-      ...stepOf(b),
+      ...stepOf(b, op),
       ...(recipe ? { nextCall: { action: "relearn" } } : {}),
     });
   }
@@ -2151,7 +2176,7 @@ export async function heal(
     tier: b?.tier,
     reason: h.reason,
     next: nextFor(b?.class ?? "drift", siteName, op, b),
-    ...(b ? stepOf(b) : {}),
+    ...(b ? stepOf(b, op) : {}),
     // this was the heal: what is left is learning it again
     ...((b?.class ?? "drift") === "drift" ? { nextCall: { action: "relearn" } } : {}),
   });
