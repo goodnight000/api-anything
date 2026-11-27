@@ -401,9 +401,10 @@ Attached mode refuses, with a reason and a `next`:
   unset the variable and log out again to clear them);
 - a second api-anything process of the same OS user while one is attached: it waits up to 15 s,
   then fails with a hint, as with the profile. Keep other automation off the port while
-  api-anything uses it. The lock is kept in a directory of your own in the temp directory
-  (`api-anything-<uid>`), so another user's never gets in your way; a lock or directory there that
-  cannot be used is refused with a `next`.
+  api-anything uses it. The lock is kept in `~/.api-anything-locks` (your home directory as the OS
+  records it, whatever `HOME`, `TMPDIR` or `API_ANYTHING_HOME` say), so every process of yours
+  shares one lock per browser and another user's never gets in your way; a lock or directory there
+  that cannot be used is refused with a `next`.
 
 ### Health: `api-anything status [site]`
 

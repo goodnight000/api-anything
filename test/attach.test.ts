@@ -184,7 +184,7 @@ describe("API_ANYTHING_CDP refused before anything connects", () => {
 
   test("the attach lock is in a directory of this OS user's alone, so another user's lock never blocks it", () => {
     const file = lockPath(attachLock("127.0.0.1:9222"));
-    if (process.platform === "win32") return; // the temp directory is the user's own there
+    if (process.platform === "win32") return; // the profile directory is the user's own there
     const dir = dirname(file);
     assert.notEqual(dir, tmpdir(), "not in the temp directory every user shares");
     const s = statSync(dir);
@@ -192,6 +192,26 @@ describe("API_ANYTHING_CDP refused before anything connects", () => {
     assert.equal(s.mode & 0o077, 0, "no other user can enter it");
   });
 
+  test("one OS user and one endpoint have one lock path, whatever the process's environment, and no home's", () => {
+    const names = ["TMPDIR", "TMP", "TEMP", "HOME", "API_ANYTHING_HOME"] as const;
+    const saved = names.map((n) => [n, process.env[n]] as const);
+    const paths = new Set<string>();
+    try {
+      // an MCP service and a shell of one user: each with its own temp directory, HOME and home
+      for (const tag of ["a", "b"]) {
+        const dir = mkdtempSync(join(tmpdir(), `aa-env-${tag}-`));
+        for (const n of names) process.env[n] = dir;
+        const file = attachLock("127.0.0.1:9222");
+        assert.ok(!file.startsWith(dir), `${file} is under the process's own ${dir}`);
+        paths.add(file);
+      }
+    } finally {
+      for (const [n, v] of saved) if (v === undefined) delete process.env[n];
+      else process.env[n] = v;
+    }
+    assert.equal(paths.size, 1, [...paths].join(" and "));
+    assert.notEqual(attachLock("127.0.0.1:9223"), [...paths][0], "another endpoint has a lock of its own");
+  });
   test("a lock that cannot be opened, or a lock directory that is not this user's alone, is refused cleanly with a next", async () => {
     saveSite(minTier2(fx));
     const devtools = await fakeDevTools();

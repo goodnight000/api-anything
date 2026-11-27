@@ -1311,9 +1311,12 @@ attach to. A DevTools endpoint is full control of a browser.
   the other's tabs as tabs of the browser and answers their dialogs (seen: two test processes
   attached at once dismissed each other's confirms, and an order a read's learning should have
   stopped reached the server). The lock is per OS user, keyed by the address and port, not under a
-  home: `api-anything-<uid>/api-anything-cdp-<host>_<port>.lk` in the temp directory, a directory
-  of the user's own (0700; one that is not a directory, is another user's, or is open to others is
-  refused as `AttachError` with a `next`). It used to be in the temp directory itself, which Linux
+  home: `.api-anything-locks/api-anything-cdp-<host>_<port>.lk` in the user's home directory as the
+  OS records it (`os.userInfo()`: the password database, the profile directory on Windows), a
+  directory of the user's own (0700; one that is not a directory, is another user's, or is open to
+  others is refused as `AttachError` with a `next`). Nothing of a process's environment moves it:
+  it was in the temp directory, so an MCP service and a shell of one user with two TMPDIR values
+  took two locks for one browser. Before that it was in the temp directory itself, which Linux
   shares: once one user had attached to a port, another user's every attached call failed with
   SQLite's "unable to open database file" and no `next`. A lock file that cannot be opened is
   refused as `AttachError` with a `next` too, nothing sent. Another process of the same user waits

@@ -6,7 +6,7 @@
 import { lookup } from "node:dns/promises";
 import { lstatSync, mkdirSync } from "node:fs";
 import { isIP } from "node:net";
-import { tmpdir } from "node:os";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { proxyConfig } from "./proxy.js";
 
@@ -55,23 +55,34 @@ export const learnAgain = (again: string, what: string, site = "<site>", op = "<
     ? `learn it with api-anything add ${site} ${op} --trigger <url> --example k=v instead: its runs in the attached browser carry what the window kept, and ${what}'s start with none of it`
     : again;
 
+const firstLine = (e: unknown) => (e as Error).message.split("\n")[0];
+
 const loopback = (ip: string) => (isIP(ip) === 4 ? ip.startsWith("127.") : ip === "::1" || /^::ffff:127\./i.test(ip));
 
 /**
- * The directory of this OS user's attach locks: one of its own in the temp directory, 0700. The temp
- * directory is shared on Linux, so a lock there that another user made would be one this process may
- * not open (seen: "unable to open database file" on every attached call), and one this user made would
- * lock the other out. Throws AttachError when what is there is not a directory of this user's alone.
- * Windows has no uid, and its temp directory is the user's own.
+ * The directory of this OS user's attach locks: `.api-anything-locks` in the user's home directory as
+ * the OS records it (the password database, or the profile directory on Windows), 0700. Nothing of the
+ * process's environment moves it: an MCP service and a shell of one user with other TMPDIR, HOME or
+ * API_ANYTHING_HOME values would otherwise take two locks for one browser. A shared directory (the
+ * temp directory on Linux) would let one user's lock shut another out (seen: "unable to open database
+ * file" on every attached call). Throws AttachError when what is there is not a directory of this
+ * user's alone. Windows has no uid; the profile directory is the user's own.
  */
 function lockDir(): string {
+  let dir: string;
+  try {
+    dir = join(userInfo().homedir, ".api-anything-locks");
+  } catch (e) {
+    throw new AttachError(
+      `the attach lock has no place: this OS user has no home directory (${firstLine(e)})`,
+      "run api-anything as an OS user with a home directory, or unset API_ANYTHING_CDP",
+    );
+  }
   const uid = process.getuid?.();
-  if (uid === undefined) return tmpdir();
-  const dir = join(tmpdir(), `api-anything-${uid}`);
   const refused = (why: string) =>
     new AttachError(
       `${dir}, where api-anything keeps the lock that lets one of its processes at a time use an attached browser, is not a directory of this user's alone: ${why}`,
-      `remove ${dir}, or set TMPDIR to a directory of your own, then retry`,
+      `remove ${dir}, then retry`,
     );
   try {
     mkdirSync(dir, { mode: 0o700 });
@@ -80,6 +91,7 @@ function lockDir(): string {
   }
   const s = lstatSync(dir);
   if (!s.isDirectory()) throw refused("it is not a directory");
+  if (uid === undefined) return dir;
   if (s.uid !== uid) throw refused(`another user (uid ${s.uid}) owns it`);
   if (s.mode & 0o077) throw refused(`other users may use it (mode ${(s.mode & 0o777).toString(8)})`);
   return dir;
