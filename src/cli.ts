@@ -132,9 +132,11 @@ const HELP: Record<string, string> = {
               remembered: a later automatic re-import uses the same profile.
   --window    open a visible browser window to sign in by hand (an independent session); also the
               automatic fallback when nothing is importable. This is where you solve 2FA/captchas.
-              It counts only if a login cookie appears or changes while it is open; else ok:false
-              and the stored session is kept. With API_ANYTHING_CDP set, it is a new window of
-              that browser.
+              It counts as a sign-in only if a login cookie appears or changes while it is open.
+              Without one, what the site set there that is no known tracker (a cookie-consent
+              answer, a cleared challenge) is kept for the site: ok:true, loggedIn:false, with kept,
+              a warning and a next. With nothing of that either, ok:false and the stored session
+              is kept. With API_ANYTHING_CDP set, it is a new window of that browser.
   --cookies   import a cookies.txt (Netscape) or JSON export (Cookie-Editor / Playwright), for CI
   --site      with a page's URL: the name to keep its session under when no site has it yet, as a
               learn_site, add or capture hint gives it, so the learning that follows finds it there

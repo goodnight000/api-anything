@@ -629,7 +629,9 @@ In short:
   (`laravel_session`, `_app_session`). `login` notes which ones a signed-out visit gets, and those
   never count as signed in.
 - **A window sign-in has to show a login.** It counts only if a login cookie appears or changes
-  while the window is open. Otherwise `login` says so and keeps the session you had.
+  while the window is open. Otherwise what the site set there that is no known tracker (a consent
+  answer, a cleared challenge) is added to the session, `loggedIn: false`; with nothing of that
+  either, `login` says so and keeps the session you had.
 - **On an unauthorized call**, API Anything tries each of these at most once, retrying the call after
   each one that changes something: re-import from the profile you chose; take cookies from its own
   browser profile; for an op with session tokens, reload the page so the site issues fresh ones. A
