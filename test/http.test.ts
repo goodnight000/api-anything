@@ -526,6 +526,46 @@ test("send: a stream cut at the size cap keeps what came before the cap, compres
     assert.ok(r.body.length <= MAX_BODY_BYTES, what);
   }
 });
+test("send: a zstd stream read in many pieces adds no listener per piece", {
+  skip: !zlib.createZstdCompress && "Node 22.15 or newer has zstd",
+}, async () => {
+  const warned: string[] = [];
+  const onWarning = (w: Error) => warned.push(`${w.name}: ${w.message}`);
+  process.on("warning", onWarning);
+  try {
+    for (const count of [18, 40]) {
+      const texts = Array.from({ length: count }, (_, i) => `data: {"n":${i}}\n\n`);
+      const pieces = await zstdFlushed(texts);
+      const fetchImpl = (async () =>
+        new Response(
+          new ReadableStream({
+            async pull(c) {
+              const next = pieces.shift();
+              if (!next) return c.close();
+              // one piece at a time, each read on its own
+              await new Promise((r) => setTimeout(r, 2));
+              c.enqueue(next);
+            },
+          }),
+          { status: 200, headers: streamed },
+        )) as unknown as typeof fetch;
+      const r = await send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+        site: "zst",
+        fetchImpl,
+        minIntervalMs: 0,
+      });
+      assert.equal(r.body, texts.join(""), String(count));
+    }
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(
+      warned.filter((w) => /MaxListeners/.test(w)),
+      [],
+    );
+  } finally {
+    process.off("warning", onWarning);
+  }
+});
+
 test("send: a zstd answer this Node has no decoder for is an error that says so, never its compressed bytes", {
   skip: !zlib.zstdCompressSync && "Node 22.15 or newer has zstd",
 }, async () => {

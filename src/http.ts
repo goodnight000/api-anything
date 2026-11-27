@@ -857,6 +857,9 @@ function zstdPieces(make: () => Transform, cap: number) {
       const done = () => {
         if (settled) return;
         settled = true;
+        // a write's callback usually wins: its listeners must not outlive it, one more per piece
+        d.off("close", done);
+        d.off("end", done);
         // what a write decoded may still be on its way to "data"
         setImmediate(() => {
           if (failed && !over)
