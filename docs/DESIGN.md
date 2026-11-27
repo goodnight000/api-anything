@@ -1351,11 +1351,22 @@ attach to. A DevTools endpoint is full control of a browser.
   api-anything's profile would hold them, so `windowLogin` decides as it does unattached, fed with
   that context's cookies as the window opened and as it closed: login cookies that appeared or
   changed replace the jar, else the visitor's choices (a cleared challenge, a consent answer) are
-  merged into it. The window ends as it does unattached (the user closes the tab or its window,
-  Enter on the CLI, the MCP job's 10-minute cap); the context then closes, as on idle, and the next
-  call's context is seeded from the jar, so it carries what the site set. The attach rules hold
-  for it: the lock (another process holding it fails as `ProfileInUse`, after the wait), loopback
-  only, refused with the proxy, the user's default context never read. The attached browser going
+  merged into it. The closing cookies are read from the context after the tab closed, which it
+  outlives: the half-second poll alone lost a choice made just before closing (an attached
+  context does not quit with its last tab, as api-anything's own Chrome can on Linux and Windows,
+  where only reads made while the window was open count). The window ends as it does unattached
+  (the user closes the tab or its window, Enter on the CLI, the MCP job's 10-minute cap, which
+  aborts it). Ending it closes its own pages only (its tab and the popups it opened): another
+  window's tab and a call's page in the same context go on, and the context closes on idle, after
+  which the next call's context is seeded from the jar. It used to close the whole context, taking
+  a second sign-in tab and the page of a call in flight with it. In api-anything's own browser the
+  same holds between windows (each opens a page of its own; the browser is closed at once only
+  when nothing else holds it); a call in flight there is a headless browser of the same profile,
+  which opening a headed window replaces, as before. Before any of it, an attached window checks
+  the endpoint: a window that will be refused (nothing at the endpoint, the proxy set as well)
+  sends the site nothing, not even the signed-out probe that tells its visitor cookies. The attach
+  rules hold for it: the lock (another process holding it fails as `ProfileInUse`, after the
+  wait), loopback only, refused with the proxy, the user's default context never read. The attached browser going
   away while the window is open (a read of the context no longer answers, and api-anything did not
   close it) fails the login as `AttachError`, nothing kept. Every hint that sends the user to the
   window says, while attached, that it is a new window of the browser they run (`windowWhere`). A

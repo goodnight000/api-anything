@@ -154,8 +154,8 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
       loadSession("gate").cookies.some((c) => c.name === "gate_clearance"),
       "the clearance is in the jar",
     );
-    // the window's context closed with it: the next call opens a fresh one, seeded from the jar
-    assert.deepEqual(await userTabs(port), [tab]);
+    // the window closed its own tab and nothing else: the call's page stays until the context is idle
+    assert.ok(!(await userTabs(port)).some((t) => t.url.includes("/gate/")), "the window's tab is gone");
     for (const [op, tier] of [
       ["data", 2],
       ["page", 3],
@@ -266,6 +266,65 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
     await untouched("auth_token", "app_session");
   });
 
+  test("ending one sign-in tab ends that tab alone: another window's tab and a call in flight go on", async () => {
+    saveSite(
+      parseSite({
+        name: "duo",
+        baseUrl: `${fx.url}/list`,
+        operations: [read(fx.url, "slow", "/api/slow/data?ms=2500", 2, "data", "/list")],
+      }),
+    );
+    const first = windowLogin("duo", `${fx.url}/list?w=1`, { waitForEnter: false });
+    const one = await windowTab("w=1");
+    const stop = new AbortController();
+    const second = windowLogin("duo", `${fx.url}/list?w=2`, { waitForEnter: false, signal: stop.signal });
+    const two = await windowTab("w=2");
+    const third = windowLogin("duo", `${fx.url}/list?w=3`, { waitForEnter: false });
+    const three = await windowTab("w=3");
+    const inFlight = call("duo", "slow", {}, fast);
+    await sleep(500);
+    // the user closes the first tab while the call's page waits for its answer
+    await one.close({ runBeforeUnload: true });
+    await first;
+    assert.deepEqual([two.isClosed(), three.isClosed()], [false, false], "the other windows' tabs are still open");
+    // the MCP server's cap ends its window the same way: that tab alone
+    stop.abort();
+    await second;
+    assert.deepEqual([two.isClosed(), three.isClosed()], [true, false], "the capped window closed its own tab only");
+    const r = await inFlight;
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(r.data, ["slow"]);
+    await three.close({ runBeforeUnload: true });
+    await third;
+    await closeBrowser();
+    await untouched();
+  });
+
+  test("what the window keeps is read after the last thing the user did, however soon the tab closes", async () => {
+    // a cookie a script sets, and one a response sets, each the moment before the tab closes
+    const cases: [string, (p: Page) => Promise<void>, string][] = [
+      ["late-script", (p) => p.evaluate(() => void (document.cookie = "late_choice=yes; path=/")), "late_choice"],
+      [
+        "late-response",
+        async (p) => void (await p.goto(`${fx.url}/eu/consent/save?choice=reject&continue=%2Feu%2Fflights`)),
+        "eu_choice",
+      ],
+    ];
+    for (const [site, act, name] of cases) {
+      const pending = windowLogin(site, `${fx.url}/list?late=${site}`, { waitForEnter: false });
+      const page = await windowTab(`late=${site}`);
+      // the window has read the page as it opened
+      await sleep(700);
+      await act(page);
+      await page.close({ runBeforeUnload: true });
+      const w = await pending;
+      assert.equal(w.ok, true, `${site}: ${JSON.stringify(w)}`);
+      assert.ok(w.ok && w.kept?.includes(name), `${site}: ${JSON.stringify(w)}`);
+      assert.ok(loadSession(site).cookies.some((c) => c.name === name), `${site}: ${name} is in the jar`);
+    }
+    await closeBrowser();
+    await untouched("late_choice", "eu_choice");
+  });
   test("the window while another process is attached fails as ProfileInUse, after the wait, and over MCP says to wait", async () => {
     await closeBrowser();
     const release = await claim(attachLock(`127.0.0.1:${port}`), 0);
@@ -299,9 +358,11 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
     await untouched();
   });
 
-  test("the window with nothing at the endpoint fails at once with the attach hint", async () => {
+  test("the window with nothing at the endpoint fails at once with the attach hint, and the site is sent nothing", async () => {
     const was = process.env.API_ANYTHING_CDP;
     process.env.API_ANYTHING_CDP = `http://127.0.0.1:${await freePort()}`;
+    const asked = () => fx.calls.filter((c) => c.path.startsWith("/members")).length;
+    const before = asked();
     try {
       const t0 = Date.now();
       await assert.rejects(
@@ -310,8 +371,18 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
           e instanceof AttachError && /nothing answers/.test(e.message) && /remote-debugging-port/.test(e.next),
       );
       assert.ok(Date.now() - t0 < 5000, `took ${Date.now() - t0} ms`);
+      assert.equal(asked(), before, "no guest probe reached the site");
+      // another refusal for its configuration: a proxy set as well
+      process.env.API_ANYTHING_CDP = was;
+      process.env.API_ANYTHING_PROXY = "http://127.0.0.1:9";
+      await assert.rejects(
+        windowLogin("members", `${fx.url}/members`, { waitForEnter: false }),
+        (e: Error) => e instanceof AttachError && /API_ANYTHING_PROXY are both set/.test(e.message),
+      );
+      assert.equal(asked(), before, "no guest probe reached the site");
     } finally {
       process.env.API_ANYTHING_CDP = was;
+      delete process.env.API_ANYTHING_PROXY;
     }
   });
 

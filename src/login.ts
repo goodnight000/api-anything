@@ -6,7 +6,7 @@
  * of a site from a browser profile waits for a person's yes (`ImportRefused` without one).
  */
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { attached } from "./attach.js";
+import { attached, attachEndpoint } from "./attach.js";
 import { addCookiesToProfile, browserAvailable, clearProfileSite, forgetAttachedSite, login } from "./browser.js";
 import { dropCaptures, profileDir } from "./heal.js";
 import { publicAddress } from "./http.js";
@@ -475,13 +475,16 @@ export function windowAnswer(site: string, w: Extract<WindowLogin, { ok: true }>
 export async function windowLogin(
   site: string,
   url: string,
-  o: { loginCookies?: string[]; waitForEnter?: boolean; publicOnly?: boolean } = {},
+  o: { loginCookies?: string[]; waitForEnter?: boolean; publicOnly?: boolean; signal?: AbortSignal } = {},
 ): Promise<WindowLogin> {
+  // an attached window that would be refused (nothing at the endpoint, a proxy set too) sends nothing to the site
+  if (attached()) await attachEndpoint();
   const guest = await knownGuests(site, url, o.loginCookies, undefined, o.publicOnly ? publicAddress : undefined);
   const { opened, closed } = await login({
     url,
     profileDir: profileDir(),
     waitForEnter: o.waitForEnter,
+    ...(o.signal ? { signal: o.signal } : {}),
     ...(attached() ? { jar: loadSession(site).cookies } : {}),
   });
   // the user had the site open: a challenge cleared there counts even with no sign-in

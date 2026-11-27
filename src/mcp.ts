@@ -1084,13 +1084,16 @@ export function createToolset({
             async () => {
               // a human signs in by hand: they see which site and which account
               let capped = false;
+              // the cap ends this window alone: another window's tab and a call in flight go on
+              const stop = new AbortController();
               const cap = setTimeout(() => {
                 capped = true;
-                void closeBrowser();
+                stop.abort();
               }, WINDOW_MS);
               const w = await signInWindow(t.site, t.url, {
                 loginCookies: t.loginCookies,
                 waitForEnter: false,
+                signal: stop.signal,
                 // the probe keeps the rule on its redirects, unless the address is the site's own
                 publicOnly: !users,
               }).finally(() => clearTimeout(cap));

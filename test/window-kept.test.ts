@@ -108,12 +108,12 @@ function shop(): Promise<{ base: string; server: Server }> {
   );
 }
 
-async function windowPage(): Promise<Page> {
+async function windowPage(part = "127.0.0.1"): Promise<Page> {
   for (let i = 0; i < 300; i++) {
     await new Promise((r) => setTimeout(r, 100));
     const page = (await openBrowser({ profileDir: profileDir(), headless: false }))
       .pages()
-      .find((p) => p.url().includes("127.0.0.1"));
+      .find((p) => p.url().includes(part));
     if (page) return page;
   }
   throw new Error("the window did not open");
@@ -143,6 +143,21 @@ describe("the window on a site with analytics", {
     assert.equal(w.ok, false, JSON.stringify(w));
     assert.match(w.ok ? "" : w.reason, /no sign-in seen: no login cookie appeared while the window was open/);
     assert.deepEqual(loadSession("trk").cookies, [], "the stored session is unchanged");
+  });
+
+  test("in api-anything's own browser too, ending one window ends that window alone", async () => {
+    const stop = new AbortController();
+    const first = windowLogin("trk", `${base}/?w=1`, { waitForEnter: false, signal: stop.signal });
+    const one = await windowPage("w=1");
+    const second = windowLogin("trk", `${base}/?w=2`, { waitForEnter: false });
+    const two = await windowPage("w=2");
+    assert.notEqual(one, two, "each window has a page of its own");
+    // the MCP server's cap on the first, then the user closes the second
+    stop.abort();
+    await first;
+    assert.deepEqual([one.isClosed(), two.isClosed()], [true, false], "the other window is still open");
+    await userCloses(two);
+    await second;
   });
 
   test("a sign-in by a cookie name nothing knows: kept, said plainly over MCP, and the session is never public", async () => {
