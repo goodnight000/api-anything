@@ -1580,7 +1580,11 @@ refused: a stream has no length). At tier 1 a zstd body that Node 22's fetch han
 compressed is decoded as it arrives, so the idle bound reads its lines, a cut keeps what was decoded,
 and the 32 MiB bound counts what it decodes to; a Node with no zstd decoder (before 22.15) fails the
 read with an `error` saying the encoding could not be read, for an answer of any type, never its
-compressed bytes as the body. A browser run reads a page's stream on the page's own DevTools session
+compressed bytes as the body. Node 22's decoder stops at the end of a body's first frame and says
+nothing of the rest, so the frames are told apart from their headers and block headers (`ZstdFrames`,
+RFC 8878) and each is decoded, a whole body's and a stream's alike; skippable frames anywhere are
+dropped. A body that ends inside a frame (a zstd one or a skippable one) is an `error` saying so,
+never `ok` with what the first frames held. A browser run reads a page's stream on the page's own DevTools session
 as it arrives; one that session does not hand over (a frame of another site runs in a process of its
 own) is not read at all, since Playwright's read of a response buffers the whole body with no cap on
 its size: the exchange is cut, its `truncated` saying it was not read, and a call on it is `error`

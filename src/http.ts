@@ -722,28 +722,16 @@ async function readStream(res: Response, budgetMs: number): Promise<{ raw: Uint8
   let pending: ReturnType<typeof reader.read> | undefined;
   // the first bytes say whether fetch decoded it already: held until there are enough to tell
   let head: Buffer | undefined = /\bzstd\b/i.test(encoding ?? "") ? Buffer.alloc(0) : undefined;
-  // what is left of a skippable frame the stream opened with (Node's decoder stops at the end of one)
-  let skip = 0;
-  let skipped = false;
-  let zstd: ReturnType<typeof zstdPieces> | undefined;
+  let zstd: ReturnType<typeof zstdFrames> | undefined;
   const take = async (piece: Uint8Array): Promise<{ bytes: Uint8Array; over?: boolean }> => {
     if (head) {
       head = Buffer.concat([head, piece]);
-      for (;;) {
-        const n = Math.min(skip, head.byteLength);
-        head = head.subarray(n);
-        skip -= n;
-        if (skip || head.byteLength < 4) return { bytes: new Uint8Array(0) };
-        if (!skippableFrame(head)) break;
-        if (head.byteLength < 8) return { bytes: new Uint8Array(0) };
-        skip = 8 + head.readUInt32LE(4);
-        skipped = true;
-      }
+      if (head.byteLength < 4) return { bytes: new Uint8Array(0) };
       piece = head;
       head = undefined;
-      if (skipped || zstdFrame(piece)) {
+      if (zstdFrame(piece) || skippableFrame(piece)) {
         if (!zstdCodec.stream) throw noZstd();
-        zstd = zstdPieces(zstdCodec.stream, MAX_BODY_BYTES);
+        zstd = zstdFrames(zstdCodec.stream, MAX_BODY_BYTES);
       }
     }
     return zstd ? zstd.write(piece) : { bytes: piece };
@@ -778,9 +766,7 @@ async function readStream(res: Response, budgetMs: number): Promise<{ raw: Uint8
       if (!got) continue;
       pending = undefined;
       if (got.done) {
-        if (head?.byteLength && skipped)
-          throw new Error("the answer's zstd encoding could not be read: it ends inside a frame");
-        // fewer than 4 bytes in all are no zstd frame
+        // fewer than 4 bytes in all are no zstd frame; a body that ends inside one throws (`zstdFrames`)
         if (head?.byteLength) keep({ bytes: head });
         else if (zstd && !keep(await zstd.end())) cut = "bytes";
         break;
@@ -812,12 +798,108 @@ const zstdFrame = (b: Uint8Array) => b[0] === 0x28 && b[1] === 0xb5 && b[2] === 
 /** The standard lets a zstd stream open with skippable frames (magic 0x184D2A50 to 0x184D2A5F, little-endian). */
 const skippableFrame = (b: Uint8Array) => (b[0]! & 0xf0) === 0x50 && b[1] === 0x2a && b[2] === 0x4d && b[3] === 0x18;
 
-/** A whole zstd body after the skippable frames it opens with. */
-function pastSkippable(buf: Uint8Array): Uint8Array {
-  const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
-  let at = 0;
-  while (b.byteLength - at >= 8 && skippableFrame(b.subarray(at))) at += 8 + b.readUInt32LE(at + 4);
-  return b.subarray(Math.min(at, b.byteLength));
+const CUT_FRAME = "the answer's zstd encoding could not be read: it ends inside a frame";
+
+/**
+ * Where a zstd body's frames begin and end, read from their headers and block headers (RFC 8878),
+ * without decoding: Node 22's decoder stops at the end of the first frame, and says nothing of the
+ * rest. `push` answers each piece of a zstd frame in order, with `end` on the frame's last byte;
+ * skippable frames are dropped. `done` says whether the body ended between frames.
+ */
+export class ZstdFrames {
+  private buf = Buffer.alloc(0);
+  private state: "start" | "fhd" | "header" | "blockHead" | "block" | "checksum" | "skip" = "start";
+  private left = 0;
+  private last = false;
+  private checksum = false;
+
+  push(piece: Uint8Array): { bytes: Buffer; end: boolean }[] {
+    this.buf = Buffer.concat([this.buf, piece]);
+    const out: { bytes: Buffer; end: boolean }[] = [];
+    const emit = (n: number, end = false) => {
+      out.push({ bytes: this.buf.subarray(0, n), end });
+      this.buf = this.buf.subarray(n);
+    };
+    for (;;) {
+      if (this.state === "start") {
+        if (this.buf.byteLength < 4) break;
+        if (zstdFrame(this.buf)) {
+          emit(4);
+          this.state = "fhd";
+        } else if (skippableFrame(this.buf)) {
+          if (this.buf.byteLength < 8) break;
+          this.left = this.buf.readUInt32LE(4);
+          this.buf = this.buf.subarray(8);
+          this.state = "skip";
+        } else throw new Error("the answer's zstd encoding could not be read: bytes after a frame are no frame");
+      } else if (this.state === "fhd") {
+        if (!this.buf.byteLength) break;
+        const fhd = this.buf[0]!;
+        const single = (fhd & 0x20) !== 0;
+        const fcs = [single ? 1 : 0, 2, 4, 8][fhd >> 6]!;
+        this.checksum = (fhd & 0x04) !== 0;
+        this.left = (single ? 0 : 1) + [0, 1, 2, 4][fhd & 0x03]! + fcs;
+        emit(1);
+        this.state = "header";
+      } else if (this.state === "blockHead") {
+        if (this.buf.byteLength < 3) break;
+        const h = this.buf.readUIntLE(0, 3);
+        const type = (h >> 1) & 0x03;
+        if (type === 3) throw new Error("the answer's zstd encoding could not be read: a block of a reserved type");
+        this.last = (h & 1) === 1;
+        this.left = type === 1 ? 1 : h >>> 3;
+        emit(3);
+        this.state = "block";
+      } else if (this.state === "skip") {
+        const n = Math.min(this.left, this.buf.byteLength);
+        this.buf = this.buf.subarray(n);
+        this.left -= n;
+        if (this.left) break;
+        this.state = "start";
+      } else {
+        // the rest of a header, a block's content, or the checksum: passed on as it comes
+        const n = Math.min(this.left, this.buf.byteLength);
+        this.left -= n;
+        if (this.left) {
+          if (n) emit(n);
+          break;
+        }
+        if (this.state === "header" || (this.state === "block" && !this.last)) {
+          emit(n);
+          this.state = "blockHead";
+        } else if (this.state === "block" && this.checksum) {
+          emit(n);
+          this.state = "checksum";
+          this.left = 4;
+        } else {
+          // the frame's last byte
+          emit(n, true);
+          this.state = "start";
+        }
+      }
+    }
+    return out;
+  }
+
+  get done(): boolean {
+    return this.state === "start" && !this.buf.byteLength;
+  }
+}
+
+/** Each zstd frame of a whole body, in order, the skippable ones dropped; throws when it ends inside one. */
+function framesOf(buf: Uint8Array): Buffer[] {
+  const split = new ZstdFrames();
+  const frames: Buffer[] = [];
+  let at: Buffer[] = [];
+  for (const p of split.push(buf)) {
+    at.push(p.bytes);
+    if (p.end) {
+      frames.push(Buffer.concat(at));
+      at = [];
+    }
+  }
+  if (!split.done) throw new Error(CUT_FRAME);
+  return frames;
 }
 
 /** Read as it came, the body would be its compressed bytes: a wrong answer that says nothing of why. */
@@ -885,27 +967,70 @@ function zstdPieces(make: () => Transform, cap: number) {
 }
 
 /**
+ * `zstdPieces` for every frame of a stream (`ZstdFrames`): a decoder per frame, under one cap. `end`
+ * throws when the stream ended inside a frame.
+ */
+function zstdFrames(make: () => Transform, cap: number) {
+  const split = new ZstdFrames();
+  let current: ReturnType<typeof zstdPieces> | undefined;
+  let size = 0;
+  const write = async (piece: Uint8Array): Promise<{ bytes: Uint8Array; over: boolean }> => {
+    const out: Uint8Array[] = [];
+    for (const p of split.push(piece)) {
+      current ??= zstdPieces(make, cap - size);
+      const parts = [await current.write(p.bytes), ...(p.end ? [await current.end()] : [])];
+      if (p.end) current = undefined;
+      for (const got of parts) {
+        size += got.bytes.byteLength;
+        out.push(got.bytes);
+        if (got.over) {
+          current?.close();
+          return { bytes: Buffer.concat(out), over: true };
+        }
+      }
+    }
+    return { bytes: Buffer.concat(out), over: false };
+  };
+  return {
+    write,
+    end: async (): Promise<{ bytes: Uint8Array; over: boolean }> => {
+      if (!split.done) {
+        current?.close();
+        throw new Error(CUT_FRAME);
+      }
+      return { bytes: new Uint8Array(0), over: false };
+    },
+    close: () => current?.close(),
+  };
+}
+
+/**
  * Node 22's fetch hands back a zstd body still compressed (24 and later decode it). Decode it here
  * when that happened; zlib has zstd from 22.15, and before that the call fails saying so. The output is
  * bounded too: a few KB of zstd expand to gigabytes.
  */
 function unzstd(buf: Uint8Array, encoding: string | null): Uint8Array {
   if (!/\bzstd\b/i.test(encoding ?? "")) return buf;
-  const skipped = pastSkippable(buf);
-  if (skipped.byteLength < buf.byteLength) {
-    if (!skipped.byteLength) return skipped;
-    buf = skipped;
-  } else if (!zstdFrame(buf)) return buf;
+  if (buf.byteLength < 4 || !(zstdFrame(buf) || skippableFrame(buf))) return buf;
+  const frames = framesOf(buf);
+  if (!frames.length) return new Uint8Array(0);
   if (!zstdCodec.sync) throw noZstd();
-  try {
-    return zstdCodec.sync(buf, { maxOutputLength: MAX_BODY_BYTES });
-  } catch (e) {
-    if ((e as { code?: string }).code === "ERR_BUFFER_TOO_LARGE")
-      throw new BodyTooLarge(
-        `the response is ${buf.byteLength} bytes of zstd that decode to over the ${CAP} cap on a response; refused`,
-      );
-    throw e;
+  const out: Uint8Array[] = [];
+  let size = 0;
+  for (const frame of frames) {
+    try {
+      const d = zstdCodec.sync(frame, { maxOutputLength: MAX_BODY_BYTES - size });
+      size += d.byteLength;
+      out.push(d);
+    } catch (e) {
+      if ((e as { code?: string }).code === "ERR_BUFFER_TOO_LARGE")
+        throw new BodyTooLarge(
+          `the response is ${buf.byteLength} bytes of zstd that decode to over the ${CAP} cap on a response; refused`,
+        );
+      throw e;
+    }
   }
+  return Buffer.concat(out);
 }
 
 /** Decode with the declared charset (header, else an HTML <meta>), else UTF-8. A BOM is dropped. */
