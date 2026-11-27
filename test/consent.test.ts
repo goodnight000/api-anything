@@ -14,9 +14,9 @@ import { fileURLToPath } from "node:url";
 import type { Page } from "playwright-core";
 import { browserAvailable, closeBrowser, openBrowser } from "../src/browser.js";
 import { type CaseResult, verifySite } from "../src/checks.js";
+import { classify } from "../src/classify.js";
 import { cleanCall } from "../src/clean.js";
 import { type CallResult, call } from "../src/execute.js";
-import { classify } from "../src/classify.js";
 import { addOperation, challengePage, consentWall, profileDir } from "../src/heal.js";
 import { learnSite } from "../src/learnsite.js";
 import { visitorChoices, windowLogin } from "../src/login.js";
@@ -106,7 +106,12 @@ test("a page at a consent address gets one verdict whichever tier read it, at an
   const pages: [string, number, string, "blocked" | "consent" | "other"][] = [
     ["a challenge past 64 KB", 200, html("One moment", '<div id="cf-chl-widget"></div>'), "blocked"],
     ["a consent page past 64 KB", 200, html("Before you continue", consent), "consent"],
-    ["a sign-in page", 200, html("Sign in", '<form action="/session"><input name="email"><input type="password" name="pw"></form>'), "other"],
+    [
+      "a sign-in page",
+      200,
+      html("Sign in", '<form action="/session"><input name="email"><input type="password" name="pw"></form>'),
+      "other",
+    ],
     ["an outage", 503, html("Service unavailable", "<p>We use cookies. Back soon.</p>"), "other"],
   ];
   const op = OperationSchema.parse({

@@ -778,7 +778,8 @@ async function readStream(res: Response, budgetMs: number): Promise<{ raw: Uint8
       if (!got) continue;
       pending = undefined;
       if (got.done) {
-        if (head?.byteLength && skipped) throw new Error("the answer's zstd encoding could not be read: it ends inside a frame");
+        if (head?.byteLength && skipped)
+          throw new Error("the answer's zstd encoding could not be read: it ends inside a frame");
         // fewer than 4 bytes in all are no zstd frame
         if (head?.byteLength) keep({ bytes: head });
         else if (zstd && !keep(await zstd.end())) cut = "bytes";

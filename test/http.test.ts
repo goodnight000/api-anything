@@ -475,7 +475,7 @@ test("send: a zstd answer that opens with a skippable frame is decoded, a stream
     send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
       site: "zst",
       fetchImpl: (async () =>
-        new Response(body, {
+        new Response(new Uint8Array(body), {
           status: 200,
           headers: { "content-type": type, "content-encoding": "zstd" },
         })) as unknown as typeof fetch,
