@@ -9,11 +9,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { browserAvailable, closeBrowser } from "../src/browser.js";
+import { browserAvailable, closeBrowser, keepPiece, readTapped, type Streaming } from "../src/browser.js";
 import { classify, judge } from "../src/classify.js";
 import { call } from "../src/execute.js";
 import { capOutput, extract, inferShape, parseBody, pick } from "../src/extract.js";
 import { addOperation, capturePage } from "../src/heal.js";
+import { MAX_BODY_BYTES } from "../src/http.js";
 import { learnOperation } from "../src/learn.js";
 import { outline } from "../src/outline.js";
 import { loadSession } from "../src/session.js";
@@ -98,6 +99,47 @@ const EVENTS = [
   },
   { event: "done", id: "2", data: "[DONE]" },
 ];
+
+describe("a stream read in the browser keeps to the size cap", () => {
+  const stream = (over: Partial<Streaming> = {}): Streaming => ({
+    url: "https://s.test/live",
+    method: "GET",
+    chunks: [],
+    bytes: 0,
+    start: Date.now(),
+    last: Date.now(),
+    ended: false,
+    ready: true,
+    ...over,
+  });
+  const never = new Promise<void>(() => {});
+
+  test("a stream that passed the cap and then ended is cut, not complete", async () => {
+    const first = Buffer.from("data: one\n\n");
+    const s = stream({ chunks: [first], bytes: MAX_BODY_BYTES - 4 });
+    // the piece that crosses the cap keeps what came before it
+    const kept = keepPiece(s, Buffer.from("data: two\n\n"));
+    assert.equal(kept.toString(), "data");
+    assert.equal(s.bytes, Number.POSITIVE_INFINITY);
+    assert.equal(keepPiece(s, Buffer.from("event: error\ndata: late\n\n")).byteLength, 0, "nothing after the cap");
+    // the stream ends before the reader looks again
+    s.ended = true;
+    const read = await readTapped(s, Date.now() + 5000, never);
+    assert.match(read?.truncated ?? "", /passed the cap on a response's size/);
+    assert.equal(read?.body, "data: one\n\ndata");
+  });
+
+  test("a stream that ended under the cap is complete, and one still open at the cap is cut", async () => {
+    const whole = stream({ chunks: [Buffer.from("data: one\n\n")], bytes: 11, ended: true });
+    assert.deepEqual(await readTapped(whole, Date.now() + 5000, never), { body: "data: one\n\n" });
+    const open = stream({ chunks: [Buffer.from("data: one\n\n")], bytes: Number.POSITIVE_INFINITY });
+    assert.match((await readTapped(open, Date.now() + 5000, never))?.truncated ?? "", /passed the cap/);
+    // exactly at the cap is not past it
+    const full = stream({ bytes: MAX_BODY_BYTES - 3 });
+    assert.equal(keepPiece(full, Buffer.from("abc")).toString(), "abc");
+    assert.equal(full.bytes, MAX_BODY_BYTES);
+  });
+});
 
 describe("an event stream is read like any JSON answer", () => {
   test("parseBody decodes it; extract, pick, the output cap, the shape and the outline need nothing of their own", () => {

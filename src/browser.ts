@@ -879,7 +879,7 @@ async function tap(
 }
 
 /** One event stream a page is receiving, as its DevTools session reports it. */
-interface Streaming {
+export interface Streaming {
   url: string;
   method: string;
   chunks: Buffer[];
@@ -897,6 +897,19 @@ interface Streaming {
 }
 
 /**
+ * Keep a piece of a stream up to `MAX_BODY_BYTES`, and answer the part kept: a piece that crosses the
+ * cap keeps what came before it, and the stream is marked as past the cap (`bytes` infinite) from then on.
+ */
+export function keepPiece(s: Streaming, buf: Buffer): Buffer {
+  if (s.bytes === Number.POSITIVE_INFINITY) return buf.subarray(0, 0);
+  const room = MAX_BODY_BYTES - s.bytes;
+  const kept = buf.byteLength > room ? buf.subarray(0, room) : buf;
+  if (kept.byteLength) s.chunks.push(kept);
+  s.bytes = buf.byteLength > room ? Number.POSITIVE_INFINITY : s.bytes + buf.byteLength;
+  return kept;
+}
+
+/**
  * A page's event streams, read as they arrive on a DevTools session of the run's own: Playwright's
  * `text()` of a response settles only once its body has ended, which a stream may never do, and it
  * never reads an EventSource's. Each stream's pieces are kept up to `MAX_BODY_BYTES`; the page itself
@@ -910,14 +923,8 @@ async function streamTap(ctx: BrowserContext, page: Page) {
   const add = (id: string, data: string | undefined) => {
     const s = streams.get(id);
     if (!s || !data) return;
-    const buf = Buffer.from(data, "base64");
-    if (s.bytes + buf.byteLength > MAX_BODY_BYTES) {
-      s.bytes = Number.POSITIVE_INFINITY;
-      return;
-    }
-    s.bytes += buf.byteLength;
-    s.chunks.push(buf);
-    if (carriesField(decoders.get(id)!.decode(buf, { stream: true }))) s.last = Date.now();
+    const kept = keepPiece(s, Buffer.from(data, "base64"));
+    if (kept.byteLength && carriesField(decoders.get(id)!.decode(kept, { stream: true }))) s.last = Date.now();
   };
   cdp.on("Network.requestWillBeSent", (e) => void methods.set(e.requestId, e.request.method));
   cdp.on("Network.responseReceived", (e) => {
@@ -984,7 +991,7 @@ type StreamTap = Awaited<ReturnType<typeof streamTap>>;
  * done with it), or `until`, the run's deadline, comes. The body is what arrived, the bound its
  * `truncated`; undefined when the browser would not stream it after all.
  */
-async function readTapped(
+export async function readTapped(
   s: Streaming,
   until: number,
   stop: Promise<unknown>,
@@ -995,8 +1002,9 @@ async function readTapped(
   for (;;) {
     const now = Date.now();
     if (s.unread) return undefined;
-    if (s.ended && s.ready) break;
+    // the cap before the end: a stream that ended after passing it was still read only in part
     if (s.bytes === Number.POSITIVE_INFINITY) cut = "bytes";
+    else if (s.ended && s.ready) break;
     else if (stopped || now >= until) cut = "ended";
     else if (now - s.start >= STREAM_MAX_MS) cut = "time";
     else if (now - s.last >= STREAM_IDLE_MS) cut = "idle";
