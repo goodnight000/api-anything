@@ -14,7 +14,16 @@ import {
   TRIGGER_BUDGET_MS,
   waitReport,
 } from "./browser.js";
-import { botWall, type Class, consentReason, consentStep, judge, type Observed, pickedShape } from "./classify.js";
+import {
+  botWall,
+  type Class,
+  consentPage,
+  consentReason,
+  consentStep,
+  judge,
+  type Observed,
+  pickedShape,
+} from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, type Step, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
@@ -618,16 +627,17 @@ export function loginWall(capture: CaptureResult, triggerUrl: string): string | 
 
 /**
  * The final page of a run, when the trigger was redirected to the site's cookie-consent step
- * (`consentStep`). As the tier-1 classifier holds it: only a 2xx page that is no bot challenge (and
- * no sign-in page, which `consentStep` refuses); an outage or a challenge there stays what it is.
+ * (`consentStep`), by the tier-1 classifier's own test (`consentPage`): only a 2xx page that is no bot
+ * challenge (and no sign-in page, which `consentStep` refuses); an outage or a challenge there stays what it is.
  */
 export function consentWall(capture: CaptureResult, triggerUrl: string): string | undefined {
   const doc =
     lastLoad(capture) ??
     capture.exchanges.filter((e) => e.resourceType === "document" && e.response?.body).at(-1)?.response;
-  if (!doc || doc.status < 200 || doc.status >= 300) return undefined;
-  if (botWall({ status: doc.status, headers: doc.headers, body: doc.body ?? "" })) return undefined;
-  return consentStep(triggerUrl, capture.finalUrl, doc.body ?? "") ? capture.finalUrl : undefined;
+  if (!doc) return undefined;
+  return consentPage(triggerUrl, capture.finalUrl, { status: doc.status, headers: doc.headers, body: doc.body ?? "" })
+    ? capture.finalUrl
+    : undefined;
 }
 
 /** A read that ended on the site's cookie-consent page at `url`: an error, which nothing heals. */
@@ -794,7 +804,10 @@ export function cutShort(op: Pick<Operation, "trigger" | "readOnly">, capture: C
 /** The run ended on a bot challenge that did not solve: its requests never fired, which says nothing about the op. */
 export function challengePage(capture: CaptureResult): Attempt | undefined {
   const doc = lastLoad(capture);
-  const wall = doc && botWall({ status: doc.status, headers: doc.headers, body: doc.body ?? "" });
+  // a run sent from its first page to a consent address ends where the data was expected (consentPage)
+  const first = capture.exchanges.find((e) => e.resourceType === "document")?.request.url;
+  const atConsent = !!doc && !!first && consentStep(first, capture.finalUrl, doc.body ?? "");
+  const wall = doc && botWall({ status: doc.status, headers: doc.headers, body: doc.body ?? "" }, atConsent);
   return wall ? { tier: 3, class: "blocked", reason: `the trigger page stayed a bot challenge (${wall})` } : undefined;
 }
 

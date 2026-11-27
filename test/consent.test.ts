@@ -16,14 +16,15 @@ import { browserAvailable, closeBrowser, openBrowser } from "../src/browser.js";
 import { type CaseResult, verifySite } from "../src/checks.js";
 import { cleanCall } from "../src/clean.js";
 import { type CallResult, call } from "../src/execute.js";
-import { addOperation, profileDir } from "../src/heal.js";
+import { classify } from "../src/classify.js";
+import { addOperation, challengePage, consentWall, profileDir } from "../src/heal.js";
 import { learnSite } from "../src/learnsite.js";
 import { visitorChoices, windowLogin } from "../src/login.js";
 import { learnTool } from "../src/mcp-learn.js";
 import { loadSession, mergeCapture } from "../src/session.js";
-import { type Operation, parseSite } from "../src/spec.js";
+import { type Operation, OperationSchema, parseSite } from "../src/spec.js";
 import { cooling, loadSite, saveSite, staleMark } from "../src/store.js";
-import type { StoredCookie } from "../src/types.js";
+import type { CaptureResult, StoredCookie } from "../src/types.js";
 import { vetShared } from "../src/vet.js";
 import { type Fixture, FLIGHTS, startFixture } from "./fixture/server.js";
 import { siteEntries } from "./verify-live.js";
@@ -93,6 +94,56 @@ const cookie = (name: string, value: string, domain = "127.0.0.1"): StoredCookie
   secure: false,
 });
 
+test("a page at a consent address gets one verdict whichever tier read it, at any size", () => {
+  const trigger = "https://www.example.com/flights?q=AMS";
+  const asked = "https://www.example.com/api/flights?q=AMS";
+  const landed = "https://www.example.com/consent?continue=%2Fflights";
+  const pad = `<!-- ${"x".repeat(66_000)} -->`;
+  const html = (title: string, body: string) =>
+    `<!doctype html><html><head><title>${title}</title></head><body>${body}${pad}</body></html>`;
+  const consent =
+    '<h1>Before you continue</h1><p>We use cookies and data to deliver our services.</p><form action="/consent/save"><button name="choice" value="reject">Reject all</button></form>';
+  const pages: [string, number, string, "blocked" | "consent" | "other"][] = [
+    ["a challenge past 64 KB", 200, html("One moment", '<div id="cf-chl-widget"></div>'), "blocked"],
+    ["a consent page past 64 KB", 200, html("Before you continue", consent), "consent"],
+    ["a sign-in page", 200, html("Sign in", '<form action="/session"><input name="email"><input type="password" name="pw"></form>'), "other"],
+    ["an outage", 503, html("Service unavailable", "<p>We use cookies. Back soon.</p>"), "other"],
+  ];
+  const op = OperationSchema.parse({
+    name: "api",
+    readOnly: true,
+    request: { method: "GET", url: asked, headers: {} },
+    slots: [],
+    params: [],
+    trigger: { url: trigger },
+    response: { format: "json", extract: "flights" },
+  });
+  for (const [what, status, body, verdict] of pages) {
+    const headers = { "content-type": "text/html; charset=utf-8" };
+    const one = classify(op, { status, headers, body, url: landed, redirected: true });
+    const capture: CaptureResult = {
+      finalUrl: landed,
+      cookies: [],
+      exchanges: [
+        {
+          id: 1,
+          resourceType: "document",
+          request: { method: "GET", url: trigger, headers: {} },
+          response: { status: 302, headers: { location: landed }, contentType: "text/plain", body: "" },
+        },
+        {
+          id: 2,
+          resourceType: "document",
+          request: { method: "GET", url: landed, headers: {} },
+          response: { status, headers, contentType: headers["content-type"], body },
+        },
+      ],
+    };
+    const three = consentWall(capture, trigger) ? "consent" : challengePage(capture) ? "blocked" : "other";
+    const tier1 = one.wall === "consent" ? "consent" : one.class === "blocked" ? "blocked" : "other";
+    assert.deepEqual([tier1, three], [verdict, verdict], `${what}: tier 1 ${one.class} (${one.reason})`);
+  }
+});
 describe("a consent wall at tier 1, cleared once", () => {
   let fx: Fixture;
   before(async () => (fx = await startFixture()));
@@ -346,6 +397,37 @@ describe("a consent wall at tiers 2 and 3, learning on it, and the window that c
     }
   });
 
+  test("a large challenge at a consent address is blocked at tiers 1 and 3; a consent page as large is a consent at both", async () => {
+    for (const [kind, cls, wall] of [
+      ["eubig", "blocked", undefined],
+      ["eubigok", "error", "consent"],
+    ] as const) {
+      for (const tier of [1, 3] as const) {
+        const site = `${kind}-t${tier}`;
+        saveSite(
+          parseSite({
+            name: site,
+            baseUrl: fx.url,
+            operations: [
+              {
+                name: "api",
+                readOnly: true,
+                minTier: tier,
+                request: { method: "GET", url: `${fx.url}/api/${kind}/flights?q=AMS`, headers: {} },
+                slots: [{ param: "q", at: ["query:q"] }],
+                params: [{ name: "q", example: "BER" }],
+                trigger: { url: `${fx.url}/${kind}/flights?q={q}` },
+                match: { method: "GET", path: `/api/${kind}/flights` },
+                response: { extract: "flights" },
+              },
+            ],
+          }),
+        );
+        const r = await call(site, "api", { q: "AMS" }, { ...fast, maxTier: tier });
+        assert.deepEqual([r.class, r.wall], [cls, wall], JSON.stringify(r));
+      }
+    }
+  });
   test("capture says the page is the consent page", async () => {
     // the CLI runs Chrome on the same profile: this process lets go of it first
     await closeBrowser();
