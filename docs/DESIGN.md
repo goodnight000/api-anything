@@ -816,8 +816,18 @@ verification sends no report for it, and `verify` counts it `inconclusive`. A co
 overlay over a page without the data) cannot be told from drift without a site's own rules: it stays
 drift.
 
-Its `next` leads to a step that works. A public read (no credential ref, learned signed out): the
-user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
+What a walled call is told (a consent step, a bot challenge, a bare 403) is decided in one place
+(`wall.ts` `wallStep`), from what that call may carry, and `call`, the cool-down's answer and
+`status` all use it. A call of the user's own spec, or of a pulled one in api-anything's own browser,
+is sent to the window. A pulled spec while attached is sent to api-anything's own browser (below,
+under attached). A bare call (`bareCall`: a pulled candidate op, an agent-pulled non-GET op) sends no
+cookie at any tier, so nothing a window keeps reaches it: its `next` says so, names what works (the
+version confirmed and pulled again, the user's own pull, or the page learned as an op of the user's
+own) and never suggests a window; `nextCall` `report`, `retry: "no"`. A write that was sent, or may
+have been, is told to check the site before anything else, whatever wall it met: no part of its
+answer (prose, `nextCall` `check_site`, `retry: "no"`) invites a second send (`ranNext`, asked
+before any other hint). A public read (no credential ref, learned signed out) of the user's own spec:
+the user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
 closes the window. For a page no site has yet (`learn_site`, `add`, `capture`), `<site>` would not
 resolve, so the hint names the page and the name the learning uses (`loginHint`: `login '<url>'
 --site <name> --window`, MCP `login` with `site` and `url`, a `nextCall` with `url`): the window
@@ -908,7 +918,10 @@ local `blocked` (a tier cap, no browser, an unconfirmed op) sets none. While it 
 answers `rate` or `blocked` without sending anything, a write before its ledger records it
 (`write: "not_sent"`), with `cooling: true`, `retryAfterMs` counting down to its end and a `reason`
 naming what the site answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
-asks for `api-anything login <site> --window` (while attached, a tab in the attached browser). Any login for the site (an import, a cookies file, the
+is the wall's step for the calling op (`coolStep`, the op that met the block recorded with the
+cool-down for `status`): `api-anything login <site> --window` for the user's own spec (while
+attached, a tab in the attached browser), api-anything's own browser for a pulled spec while attached,
+and no window for a bare call. Any login for the site (an import, a cookies file, the
 window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. A consent
 wall (Failure classifier) is `error` and sets none: the site asked a question, it did not say stop. The call
 option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends that one call through
