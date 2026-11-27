@@ -439,13 +439,13 @@ export function visitorChoices(
 export const keptNote = (site: string, kept: string[], account: string[] = []) =>
   account.length
     ? `no sign-in seen; kept what the site set while the window was open (${kept.join(", ")}), and calls of ${site} now send it: ${account.join(", ")} may carry an account`
-    : `no sign-in seen; kept what the site set while the window was open (${kept.join(", ")}), its record of a cookie consent or a cleared challenge: calls of ${site} now send them`;
+    : `no sign-in seen; kept what the site set while the window was open (${kept.join(", ")}), and calls of ${site} now send it. It may record a cookie consent or a cleared challenge, or be a tracker api-anything does not know: it does not show that anyone chose anything`;
 
 /** The `next` of a window that kept something and saw no sign-in, for each thing the user may have done there. */
 export const keptNext = (site: string, account: string[], how: string) =>
   account.length
     ? `ask the user what they did in the window. If they answered a consent page or cleared a challenge, retry the call. If they signed in, api-anything did not recognize the sign-in cookie: list the one of ${account.join(", ")} that is it in ${site}'s spec loginCookies, then ${how}`
-    : `retry the call: what the window kept reaches it. If the user signed in there and calls still say auth, ${site}'s login cookie is named like a visitor's: list its name in the spec's loginCookies, then ${how}`;
+    : `retry the call: what the window kept reaches it. If it meets the same page again, nothing kept answered it: ask the user to make the choice on the site's page, then ${how}. If the user signed in there and calls still say auth, ${site}'s login cookie is named like a visitor's: list its name in the spec's loginCookies, then ${how}`;
 
 /** What a window that counted answers, over MCP and on the CLI alike. `how`: how to open the window again. */
 export function windowAnswer(site: string, w: Extract<WindowLogin, { ok: true }>, how: string) {

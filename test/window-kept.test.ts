@@ -44,6 +44,32 @@ test("analytics and tracking cookies alone are not a visitor's choice; a consent
     names(visitorChoices([], [cookie("_ga"), cookie("_gid"), cookie("_fbp"), cookie("_hjSessionUser_1")], [])),
     [],
   );
+  // the families of the vendors in common use, Meta's click id and Matomo's per-site ids among them
+  const trackers = [
+    "_fbc",
+    "_pk_id.1.abcd",
+    "_pk_ses.1.abcd",
+    "__utma",
+    "_gac_UA-1234-1",
+    "MUID",
+    "_scid",
+    "_rdt_uuid",
+    "__qca",
+    "cto_bundle",
+    "s_vi",
+    "AMCV_0123456789ABCDEF%40AdobeOrg",
+    "AMP_0123456789",
+    "mp_0123456789abcdef_mixpanel",
+    "_hp2_id.123456",
+    "fs_uid",
+    "_lr_uf_abc-123",
+    "_ym_uid",
+    "optimizelyEndUserId",
+    "_vwo_uuid_v2",
+  ];
+  assert.deepEqual(names(visitorChoices([], trackers.map((n) => cookie(n)), [])), []);
+  // a name of a vendor's that names a user is no tracker of an anonymous visitor
+  assert.deepEqual(names(visitorChoices([], [cookie("ajs_user_id")], [])), ["ajs_user_id"]);
   assert.deepEqual(names(visitorChoices([], [cookie("_ga"), cookie("OptanonConsent"), cookie("cf_clearance")], [])), [
     "OptanonConsent",
     "cf_clearance",
@@ -61,7 +87,14 @@ test("the answer for kept cookies: a known consent says retry; one that may carr
   );
   assert.equal(consent.ok, true);
   assert.equal(consent.loggedIn, false);
-  assert.match(String(consent.warning), /OptanonConsent.*cookie consent or a cleared challenge/);
+  assert.match(String(consent.warning), /OptanonConsent.*may record a cookie consent or a cleared challenge/);
+  // a cookie api-anything does not know to be a tracker is kept too: the answer claims no choice
+  assert.match(String(consent.warning), /does not show that anyone chose anything/);
+  assert.doesNotMatch(String(consent.warning), /its record of/);
+  // a load balancer's cookie every visitor is given, set with nobody asked anything
+  const unknownTracker = windowAnswer("shop", { ok: true, cookies: [], renewed: [], kept: ["__cf_bm"], account: [] }, how);
+  assert.match(String(unknownTracker.warning), /does not show that anyone chose anything/);
+  assert.match(String(unknownTracker.next), /same page again.*make the choice on the site's page/);
   assert.match(String(consent.next), /^retry the call/);
   assert.match(String(consent.next), /loginCookies/);
 
