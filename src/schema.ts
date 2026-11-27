@@ -15,7 +15,7 @@
  */
 import type { Class } from "./classify.js";
 import { outputOf } from "./describe.js";
-import type { NextAction, Retry, Tier } from "./execute.js";
+import type { NextAction, NextCall, Retry, Tier } from "./execute.js";
 import { hasWildcard, pickEntry, returnedFields } from "./extract.js";
 import type { Operation } from "./spec.js";
 import type { WriteStatus } from "./store.js";
@@ -70,7 +70,8 @@ const RETRY = oneOf(every<Retry>()(["no", "safe", "after_wait", "after_fix"]));
 const TIER = oneOf(every<Tier>()([1, 2, 3]));
 
 /** `nextCall`: `next` as data. Over MCP it also names the tool and args that take the step; some name only those. */
-export const NEXT_CALL_SCHEMA: JsonSchema = object({
+// every field of NextCall, and MCP's tool and args: one left out here is a type error, not a schema a client rejects
+const nextCallFields: Record<keyof NextCall | "tool" | "args", JsonSchema> = {
   // call()'s steps, and MCP's get_job for a job still running
   action: oneOf(
     every<NextAction | "get_job">()([
@@ -92,11 +93,13 @@ export const NEXT_CALL_SCHEMA: JsonSchema = object({
   site: str,
   op: str,
   mode: oneOf(["window"]),
+  url: str,
   tier: TIER,
   profile: str,
   tool: str,
   args: anyObject,
-});
+};
+export const NEXT_CALL_SCHEMA: JsonSchema = object(nextCallFields);
 
 /** A cut answer's rest, kept locally: get_result takes it as it is. */
 const MORE = object(

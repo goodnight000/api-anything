@@ -14,7 +14,7 @@ import { launchOf, printConfig } from "./clients.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { describeOperation } from "./describe.js";
 import { type CallOptions, type CallResult, call, heal, type Tier } from "./execute.js";
-import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
+import { capOutput, extract, getPath, innerJson, isHtmlType, pick, returnedFields, splitPick } from "./extract.js";
 import {
   addOperation,
   type CaptureFile,
@@ -857,7 +857,7 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     };
   });
   const top = ranked[0];
-  const html = top && /html/i.test(top.contentType ?? "");
+  const html = top && isHtmlType(top.contentType);
   // a bot wall is not fixed by picking another request or writing a recipe
   const doc = mainDocument(c);
   const topEx = top && c.exchanges.find((e) => e.id === top.id);
@@ -985,7 +985,7 @@ function cmdInspect({ v, pos }: Parsed): number {
   } else if (v.embedded) {
     data = extract({ format: "embedded", embedded: { regex: v.embedded } }, body);
     if (data === undefined) throw nothing("the --embedded regex found no JSON");
-  } else if (!/html/i.test(e.response?.contentType ?? "")) {
+  } else if (!isHtmlType(e.response?.contentType)) {
     try {
       data = extract({ format: "json" }, body, undefined, e.response?.contentType);
     } catch {

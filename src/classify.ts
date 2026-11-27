@@ -8,6 +8,7 @@ import {
   getPath,
   getPathRegex,
   inferShape,
+  isHtmlType,
   PageTooLarge,
   parseBody,
   parsePage,
@@ -182,7 +183,7 @@ function challenge(body: string, status: number): { vendor: string; rides: boole
 export function botWall(r: Observed, wantsJson = false, hasData?: () => boolean): string | undefined {
   const body = r.body ?? "";
   const ct = (r.headers["content-type"] ?? "").toLowerCase();
-  const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
+  const isHtml = isHtmlType(ct) || /^\s*<(!doctype|html)/i.test(body);
   if (r.headers["cf-mitigated"] === "challenge") return "Cloudflare challenge (cf-mitigated)";
   // Kasada's headers ride on its sites' ordinary answers too: only its challenge status is a wall, and
   // not on a sign-in form (an interstitial's markers on that page are still caught below).
@@ -781,7 +782,7 @@ function classifyBody(
 ): Classified {
   const body = r.body ?? "";
   const ct = (r.headers["content-type"] ?? "").toLowerCase();
-  const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
+  const isHtml = isHtmlType(ct) || /^\s*<(!doctype|html)/i.test(body);
   const wantsJson = op.response.format === "json";
 
   // sent to a consent address, the page is judged as every tier judges it there (consentPage)
@@ -868,7 +869,7 @@ function classifyBody(
     data = readJson();
   } catch (error) {
     if (!op.readOnly) {
-      if (isHtml && !/html/i.test(op.response.contentType ?? "") && signInForm(body))
+      if (isHtml && !isHtmlType(op.response.contentType) && signInForm(body))
         return is("auth", "a sign-in form where the write's answer was expected");
       // the form answered with its errors (nothing ran), or the post redirected back to it, showing one
       const shown = isHtml && (!r.redirected || onForm(op, r.url)) ? formError(body) : undefined;

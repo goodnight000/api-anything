@@ -17,7 +17,7 @@ import {
   templateRefs,
   walk,
 } from "./codec.js";
-import { getPath, inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
+import { getPath, inferShape, innerJson, isHtmlType, parseBody, xssiOf } from "./extract.js";
 import {
   besideHoles,
   besideOrigins,
@@ -1701,7 +1701,7 @@ function learnResponse(e: Exchange, values: string[], warnings: string[]): Respo
     };
   }
   warnings.push(
-    /html/i.test(r.contentType)
+    isHtmlType(r.contentType)
       ? 'response is HTML: add --html \'{"items":"<css>","fields":{...}}\' for a list, or --embedded \'<regex>\' for JSON inside the page'
       : `response is ${r.contentType || "untyped"} text, returned raw`,
   );

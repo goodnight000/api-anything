@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parse } from "node-html-parser";
-import { extractEmbedded, extractHtml } from "../src/extract.js";
+import { extractEmbedded, extractHtml, isHtmlType } from "../src/extract.js";
 import { embeddedBlocks, outline, outlineJson, sig } from "../src/outline.js";
 
 const row = (id: string, title: string, rating: string, badge = "") =>
@@ -158,4 +158,16 @@ test("scout: a page's script tags are read one at a time, so tags that never clo
     'id="__DATA__"[^>]*>\\s*([[{])',
     "window\\.__STATE__\\s*=\\s*([[{])",
   ]);
+});
+
+test("the media type alone says HTML: a parameter that spells it does not make an event stream or JSON a page", () => {
+  for (const type of ['text/event-stream; profile="html"', "application/json; charset=utf-8; x=html"]) {
+    assert.equal(isHtmlType(type), false, type);
+    const body = type.startsWith("text/event-stream") ? 'data: {"title":"dune"}\n\n' : '{"title":"dune"}';
+    const o = outline(type, body, ["dune"]);
+    assert.ok(o?.json, `${type}: ${JSON.stringify(o)}`);
+    assert.match(JSON.stringify(o.json), /title/);
+  }
+  for (const type of ["text/html", "TEXT/HTML; charset=utf-8", "application/xhtml+xml"])
+    assert.equal(isHtmlType(type), true);
 });

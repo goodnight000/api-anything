@@ -7,7 +7,7 @@ import { lookup } from "node:dns/promises";
 import { lstatSync, mkdirSync } from "node:fs";
 import { isIP } from "node:net";
 import { userInfo } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { proxyConfig } from "./proxy.js";
 
 /** The attached browser could not be used; nothing was sent through it. `next` says what to do. */
@@ -69,15 +69,21 @@ const loopback = (ip: string) => (isIP(ip) === 4 ? ip.startsWith("127.") : ip ==
  * user's alone. Windows has no uid; the profile directory is the user's own.
  */
 function lockDir(): string {
-  let dir: string;
-  try {
-    dir = join(userInfo().homedir, ".api-anything-locks");
-  } catch (e) {
-    throw new AttachError(
-      `the attach lock has no place: this OS user has no home directory (${firstLine(e)})`,
-      "run api-anything as an OS user with a home directory, or unset API_ANYTHING_CDP",
+  const noHome = (why: string) =>
+    new AttachError(
+      `the attach lock has no place: ${why}`,
+      "run api-anything as an OS user whose home directory exists and is an absolute path, or unset API_ANYTHING_CDP",
     );
+  let home: string;
+  try {
+    home = userInfo().homedir;
+  } catch (e) {
+    throw noHome(`this OS user has no home directory (${firstLine(e)})`);
   }
+  // an empty or relative home would put the lock wherever the process started: two locks for one browser
+  if (!isAbsolute(home))
+    throw noHome(`this OS user's home directory is ${home ? `"${home}", not an absolute path` : "empty"}`);
+  const dir = join(home, ".api-anything-locks");
   const uid = process.getuid?.();
   const refused = (why: string) =>
     new AttachError(
@@ -87,7 +93,9 @@ function lockDir(): string {
   try {
     mkdirSync(dir, { mode: 0o700 });
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw refused((e as Error).message);
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") throw noHome(`the home directory ${home} does not exist`);
+    if (code !== "EEXIST") throw refused((e as Error).message);
   }
   const s = lstatSync(dir);
   if (!s.isDirectory()) throw refused("it is not a directory");

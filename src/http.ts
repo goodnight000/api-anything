@@ -6,6 +6,7 @@ import type { Transform } from "node:stream";
 import * as zlib from "node:zlib";
 import type { SendBudget } from "./budget.js";
 import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
+import { isHtmlType } from "./extract.js";
 import { matches } from "./learn.js";
 import { CleartextRefused, refuseCleartext, siteFetch } from "./proxy.js";
 import { cookieHeaderFor, cookieValue, insecureSet, parseSetCookie, type Session } from "./session.js";
@@ -1036,7 +1037,7 @@ function unzstd(buf: Uint8Array, encoding: string | null): Uint8Array {
 /** Decode with the declared charset (header, else an HTML <meta>), else UTF-8. A BOM is dropped. */
 export function decodeBody(buf: Uint8Array, contentType: string): string {
   let charset = /charset=["']?([\w.:-]+)/i.exec(contentType)?.[1];
-  if (!charset && /html/i.test(contentType))
+  if (!charset && isHtmlType(contentType))
     charset = /<meta[^>]+charset=["']?([\w.:-]+)/i.exec(new TextDecoder("latin1").decode(buf.subarray(0, 2048)))?.[1];
   try {
     return new TextDecoder(charset ?? "utf-8").decode(buf);

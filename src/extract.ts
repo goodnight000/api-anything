@@ -11,6 +11,10 @@ const PREFIXES = [XSSI, "for (;;);", "while(1);"];
 /** The XSSI prefix a body starts with, if any. */
 export const xssiOf = (body: string) => PREFIXES.find((p) => body.trimStart().startsWith(p));
 
+/** A Content-Type that names HTML: its media type alone, never a parameter (`text/event-stream; profile="html"`). */
+export const isHtmlType = (contentType: string | null | undefined): boolean =>
+  /html/i.test((contentType ?? "").split(";")[0]!);
+
 /**
  * Strip the XSSI prefix and parse JSON losslessly. Google `rt=c` length-prefixed chunks, and
  * Meta-style bodies that repeat the prefix before each JSON value, become an array. A server-sent

@@ -1352,7 +1352,9 @@ attach to. A DevTools endpoint is full control of a browser.
   home: `.api-anything-locks/api-anything-cdp-<host>_<port>.lk` in the user's home directory as the
   OS records it (`os.userInfo()`: the password database, the profile directory on Windows), a
   directory of the user's own (0700; one that is not a directory, is another user's, or is open to
-  others is refused as `AttachError` with a `next`). Nothing of a process's environment moves it:
+  others is refused as `AttachError` with a `next`; a home that is empty, not an absolute path, or
+  does not exist is refused too, with a `next` to run as a user whose home exists, since a relative
+  one would put the lock wherever the process started). Nothing of a process's environment moves it:
   it was in the temp directory, so an MCP service and a shell of one user with two TMPDIR values
   took two locks for one browser. Before that it was in the temp directory itself, which Linux
   shares: once one user had attached to a port, another user's every attached call failed with
