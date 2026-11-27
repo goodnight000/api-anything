@@ -1085,7 +1085,9 @@ Known limits in detail:
   page there and close the window: the cookies the site set then are kept for that site alone, and
   later calls send them at every tier. For a signed-in read it names the page to finish in your
   browser before `api-anything login <site>`. `learn_site`, `add`, `capture` and a heal say the same
-  instead of finding no request. api-anything never answers a consent question for you (no automatic
+  instead of finding no request. For a page no site has yet, the hint names the page and the name
+  the learning will use, `api-anything login '<url>' --site <name> --window` (MCP: `login` with
+  `site` and `url`), so what the window keeps is stored where that learning reads it. api-anything never answers a consent question for you (no automatic
   "reject all") and sets no site's consent cookie itself. Only a real redirect to another page of the
   same site is recognised (its address names a consent step, or the page asks the question and holds
   the address to go back to); a consent overlay served at the page's own address still reads as

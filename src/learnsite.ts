@@ -31,7 +31,7 @@ import {
 import { buildRequest } from "./http.js";
 import { answerShare, loadSettings, localOnly, QUESTION } from "./identity.js";
 import { type Args, capturePages, lookedUp, pageUrls, rankCandidates } from "./learn.js";
-import { resolveLoginTarget } from "./login.js";
+import { loginHint, resolveLoginTarget } from "./login.js";
 import { lookupOp } from "./lookup.js";
 import { outline } from "./outline.js";
 import { pagingHints } from "./paging.js";
@@ -624,12 +624,14 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       const url1 = t1.url;
       c1 = await capturePage(t1);
       const wall = loginWall(c1, url1);
-      if (wall)
+      if (wall) {
+        const login = loginHint(site, url1);
         return fail(
           `the page landed on a sign-in page (${wall}): the site needs an account`,
-          `ask the user to run api-anything login ${site}; then learn again`,
-          { nextCall: { action: "login", site }, captures: [c1.id] },
+          `ask the user to run api-anything login ${login.cli}; then learn again`,
+          { nextCall: { action: "login", ...login.call }, captures: [c1.id] },
         );
+      }
       second = () => capturePage(fillTrigger(trigger, input.args2));
     }
   } catch (e) {
@@ -638,11 +640,12 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   const captures = c2 ? [c1.id, c2.id] : [c1.id];
   // the page was sent to the site's consent step: no request of the data's was made to learn from
   const consent = consentWall(c1, c1.url);
+  const login = loginHint(site, c1.url);
   if (consent)
     return fail(
       consentReason(consent),
-      `ask the user to run api-anything login ${site} --window${windowWhere()}, make the choice on the site's page there and close the window; then ${learnAgain("learn again", "learn_site", site, op)}`,
-      { captures, wall: "consent", nextCall: { action: "login", site, mode: "window" } },
+      `ask the user to run api-anything login ${login.cli} --window${windowWhere()}, make the choice on the site's page there and close the window; then ${learnAgain("learn again", "learn_site", site, op)}`,
+      { captures, wall: "consent", nextCall: { action: "login", ...login.call, mode: "window" } },
     );
   // The rule holds for what the page requested, not only for the trigger typed: a request to this
   // machine or the local network (the page's redirect, a request its script sent, a capture of another
@@ -723,8 +726,8 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   if (!chosen && wall)
     return fail(
       `the site served a bot challenge (${wall})`,
-      `ask the user to run api-anything login ${site} --window${windowWhere()} and clear it; then ${learnAgain("learn again", "learn_site", site, op)}`,
-      { captures, nextCall: { action: "login", site, mode: "window" } },
+      `ask the user to run api-anything login ${login.cli} --window${windowWhere()} and clear it; then ${learnAgain("learn again", "learn_site", site, op)}`,
+      { captures, nextCall: { action: "login", ...login.call, mode: "window" } },
     );
   if (!chosen && page && page.status >= 400)
     return fail(
@@ -814,17 +817,17 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   } catch (e) {
     const m = (e as Error).message.split("\n")[0]!;
     if (e instanceof NotARead) return notRead(m);
-    const login = /api-anything login/.test(m);
+    const needsLogin = /api-anything login/.test(m);
     return fail(
       m,
-      login
-        ? `ask the user to run api-anything login ${site}; then learn again`
+      needsLogin
+        ? `ask the user to run api-anything login ${login.cli}; then learn again`
         : "learn again with captures (no browser) and another pickRequest from alternatives, or a recipe",
       {
         chosen: shown,
         alternatives,
         captures,
-        nextCall: login ? { action: "login", site } : { action: "relearn", site, op },
+        nextCall: needsLogin ? { action: "login", ...login.call } : { action: "relearn", site, op },
       },
     );
   }

@@ -209,6 +209,8 @@ export interface NextCall {
   op?: string;
   /** login: a visible window, for a challenge or a sign-in the user clears by hand */
   mode?: "window";
+  /** login: the page to open, for a site not learned yet; its session is kept under `site` */
+  url?: string;
   /** raise_tier: the tier the call needs */
   tier?: Tier;
   /**

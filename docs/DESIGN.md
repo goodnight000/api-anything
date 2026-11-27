@@ -818,7 +818,11 @@ drift.
 
 Its `next` leads to a step that works. A public read (no credential ref, learned signed out): the
 user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
-closes the window. The cookies the site set while it was open that are the visitor's own choices
+closes the window. For a page no site has yet (`learn_site`, `add`, `capture`), `<site>` would not
+resolve, so the hint names the page and the name the learning uses (`loginHint`: `login '<url>'
+--site <name> --window`, MCP `login` with `site` and `url`, a `nextCall` with `url`): the window
+keeps the choice under that name, where the learning that follows (an `add` of the same site
+while attached) reads it. The cookies the site set while it was open that are the visitor's own choices
 (`visitorChoices`: new or changed there, none every visitor is given unasked, no analytics,
 advertising or CSRF name, none that shows a sign-in) are added to the site's jar, and nothing else of the profile, so tier 1 sends them; tiers 2
 and 3 send the profile's, which holds them. The spec gains no cookie value and no ref, so a shared spec

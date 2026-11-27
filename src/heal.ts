@@ -44,6 +44,7 @@ import {
   UUID,
   unplaced,
 } from "./learn.js";
+import { loginHint } from "./login.js";
 import { sendDerived } from "./lookup.js";
 
 export { unplaced };
@@ -1153,7 +1154,7 @@ function learnOrExplain(
       botWall({ status: doc.response.status, headers: doc.response.headers, body: doc.response.body ?? "" });
     if (wall)
       throw new Error(
-        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} --window${windowWhere()} and clear it, then add again (learning said: ${(e as Error).message})`,
+        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${loginHint(site, doc.request.url).cli} --window${windowWhere()} and clear it, then add again (learning said: ${(e as Error).message})`,
       );
     const asked = input.readOnly && run.dialogs?.find((d) => d.type === "confirm" && !d.accepted);
     if (asked)
@@ -1280,7 +1281,7 @@ function saveOperation(
         `refusing to save ${operation.name}: the captured response is ${j.class}: ${j.reason}, so it was learned from ${j.class === "rate" ? "a throttled answer" : j.class === "error" ? "a server failure" : "a challenge or sign-in page"}, not the op's own answer. ` +
           (j.class === "rate" || j.class === "error"
             ? "Wait a few minutes, then add again"
-            : `Ask the user to run api-anything login ${site}${j.class === "blocked" ? ` --window${windowWhere()} and clear the challenge` : ""}, then add again`),
+            : `Ask the user to run api-anything login ${loginHint(site, exchange.request.url).cli}${j.class === "blocked" ? ` --window${windowWhere()} and clear the challenge` : ""}, then add again`),
       );
     } else
       warnings.push(
@@ -1415,12 +1416,12 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     const wall = loginWall(run1, fillTrigger(trigger, ex1).url);
     if (wall)
       throw new Error(
-        `the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${i.site}; then add again`,
+        `the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${loginHint(i.site, fillTrigger(trigger, ex1).url).cli}; then add again`,
       );
     const consent = i.write ? undefined : consentWall(run1, fillTrigger(trigger, ex1).url);
     if (consent)
       throw new Error(
-        `${consentReason(consent)}. Ask the user to run api-anything login ${i.site} --window${windowWhere()}, make the choice on the site's page there and close the window; then add again`,
+        `${consentReason(consent)}. Ask the user to run api-anything login ${loginHint(i.site, fillTrigger(trigger, ex1).url).cli} --window${windowWhere()}, make the choice on the site's page there and close the window; then add again`,
       );
     run2 = await run(ex2 ?? ex1);
   }

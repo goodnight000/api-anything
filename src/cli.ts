@@ -41,6 +41,7 @@ import {
   importSession,
   importWarning,
   knownGuests,
+  loginHint,
   logout,
   resolveLoginTarget,
   strayLogin,
@@ -114,7 +115,7 @@ const oneLine = (m: string) =>
     .trim();
 
 const HELP: Record<string, string> = {
-  login: `api-anything login <site|url> [--profile "Chrome/Profile 1"] [--window] [--cookies <file>]
+  login: `api-anything login <site|url> [--profile "Chrome/Profile 1"] [--window] [--cookies <file>] [--site <name>]
   By default imports the site's cookies from your everyday browser (you are almost always already
   signed in there, so no password and no re-doing 2FA). Prints which profile was used and the cookie
   NAMES only (plus the profile's display name and Google account). The imported session is the SAME
@@ -135,6 +136,8 @@ const HELP: Record<string, string> = {
               and the stored session is kept. With API_ANYTHING_CDP set, it is a new window of
               that browser.
   --cookies   import a cookies.txt (Netscape) or JSON export (Cookie-Editor / Playwright), for CI
+  --site      with a page's URL: the name to keep its session under when no site has it yet, as a
+              learn_site, add or capture hint gives it, so the learning that follows finds it there
   Output: loggedIn, renewed (new login cookies), and a warning when the cookies show no sign-in or
   are the ones the session already had. Cookies every signed-out visitor gets never count.`,
   logout: `api-anything logout <site|url>
@@ -651,7 +654,9 @@ async function cmdLogin({ v, pos }: Parsed): Promise<number> {
   if (!target) throw new Fail("missing <site|url>", "api-anything login <site|url>");
   let t: ReturnType<typeof resolveLoginTarget>;
   try {
-    t = resolveLoginTarget(target);
+    if (v.site !== undefined && !/^https?:\/\//i.test(target))
+      throw new Error("--site names a site not learned yet by its page: give the page's full https:// URL");
+    t = resolveLoginTarget(target, v.site);
   } catch (e) {
     throw new Fail(
       (e as Error).message,
@@ -880,9 +885,9 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     ...(page.status ? { pageStatus: page.status } : {}),
     ...(stopped.length ? { stopped } : {}),
     next: wall
-      ? `the site served a bot challenge (${wall}): ask the user to run api-anything login <site> --window${windowWhere()} and clear the challenge in the window, then ${learnAgain("capture again", "a capture")}`
+      ? `the site served a bot challenge (${wall}): ask the user to run api-anything login ${loginHint("<site>", url).cli} --window${windowWhere()} and clear the challenge in the window, then ${learnAgain("capture again", "a capture")}`
       : consent
-        ? `${consentReason(consent)}: ask the user to run api-anything login <site> --window${windowWhere()}, make the choice on the site's page there and close the window, then ${learnAgain("capture again", "a capture")}`
+        ? `${consentReason(consent)}: ask the user to run api-anything login ${loginHint("<site>", url).cli} --window${windowWhere()}, make the choice on the site's page there and close the window, then ${learnAgain("capture again", "a capture")}`
         : halted?.site.length
           ? stoppedHint(halted.site, "capture again")
           : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),
@@ -2031,7 +2036,7 @@ function serveExamples(base: string): string {
 type Flag = keyof typeof OPTIONS;
 /** Each command and the flags it takes: run() refuses any other, so none is silently ignored. */
 const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; flags: Flag[] }> = {
-  login: { run: cmdLogin, flags: ["profile", "window", "cookies"] },
+  login: { run: cmdLogin, flags: ["profile", "window", "cookies", "site"] },
   logout: { run: cmdLogout, flags: [] },
   capture: { run: cmdCapture, flags: ["steps", "soft-from", "example", "write", "limit", "outline"] },
   inspect: { run: cmdInspect, flags: ["path", "extract", "pick", "html", "embedded", "outline", "example"] },

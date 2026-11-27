@@ -59,7 +59,21 @@ function siteOnHost(host: string): string | undefined {
  * ("linkedin.com", "www.linkedin.com") or a URL. A domain or URL on a known site's host is that
  * site; any other one is a new site named after its host.
  */
-export function resolveLoginTarget(target: string): { site: string; url: string; loginCookies?: string[] } {
+export function resolveLoginTarget(
+  target: string,
+  /**
+   * the name to keep a page's session under when no site has it yet: a learning the window clears the
+   * way for then reads it there (`loginHint`). A site of that name already on another domain is refused.
+   */
+  as?: string,
+): { site: string; url: string; loginCookies?: string[] } {
+  if (as !== undefined && /^https?:\/\//i.test(target)) {
+    const name = safeName(as);
+    const known = loadSite(name)?.site;
+    if (known && siteOf(new URL(known.baseUrl).hostname.toLowerCase()) !== hostOf(target))
+      throw new Error(`site "${name}" is ${known.baseUrl}, not on ${hostOf(target)}: a name holds one site`);
+    return known ? { site: name, url: target, loginCookies: known.loginCookies } : { site: name, url: target };
+  }
   let url = target;
   if (!/^https?:\/\//i.test(target)) {
     const known = /^[a-z0-9][a-z0-9._-]*$/i.test(target) ? loadSite(target) : undefined;
@@ -76,6 +90,24 @@ export function resolveLoginTarget(target: string): { site: string; url: string;
     return { site: s.name, url: url === target ? url : s.baseUrl, loginCookies: s.loginCookies };
   }
   return { site: host.replace(/^www\./, ""), url };
+}
+
+/** A shell word as typed: quoted when it holds anything a shell reads (a URL's ? or &). */
+const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
+
+/**
+ * How a hint names the login of `site` for the page at `url`, so it can be followed as written: by the
+ * site's name once that resolves, else by the page with the name the learning that follows uses
+ * (`--site`; MCP: `url` beside `site`), so what the window keeps is stored where that learning reads it.
+ */
+export function loginHint(site: string, url: string): { cli: string; call: { site: string; url?: string } } {
+  let known = false;
+  try {
+    known = resolveLoginTarget(site).site === site;
+  } catch {
+    // no site of that name yet
+  }
+  return known ? { cli: site, call: { site } } : { cli: `${shellWord(url)} --site ${site}`, call: { site, url } };
 }
 
 /**

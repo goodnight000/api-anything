@@ -19,7 +19,7 @@ import { cleanCall } from "../src/clean.js";
 import { type CallResult, call } from "../src/execute.js";
 import { addOperation, challengePage, consentWall, profileDir } from "../src/heal.js";
 import { learnSite } from "../src/learnsite.js";
-import { visitorChoices, windowLogin } from "../src/login.js";
+import { logout, resolveLoginTarget, visitorChoices, windowLogin } from "../src/login.js";
 import { learnTool } from "../src/mcp-learn.js";
 import { loadSession, mergeCapture } from "../src/session.js";
 import { type Operation, OperationSchema, parseSite } from "../src/spec.js";
@@ -323,7 +323,7 @@ describe("a consent wall at tiers 2 and 3, learning on it, and the window that c
         examples: [{ q: "AMS" }, { q: "BER" }],
         response: { extract: "flights" },
       }),
-      /cookie-consent page, instead of the data.*api-anything login eu-add --window/,
+      /cookie-consent page, instead of the data.*api-anything login '?http:\/\/127\.0\.0\.1:\d+\/eu\/flights\?q=AMS'? --site eu-add --window/,
     );
     const r = await learnSite(
       {
@@ -339,7 +339,12 @@ describe("a consent wall at tiers 2 and 3, learning on it, and the window that c
     assert.deepEqual([r.ok, r.wall], [false, "consent"], JSON.stringify(r));
     assert.match(r.error ?? "", /\/eu\/consent\?continue=.*cookie-consent page/);
     assert.doesNotMatch(r.error ?? "", /carries the example values/);
-    assert.deepEqual(r.nextCall, { action: "login", site: "eu-learn", mode: "window" });
+    assert.deepEqual(r.nextCall, {
+      action: "login",
+      site: "eu-learn",
+      url: `${fx.url}/eu/flights?q=AMS`,
+      mode: "window",
+    });
     assert.equal(loadSite("eu-learn"), undefined, "nothing saved");
   });
 
@@ -447,7 +452,8 @@ describe("a consent wall at tiers 2 and 3, learning on it, and the window that c
     const c = JSON.parse(out) as { wall?: string; finalUrl: string; next: string };
     assert.equal(c.wall, "consent", out);
     assert.match(c.finalUrl, /\/eu\/consent\?continue=/);
-    assert.match(c.next, /cookie-consent page.*login <site> --window/);
+    // the page by its address, and the name the agent then adds it under: followable as written
+    assert.match(c.next, /cookie-consent page.*login '?http:\/\/127\.0\.0\.1:\d+\/eu\/flights\?q=AMS'? --site <site> --window/);
     // an outage or a challenge at a consent address is no consent step
     for (const kind of ["eudown", "euwall"]) {
       const o = await new Promise<string>((resolve, reject) =>
@@ -503,5 +509,48 @@ describe("a consent wall at tiers 2 and 3, learning on it, and the window that c
       assert.equal((r.data as unknown[]).length, FLIGHTS.AMS!.length);
     }
     assert.equal(existsSync(join(HOME, "heals.jsonl")), false, "no heal ran");
+  });
+
+  test("for a page learned the first time, the window the hint opens keeps the choice where the next learning reads it", async () => {
+    // the profile forgets the choice the last test made: the page shows its consent step again
+    await logout("eu");
+    const input = {
+      site: "eu-loop",
+      trigger: `${fx.url}/eu/flights?q={q}`,
+      args: { q: "AMS" },
+      args2: { q: "BER" },
+      args3: { q: "CDG" },
+    };
+    const walled = await learnSite(input, fast);
+    assert.deepEqual([walled.ok, walled.wall], [false, "consent"], JSON.stringify(walled));
+    // as written: the command the user is asked to run, and the step an agent over MCP takes
+    const command = /api-anything login (.+?) --window/.exec(walled.next ?? "")?.[1];
+    assert.ok(command, String(walled.next));
+    const [target, flag, name] = command.split(" ");
+    assert.equal(flag, "--site");
+    assert.equal(name, "eu-loop");
+    const url = target!.replace(/^'|'$/g, "");
+    assert.deepEqual(walled.nextCall, { action: "login", site: "eu-loop", url, mode: "window" });
+    const t = resolveLoginTarget(url, name);
+    assert.equal(t.site, "eu-loop", "the window keeps the choice under the name the learning uses");
+    const pending = windowLogin(t.site, t.url, { waitForEnter: false });
+    let page: Page | undefined;
+    for (let i = 0; i < 300 && !page; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      page = (await openBrowser({ profileDir: profileDir(), headless: false }))
+        .pages()
+        .find((p) => p.url().includes("/eu/consent"));
+    }
+    assert.ok(page, "the window opened on the consent page");
+    await page.click("text=Reject all");
+    await page.waitForURL(/\/eu\/flights\?q=AMS/);
+    await page.close({ runBeforeUnload: true });
+    const w = await pending;
+    assert.ok(w.ok && w.kept?.includes("eu_choice"), JSON.stringify(w));
+    assert.ok(loadSession("eu-loop").cookies.some((c) => c.name === "eu_choice"));
+    // learning again, as the hint says, gets past the consent step
+    const again = await learnSite(input, fast);
+    assert.notEqual(again.wall, "consent", JSON.stringify(again));
+    assert.doesNotMatch(again.error ?? "", /cookie-consent/);
   });
 });
