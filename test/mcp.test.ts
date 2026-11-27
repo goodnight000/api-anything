@@ -10,6 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { DEADLINE } from "../src/deadline.js";
 import { type CallResult, call } from "../src/execute.js";
 import { Jobs } from "../src/jobs.js";
+import { loginHint, resolveLoginTarget } from "../src/login.js";
 import {
   asTable,
   createServer,
@@ -268,6 +269,29 @@ test("MCP names the tool for a next step one of its tools takes, with the call's
     op: "get",
     profile: "Chrome/Profile 1",
   });
+});
+
+test("MCP text of a login hint for a page no site has yet names the login tool with its site and url, followable as written", () => {
+  for (const url of ["https://shop.example.com/eu/flights?q=AMS&x='1'", "https://shop.example.com/flights"]) {
+    const hint = loginHint("shop-new", url);
+    for (const [cli, window] of [
+      [`ask the user to run api-anything login ${hint.cli} --window, make the choice on the site's page there`, true],
+      [`ask the user to run api-anything login ${hint.cli}; then learn again`, false],
+    ] as const) {
+      const out = mcpNext(cli);
+      assert.doesNotMatch(out, /api-anything login https?(\s|$)/, out);
+      const args = JSON.parse(/the login tool (\{[^}]*\})/.exec(out)?.[1] ?? "null");
+      assert.deepEqual(args, { site: "shop-new", url, mode: "window" }, out);
+      if (!window) assert.match(out, /run in a terminal: api-anything login .+ --site shop-new \(it imports/);
+      // followed as the login tool takes it: the page, kept under the name the learning uses
+      assert.deepEqual(resolveLoginTarget(args.url, args.site), { site: "shop-new", url });
+    }
+  }
+  // a site's own name still goes as before
+  assert.match(
+    mcpNext("ask the user to run api-anything login x --window"),
+    /the login tool \{"site":"x","mode":"window"\}/,
+  );
 });
 
 test("MCP points an auth failure at the login tool only for a session the user imported; else at the terminal", async () => {

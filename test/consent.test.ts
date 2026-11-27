@@ -452,11 +452,13 @@ describe("a consent wall at tiers 2 and 3, learning on it, and the window that c
     const c = JSON.parse(out) as { wall?: string; finalUrl: string; next: string };
     assert.equal(c.wall, "consent", out);
     assert.match(c.finalUrl, /\/eu\/consent\?continue=/);
-    // the page by its address, and the name the agent then adds it under: followable as written
-    assert.match(
-      c.next,
-      /cookie-consent page.*login '?http:\/\/127\.0\.0\.1:\d+\/eu\/flights\?q=AMS'? --site <site> --window/,
-    );
+    // the page by its address, kept under the name a login gives the page's host: followable as written
+    const hinted = /login '?(http:\/\/127\.0\.0\.1:\d+\/eu\/flights\?q=AMS)'? --site ([\w.-]+) --window/.exec(c.next);
+    assert.ok(hinted, c.next);
+    assert.doesNotMatch(c.next, /<site>/);
+    // the page's host is the "eu" site's: the page itself opens, its session kept under eu
+    const t = resolveLoginTarget(hinted[1]!, hinted[2]);
+    assert.deepEqual([hinted[2], t.site, t.url], ["eu", "eu", hinted[1]]);
     // an outage or a challenge at a consent address is no consent step
     for (const kind of ["eudown", "euwall"]) {
       const o = await new Promise<string>((resolve, reject) =>

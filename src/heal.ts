@@ -1136,11 +1136,16 @@ export function putOperation(site: Site, op: Operation): Site {
   return { ...site, operations: [...rest, op] };
 }
 
-/** learnOperation, but a failure on a page that was a bot wall says so (the recipe or the pick is not the problem). */
+/**
+ * learnOperation, but a failure on a page that was a bot wall says so (the recipe or the pick is not
+ * the problem). `page`: the trigger page as the caller typed it, with its args: the one address a hint
+ * names, never one a captured request went to (a signed query string holds a credential).
+ */
 function learnOrExplain(
   site: string,
   run: CaptureResult,
   input: Parameters<typeof learnOperation>[0],
+  page: string,
 ): ReturnType<typeof learnOperation> {
   try {
     return learnOperation(input);
@@ -1154,7 +1159,7 @@ function learnOrExplain(
       botWall({ status: doc.response.status, headers: doc.response.headers, body: doc.response.body ?? "" });
     if (wall)
       throw new Error(
-        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${loginHint(site, doc.request.url).cli} --window${windowWhere()} and clear it, then add again (learning said: ${(e as Error).message})`,
+        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${loginHint(site, page).cli} --window${windowWhere()} and clear it, then add again (learning said: ${(e as Error).message})`,
       );
     const asked = input.readOnly && run.dialogs?.find((d) => d.type === "confirm" && !d.accepted);
     if (asked)
@@ -1253,7 +1258,8 @@ const recipeWarnings = (warnings: string[], r: Recipe) =>
 
 /**
  * The end of every add: judge the op on the answer it was learned from (a preview, or a warning that
- * says what to fix), then save it. `again`: the capture a fixed recipe can be tried on.
+ * says what to fix), then save it. `again`: the capture a fixed recipe can be tried on. `page`: the
+ * trigger page as typed, which a sign-in hint names (`learnOrExplain`).
  */
 function saveOperation(
   site: string,
@@ -1262,6 +1268,7 @@ function saveOperation(
   warnings: string[],
   session: Session,
   again: string | undefined,
+  page: string,
   examples: readonly (Record<string, unknown> | undefined)[] = [],
 ): Omit<AddResult, "captures"> {
   let preview: AddResult["preview"];
@@ -1281,7 +1288,7 @@ function saveOperation(
         `refusing to save ${operation.name}: the captured response is ${j.class}: ${j.reason}, so it was learned from ${j.class === "rate" ? "a throttled answer" : j.class === "error" ? "a server failure" : "a challenge or sign-in page"}, not the op's own answer. ` +
           (j.class === "rate" || j.class === "error"
             ? "Wait a few minutes, then add again"
-            : `Ask the user to run api-anything login ${loginHint(site, exchange.request.url).cli}${j.class === "blocked" ? ` --window${windowWhere()} and clear the challenge` : ""}, then add again`),
+            : `Ask the user to run api-anything login ${loginHint(site, page).cli}${j.class === "blocked" ? ` --window${windowWhere()} and clear the challenge` : ""}, then add again`),
       );
     } else
       warnings.push(
@@ -1372,6 +1379,8 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     if (!existing) throw new Error(`relative trigger ${trigger.url} needs an existing site; use a full URL`);
     trigger = { ...trigger, url: existing.baseUrl.replace(/\/$/, "") + trigger.url };
   }
+  // the page a hint names: as typed, with example 1's args
+  const page = fillTrigger(trigger, ex1).url;
   // a cursor is no part of the page's address: it is the site's answer to an earlier page
   const missing = unplaced(trigger, ex1).filter((k) => !(i.paging?.next && k === i.paging.param));
 
@@ -1413,15 +1422,15 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       return saved;
     };
     run1 = await run(ex1);
-    const wall = loginWall(run1, fillTrigger(trigger, ex1).url);
+    const wall = loginWall(run1, page);
     if (wall)
       throw new Error(
-        `the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${loginHint(i.site, fillTrigger(trigger, ex1).url).cli}; then add again`,
+        `the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${loginHint(i.site, page).cli}; then add again`,
       );
-    const consent = i.write ? undefined : consentWall(run1, fillTrigger(trigger, ex1).url);
+    const consent = i.write ? undefined : consentWall(run1, page);
     if (consent)
       throw new Error(
-        `${consentReason(consent)}. Ask the user to run api-anything login ${loginHint(i.site, fillTrigger(trigger, ex1).url).cli} --window${windowWhere()}, make the choice on the site's page there and close the window; then add again`,
+        `${consentReason(consent)}. Ask the user to run api-anything login ${loginHint(i.site, page).cli} --window${windowWhere()}, make the choice on the site's page there and close the window; then add again`,
       );
     run2 = await run(ex2 ?? ex1);
   }
@@ -1433,24 +1442,29 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       : flags;
   const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
   const learn = () =>
-    learnOrExplain(i.site, run1, {
-      exchanges: run1.exchanges,
-      pages: capturePages(run1),
-      exchanges2: run2?.exchanges,
-      examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
-      cookies: (run2 ?? run1).cookies,
-      storage: { ...run2?.storage, ...run1.storage },
-      match: i.match,
-      id: i.from?.id,
-      name: i.op,
-      trigger,
-      readOnly: !i.write,
-      loginCookies: existing?.loginCookies,
-      guestCookies: loadSession(i.site).guestCookies,
-      public: i.public,
-      // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
-      ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response) } : {}),
-    });
+    learnOrExplain(
+      i.site,
+      run1,
+      {
+        exchanges: run1.exchanges,
+        pages: capturePages(run1),
+        exchanges2: run2?.exchanges,
+        examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
+        cookies: (run2 ?? run1).cookies,
+        storage: { ...run2?.storage, ...run1.storage },
+        match: i.match,
+        id: i.from?.id,
+        name: i.op,
+        trigger,
+        readOnly: !i.write,
+        loginCookies: existing?.loginCookies,
+        guestCookies: loadSession(i.site).guestCookies,
+        public: i.public,
+        // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
+        ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response) } : {}),
+      },
+      page,
+    );
   let learned: ReturnType<typeof learn>;
   // said when the stored examples do not fit the capture
   const stored = () =>
@@ -1638,7 +1652,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   }
 
   const again = captures[0] ?? i.from?.capture.id;
-  const saved = saveOperation(i.site, operation, learned.exchange, warnings, session, again, examples);
+  const saved = saveOperation(i.site, operation, learned.exchange, warnings, session, again, page, examples);
   rememberTier(i.site, operation.name, undefined);
   return { ...saved, captures };
 }

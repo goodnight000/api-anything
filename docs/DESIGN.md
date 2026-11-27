@@ -830,7 +830,11 @@ before any other hint). A public read (no credential ref, learned signed out) of
 the user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
 closes the window. For a page no site has yet (`learn_site`, `add`, `capture`), `<site>` would not
 resolve, so the hint names the page and the name the learning uses (`loginHint`: `login '<url>'
---site <name> --window`, MCP `login` with `site` and `url`, a `nextCall` with `url`): the window
+--site <name> --window`, MCP `login` with `site` and `url`, a `nextCall` with `url`). The page is
+the trigger as the caller typed it, with its args: never an address a captured request or document
+went to, which can carry a signed query string. `capture` has no site name, so its hint keeps the page
+under the one `login` would give it (a known site on the host, else the host), and its MCP text names
+the `login` tool with `site` and `url` (`mcpNext`). The window
 keeps the choice under that name, where the learning that follows (an `add` of the same site
 while attached) reads it. The cookies the site set while it was open that are the visitor's own choices
 (`visitorChoices`: new or changed there, none every visitor is given unasked, no analytics,

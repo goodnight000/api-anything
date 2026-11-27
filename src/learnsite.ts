@@ -640,7 +640,8 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   const captures = c2 ? [c1.id, c2.id] : [c1.id];
   // the page was sent to the site's consent step: no request of the data's was made to learn from
   const consent = consentWall(c1, c1.url);
-  const login = loginHint(site, c1.url);
+  // the page as the caller typed it, never a captured address (a redirect's signed query holds a credential)
+  const login = loginHint(site, fillTrigger({ url: input.trigger }, input.args).url);
   if (consent)
     return fail(
       consentReason(consent),

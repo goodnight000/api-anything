@@ -115,7 +115,7 @@ describe("a write that may have run, behind a wall", () => {
       assert.equal(r.retry, "no");
       assert.equal(r.nextCall?.action, "check_site");
       assert.match(r.next ?? "", /^the write may have gone through: check the site before any retry/);
-      assert.doesNotMatch(r.next ?? "", RESEND, r.next);
+      assert.doesNotMatch(r.next ?? "", RESEND, String(r.next));
       assert.doesNotMatch(mcpNext(r.next ?? ""), RESEND);
       // followed: the agent checks the site and sends nothing; a repeat of the call is held back unsent
       const before = cookies.length;
@@ -181,7 +181,7 @@ describe("a call no window reaches", () => {
         assert.equal(r.wall, "consent", JSON.stringify(r));
         assert.match(r.next ?? "", says);
         assert.match(r.next ?? "", /nothing a window keeps reaches it: do not retry as it is/);
-        assert.doesNotMatch(r.next ?? "", /--window|login/, r.next);
+        assert.doesNotMatch(r.next ?? "", /--window|login/, String(r.next));
         assert.deepEqual([r.nextCall?.action, r.retry], ["report", "no"]);
         assert.doesNotMatch(mcpNext(r.next ?? ""), /the login tool/);
         // the claim: the kept cookie never rode along, so a retry as it is meets the same wall
@@ -192,7 +192,11 @@ describe("a call no window reaches", () => {
         const again = await call("wall-r", name, {}, { ...fast, fetchImpl: fetchWith(site("consent")) });
         assert.equal(again.wall, "consent");
         // what works, followed: the version confirmed, or the user's own pull, sends the kept cookie and answers
-        spec("wall-r", [{ ...(op as object), ...((fixed.op as object) ?? {}) }], (fixed.shared as object) ?? shared);
+        spec(
+          "wall-r",
+          [{ ...(op as object), ...((fixed.op as object) ?? {}) }],
+          (fixed.shared as Record<string, unknown>) ?? shared,
+        );
         cookies = [];
         const through = await call("wall-r", name, {}, { ...fast, fetchImpl: fetchWith(site("consent")) });
         assert.equal(through.ok, true, JSON.stringify(through));

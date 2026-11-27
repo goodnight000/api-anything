@@ -103,12 +103,19 @@ const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace
 export function loginHint(site: string, url: string): { cli: string; call: { site: string; url?: string } } {
   let known = false;
   try {
-    known = resolveLoginTarget(site).site === site;
+    // a spec of that name: a name with no spec that looks like a domain would open that domain's home, not the page
+    known = !!loadSite(site) && resolveLoginTarget(site).site === site;
   } catch {
     // no site of that name yet
   }
-  return known ? { cli: site, call: { site } } : { cli: `${shellWord(url)} --site ${site}`, call: { site, url } };
+  return known ? { cli: site, call: { site } } : pageLogin(site, url);
 }
+
+/** The login of the page at `url` itself, its session kept under `site`: whatever the site's baseUrl shows. */
+export const pageLogin = (site: string, url: string) => ({
+  cli: `${shellWord(url)} --site ${site}`,
+  call: { site, url },
+});
 
 /**
  * The hosts the user pre-approved for a browser import with no one at a terminal, for automation they
