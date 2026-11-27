@@ -158,6 +158,8 @@ export interface CoolDown {
   reason: string;
   /** the answer's HTTP status (451: refused to this network or region) */
   status?: number;
+  /** the op whose call met it: what can clear the wall depends on what that op's calls carry (wall.ts) */
+  op?: string;
 }
 
 interface State {
@@ -336,7 +338,7 @@ export const BLOCKED_COOL_MS = 10 * 60_000;
 
 export function coolDown(
   site: string,
-  c: Pick<CoolDown, "class" | "reason" | "status">,
+  c: Pick<CoolDown, "class" | "reason" | "status" | "op">,
   ms: number,
   now = Date.now(),
 ): void {

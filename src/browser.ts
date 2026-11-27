@@ -2141,7 +2141,8 @@ async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetc
 /**
  * Open `url` headed so the user can sign in. Resolves when they close the window or press Enter
  * in the terminal; what counts as logged in is the caller's call. Returns the site's cookies as the
- * window opened, before the page loaded, and as it closed. Attached (API_ANYTHING_CDP), the window
+ * window opened, before the page loaded; once it had loaded (`loaded`, `markLoaded`; the last read
+ * before the window ended, when it ended first); and as it closed. Attached (API_ANYTHING_CDP), the window
  * is a tab of api-anything's own context in that browser, started with `jar`, and its cookies are
  * that context's alone; the browser going away while it is open throws AttachError. `signal` ends the
  * window as Enter does, then closes it (the MCP server's cap): its own pages, nothing else.
@@ -2159,7 +2160,7 @@ export async function login({
   /** attached only: the stored cookies the window starts with, as api-anything's own profile would hold them */
   jar?: StoredCookie[];
   signal?: AbortSignal;
-}): Promise<{ opened: StoredCookie[]; closed: StoredCookie[] }> {
+}): Promise<{ opened: StoredCookie[]; loaded: StoredCookie[]; closed: StoredCookie[] }> {
   const release = hold();
   const before = losses;
   try {
@@ -2180,7 +2181,7 @@ async function loginWindow(
   waitForEnter: boolean,
   jar?: StoredCookie[],
   signal?: AbortSignal,
-): Promise<{ opened: StoredCookie[]; closed: StoredCookie[] }> {
+): Promise<{ opened: StoredCookie[]; loaded: StoredCookie[]; closed: StoredCookie[] }> {
   const ctx = await openBrowser({ profileDir, headless: false });
   const own = guests.has(ctx);
   const uncarry = await seed(ctx, url, jar, LOCK_WAIT_MS);
@@ -2189,8 +2190,11 @@ async function loginWindow(
   try {
     opened = siteCookies(await ctx.cookies(), url);
     // attached: a tab of its own, never a page a call is using, shown in front where the browser lets it;
-    // api-anything's own: the window it opened with, unless another sign-in window shows it
-    page = own ? await ctx.newPage() : (ctx.pages().find((p) => !windowPages.has(p)) ?? (await ctx.newPage()));
+    // api-anything's own: the blank window it opened with, unless a sign-in window (its tab or a popup)
+    // or a call shows it
+    const free = (p: Page) =>
+      !windowPages.has(p) && p.url() === "about:blank" && ![...originPages.values()].some((o) => o.page === p);
+    page = own ? await ctx.newPage() : (ctx.pages().find(free) ?? (await ctx.newPage()));
     windowPages.add(page);
   } catch (e) {
     uncarry();
@@ -2205,6 +2209,7 @@ async function loginWindow(
   const mine = new Set<Page>();
   const onPage = (p: Page) => {
     mine.add(p);
+    windowPages.add(p);
     p.on("dialog", onDialog);
     p.on("popup", onPage);
   };
@@ -2218,6 +2223,9 @@ async function loginWindow(
   let snapshot: Cookie[] = [];
   let started = 0;
   let kept = 0;
+  /** the read that started first once the page had loaded (`markLoaded`): what the load itself set */
+  let loadRead = Number.POSITIVE_INFINITY;
+  let loaded: Cookie[] | undefined;
   /** no more reads start */
   let shut = false;
   /** the window began closing: no read that completes from here counts */
@@ -2228,7 +2236,9 @@ async function loginWindow(
     const n = ++started;
     const r = ctx.cookies().then(
       (c) => {
-        if (!closing && n > kept) [kept, snapshot] = [n, c];
+        if (closing) return;
+        if (n > kept) [kept, snapshot] = [n, c];
+        if (n === loadRead) loaded = c;
       },
       () => {},
     );
@@ -2237,21 +2247,39 @@ async function loginWindow(
   };
   ctx.on("response", read);
   const poll = setInterval(read, 500);
+  // Loaded is the page's DOMContentLoaded (its document's Set-Cookie is in the jar by then), or the end of
+  // the navigation for a page that fired none: not its load event, which a slow subresource can hold
+  // while the user already answers the page. A window that ended first did nothing after a load.
+  const markLoaded = () => {
+    if (loadRead !== Number.POSITIVE_INFINITY || shut) return;
+    loadRead = started + 1;
+    read();
+  };
+  page.once("domcontentloaded", markLoaded);
   let onEnter = () => {};
+  let close = () => {};
   let entered = false;
+  /** the context itself closed (api-anything's own browser quit), not just the window's tab */
+  let ctxGone = false;
+  const ctxClose = () => {
+    ctxGone = true;
+    close();
+  };
+  // a persistent context (api-anything's own profile) has no Browser object
+  const browserAtOpen = ctx.browser();
   const done = new Promise<void>((resolve) => {
     onEnter = () => {
       entered = true;
       resolve();
     };
-    const close = () => {
+    close = () => {
       closing = true;
       shut = true;
       resolve();
     };
-    ctx.once("close", close);
+    ctx.once("close", ctxClose);
     page.once("close", close);
-    ctx.browser()?.once("disconnected", close);
+    browserAtOpen?.once("disconnected", close);
     // The MCP server's stdin is its transport; only the CLI reads Enter.
     if (waitForEnter) {
       process.stdin.once("data", onEnter);
@@ -2264,22 +2292,27 @@ async function loginWindow(
     // A user who clicks away before the page has loaded interrupts this navigation; the window stays theirs.
     // Enter (or a close) ends the wait even while a slow subresource holds the page's load event.
     await Promise.race([page.goto(url).catch(() => {}), done]);
+    markLoaded();
     read();
     await done;
-    // Attached, a closed tab leaves the context, which still holds what the user did last there: that is
-    // read now, so a choice made a moment before closing is not lost to the poll's interval. A browser
-    // that went away (quit, killed) takes the context along, and those reads with it.
+    // A closed tab leaves a context that outlives it holding what the user did last there: that is read
+    // now, so a choice made a moment before closing is not lost to the poll's interval. Attached, the
+    // context is api-anything's own in a browser the user runs; in api-anything's own browser, only while
+    // another page keeps it open (another window's tab, a call's page): closing the last window quits
+    // Chrome, whose jar has lost its session cookies by then. A browser that went away (quit, killed)
+    // takes the context along, and those reads with it.
     const browser = ctx.browser();
-    if (own && browser && !leaving.has(browser)) {
+    const outlives = own ? !!browser && !leaving.has(browser) : !ctxGone && ctx.pages().length > 0;
+    if (outlives) {
       shut = true;
       await Promise.all(reads);
       const last = await within<Cookie[] | undefined>(ctx.cookies(), undefined, 2000);
-      if (!last)
+      if (!last && own)
         throw new AttachError(
           "the attached browser (API_ANYTHING_CDP) went away while the sign-in window was open: nothing was kept, and the stored session is unchanged",
           "start the browser again with its DevTools port, then open the window again",
         );
-      snapshot = last;
+      if (last) snapshot = last;
     }
     // Enter leaves the window open, so one more read is current (unless the user closes it meanwhile).
     if (entered && !shut) read();
@@ -2288,6 +2321,9 @@ async function loginWindow(
   } finally {
     clearInterval(poll);
     ctx.off("response", read);
+    ctx.off("close", ctxClose);
+    page.off("domcontentloaded", markLoaded);
+    browserAtOpen?.off("disconnected", close);
     signal?.removeEventListener("abort", onEnter);
     if (waitForEnter) {
       process.stdin.off("data", onEnter);
@@ -2300,5 +2336,5 @@ async function loginWindow(
     await Promise.allSettled([...mine].map((p) => within(p.close(), undefined)));
     if (!own && users === 1) await closeBrowser();
   }
-  return { opened, closed: siteCookies(snapshot, url) };
+  return { opened, loaded: siteCookies(loaded ?? snapshot, url), closed: siteCookies(snapshot, url) };
 }

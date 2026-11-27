@@ -16,6 +16,7 @@ import {
   ReadWrites,
   resolver,
   send,
+  ZstdFrames,
   zstdCodec,
 } from "../src/http.js";
 import type { Session } from "../src/session.js";
@@ -391,7 +392,10 @@ test("send: a zstd body that decodes past the cap is refused, not inflated", {
   assert.equal(r.body, '{"ok":true}');
 });
 
-/** Each text compressed into one zstd frame and flushed after it, so a decoder can read each piece as it comes. */
+/**
+ * Each text compressed into one zstd frame and flushed after it, so a decoder can read each piece as it
+ * comes; the frame's end rides on the last piece.
+ */
 async function zstdFlushed(texts: string[]): Promise<Buffer[]> {
   const z = zlib.createZstdCompress();
   let got: Buffer[] = [];
@@ -404,7 +408,9 @@ async function zstdFlushed(texts: string[]): Promise<Buffer[]> {
     pieces.push(Buffer.concat(got));
     got = [];
   }
-  z.destroy();
+  await new Promise<void>((r) => z.end(() => r()));
+  await new Promise((r) => setImmediate(r));
+  pieces[pieces.length - 1] = Buffer.concat([pieces.at(-1)!, ...got]);
   return pieces;
 }
 
@@ -493,6 +499,64 @@ test("send: a zstd answer that opens with a skippable frame is decoded, a stream
       "application/json",
     );
     assert.equal(whole.body, '{"ok":true}', `skippable 0x${n.toString(16)}`);
+  }
+});
+test("send: every frame of a zstd answer is decoded, a stream and a whole body; one that ends inside a frame is no answer", {
+  skip: !zlib.zstdCompressSync && "Node 22.15 or newer has zstd",
+}, async () => {
+  const sent = (body: Buffer, type: string) =>
+    send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+      site: "zst",
+      fetchImpl: (async () =>
+        new Response(new Uint8Array(body), {
+          status: 200,
+          headers: { "content-type": type, "content-encoding": "zstd" },
+        })) as unknown as typeof fetch,
+      minIntervalMs: 0,
+    });
+  const z = (s: string) => zlib.zstdCompressSync(Buffer.from(s));
+  const one = 'data: {"n":1}\n\n';
+  const two = 'data: {"n":2}\n\n';
+  // two frames, and two with a skippable one between them
+  for (const between of [Buffer.alloc(0), skippable(3)]) {
+    const stream = await sent(Buffer.concat([z(one), between, z(two)]), "text/event-stream");
+    assert.equal(stream.body, one + two);
+    assert.equal(stream.truncated, undefined);
+    const whole = await sent(Buffer.concat([z('{"ok":'), between, z("true}")]), "application/json");
+    assert.equal(whole.body, '{"ok":true}');
+  }
+  // a body that ends inside a frame, skippable or not, at its end: refused, never ok and short
+  for (const tail of [skippable(1).subarray(0, 10), z(two).subarray(0, 9)])
+    for (const type of ["text/event-stream", "application/json"])
+      await assert.rejects(
+        sent(Buffer.concat([z(type === "application/json" ? "{}" : one), tail]), type),
+        /ends inside a frame/,
+      );
+});
+
+test("ZstdFrames: the frames of a body come out whole however its bytes arrive", {
+  skip: !zlib.zstdCompressSync,
+}, () => {
+  const frames = [
+    zlib.zstdCompressSync(Buffer.from("first")),
+    zlib.zstdCompressSync(Buffer.alloc(300_000, "x")),
+    zlib.zstdCompressSync(Buffer.from("")),
+  ];
+  const body = Buffer.concat([skippable(0), frames[0]!, skippable(9), frames[1]!, frames[2]!]);
+  for (const size of [1, 2, 7, 4096, body.byteLength]) {
+    const split = new ZstdFrames();
+    const got: Buffer[] = [];
+    let at: Buffer[] = [];
+    for (let i = 0; i < body.byteLength; i += size)
+      for (const p of split.push(body.subarray(i, i + size))) {
+        at.push(p.bytes);
+        if (p.end) {
+          got.push(Buffer.concat(at));
+          at = [];
+        }
+      }
+    assert.equal(split.done, true, `pieces of ${size}`);
+    assert.deepEqual(got, frames, `pieces of ${size}`);
   }
 });
 

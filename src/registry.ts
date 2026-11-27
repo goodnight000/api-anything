@@ -814,17 +814,14 @@ export async function search(
     // the registry's row of this very site (its name and domain)
     const theirs = shared.get(s.name);
     const same = theirs && theirs.domain === siteOf(new URL(s.baseUrl).hostname) ? theirs : undefined;
-    // the registry's copy may be found by more (an alias added since this copy)
+    // the registry's copy may be found by more (an alias added since this copy): shown with that match,
+    // but placed by its own, so a site found only through the registry keeps the registry's place
     const also = same ? matchQuery(entryOf(same), query) : undefined;
-    return { site: s, same, match: also && also.score > own.score ? also : own };
+    return { site: s, same, own, match: also && also.score > own.score ? also : own };
   });
-  const best = Math.max(
-    0,
-    ...mine.map((x) => x.match.score),
-    ...remote.map((m) => matchQuery(entryOf(m), query).score),
-  );
+  const best = Math.max(0, ...mine.map((x) => x.own.score), ...remote.map((m) => matchQuery(entryOf(m), query).score));
   // a local site far behind the best answer matched a stray word; the registry already chose its own
-  const placed = new Set(mine.filter((x) => x.match.score > 0 && x.match.score * 3 >= best).map((x) => x.site.name));
+  const placed = new Set(mine.filter((x) => x.own.score > 0 && x.own.score * 3 >= best).map((x) => x.site.name));
   // A registry row of an installed site this machine's own match does not place is still the
   // registry's match, whatever made it one (a domain a newer version calls, an alias): it is shown as
   // the installed site, in the row's place.
@@ -832,7 +829,7 @@ export async function search(
   const scored = [
     ...mine
       .filter((x) => placed.has(x.site.name))
-      .map((x) => ({ found: withInterfaces(localFound(x.site)), match: x.match, local: true })),
+      .map((x) => ({ found: withInterfaces(localFound(x.site)), match: x.own, local: true })),
     ...remote
       .filter((m) => !installed.has(m.name) || standIn.has(m.name))
       .map((m) => {

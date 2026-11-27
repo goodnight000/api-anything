@@ -445,7 +445,10 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
       },
     );
     // the user's own spec keeps the window: the attached window does reach its calls
-    assert.equal(stepOf({ tier: 2, class: "blocked", reason: "x" }, pulled, "gate").nextCall, undefined);
+    assert.deepEqual(stepOf({ tier: 2, class: "blocked", reason: "x" }, pulled, "gate").nextCall, {
+      action: "login",
+      mode: "window",
+    });
     // followed as written: in api-anything's own browser the window keeps the clearance in the profile,
     // and a page fetch with nothing of the jar put in (as a pulled spec's is sent) carries it
     await closeBrowser();

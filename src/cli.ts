@@ -14,7 +14,7 @@ import { launchOf, printConfig } from "./clients.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { describeOperation } from "./describe.js";
 import { type CallOptions, type CallResult, call, heal, type Tier } from "./execute.js";
-import { capOutput, extract, getPath, innerJson, pick, returnedFields, splitPick } from "./extract.js";
+import { capOutput, extract, getPath, innerJson, isHtmlType, pick, returnedFields, splitPick } from "./extract.js";
 import {
   addOperation,
   type CaptureFile,
@@ -41,8 +41,8 @@ import {
   importSession,
   importWarning,
   knownGuests,
-  loginHint,
   logout,
+  pageLogin,
   resolveLoginTarget,
   strayLogin,
   windowAnswer,
@@ -857,7 +857,7 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     };
   });
   const top = ranked[0];
-  const html = top && /html/i.test(top.contentType ?? "");
+  const html = top && isHtmlType(top.contentType);
   // a bot wall is not fixed by picking another request or writing a recipe
   const doc = mainDocument(c);
   const topEx = top && c.exchanges.find((e) => e.id === top.id);
@@ -871,6 +871,14 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
   const consent = wall || v.write ? undefined : consentWall(c, url);
   const page: ReturnType<typeof pageSays> = wall ? {} : pageSays(c, ranked, values);
   const pages = pagesOf(c, values);
+  // the name a login of the page keeps its session under: a known site's on its host, else the host, as
+  // `login` names a new site; the hint opens the page itself, which a site's baseUrl may not show
+  let named = "<site>";
+  try {
+    named = resolveLoginTarget(url).site;
+  } catch {
+    // no address a login takes: the hint keeps the placeholder
+  }
   const learn = `${
     html
       ? `the best candidate is the HTML page (server-rendered): api-anything inspect ${c.id} ${top.id} to read it, then add <site> <op> --from ${c.id} --pick-request ${top.id} --example k=v with --html '<recipe>' or --embedded '<regex>'`
@@ -887,9 +895,9 @@ async function cmdCapture({ v, pos, steps }: Parsed): Promise<number> {
     ...(page.status ? { pageStatus: page.status } : {}),
     ...(stopped.length ? { stopped } : {}),
     next: wall
-      ? `the site served a bot challenge (${wall}): ask the user to run api-anything login ${loginHint("<site>", url).cli} --window${windowWhere()} and clear the challenge in the window, then ${learnAgain("capture again", "a capture")}`
+      ? `the site served a bot challenge (${wall}): ask the user to run api-anything login ${pageLogin(named, url).cli} --window${windowWhere()} and clear the challenge in the window, then ${learnAgain("capture again", "a capture", named)}`
       : consent
-        ? `${consentReason(consent)}: ask the user to run api-anything login ${loginHint("<site>", url).cli} --window${windowWhere()}, make the choice on the site's page there and close the window, then ${learnAgain("capture again", "a capture")}`
+        ? `${consentReason(consent)}: ask the user to run api-anything login ${pageLogin(named, url).cli} --window${windowWhere()}, make the choice on the site's page there and close the window, then ${learnAgain("capture again", "a capture", named)}`
         : halted?.site.length
           ? stoppedHint(halted.site, "capture again")
           : (page.stop ?? (page.also ? `${learn}; ${page.also}` : learn)),
@@ -977,7 +985,7 @@ function cmdInspect({ v, pos }: Parsed): number {
   } else if (v.embedded) {
     data = extract({ format: "embedded", embedded: { regex: v.embedded } }, body);
     if (data === undefined) throw nothing("the --embedded regex found no JSON");
-  } else if (!/html/i.test(e.response?.contentType ?? "")) {
+  } else if (!isHtmlType(e.response?.contentType)) {
     try {
       data = extract({ format: "json" }, body, undefined, e.response?.contentType);
     } catch {

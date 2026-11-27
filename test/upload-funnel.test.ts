@@ -19,7 +19,7 @@ import { saveSettings } from "../src/identity.js";
 import type { VersionUpload } from "../src/registry-api.js";
 import { REVIEW_CATEGORIES, reviewCategory } from "../src/review.js";
 import { saveSession } from "../src/session.js";
-import { shareOps } from "../src/share.js";
+import { healBack, shareOps } from "../src/share.js";
 import { OperationSchema, parseSite, type Site } from "../src/spec.js";
 import { status } from "../src/status.js";
 import { coolDown, cooling, loadSite, saveSite } from "../src/store.js";
@@ -417,4 +417,92 @@ test("publish's preview sends nothing and says the clean replay will run; --yes 
   assert.match(one!.reason, /held for review: served only to this install/);
   assert.match(one!.next, /wait for a maintainer/);
   assert.match(String(sent.out.next), /held for review/);
+});
+
+test("a proof a caller gives goes up with the op it proved or not at all: a heal's op replaced during its replay stays", async () => {
+  shareOn();
+  saveSite(site());
+  const parent = "c".repeat(64);
+  const { asked, fetchImpl } = web(() => {
+    // another process learns the op again while the heal's clean replay is in flight
+    saveSite(site({ description: "learned again" }));
+    return json({ hits: [{ title: "a puppy" }] });
+  });
+  const out = await healBack("demo", "search", parent, { fetchImpl, minIntervalMs: 0 });
+  assert.equal(asked.length, 1);
+  assert.equal(out?.shared, false, JSON.stringify(out));
+  assert.match(out!.reason!, /changed after its clean replay was sent/);
+  assert.equal(uploads().length, 0, "nothing went up with the replaced op's proof");
+  // the same rule for any caller: a replay's evidence with no op, or another op, sends nothing
+  const now = loadSite("demo")!.site.operations[0]!;
+  const evidence = { cleanReplay: "ok" as const };
+  const [none] = await shareOps("demo", ["search"], { evidence, consent: true, fetchImpl, minIntervalMs: 0 });
+  assert.equal(none!.shared, false, JSON.stringify(none));
+  const [older] = await shareOps("demo", ["search"], {
+    evidence,
+    proved: { ...now, description: "the op before" },
+    consent: true,
+    fetchImpl,
+    minIntervalMs: 0,
+  });
+  assert.equal(older!.shared, false, JSON.stringify(older));
+  assert.equal(uploads().length, 0);
+  // the op it proved, as it is: it goes up with that proof, and no second replay
+  const before = asked.length;
+  const [same] = await shareOps("demo", ["search"], {
+    evidence,
+    proved: now,
+    consent: true,
+    fetchImpl,
+    minIntervalMs: 0,
+  });
+  assert.equal(same!.shared, true, JSON.stringify(same));
+  assert.equal(asked.length, before);
+  assert.equal(uploads()[0]!.operation.description, "learned again");
+});
+
+test("a share ends in an outcome whatever the store does meanwhile: a site that appears, or goes, during it", async () => {
+  shareOn();
+  // started with no site; the site is saved before planning resumes
+  queueMicrotask(() => saveSite(site()));
+  const { fetchImpl } = web();
+  const appeared = await shareOps("demo", ["search"], { evidence: {}, consent: true, fetchImpl, minIntervalMs: 0 });
+  assert.equal(appeared.length, 1);
+  assert.equal(appeared[0]!.shared, false, JSON.stringify(appeared));
+  assert.match(appeared[0]!.reason!, /no site "demo"/);
+  // the site removed while its clean replay is out: the upload is still an outcome
+  const gone = web(() => {
+    fs.rmSync(join(process.env.API_ANYTHING_HOME!, "sites", "demo.json"), { force: true });
+    return json({ hits: [{ title: "a puppy" }] });
+  });
+  const [out] = await shareOps("demo", ["search"], {
+    evidence: {},
+    consent: true,
+    fetchImpl: gone.fetchImpl,
+    minIntervalMs: 0,
+  });
+  assert.equal(typeof out!.shared, "boolean", JSON.stringify(out));
+  assert.equal(uploads().length, 0, "the replay proved an op that is no longer there");
+});
+
+test("a clean replay that meets a consent wall goes up skipped, and the outcome says why", async () => {
+  shareOn();
+  saveSite(site());
+  const consentAt = "https://www.example.com/consent?continue=%2Fapi%2Fsearch";
+  const { asked, fetchImpl } = web((url) =>
+    url.includes("/consent")
+      ? new Response(
+          '<!doctype html><html><head><title>Before you continue</title></head><body><p>We use cookies.</p><form action="/consent/save"><button name="choice" value="reject">Reject all</button></form></body></html>',
+          { status: 200, headers: { "content-type": "text/html" } },
+        )
+      : new Response("", { status: 302, headers: { location: consentAt } }),
+  );
+  const [out] = await shareOps("demo", ["search"], { evidence: {}, consent: true, fetchImpl, minIntervalMs: 0 });
+  assert.ok(asked.length >= 1);
+  assert.equal(out!.cleanReplay, "skipped", JSON.stringify(out));
+  assert.match(
+    out!.cleanReason!,
+    /cookie-consent step, which says nothing of the operation: the registry replays it itself/,
+  );
+  assert.equal(uploads()[0]!.evidence.cleanReplay, "skipped");
 });

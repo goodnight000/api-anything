@@ -512,3 +512,15 @@ test("MCP and OpenAPI schemas emit no tuple prefixItems and validate learn_site 
   });
   checkSchema(doc, "openapi");
 });
+
+test("the nextCall schema names the page a login opens for a site not learned yet", () => {
+  const nc = (CALL_RESULT_SCHEMA.properties as Record<string, { properties: Record<string, unknown> }>).nextCall;
+  assert.deepEqual(nc.properties.url, { type: "string" });
+  const validate = new AjvJsonSchemaValidator().getValidator(CALL_RESULT_SCHEMA);
+  const r = validate({
+    ok: false,
+    class: "error",
+    nextCall: { action: "login", site: "shop-new", url: "https://shop.example.com/eu", mode: "window" },
+  });
+  assert.equal(r.valid, true, JSON.stringify(r));
+});

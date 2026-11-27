@@ -816,19 +816,50 @@ verification sends no report for it, and `verify` counts it `inconclusive`. A co
 overlay over a page without the data) cannot be told from drift without a site's own rules: it stays
 drift.
 
-Its `next` leads to a step that works. A public read (no credential ref, learned signed out): the
-user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
+What a walled call is told (a consent step, a bot challenge, a bare 403) is decided in one place
+(`wall.ts` `wallStep`), from what that call may carry, and `call`, the cool-down's answer and
+`status` all use it. A call of the user's own spec, or of a pulled one in api-anything's own browser,
+is sent to the window. A pulled spec while attached is sent to api-anything's own browser (below,
+under attached). A bare call (`bareCall`: a pulled candidate op, an agent-pulled non-GET op) sends no
+cookie at any tier, so nothing a window keeps reaches it: its `next` says so, names what works (the
+version confirmed and pulled again, the user's own pull, or the page learned as an op of the user's
+own) and never suggests a window; `nextCall` `report`, `retry: "no"`. A write that was sent, or may
+have been, is told to check the site before anything else, whatever wall it met: no part of its
+answer (prose, `nextCall` `check_site`, `retry: "no"`) invites a second send (`ranNext`, asked
+before any other hint). A public read (no credential ref, learned signed out) of the user's own spec:
+the user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
 closes the window. For a page no site has yet (`learn_site`, `add`, `capture`), `<site>` would not
 resolve, so the hint names the page and the name the learning uses (`loginHint`: `login '<url>'
---site <name> --window`, MCP `login` with `site` and `url`, a `nextCall` with `url`): the window
+--site <name> --window`, MCP `login` with `site` and `url`, a `nextCall` with `url`). The page is
+the trigger as the caller typed it, with its args: never an address a captured request or document
+went to, which can carry a signed query string. `capture` has no site name, so its hint keeps the page
+under the one `login` would give it (a known site on the host, else the host), and its MCP text names
+the `login` tool with `site` and `url` (`mcpNext`). A name that already holds a spec or a stored
+session is bound to its registrable domain (the spec's baseUrl; else the session's cookies and the
+domains a person approved importing): a `url` on another one is refused before any probe or window,
+on the CLI and over MCP alike, since a login-looking cookie there would replace the stored jar. The window
 keeps the choice under that name, where the learning that follows (an `add` of the same site
-while attached) reads it. The cookies the site set while it was open that are the visitor's own choices
-(`visitorChoices`: new or changed there, none every visitor is given unasked, no analytics,
-advertising or CSRF name, none that shows a sign-in) are added to the site's jar, and nothing else of the profile, so tier 1 sends them; tiers 2
-and 3 send the profile's, which holds them. The spec gains no cookie value and no ref, so a shared spec
+while attached) reads it. The cookies that are the visitor's own answer (`visitorChoices`) are added to the site's jar,
+and nothing else of the profile, so tier 1 sends them; tiers 2 and 3 send the profile's, which holds
+them. An answer is a cookie whose value at closing differs from its value once the page had loaded,
+whether or not a signed-out visitor is given one of that name (a site that gives every visitor its
+consent cookie "pending" and changes only the value on the choice). "Loaded" is the first jar read
+the window starts after the page's DOMContentLoaded, or after the navigation ends for a page that fired
+none (`markLoaded`): the document's Set-Cookie is in the jar then, and a slow subresource holding the
+load event does not hold it; a window that ended first did nothing after a load. Not an answer: a
+cookie the load set that nothing changed since; one the site gives anew on every load
+(`rotatingCookies`: the load changed the value the window opened with, or the signed-out probe was
+given another value than the window's load); an analytics, advertising or CSRF name
+(`UNASKED_COOKIE`); one that shows a sign-in (the sign-in path's). In api-anything's own browser the
+profile drops a cookie with no expiry when the browser closes, as it does after the window: one the
+window kept is put back in the profile with Chrome's longest lifetime (400 days; the jar keeps it until
+a logout or a newer value), so tiers 2 and 3 carry it as tier 1 does. Only those: the profile is no
+copy of the jar. Attached, every run is seeded from the jar. The spec gains no cookie value and no ref, so a shared spec
 and `vetShared` are unchanged, and the clean replay (`clean.ts`) still sends nothing of the user's:
-from a network the site walls, a consent-walled site's clean replay answers this `error`, and the op
-is not shared automatically from there. A signed-in read's `next` names the page to finish in the
+from a network the site walls, a consent-walled site's clean replay answers this `error`, which says
+nothing of the op: it goes up as `cleanReplay: "skipped"` (`cleanEvidence`, in `shareOps`'s replay,
+`learn_site` and the heal-back alike), which the registry settles by its own replay, and the outcome's
+`cleanReason` says why; it is not shared automatically from there. A signed-in read's `next` names the page to finish in the
 everyday browser, then `api-anything login <site>` imports it with the session. The tool never answers
 a consent question for the user and sets no site's consent cookie itself: that would be a choice made
 for them, and site-specific.
@@ -908,7 +939,10 @@ local `blocked` (a tier cap, no browser, an unconfirmed op) sets none. While it 
 answers `rate` or `blocked` without sending anything, a write before its ledger records it
 (`write: "not_sent"`), with `cooling: true`, `retryAfterMs` counting down to its end and a `reason`
 naming what the site answered and when; nothing is reported to the registry for that answer. A blocked cool-down's `next`
-asks for `api-anything login <site> --window` (while attached, a tab in the attached browser). Any login for the site (an import, a cookies file, the
+is the wall's step for the calling op (`coolStep`, the op that met the block recorded with the
+cool-down for `status`): `api-anything login <site> --window` for the user's own spec (while
+attached, a tab in the attached browser), api-anything's own browser for a pulled spec while attached,
+and no window for a bare call. Any login for the site (an import, a cookies file, the
 window whether or not it saw a sign-in, since a challenge cleared there counts) ends it. A consent
 wall (Failure classifier) is `error` and sets none: the site asked a question, it did not say stop. The call
 option `ignoreCoolDown` (CLI `call --force`), which only a user asks for, sends that one call through
@@ -1318,7 +1352,9 @@ attach to. A DevTools endpoint is full control of a browser.
   home: `.api-anything-locks/api-anything-cdp-<host>_<port>.lk` in the user's home directory as the
   OS records it (`os.userInfo()`: the password database, the profile directory on Windows), a
   directory of the user's own (0700; one that is not a directory, is another user's, or is open to
-  others is refused as `AttachError` with a `next`). Nothing of a process's environment moves it:
+  others is refused as `AttachError` with a `next`; a home that is empty, not an absolute path, or
+  does not exist is refused too, with a `next` to run as a user whose home exists, since a relative
+  one would put the lock wherever the process started). Nothing of a process's environment moves it:
   it was in the temp directory, so an MCP service and a shell of one user with two TMPDIR values
   took two locks for one browser. Before that it was in the temp directory itself, which Linux
   shares: once one user had attached to a port, another user's every attached call failed with
@@ -1369,8 +1405,11 @@ attach to. A DevTools endpoint is full control of a browser.
   window's tab and a call's page in the same context go on, and the context closes on idle, after
   which the next call's context is seeded from the jar. It used to close the whole context, taking
   a second sign-in tab and the page of a call in flight with it. In api-anything's own browser the
-  same holds between windows (each opens a page of its own; the browser is closed at once only
-  when nothing else holds it); a call in flight there is a headless browser of the same profile,
+  same holds between windows (each opens a page of its own, never another window's tab or a popup it
+  opened, nor a call's page; the browser is closed at once only when nothing else holds it), and the
+  closing cookies are read after the tab closed whenever another page keeps the context open (another
+  window's tab, a call's page), as attached; a window that ended takes its listeners on the shared
+  context with it. A call in flight there is a headless browser of the same profile,
   which opening a headed window replaces, as before. Before any of it, an attached window checks
   the endpoint: a window that will be refused (nothing at the endpoint, the proxy set as well)
   sends the site nothing, not even the signed-out probe that tells its visitor cookies. The attach
@@ -1543,7 +1582,11 @@ refused: a stream has no length). At tier 1 a zstd body that Node 22's fetch han
 compressed is decoded as it arrives, so the idle bound reads its lines, a cut keeps what was decoded,
 and the 32 MiB bound counts what it decodes to; a Node with no zstd decoder (before 22.15) fails the
 read with an `error` saying the encoding could not be read, for an answer of any type, never its
-compressed bytes as the body. A browser run reads a page's stream on the page's own DevTools session
+compressed bytes as the body. Node 22's decoder stops at the end of a body's first frame and says
+nothing of the rest, so the frames are told apart from their headers and block headers (`ZstdFrames`,
+RFC 8878) and each is decoded, a whole body's and a stream's alike; skippable frames anywhere are
+dropped. A body that ends inside a frame (a zstd one or a skippable one) is an `error` saying so,
+never `ok` with what the first frames held. A browser run reads a page's stream on the page's own DevTools session
 as it arrives; one that session does not hand over (a frame of another site runs in a process of its
 own) is not read at all, since Playwright's read of a response buffers the whole body with no cap on
 its size: the exchange is cut, its `truncated` saying it was not read, and a call on it is `error`
@@ -2153,7 +2196,12 @@ since a re-upload of the same version is a duplicate that changes nothing: the o
 `next`. An op learned over MCP or a pulled site's op goes only to public addresses (`publicOnly`). The
 result is not kept: a second share of the same op replays again. What goes up is the op that was
 replayed: when the stored op changed while the request was out (another process learned or healed it),
-nothing goes up, and the outcome says why with a `next` to publish again. A failed replay still uploads; the
+nothing goes up, and the outcome says why with a `next` to publish again. The same holds for a replay
+the caller ran: whoever passes `cleanReplay` in the evidence passes `proved`, the op it was sent for
+(learn_site's op after its holdout, the heal-back's healed op), and an op on record that is not that one
+goes up with nothing of it: it is not shared, and the outcome says why. A share planned on a read that
+found no site answers "no site" for each op; one whose site went or was replaced meanwhile ends in an
+outcome too, never an exception. A failed replay still uploads; the
 registry holds it, and the outcome carries `cleanReplay` and `cleanReason`. `publish`'s preview sends
 nothing to the site and says per op what the replay will be (`cleanReplay`: on record, `skipped` and
 why, or "will run on publish").
@@ -2264,11 +2312,11 @@ removed (logged out), and one `api-anything verify <site>` process per site, in 
 spec's pace, the budget and the cool-downs are the only pacing, as for one user; a site still
 running after `--site-timeout` (20 min) is killed with its browser. It judges nothing itself: each
 op's entry in `health.json` is its worst case in verify's own JSON (a failing case, else an
-inconclusive one, else a passing one), with that case's label, class (`got`), tier and ms, verify's
-reason cut to one line of 200 characters with nothing a site sent in it (every reason that quotes an
-answer, its markup, a body, plain text, a GraphQL message or an error event, does it after a `: `, so
-what follows the first one goes; an address keeps only its origin) and with the spec's example and
-check values replaced by `<arg>`, and the time. A skipped op (or a write's preflight) is `skipped`; a site verify could not
+inconclusive one, else a passing one), with that case's label, class (`got`), tier and ms, a reason
+that is a fixed phrase of the script's own chosen by the case's class, outcome and what it expected
+(`answered`, `skippedWhy`: no text of verify's reason is kept, since verify's reasons quote what the
+site sent, a body, a redirect's path or a cursor; the summary and the issue say once that the site's
+own words are in `api-anything verify <site>`), and the time. A skipped op (or a write's preflight) is `skipped`; a site verify could not
 load fails each of its ops; a verify that crashed, hung, or reported nothing about an op is
 `inconclusive`, since it tested nothing. No args, no answers. The header has the version, the
 commit, the run's start, end and duration, the op totals and verify's case counts summed; a
@@ -2451,8 +2499,8 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   only when a login cookie (not a guest name) appeared or changed in between: a profile that already
   held one proves nothing, since it may be the very cookie the site has signed out. Then the jar is
   replaced and `login` answers `ok: true` with the `renewed` names. With no sign-in, the cookies the
-  visitor's own choices set there (a consent answered, a challenge cleared: `visitorChoices`, see
-  "A consent wall" under the classifier) are added to the jar alone, and `login` answers `ok: true`,
+  visitor changed after the page loaded (a consent answered, a challenge cleared: `visitorChoices`,
+  see "A consent wall" under the classifier) are added to the jar alone, and `login` answers `ok: true`,
   `loggedIn: false`, with their names in `kept`, a `warning` and a `next` (`windowAnswer`, the
   same over MCP and on the CLI, which exits 0); the session's `source` stays as it was. Analytics,
   advertising and CSRF names (`UNASKED_COOKIE`) are never a choice: a window in which only those

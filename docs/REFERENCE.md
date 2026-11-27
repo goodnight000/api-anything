@@ -1086,9 +1086,15 @@ Known limits in detail:
 - A read redirected to the site's cookie-consent page (Google's `consent.google.com` for a caller in
   the EU), signed in or not, JSON, html or embedded, at any tier, is `error` with `wall: "consent"`,
   not drift: it is not healed, not marked stale, and starts no cool-down. For a read learned signed
-  out, `next` asks you to run `api-anything login <site> --window`, make the choice on the site's
-  page there and close the window: the cookies the site set then are kept for that site alone, and
-  later calls send them at every tier. For a signed-in read it names the page to finish in your
+  out of your own spec, `next` asks you to run `api-anything login <site> --window`, make the choice
+  on the site's page there and close the window: the cookies whose value you changed after the page
+  loaded are kept for that site alone (a consent cookie every visitor is given "pending" included;
+  never one the site gives anew on every load), and later calls of your own spec send them at every
+  tier, in api-anything's own browser and attached alike. A spec pulled from the catalog, while
+  attached, is told to use api-anything's own browser instead. A call that sends no stored cookie at
+  all (a pulled operation the registry has not confirmed, or a non-GET operation of a spec an agent
+  pulled) is told that no window helps and what does. A write that may have run is told to check the
+  site first, whatever page it met. For a signed-in read it names the page to finish in your
   browser before `api-anything login <site>`. `learn_site`, `add`, `capture` and a heal say the same
   instead of finding no request. For a page no site has yet, the hint names the page and the name
   the learning will use, `api-anything login '<url>' --site <name> --window` (MCP: `login` with
@@ -1097,7 +1103,8 @@ Known limits in detail:
   same site is recognised (its address names a consent step, or the page asks the question and holds
   the address to go back to); a consent overlay served at the page's own address still reads as
   drift. From a network that gets the wall, a learned operation's clean replay (no cookies) answers
-  the wall, so it is not shared automatically from there. This was checked against a local fixture
+  the wall, which says nothing of the operation: it goes up with its clean replay skipped, for the
+  registry's own replay to settle, and the share's outcome says why. This was checked against a local fixture
   only, not against a real site's consent page.
 - A signed-in read redirected to a terms or "verify it's you" page of the same site is `error`. Its
   `next` names the page, which the user finishes in the browser before running
@@ -1137,6 +1144,19 @@ Known limits in detail:
 - The recorded answers in `test/fixture/sites/` prove that a bundled recipe still parses the
   answer it was recorded from, not that the site still answers that way. Ops that send a cookie or
   session value have none.
+- A logout is told apart from a sign-in by comparing wall-clock times, so a clock that moves back can
+  let a run's cookies through after it; and a sign-in window that was open across a logout saves what
+  it sees when it closes.
+- A tier-2 call waits for the site's pacing even past its own timeout.
+- A page at an address that names a consent step and also holds the data is `ok` at tier 1 and a
+  consent wall at tier 3.
+- A DevTools endpoint (`API_ANYTHING_CDP`) that answers `/json/version` and then refuses the
+  connection lets the window's signed-out probe reach the site before the login is refused.
+- Cookies a site sets during a tier-2 fetch in a browser you already run (`API_ANYTHING_CDP`) are not
+  merged into the jar.
+- The kept cookie of a consent answered in the window, when the site gave it no expiry, lives in
+  api-anything's own browser profile for 400 days (Chrome's longest), or until a logout or a new
+  value; the jar keeps it until then too.
 
 
 ## Bundled sites

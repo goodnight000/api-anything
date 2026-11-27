@@ -25,6 +25,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/proxy.ts` | `API_ANYTHING_PROXY`: site traffic through an outbound proxy, the same rules for tier 1 (`siteFetch`) and Chrome; catalog traffic never |
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |
 | `src/execute.ts` | `call()`: the tier ladder, classifier actions, heal guards, write rules |
+| `src/wall.ts` | what a walled call is told, from what it may carry (`bareCall`, `wallStep`, `coolStep`): call, cool-down and status alike |
 | `src/seal.ts` | AES-256-GCM sealing of session and capture files; the data key from the OS store or `API_ANYTHING_KEY`; the no-key fallback |
 | `src/lock.ts` | the cross-process lock beside a file: an exclusive SQLite transaction the OS releases when its holder dies; `LockBusy`; `claim`, a hold across async work |
 | `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, write ledger, call log, export |

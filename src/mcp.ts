@@ -172,10 +172,21 @@ export function mcpNext(next: string): string {
       /(?<!in a terminal: )api-anything pull ([\w.-]+)/g,
       'list_operations {"site":"$1"} (it pulls a shared site)',
     )
+    // a page no site has yet, by its address (shell-quoted or bare) and the name to keep it under (loginHint)
+    .replace(
+      /(?:ask the user to run(?: in a terminal)?:? )?api-anything login ('(?:[^']|'\\'')*'|https?:\/\/[\w@%+=:,./-]+)(?: --site ([\w.-]+))?( --window)?/g,
+      (_, page: string, site: string | undefined, window: string | undefined) => {
+        const url = page.startsWith("'") ? page.slice(1, -1).replace(/'\\''/g, "'") : page;
+        const tool = `the login tool ${JSON.stringify({ ...(site ? { site } : {}), url, mode: "window" })}`;
+        return window
+          ? `${tool} (the user signs in or clears the challenge by hand)`
+          : `ask the user to run in a terminal: api-anything login ${page}${site ? ` --site ${site}` : ""} (it imports the cookies of the browser they are signed in with, no password), or ${tool} to sign in by hand`;
+      },
+    )
     // the login tool's import only refreshes a session the user imported: before that, it is theirs to
     // run. A login from a named profile is the CLI's alone, and stays as it is.
     .replace(
-      /(?:ask the user to run(?: in a terminal)?:? )?api-anything login ([\w.-]+)(?![\w.-]| --profile)( --window)?/g,
+      /(?:ask the user to run(?: in a terminal)?:? )?api-anything login ([\w.-]+)(?![\w.:-]| --profile)( --window)?/g,
       (_, site, window) =>
         window
           ? `the login tool {"site":"${site}","mode":"window"} (the user signs in or clears the challenge by hand)`

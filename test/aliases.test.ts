@@ -258,6 +258,22 @@ test("registry matches keep the registry's order among themselves, by domain and
     ["suggest", "films"],
   );
 });
+test("an installed copy found only through the registry keeps the registry's place among its matches", async () => {
+  // this machine's suggest predates its alias; the registry ranks multi (which calls the domain) first
+  const site = spec();
+  for (const q of ["example.com", "https://www.example.com/titles"]) {
+    fake.matches = [found("multi", "example.org", "live"), found("suggest", "example.net", "live", ["example.com"])];
+    const r = await search(q, { local: [site] });
+    assert.deepEqual(
+      r.matches.map((m) => [m.site, !!m.installed]),
+      [
+        ["multi", false],
+        ["suggest", true],
+      ],
+      q,
+    );
+  }
+});
 test("an alias gives an op no new host, no cookie and no session", async () => {
   const imdb = bundled("imdb");
   // an op that calls the alias is still off the spec's own site

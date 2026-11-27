@@ -4,7 +4,7 @@
  * reactive only.
  */
 import { randomBytes } from "node:crypto";
-import { AttachError, attached, windowWhere } from "./attach.js";
+import { AttachError } from "./attach.js";
 import {
   browserAvailable,
   type PageFetchResult,
@@ -91,6 +91,10 @@ import {
   watchKey,
 } from "./snapshots.js";
 import { type Operation, readbackName, type Site } from "./spec.js";
+import { bareCall, coolStep, type Wall, wallSaid, wallStep } from "./wall.js";
+
+export { bareCall };
+
 import {
   appendCall,
   BLOCKED_COOL_MS,
@@ -440,22 +444,6 @@ export function unsendable(site: string, op: Operation, e: unknown): Result {
   return { ok: false, class: "input", reason: (e as Error).message, next };
 }
 
-/**
- * Whether this op goes without the user's cookies and session values: a request that is no GET or HEAD,
- * of a spec an agent pulled (page text may have steered it there), may change something whatever the
- * spec says it is. A human's pull and a bundled spec upgraded from the registry keep them: the registry
- * serves no such op to anyone but its uploader until a maintainer reviewed it (a POST read, a slot
- * holding a cookie or session ref), and the seeded POST reads need theirs (airbnb search).
- */
-export function bareCall(site: Pick<Site, "shared">, op: Operation): boolean {
-  // An unreviewed candidate is a public read by the registry's rules, so it needs no session; and a
-  // GET can do harm with the user's cookies too (a one-click account action), whoever pulled it.
-  if (site.shared && op.version?.status === "candidate") return true;
-  if (site.shared?.by !== "agent") return false;
-  const method = op.request.method.toUpperCase();
-  return method !== "GET" && method !== "HEAD";
-}
-
 /** The session a call of `op` may send (none when `bareCall`), filtered in memory: no file is written. */
 export function callSession(site: Pick<Site, "shared">, op: Operation, session: Session, theirs = false): Session {
   if (bareCall(site, op)) return NO_SESSION;
@@ -498,9 +486,10 @@ function writeStatus(log: Attempt[]): WriteStatus {
  */
 export function stepOf(a: Attempt, op?: Operation, site?: string): Partial<Result> {
   const wait = a.retryAfterMs !== undefined ? { retryAfterMs: a.retryAfterMs } : {};
-  // the attached window clears nothing for a pulled spec's browser tiers: the step is the user's (PULLED_WALL)
-  if (site && op && windowWall(a, op) && pulledAttached(site))
-    return { ...(a.wall ? { wall: a.wall } : {}), nextCall: { action: "report" }, retry: "after_fix" };
+  // a wall's step is what can reach this call (wall.ts), the same one `next` says
+  const w = op && wallOf(a, op);
+  const walled = site && op && w ? wallStep(site, op, sharedOf(site), w) : undefined;
+  if (walled) return { ...wait, ...(a.wall ? { wall: a.wall } : {}), nextCall: walled.nextCall, retry: walled.retry };
   if (a.unfinished) {
     const windowed = a.wall === "consent" && !!op && !signedInRead(op);
     return {
@@ -568,29 +557,45 @@ export function finish(r: Result, op: Operation | undefined, site: string | unde
 const REGION =
   "the site says this is not available from this network or region (HTTP 451): do not retry; tell the user";
 
-/** An answer whose `next` sends the user to the window: a challenge, or a public read's consent step. */
-const windowWall = (a: Attempt, op: Operation) =>
-  a.unfinished ? a.wall === "consent" && !signedInRead(op) : a.class === "blocked" && a.status !== 451 && !a.hint;
-
-/**
- * A spec someone else wrote, while attached: its tiers 2 and 3 there get none of the stored cookies
- * (browser.ts `seed`), so what the window keeps does not reach them.
- */
-function pulledAttached(site: string): boolean {
-  if (!attached()) return false;
+/** The `shared` record of the site's spec on disk: who wrote it decides what a wall's step can reach (wall.ts). */
+function sharedOf(site: string): Site["shared"] {
   try {
-    return !!loadSite(site)?.site.shared;
+    return loadSite(site)?.site.shared;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
 /**
- * What works for that case: api-anything's own browser, whose window keeps what the user clears in its
- * profile, which a pulled spec's tiers 2 and 3 there run in.
+ * The wall `a` met, when it is one: a page the site wants finished first (a public read's consent
+ * step among them), a bot challenge, or a refusal of this network. A 451 and a block with its own hint
+ * are no wall a window or a step of the user's clears.
  */
-const PULLED_WALL = (site: string, what: string) =>
-  `${what}: ${site} is a spec pulled from the catalog, which carries none of the stored cookies in the attached browser (API_ANYTHING_CDP), so a window there would clear nothing for its calls. Ask the user to unset API_ANYTHING_CDP and run api-anything login ${site} --window, which opens api-anything's own browser, whose profile keeps what they do there; then retry once with API_ANYTHING_CDP unset`;
+function wallOf(a: Attempt, op: Operation): Wall | undefined {
+  if (a.unfinished)
+    return { kind: a.wall === "consent" && !signedInRead(op) ? "consent" : "page", at: shownAddress(a.unfinished) };
+  if (a.class === "blocked" && a.status !== 451 && !a.hint) return { kind: a.missing ? "refused" : "challenge" };
+  return undefined;
+}
+
+/** A hint that already says the write may have run, and asks for no send (tryTier's). */
+const SAYS_RAN = /\bmay have (run|gone through)\b/;
+
+/**
+ * What to do after a write the server may have run, whatever else the answer met: check the site.
+ * Nothing in it invites a second send; a wall the write met is named, not offered as a step.
+ */
+function ranNext(c: CallResult["class"], site: string, op: Operation, a: Attempt, signIn: string): string {
+  if (a.hint && SAYS_RAN.test(a.hint)) return a.hint;
+  if (c === "drift")
+    return `the write may have run: check the site first, then re-learn it with api-anything add ${site} ${op.name} ... --write`;
+  if (c === "auth") return `ask the user to ${signIn}; then check the site, and retry only if the write is not there`;
+  const check = "the write may have gone through: check the site before any retry";
+  const w = wallOf(a, op);
+  return w
+    ? `${check}. The site answered it with a wall (${wallSaid(w)}), which may stand in front of the write's own answer; clearing it does not tell whether the write ran`
+    : check;
+}
 
 /** `signIn`: how the user signs in again, when it is not `api-anything login` (`reimportIfBrowser`) */
 function nextFor(
@@ -603,37 +608,27 @@ function nextFor(
   if (c === "ok") return undefined;
   if (c === "refused")
     return "only if the user asked for this write: rerun with --allow-writes (MCP: start the server with --allow-writes)";
-  if (a && windowWall(a, op) && pulledAttached(site))
-    return PULLED_WALL(
-      site,
-      a.unfinished
-        ? `the site asks this visitor for a cookie-consent choice first (${shownAddress(a.unfinished)})`
-        : a.missing
-          ? "the site refuses requests from this machine or network"
-          : "the site is challenging automated requests",
-    );
+  // Asked before any other hint: a write the server may have run is never invited to a second send.
+  if (a && !op.readOnly && statusOf(a) === "may_have_applied") return ranNext(c, site, op, a, signIn);
+  const w = a && wallOf(a, op);
+  const walled = w && wallStep(site, op, sharedOf(site), w);
+  if (walled) return walled.next;
   if (a?.unfinished) return unfinishedNext(site, op, a.unfinished, a.wall);
   if (a?.hint) return a.hint;
-  // A write the server may have run: never invite a second send.
-  const ran = !op.readOnly && a !== undefined && statusOf(a) === "may_have_applied";
-  if (ran && c !== "drift" && c !== "auth") return "the write may have gone through: check the site before any retry";
   if (a?.rejected && c === "error")
     return `the site refused the write, so it did not run: read reason, check the args against: api-anything ops ${site}; do not send it again unchanged`;
   switch (c) {
     case "auth":
-      return `ask the user to ${signIn}; then ${ran ? "check the site, and retry only if the write is not there" : "retry once"}`;
+      return `ask the user to ${signIn}; then retry once`;
     case "rate":
       return a?.retryAfterMs !== undefined
         ? "rate limited: do not retry before retryAfterMs (the time in reason)"
         : "rate limited: do not retry now; wait a few minutes";
     case "blocked":
       if (a?.status === 451) return REGION;
-      if (a?.missing)
-        return `the site refuses requests from this machine or network (a 403 with no challenge or sign-in to clear): do not retry as it is; a window may show why: ask the user to run api-anything login ${site} --window${windowWhere()}, then retry once`;
-      return `the site is challenging automated requests: ask the user to run api-anything login ${site} --window${windowWhere()} and clear the challenge in the window, then retry once`;
+      return wallStep(site, op, sharedOf(site), { kind: a?.missing ? "refused" : "challenge" })!.next;
     case "drift":
-      if (!op.readOnly)
-        return `${ran ? "the write may have run: check the site first, then " : ""}re-learn it with api-anything add ${site} ${op.name} ... --write`;
+      if (!op.readOnly) return `re-learn it with api-anything add ${site} ${op.name} ... --write`;
       return `api-anything heal ${site} ${op.name}; if that fails, re-learn it with api-anything add ${site} ${op.name} ...`;
     case "input":
       return `check the args against: api-anything ops ${site}`;
@@ -643,18 +638,15 @@ function nextFor(
 }
 
 /**
- * What to do about a read sent to a page the site wants finished first. The address is the site's own
- * text (where its redirect led): shown as a spec's address is. A signed-in read's session is the
- * everyday browser's, and so is the page to finish; a public read's consent is answered in a window
- * of api-anything's own, whose new cookies are kept for the site (login.ts `windowLogin`).
+ * What to do about a read sent to a page the site wants finished first, other than a public read's
+ * consent step (wall.ts). The address is the site's own text (where its redirect led): shown as a
+ * spec's address is. A signed-in read's session is the everyday browser's, and so is the page to finish.
  */
 function unfinishedNext(site: string, op: Operation, at: string, wall?: "consent"): string {
   const shown = shownAddress(at);
-  if (wall !== "consent")
-    return `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${shown} in their browser and finish it, then run api-anything login ${site}; then retry once`;
-  if (signedInRead(op))
+  if (wall === "consent" && signedInRead(op))
     return `the site asks for a cookie-consent choice first: ask the user to open ${shown} in their browser and finish it, then run api-anything login ${site}; then retry once`;
-  return `the site asks this visitor for a cookie-consent choice first (${shown}), which api-anything never makes for the user: ask the user to run api-anything login ${site} --window${windowWhere()}, make the choice on the site's page there and close the window (the cookies the site sets then are kept for ${site}); then retry once`;
+  return `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${shown} in their browser and finish it, then run api-anything login ${site}; then retry once`;
 }
 
 function success(a: Attempt, extra: Partial<Result> = {}): Result {
@@ -1451,16 +1443,14 @@ function whereToLook(op: Operation, args: Record<string, unknown>, given: Record
   return `. Look on ${shownAddress(fillTrigger(op.trigger, args).url)}${read}`;
 }
 
-/** The answer while the site cools down (`coolAfter`): nothing is sent. */
-function cooled(c: CoolDown, site: string, now = Date.now()): Result {
-  const reason = `not sent: ${site} answered ${c.class} at ${new Date(c.at).toISOString()} (${c.reason}), so nothing goes to it until ${new Date(c.until).toISOString()}`;
+/** The answer while the site cools down (`coolAfter`): nothing is sent. `op`: the call's, whose reach decides the step. */
+function cooled(c: CoolDown, site: Site, op: Operation, now = Date.now()): Result {
+  const name = site.name;
+  const reason = `not sent: ${name} answered ${c.class} at ${new Date(c.at).toISOString()} (${c.reason}), so nothing goes to it until ${new Date(c.until).toISOString()}`;
   const wait = { ok: false, class: c.class, reason, retryAfterMs: Math.max(0, c.until - now), cooling: true as const };
   if (c.class === "rate") return { ...wait, next: "rate limited: do not retry before retryAfterMs; nothing was sent" };
   if (c.status === 451) return { ...wait, next: REGION, nextCall: { action: "report" }, retry: "no" };
-  return {
-    ...wait,
-    next: `the site blocked its last call at every tier: do not retry before retryAfterMs. To look sooner, ask the user to run api-anything login ${site} --window (a login ends the wait), then retry once`,
-  };
+  return { ...wait, ...coolStep(name, op, site.shared) };
 }
 
 /**
@@ -1476,7 +1466,12 @@ function coolAfter(site: string, op: Operation, r: Result, log: Attempt[]): void
   } else if (r.class === "blocked" && (last.status === 451 || last.tier === (op.readOnly ? 3 : 2)))
     coolDown(
       site,
-      { class: "blocked", reason: r.reason ?? last.reason, ...(last.status ? { status: last.status } : {}) },
+      {
+        class: "blocked",
+        reason: r.reason ?? last.reason,
+        op: op.name,
+        ...(last.status ? { status: last.status } : {}),
+      },
       BLOCKED_COOL_MS,
     );
 }
@@ -1845,7 +1840,7 @@ async function run(
   if (unsafeWrite) return done(unsafeWrite);
   // A site that said stop is not asked again until its wait is over: before the write's ledger, as nothing is sent.
   held = opts.ignoreCoolDown ? undefined : cooling(siteName);
-  if (held) return done(cooled(held, siteName));
+  if (held) return done(cooled(held, site, op));
   // An early answer, before a write's ledger; each send is held to the budget again as it goes (`reserveSend`).
   const over = sendBudget && !sendBudget.exempt ? budgetCheck(siteName, budget) : undefined;
   if (over) return overBudget(over);
