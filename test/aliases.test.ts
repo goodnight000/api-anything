@@ -229,6 +229,35 @@ test("by domain, a confirmed registry site ranks above an unconfirmed one, then 
   );
 });
 
+test("a registry match for an installed site is shown as the installed site, whatever made it match", async () => {
+  // this machine's copy calls example.net only; the registry's newer version also calls example.io, or
+  // says in its description what the words ask for
+  const site = spec();
+  for (const q of ["example.io", "https://www.example.io/titles", "trailers"]) {
+    fake.matches = [found("suggest", "example.net", "live")];
+    const r = await search(q, { local: [site] });
+    assert.deepEqual(
+      r.matches.map((m) => [m.site, m.installed]),
+      [["suggest", true]],
+      q,
+    );
+  }
+});
+
+test("registry matches keep the registry's order among themselves, by domain and by words", async () => {
+  // one site calls the asked domain from a second registrable domain of its own, one only aliases it
+  fake.matches = [found("multi", "example.net", "live"), found("suggest", "example.org", "live", ["example.com"])];
+  assert.deepEqual(
+    (await search("example.com", { local: [] })).matches.map((m) => m.site),
+    ["multi", "suggest"],
+  );
+  // by words, a site the registry ranks first stays first, whatever its name scores here
+  fake.matches = [found("suggest", "example.net", "live"), found("films", "example.com", "live")];
+  assert.deepEqual(
+    (await search("films search", { local: [] })).matches.map((m) => m.site),
+    ["suggest", "films"],
+  );
+});
 test("an alias gives an op no new host, no cookie and no session", async () => {
   const imdb = bundled("imdb");
   // an op that calls the alias is still off the spec's own site
