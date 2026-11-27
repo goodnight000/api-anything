@@ -469,6 +469,44 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
     );
     assert.equal(sentUserCookie(), false);
   });
+  test("a page fetch keeps one deadline through every wait: for a run in flight with other cookies, and the pace", async () => {
+    const fetchOf = (o: { pace?: () => Promise<void> } = {}) =>
+      pageFetch({
+        origin: fx.url,
+        url: `${fx.url}/api/slow/data?ms=1500`,
+        method: "GET",
+        headers: {},
+        profileDir: profileDir(),
+        timeoutMs: 1200,
+        ...o,
+      });
+    const settles = async (p: Promise<unknown>) => {
+      const t0 = Date.now();
+      const said = await p.then(
+        (r) => `answered ${(r as { status?: number }).status}`,
+        (e: Error) => e.message.split("\n")[0],
+      );
+      return [Date.now() - t0, said] as const;
+    };
+    // a fetch that carries the jar holds the site for 700 ms; this one carries none, so it waits for it first
+    const own = pageFetch({
+      origin: fx.url,
+      url: `${fx.url}/api/slow/data?ms=700`,
+      method: "GET",
+      headers: {},
+      profileDir: profileDir(),
+      jar: [JAR_COOKIE],
+    });
+    await sleep(100);
+    const queued = await settles(fetchOf());
+    await own;
+    const paced = await settles(fetchOf({ pace: () => sleep(800) }));
+    for (const [what, [ms, said]] of [
+      ["queued behind a run", queued],
+      ["paced", paced],
+    ] as const)
+      assert.ok(ms < 1200 + 500, `${what}: settled after ${ms} ms (${said}), for a timeout of 1200 ms`);
+  });
   test("idle close and closeBrowser() leave the browser and the user's tab as they were, and take api-anything's tabs", async () => {
     await runTrigger({ url: `${fx.url}/u/alice`, profileDir: profileDir() });
     await pageFetch({ origin: fx.url, url: `${fx.url}/list`, method: "GET", headers: {}, profileDir: profileDir() });

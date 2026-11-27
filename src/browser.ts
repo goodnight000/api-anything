@@ -1904,11 +1904,16 @@ export async function pageFetch(o: {
 
 async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetchResult> {
   const timeoutMs = o.timeoutMs ?? 30_000;
+  // One deadline for the whole call, as a trigger run's: the browser's start, a wait for runs in flight
+  // with other cookies (seed), the pace, the origin page's load, every hop of the fetch and a recovery
+  // after the page navigated all draw on it.
+  const deadline = Date.now() + timeoutMs;
+  const left = () => Math.max(1, deadline - Date.now());
   const release = hold();
   let uncarry = () => {};
   try {
     const ctx = await openBrowser(o);
-    uncarry = await seed(ctx, o.url, o.jar, timeoutMs);
+    uncarry = await seed(ctx, o.url, o.jar, Math.max(0, deadline - Date.now()));
     await o.pace?.();
     const once = async (entry: OriginPage, hop: Hop, left: number) => {
       const { page } = entry;
@@ -2045,10 +2050,6 @@ async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetc
         if (entry.retired) retire(entry);
       }
     };
-    // One deadline for the whole call from here, with Chrome up: the origin page's load, every hop
-    // of the fetch and a recovery after the page navigated all draw on it.
-    const deadline = Date.now() + timeoutMs;
-    const left = () => Math.max(1, deadline - Date.now());
     let entry = await originPage(ctx, o.origin, left);
     let replaced = false;
     let navigated = false;
