@@ -834,7 +834,10 @@ resolve, so the hint names the page and the name the learning uses (`loginHint`:
 the trigger as the caller typed it, with its args: never an address a captured request or document
 went to, which can carry a signed query string. `capture` has no site name, so its hint keeps the page
 under the one `login` would give it (a known site on the host, else the host), and its MCP text names
-the `login` tool with `site` and `url` (`mcpNext`). The window
+the `login` tool with `site` and `url` (`mcpNext`). A name that already holds a spec or a stored
+session is bound to its registrable domain (the spec's baseUrl; else the session's cookies and the
+domains a person approved importing): a `url` on another one is refused before any probe or window,
+on the CLI and over MCP alike, since a login-looking cookie there would replace the stored jar. The window
 keeps the choice under that name, where the learning that follows (an `add` of the same site
 while attached) reads it. The cookies that are the visitor's own answer (`visitorChoices`) are added to the site's jar,
 and nothing else of the profile, so tier 1 sends them; tiers 2 and 3 send the profile's, which holds

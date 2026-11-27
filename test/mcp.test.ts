@@ -24,7 +24,7 @@ import {
   UNTRUSTED_NOTE,
   WRITE_HINTS,
 } from "../src/mcp.js";
-import { saveSession } from "../src/session.js";
+import { loadSession as loadSessionFile, saveSession } from "../src/session.js";
 import { type Operation, parseSite } from "../src/spec.js";
 import { loadSite, saveSite } from "../src/store.js";
 
@@ -294,6 +294,44 @@ test("MCP text of a login hint for a page no site has yet names the login tool w
   );
 });
 
+test("MCP login with site and url: a name that holds a session is bound to its domain, refused on another before any window", async () => {
+  const s = await connect();
+  try {
+    const jar = {
+      name: "sid",
+      value: "x".repeat(24),
+      domain: ".shop.example.com",
+      path: "/",
+      expires: -1,
+      httpOnly: true,
+      secure: true,
+    };
+    saveSession("stash", { cookies: [jar], values: {}, source: "window" });
+    await s.start();
+    const before = JSON.stringify(loadSessionFile("stash"));
+    const r = await s.tool("login", { site: "stash", url: "https://login.other.example.org/start", mode: "window" });
+    assert.equal(r.isError, true, JSON.stringify(r));
+    assert.match(r.error, /"stash" holds a session for example\.com, not example\.org: a name holds one site/);
+    assert.equal(r.job, undefined, "no window was opened");
+    assert.equal(JSON.stringify(loadSessionFile("stash")), before, "the stored session is as it was");
+    // the same domain, another host of it: the name's own site
+    assert.deepEqual(resolveLoginTarget("https://www.example.com/signin", "stash"), {
+      site: "stash",
+      url: "https://www.example.com/signin",
+    });
+    // a session with no cookie left, but a domain a person approved importing: bound to that one
+    saveSession("approved", {
+      cookies: [],
+      values: {},
+      imports: [{ domain: "example.net", source: "chrome:Default" }],
+    });
+    assert.throws(() => resolveLoginTarget("https://example.org/", "approved"), /holds a session for example\.net/);
+    // a new name binds nothing yet
+    assert.equal(resolveLoginTarget("https://example.org/", "fresh-name").site, "fresh-name");
+  } finally {
+    await s.done();
+  }
+});
 test("MCP points an auth failure at the login tool only for a session the user imported; else at the terminal", async () => {
   // a site whose one read always answers 401, as a signed-out session gets
   const server = httpServer((_req, res) => res.writeHead(401, { "content-type": "application/json" }).end("{}"));

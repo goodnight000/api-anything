@@ -63,7 +63,8 @@ export function resolveLoginTarget(
   target: string,
   /**
    * the name to keep a page's session under when no site has it yet: a learning the window clears the
-   * way for then reads it there (`loginHint`). A site of that name already on another domain is refused.
+   * way for then reads it there (`loginHint`). A name whose spec or stored session is on another
+   * registrable domain is refused, before any window opens.
    */
   as?: string,
 ): { site: string; url: string; loginCookies?: string[] } {
@@ -72,6 +73,12 @@ export function resolveLoginTarget(
     const known = loadSite(name)?.site;
     if (known && siteOf(new URL(known.baseUrl).hostname.toLowerCase()) !== hostOf(target))
       throw new Error(`site "${name}" is ${known.baseUrl}, not on ${hostOf(target)}: a name holds one site`);
+    // a session with no spec is bound to its domains too: another one's sign-in would replace its jar
+    const held = known ? [] : sessionDomains(name);
+    if (held.length && !held.includes(hostOf(target)))
+      throw new Error(
+        `"${name}" holds a session for ${held.join(", ")}, not ${hostOf(target)}: a name holds one site. Give the page a name of its own, or log the old one out first: api-anything logout ${name}`,
+      );
     return known ? { site: name, url: target, loginCookies: known.loginCookies } : { site: name, url: target };
   }
   let url = target;
@@ -90,6 +97,24 @@ export function resolveLoginTarget(
     return { site: s.name, url: url === target ? url : s.baseUrl, loginCookies: s.loginCookies };
   }
   return { site: host.replace(/^www\./, ""), url };
+}
+
+/**
+ * The registrable domains a stored session of `site` is on: its cookies' and the imports a person
+ * approved. None when there is no session, or it cannot be read (its own commands report that).
+ */
+function sessionDomains(site: string): string[] {
+  if (!existsSync(sessionFile(site))) return [];
+  try {
+    const s = loadSession(site);
+    const domains = [
+      ...s.cookies.map((c) => siteOf(c.domain.replace(/^\./, "").toLowerCase())),
+      ...(s.imports ?? []).map((a) => a.domain),
+    ];
+    return [...new Set(domains)].sort();
+  } catch {
+    return [];
+  }
 }
 
 /** A shell word as typed: quoted when it holds anything a shell reads (a URL's ? or &). */
