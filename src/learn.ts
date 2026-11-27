@@ -17,7 +17,7 @@ import {
   templateRefs,
   walk,
 } from "./codec.js";
-import { getPath, inferShape, innerJson, parseBody, xssiOf } from "./extract.js";
+import { getPath, inferShape, innerJson, isHtmlType, parseBody, xssiOf } from "./extract.js";
 import {
   besideHoles,
   besideOrigins,
@@ -52,6 +52,7 @@ import {
   type Trigger,
   type Volatile,
 } from "./spec.js";
+import { isEventStream } from "./stream.js";
 import type { CaptureResult, Exchange, StoredCookie } from "./types.js";
 import { DERIVED_VALUE, METHOD_OVERRIDE } from "./vet.js";
 
@@ -160,7 +161,6 @@ const DENY_RESOURCE = new Set([
   "manifest",
   "texttrack",
   "websocket",
-  "eventsource",
   "preflight",
   "ping",
   "cspviolationreport",
@@ -170,7 +170,10 @@ const DENY_MIME =
 const ANALYTICS =
   /google-analytics\.com|googletagmanager\.com|doubleclick\.net|sentry\.io|\/sentry\/|segment\.(io|com)|mixpanel\.com|amplitude\.com|hotjar\.com|facebook\.com\/tr|clarity\.ms|nr-data\.net|datadoghq|\/(collect|beacon|log_event|telemetry|jot|csp-report|client_event|tracking|logging)(\/|\?|$)/i;
 // Pages and APIs can end in .js (github.com/vercel/next.js, /repos/chart.js): the extension only means an asset for subresources.
-const DATA_RESOURCE = new Set(["document", "xhr", "fetch"]);
+// An EventSource's stream (stream.ts) is data, read like a fetch's.
+const DATA_RESOURCE = new Set(["document", "xhr", "fetch", "eventsource"]);
+/** The requests a page's script makes for data. */
+const SCRIPTED = new Set(["xhr", "fetch", "eventsource"]);
 
 function isNoise(e: Exchange): boolean {
   if (e.request.method.toUpperCase() === "OPTIONS") return true;
@@ -189,7 +192,7 @@ function isNoise(e: Exchange): boolean {
   // Media is never data, even fetched by XHR (video segments); otherwise XHR/fetch are data by
   // definition: Instagram's GraphQL answers JSON as text/javascript.
   if (/^(image|font|video|audio)\//i.test(e.response.contentType)) return true;
-  return e.resourceType !== "xhr" && e.resourceType !== "fetch" && DENY_MIME.test(e.response.contentType);
+  return !SCRIPTED.has(e.resourceType) && DENY_MIME.test(e.response.contentType);
 }
 
 /* ------------------------------------------------------------- candidates */
@@ -287,7 +290,7 @@ function isAck(e: Exchange): boolean {
     typeof v === "boolean" ||
     (typeof v === "string" && /^\w{0,8}$/.test(v)) ||
     (typeof v === "object" && Object.values(v).every(flags));
-  const data = tryParse(body);
+  const data = tryParse(body, r.contentType);
   return flags(data === undefined ? body : data);
 }
 
@@ -361,10 +364,11 @@ function shortCarrier(examples: [string, string][], short: [string, string][], s
   };
 }
 
-function tryParse(body: string | undefined): unknown {
-  if (!body) return undefined;
+/** `contentType`: the answer's, for a body that is one (`parseBody`); an empty event stream is an empty list. */
+function tryParse(body: string | undefined, contentType?: string): unknown {
+  if (!body && !isEventStream(contentType)) return undefined;
   try {
-    return parseBody(body);
+    return parseBody(body ?? "", undefined, contentType);
   } catch {
     return undefined;
   }
@@ -404,7 +408,7 @@ export function rankCandidates(
         .map(([k]) => k);
       const urlHits = values.filter(([k, v]) => !hits.includes(k) && has(v, leaves(v))).length;
       const body = e.response?.body ?? "";
-      const parsed = tryParse(body);
+      const parsed = tryParse(body, e.response?.contentType);
       const json = parsed !== null && typeof parsed === "object";
       const status = e.response?.status;
       const lower = values.length ? body.toLowerCase() : "";
@@ -414,7 +418,7 @@ export function rankCandidates(
         (e.aborted ? 600 : 0) +
         (status !== undefined && status >= 200 && status < 300 ? 300 : 0) +
         (json ? 400 : 0) +
-        (e.resourceType === "xhr" || e.resourceType === "fetch" ? 100 : 0) +
+        (SCRIPTED.has(e.resourceType) ? 100 : 0) +
         (values.some(([, v]) => lower.includes(v)) ? 200 : 0) +
         Math.min(body.length / 1000, 100);
       return {
@@ -1685,7 +1689,7 @@ function learnResponse(e: Exchange, values: string[], warnings: string[]): Respo
   if (!r) return { format: "json" };
   const body = r.body ?? "";
   const xssiPrefix = xssiOf(body);
-  const data = tryParse(body);
+  const data = tryParse(body, r.contentType);
   if (data !== null && typeof data === "object") {
     const extract = suggestExtract(data, values);
     return {
@@ -1697,7 +1701,7 @@ function learnResponse(e: Exchange, values: string[], warnings: string[]): Respo
     };
   }
   warnings.push(
-    /html/i.test(r.contentType)
+    isHtmlType(r.contentType)
       ? 'response is HTML: add --html \'{"items":"<css>","fields":{...}}\' for a list, or --embedded \'<regex>\' for JSON inside the page'
       : `response is ${r.contentType || "untyped"} text, returned raw`,
   );
@@ -1993,7 +1997,7 @@ export function lookedUp(
       );
     })
     .flatMap((x) => {
-      const data = tryParse(x.response?.body);
+      const data = tryParse(x.response?.body, x.response?.contentType);
       return data !== null && typeof data === "object" ? [{ x, paths: scalarPaths(data) }] : [];
     })
     .reverse();
@@ -2132,7 +2136,8 @@ function derivedSlots(
       continue;
     }
     if (two) {
-      const v2 = l.exchange2 && getPath(tryParse(l.exchange2.response?.body), c.path);
+      const v2 =
+        l.exchange2 && getPath(tryParse(l.exchange2.response?.body, l.exchange2.response?.contentType), c.path);
       if (v2 === undefined || v2 === null || typeof v2 === "object" || asText(v2) === c.leaf.value) {
         unproven.set(k, `${where}, but run 2's lookup holds no other value there`);
         continue;

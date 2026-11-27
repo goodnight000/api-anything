@@ -17,20 +17,24 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/outline.ts` | a compact summary of a captured response, for choosing a request and a recipe |
 | `src/classify.ts` | response -> ok/drift/auth/rate/blocked/input/error; `judge` also extracts |
 | `src/extract.ts` | parse, extract, pick, cap |
+| `src/stream.ts` | server-sent event streams: the bounds every read of one keeps to, and their decoding into a list of events |
 | `src/deadline.ts` | the time limit on reading an answer and on testing a call's args: synchronous work stopped from outside (Node's `vm` timeout); Node only, so no module the registry Worker bundles imports it |
 | `src/http.ts` | tier 1: fill the template, send with Node fetch |
-| `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login |
+| `src/browser.ts` | Chrome via playwright-core: trigger capture, tier 2 page fetch, login; or a context of its own in an attached browser |
+| `src/attach.ts` | `API_ANYTHING_CDP`: the loopback DevTools endpoint of a browser the user runs, checked before anything connects; `AttachError`; the machine-wide lock's path |
 | `src/proxy.ts` | `API_ANYTHING_PROXY`: site traffic through an outbound proxy, the same rules for tier 1 (`siteFetch`) and Chrome; catalog traffic never |
 | `src/heal.ts` | add, rescan, recapture, tier-3 trigger runs, captures |
 | `src/execute.ts` | `call()`: the tier ladder, classifier actions, heal guards, write rules |
+| `src/wall.ts` | what a walled call is told, from what it may carry (`bareCall`, `wallStep`, `coolStep`): call, cool-down and status alike |
 | `src/seal.ts` | AES-256-GCM sealing of session and capture files; the data key from the OS store or `API_ANYTHING_KEY`; the no-key fallback |
-| `src/lock.ts` | the cross-process lock beside a file: an exclusive SQLite transaction the OS releases when its holder dies; `LockBusy` |
+| `src/lock.ts` | the cross-process lock beside a file: an exclusive SQLite transaction the OS releases when its holder dies; `LockBusy`; `claim`, a hold across async work |
 | `src/session.ts`, `src/store.ts` | `~/.api-anything`: cookie jar, specs, heal log, state, write ledger, call log, export |
 | `src/status.ts` | `status`: each op's health from the local files only, each problem with its `next` |
 | `src/checks.ts` | `verify`: run each read's example and checks, judge pass/fail/inconclusive, keep the record `publish` gates on |
 | `src/vet.ts` | the shared rules a spec someone else wrote must pass: on pull, publish, load and in CI |
 | `src/registry.ts` | the registry service's client (`docs/REGISTRY.md`, wire contract `src/registry-api.ts`): `pull`, `search`, the bundled upgrade |
-| `src/publish.ts`, `src/share.ts` | what an upload sends and the scans before it (`publish` previews it); `shareOps` sends what the rules allow, signed; the heal-back |
+| `src/publish.ts`, `src/share.ts` | what an upload sends and the scans before it (`publish` previews it); `shareOps` sends what the rules allow, signed, after the clean replay nothing on record proved; the heal-back |
+| `src/review.ts` | why the registry holds a version for review: the fixed categories `/v1/stats` counts, and the words and `next` an uploader is shown; pure, the Worker bundles it |
 | `src/report.ts`, `src/background.ts` | reports of calls of registry versions, in the background, and `shutdown` (a library caller's bounded wait for them); an idle MCP server's verification of candidates |
 | `src/snapshots.ts`, `src/changes.ts`, `src/budget.ts` | a read's cache entry and watchers' baselines (keyed by args and session, never naming either); what changed between two answers; a site's request budget |
 | `src/registry-api.ts` | the wire contract with the registry service: endpoints' types, request signing, version hashing |
@@ -47,7 +51,7 @@ holds the evidence behind it, including the api-anything bugs that must not come
 | `src/serve.ts`, `src/openapi.ts` | `serve`: MCP over HTTP, REST endpoints that run the MCP tools' own handlers (`createToolset`), the token, Origin and Host guards; the OpenAPI 3.1 document (docs/SERVE.md) |
 | `src/jobs.ts` | an MCP call still running at its deadline answers with a job; identical calls join it |
 | `src/clients.ts` | `mcp --print-config`: how each MCP client adds the server, with absolute paths |
-| `registry/` | the registry service: a Cloudflare Worker with D1 (docs/REGISTRY.md) |
+| `registry/` | the registry service: a Cloudflare Worker with D1 (docs/REGISTRY.md); `registry/src/replay.ts` replays a version held only for a skipped clean replay |
 | `skills/api-anything/` | the agent skill: a short `SKILL.md` core, and `references/` for authoring and writes; it never restates a tool description or `--help` |
 
 ## Rules

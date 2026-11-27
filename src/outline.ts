@@ -5,7 +5,7 @@
  * assignments), and repeated HTML items that carry an example value.
  */
 import type { HTMLElement } from "node-html-parser";
-import { extractEmbedded, getPath, innerJson, parseBody, parseShown, tagsOf } from "./extract.js";
+import { extractEmbedded, getPath, innerJson, isHtmlType, parseBody, parseShown, tagsOf } from "./extract.js";
 import { suggestExtract } from "./learn.js";
 
 export type JsonOutline = {
@@ -300,9 +300,9 @@ function outlineLabels(root: HTMLElement): Record<string, string> {
 /** Outline a response body. `values` are the example values (matched case-insensitively). */
 export function outline(contentType: string, body: string, examples: string[]): Outline | undefined {
   const values = examples.map((v) => v.toLowerCase()).filter((v) => v.length >= 3);
-  if (!/html/i.test(contentType)) {
+  if (!isHtmlType(contentType)) {
     try {
-      const data = parseBody(body);
+      const data = parseBody(body, undefined, contentType);
       return data && typeof data === "object" ? { json: outlineJson(data, values) } : undefined;
     } catch {
       return undefined;

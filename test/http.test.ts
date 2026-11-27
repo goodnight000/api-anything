@@ -16,6 +16,8 @@ import {
   ReadWrites,
   resolver,
   send,
+  ZstdFrames,
+  zstdCodec,
 } from "../src/http.js";
 import type { Session } from "../src/session.js";
 import { type Operation, OperationSchema } from "../src/spec.js";
@@ -388,6 +390,275 @@ test("send: a zstd body that decodes past the cap is refused, not inflated", {
     minIntervalMs: 0,
   });
   assert.equal(r.body, '{"ok":true}');
+});
+
+/**
+ * Each text compressed into one zstd frame and flushed after it, so a decoder can read each piece as it
+ * comes; the frame's end rides on the last piece.
+ */
+async function zstdFlushed(texts: string[]): Promise<Buffer[]> {
+  const z = zlib.createZstdCompress();
+  let got: Buffer[] = [];
+  z.on("data", (b: Buffer) => got.push(b));
+  const pieces: Buffer[] = [];
+  for (const t of texts) {
+    z.write(t);
+    await new Promise<void>((r) => z.flush(() => r()));
+    await new Promise((r) => setImmediate(r));
+    pieces.push(Buffer.concat(got));
+    got = [];
+  }
+  // the frame's last block comes out when the readable side ends, which can be after the writable side
+  // finished (seen in CI: a last piece without it, read as a body that ends inside a frame)
+  const ended = new Promise<void>((r) => z.once("end", () => r()));
+  z.end();
+  await ended;
+  pieces[pieces.length - 1] = Buffer.concat([pieces.at(-1)!, ...got]);
+  return pieces;
+}
+
+const streamed = { "content-type": "text/event-stream", "content-encoding": "zstd" };
+
+test("send: a zstd event stream is decoded as it arrives, so the idle bound reads its lines and a cut keeps them", {
+  skip: !zlib.createZstdCompress && "Node 22.15 or newer has zstd",
+}, async () => {
+  const [event, ...pings] = await zstdFlushed([`data: {"n":1}\n\n`, ...Array(12).fill(": ping\n\n")]);
+  let timer: NodeJS.Timeout | undefined;
+  const fetchImpl = (async () =>
+    new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(event);
+          // heartbeats every half second: comments, which hold no stream open
+          timer = setInterval(() => (pings.length ? c.enqueue(pings.shift()) : clearInterval(timer)), 500);
+        },
+        cancel: () => clearInterval(timer),
+      }),
+      { status: 200, headers: streamed },
+    )) as unknown as typeof fetch;
+  const t0 = Date.now();
+  const r = await send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+    site: "zst",
+    fetchImpl,
+    minIntervalMs: 0,
+  });
+  const took = Date.now() - t0;
+  clearInterval(timer);
+  assert.ok(r.body.startsWith('data: {"n":1}\n\n: ping\n\n'), JSON.stringify(r.body.slice(0, 80)));
+  assert.match(r.truncated ?? "", /sent no event for 3 s/);
+  assert.ok(took < 3000 + 2000, `took ${took} ms: the heartbeats were read as events`);
+
+  // a finite one, compressed whole
+  const whole = zlib.zstdCompressSync(Buffer.from('event: result\ndata: {"a":1}\n\n'));
+  const done = await send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+    site: "zst",
+    fetchImpl: (async () => new Response(whole, { status: 200, headers: streamed })) as unknown as typeof fetch,
+    minIntervalMs: 0,
+  });
+  assert.equal(done.body, 'event: result\ndata: {"a":1}\n\n');
+  assert.equal(done.truncated, undefined);
+
+  // the bytes bound counts what it decodes to: a few KB that expand past the cap stop there
+  const bomb = zlib.zstdCompressSync(Buffer.alloc(2 * MAX_BODY_BYTES, ":"));
+  const capped = await send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+    site: "zst",
+    fetchImpl: (async () => new Response(bomb, { status: 200, headers: streamed })) as unknown as typeof fetch,
+    minIntervalMs: 0,
+  });
+  assert.match(capped.truncated ?? "", /passed the cap/);
+  assert.ok(capped.body.length <= MAX_BODY_BYTES);
+});
+
+/** A zstd skippable frame (magic 0x184D2A5n, little-endian, then its length): the standard lets a stream open with one. */
+const skippable = (n: number, payload = Buffer.from("metadata")) => {
+  const head = Buffer.alloc(8);
+  head.writeUInt32LE(0x184d2a50 + n, 0);
+  head.writeUInt32LE(payload.byteLength, 4);
+  return Buffer.concat([head, payload]);
+};
+
+test("send: a zstd answer that opens with a skippable frame is decoded, a stream as well as a whole body", {
+  skip: !zlib.zstdCompressSync && "Node 22.15 or newer has zstd",
+}, async () => {
+  const sent = (body: Buffer, type: string) =>
+    send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+      site: "zst",
+      fetchImpl: (async () =>
+        new Response(new Uint8Array(body), {
+          status: 200,
+          headers: { "content-type": type, "content-encoding": "zstd" },
+        })) as unknown as typeof fetch,
+      minIntervalMs: 0,
+    });
+  const event = 'data: {"a":1}\n\n';
+  for (const n of [0, 0xf]) {
+    const stream = await sent(
+      Buffer.concat([skippable(n), zlib.zstdCompressSync(Buffer.from(event))]),
+      "text/event-stream",
+    );
+    assert.equal(stream.body, event, `skippable 0x${n.toString(16)}`);
+    const whole = await sent(
+      Buffer.concat([skippable(n), zlib.zstdCompressSync(Buffer.from('{"ok":true}'))]),
+      "application/json",
+    );
+    assert.equal(whole.body, '{"ok":true}', `skippable 0x${n.toString(16)}`);
+  }
+});
+test("send: every frame of a zstd answer is decoded, a stream and a whole body; one that ends inside a frame is no answer", {
+  skip: !zlib.zstdCompressSync && "Node 22.15 or newer has zstd",
+}, async () => {
+  const sent = (body: Buffer, type: string) =>
+    send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+      site: "zst",
+      fetchImpl: (async () =>
+        new Response(new Uint8Array(body), {
+          status: 200,
+          headers: { "content-type": type, "content-encoding": "zstd" },
+        })) as unknown as typeof fetch,
+      minIntervalMs: 0,
+    });
+  const z = (s: string) => zlib.zstdCompressSync(Buffer.from(s));
+  const one = 'data: {"n":1}\n\n';
+  const two = 'data: {"n":2}\n\n';
+  // two frames, and two with a skippable one between them
+  for (const between of [Buffer.alloc(0), skippable(3)]) {
+    const stream = await sent(Buffer.concat([z(one), between, z(two)]), "text/event-stream");
+    assert.equal(stream.body, one + two);
+    assert.equal(stream.truncated, undefined);
+    const whole = await sent(Buffer.concat([z('{"ok":'), between, z("true}")]), "application/json");
+    assert.equal(whole.body, '{"ok":true}');
+  }
+  // a body that ends inside a frame, skippable or not, at its end: refused, never ok and short
+  for (const tail of [skippable(1).subarray(0, 10), z(two).subarray(0, 9)])
+    for (const type of ["text/event-stream", "application/json"])
+      await assert.rejects(
+        sent(Buffer.concat([z(type === "application/json" ? "{}" : one), tail]), type),
+        /ends inside a frame/,
+      );
+});
+
+test("ZstdFrames: the frames of a body come out whole however its bytes arrive", {
+  skip: !zlib.zstdCompressSync,
+}, () => {
+  const frames = [
+    zlib.zstdCompressSync(Buffer.from("first")),
+    zlib.zstdCompressSync(Buffer.alloc(300_000, "x")),
+    zlib.zstdCompressSync(Buffer.from("")),
+  ];
+  const body = Buffer.concat([skippable(0), frames[0]!, skippable(9), frames[1]!, frames[2]!]);
+  for (const size of [1, 2, 7, 4096, body.byteLength]) {
+    const split = new ZstdFrames();
+    const got: Buffer[] = [];
+    let at: Buffer[] = [];
+    for (let i = 0; i < body.byteLength; i += size)
+      for (const p of split.push(body.subarray(i, i + size))) {
+        at.push(p.bytes);
+        if (p.end) {
+          got.push(Buffer.concat(at));
+          at = [];
+        }
+      }
+    assert.equal(split.done, true, `pieces of ${size}`);
+    assert.deepEqual(got, frames, `pieces of ${size}`);
+  }
+});
+
+test("send: a stream cut at the size cap keeps what came before the cap, compressed or not, in one piece or many", {
+  skip: !zlib.zstdCompressSync && "Node 22.15 or newer has zstd",
+}, async () => {
+  const event = 'data: {"n":1}\n\n';
+  const big = Buffer.concat([Buffer.from(event), Buffer.alloc(2 * MAX_BODY_BYTES, ":")]);
+  const read = (piece: Buffer, headers: Record<string, string>) =>
+    send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+      site: "zst",
+      fetchImpl: (async () =>
+        new Response(
+          new ReadableStream({
+            start(c) {
+              c.enqueue(piece);
+              c.close();
+            },
+          }),
+          { status: 200, headers },
+        )) as unknown as typeof fetch,
+      minIntervalMs: 0,
+    });
+  for (const [what, piece, headers] of [
+    ["zstd", zlib.zstdCompressSync(big), streamed],
+    ["plain", big, { "content-type": "text/event-stream" }],
+  ] as const) {
+    const r = await read(piece, headers);
+    assert.match(r.truncated ?? "", /passed the cap/, what);
+    assert.ok(r.body.startsWith(event), `${what}: ${JSON.stringify(r.body.slice(0, 40))}`);
+    assert.ok(r.body.length <= MAX_BODY_BYTES, what);
+  }
+});
+test("send: a zstd stream read in many pieces adds no listener per piece", {
+  skip: !zlib.createZstdCompress && "Node 22.15 or newer has zstd",
+}, async () => {
+  const warned: string[] = [];
+  const onWarning = (w: Error) => warned.push(`${w.name}: ${w.message}`);
+  process.on("warning", onWarning);
+  try {
+    for (const count of [18, 40]) {
+      const texts = Array.from({ length: count }, (_, i) => `data: {"n":${i}}\n\n`);
+      const pieces = await zstdFlushed(texts);
+      const fetchImpl = (async () =>
+        new Response(
+          new ReadableStream({
+            async pull(c) {
+              const next = pieces.shift();
+              if (!next) return c.close();
+              // one piece at a time, each read on its own
+              await new Promise((r) => setTimeout(r, 2));
+              c.enqueue(next);
+            },
+          }),
+          { status: 200, headers: streamed },
+        )) as unknown as typeof fetch;
+      const r = await send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+        site: "zst",
+        fetchImpl,
+        minIntervalMs: 0,
+      });
+      assert.equal(r.body, texts.join(""), String(count));
+    }
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(
+      warned.filter((w) => /MaxListeners/.test(w)),
+      [],
+    );
+  } finally {
+    process.off("warning", onWarning);
+  }
+});
+
+test("send: a zstd answer this Node has no decoder for is an error that says so, never its compressed bytes", {
+  skip: !zlib.zstdCompressSync && "Node 22.15 or newer has zstd",
+}, async () => {
+  const body = zlib.zstdCompressSync(Buffer.from('data: {"a":1}\n\n'));
+  const saved = { ...zstdCodec };
+  zstdCodec.stream = undefined;
+  zstdCodec.sync = undefined;
+  try {
+    for (const type of ["text/event-stream", "application/json"])
+      await assert.rejects(
+        () =>
+          send(op({ readOnly: true }), { text: "a", tweet_id: "5" }, session, {
+            site: "zst",
+            fetchImpl: (async () =>
+              new Response(body, {
+                status: 200,
+                headers: { "content-type": type, "content-encoding": "zstd" },
+              })) as unknown as typeof fetch,
+            minIntervalMs: 0,
+          }),
+        /zstd-encoded.*no zstd decoder/,
+        type,
+      );
+  } finally {
+    Object.assign(zstdCodec, saved);
+  }
 });
 
 test("send against a local server: GET has no body, per-site pacing, timeout", async () => {

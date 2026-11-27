@@ -6,7 +6,8 @@
  * of a site from a browser profile waits for a person's yes (`ImportRefused` without one).
  */
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { addCookiesToProfile, browserAvailable, clearProfileSite, login } from "./browser.js";
+import { attachEndpoint, attached } from "./attach.js";
+import { addCookiesToProfile, browserAvailable, clearProfileSite, forgetAttachedSite, login } from "./browser.js";
 import { dropCaptures, profileDir } from "./heal.js";
 import { publicAddress } from "./http.js";
 import {
@@ -24,7 +25,10 @@ import {
   type ImportApproval,
   loadSession,
   loggedIn,
+  mayCarryAccount,
+  mergeCapture,
   parseSetCookie,
+  recordLogout,
   renewedSignIn,
   type Session,
   safeName,
@@ -32,6 +36,7 @@ import {
   sessionFile,
   signInCookies,
   siteOf,
+  UNASKED_COOKIE,
   withLock,
 } from "./session.js";
 import { clearCoolDown, listSites, loadSite } from "./store.js";
@@ -54,7 +59,28 @@ function siteOnHost(host: string): string | undefined {
  * ("linkedin.com", "www.linkedin.com") or a URL. A domain or URL on a known site's host is that
  * site; any other one is a new site named after its host.
  */
-export function resolveLoginTarget(target: string): { site: string; url: string; loginCookies?: string[] } {
+export function resolveLoginTarget(
+  target: string,
+  /**
+   * the name to keep a page's session under when no site has it yet: a learning the window clears the
+   * way for then reads it there (`loginHint`). A name whose spec or stored session is on another
+   * registrable domain is refused, before any window opens.
+   */
+  as?: string,
+): { site: string; url: string; loginCookies?: string[] } {
+  if (as !== undefined && /^https?:\/\//i.test(target)) {
+    const name = safeName(as);
+    const known = loadSite(name)?.site;
+    if (known && siteOf(new URL(known.baseUrl).hostname.toLowerCase()) !== hostOf(target))
+      throw new Error(`site "${name}" is ${known.baseUrl}, not on ${hostOf(target)}: a name holds one site`);
+    // a session with no spec is bound to its domains too: another one's sign-in would replace its jar
+    const held = known ? [] : sessionDomains(name);
+    if (held.length && !held.includes(hostOf(target)))
+      throw new Error(
+        `"${name}" holds a session for ${held.join(", ")}, not ${hostOf(target)}: a name holds one site. Give the page a name of its own, or log the old one out first: api-anything logout ${name}`,
+      );
+    return known ? { site: name, url: target, loginCookies: known.loginCookies } : { site: name, url: target };
+  }
   let url = target;
   if (!/^https?:\/\//i.test(target)) {
     const known = /^[a-z0-9][a-z0-9._-]*$/i.test(target) ? loadSite(target) : undefined;
@@ -72,6 +98,49 @@ export function resolveLoginTarget(target: string): { site: string; url: string;
   }
   return { site: host.replace(/^www\./, ""), url };
 }
+
+/**
+ * The registrable domains a stored session of `site` is on: its cookies' and the imports a person
+ * approved. None when there is no session, or it cannot be read (its own commands report that).
+ */
+function sessionDomains(site: string): string[] {
+  if (!existsSync(sessionFile(site))) return [];
+  try {
+    const s = loadSession(site);
+    const domains = [
+      ...s.cookies.map((c) => siteOf(c.domain.replace(/^\./, "").toLowerCase())),
+      ...(s.imports ?? []).map((a) => a.domain),
+    ];
+    return [...new Set(domains)].sort();
+  } catch {
+    return [];
+  }
+}
+
+/** A shell word as typed: quoted when it holds anything a shell reads (a URL's ? or &). */
+const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
+
+/**
+ * How a hint names the login of `site` for the page at `url`, so it can be followed as written: by the
+ * site's name once that resolves, else by the page with the name the learning that follows uses
+ * (`--site`; MCP: `url` beside `site`), so what the window keeps is stored where that learning reads it.
+ */
+export function loginHint(site: string, url: string): { cli: string; call: { site: string; url?: string } } {
+  let known = false;
+  try {
+    // a spec of that name: a name with no spec that looks like a domain would open that domain's home, not the page
+    known = !!loadSite(site) && resolveLoginTarget(site).site === site;
+  } catch {
+    // no site of that name yet
+  }
+  return known ? { cli: site, call: { site } } : pageLogin(site, url);
+}
+
+/** The login of the page at `url` itself, its session kept under `site`: whatever the site's baseUrl shows. */
+export const pageLogin = (site: string, url: string) => ({
+  cli: `${shellWord(url)} --site ${site}`,
+  call: { site, url },
+});
 
 /**
  * The hosts the user pre-approved for a browser import with no one at a terminal, for automation they
@@ -154,8 +223,18 @@ export async function guestCookieNames(
   fetchImpl: typeof fetch = siteFetch,
   refuse?: (url: string) => Promise<string | undefined>,
 ): Promise<string[] | undefined> {
+  const given = await guestCookieValues(url, fetchImpl, refuse);
+  return given && [...given.keys()].sort();
+}
+
+/** `guestCookieNames`, with the value each was given (the last one, when two hops set it). */
+export async function guestCookieValues(
+  url: string,
+  fetchImpl: typeof fetch = siteFetch,
+  refuse?: (url: string) => Promise<string | undefined>,
+): Promise<Map<string, string> | undefined> {
   const site = siteOf(new URL(url).hostname.toLowerCase());
-  const names = new Set<string>();
+  const names = new Map<string, string>();
   let at = url;
   try {
     for (let hop = 0; hop <= 5; hop++) {
@@ -167,7 +246,7 @@ export async function guestCookieNames(
       });
       for (const line of res.headers.getSetCookie()) {
         const c = parseSetCookie(line, at);
-        if (c && (c.expires < 0 || c.expires * 1000 > Date.now())) names.add(c.name); // not a deletion
+        if (c && (c.expires < 0 || c.expires * 1000 > Date.now())) names.set(c.name, c.value); // not a deletion
       }
       await res.body?.cancel();
       const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
@@ -179,7 +258,7 @@ export async function guestCookieNames(
   } catch {
     if (!names.size) return undefined; // no answer: nothing learned
   }
-  return [...names].sort();
+  return names;
 }
 
 /** Two lists of guest names as one: a name a signed-out visit was once given proves nothing, ever. */
@@ -196,10 +275,14 @@ export async function knownGuests(
   loginCookies?: string[],
   fetchImpl?: typeof fetch,
   refuse?: (url: string) => Promise<string | undefined>,
+  /** filled with what the signed-out visit was given, name to value */
+  given?: Map<string, string>,
 ): Promise<string[]> {
   const stored = loadSession(site).guestCookies;
   if (loginCookies?.length) return stored ?? [];
-  return union(stored, await guestCookieNames(url, fetchImpl, refuse));
+  const now = await guestCookieValues(url, fetchImpl, refuse);
+  for (const [k, v] of now ?? []) given?.set(k, v);
+  return union(stored, now && [...now.keys()]);
 }
 
 export interface Imported extends ImportedSession {
@@ -396,22 +479,124 @@ export async function reimportIfBrowser(
 }
 
 export type WindowLogin =
-  | { ok: true; cookies: StoredCookie[]; renewed: string[] }
+  /**
+   * `kept`: no sign-in, but the names of the cookies the visitor's choices set, added to the jar
+   * (`visitorChoices`); `account`: those of them that may carry an account (`mayCarryAccount`)
+   */
+  | { ok: true; cookies: StoredCookie[]; renewed: string[]; kept?: string[]; account?: string[] }
   | { ok: false; cookies: StoredCookie[]; reason: string };
+
+/**
+ * The cookies a window set that are the visitor's own answer to the page (a cookie-consent choice, a
+ * cleared challenge): a value at closing other than the one it had once the page had loaded
+ * (`loaded`), whether or not a signed-out visitor is given a cookie of that name (a consent cookie
+ * every visitor gets "pending", whose value the choice changes). Not an answer: a cookie the page load
+ * set that nothing changed since; one the site rotates on every load (`rotating`); an analytics,
+ * advertising or CSRF name (`UNASKED_COOKIE`); one that shows a sign-in (the sign-in path's).
+ */
+export function visitorChoices(
+  loaded: StoredCookie[],
+  closed: StoredCookie[],
+  guest: string[],
+  loginCookies?: string[],
+  rotating: string[] = [],
+): StoredCookie[] {
+  const key = (c: StoredCookie) => [c.name, c.domain.toLowerCase(), c.path, c.value].join("\0");
+  const had = new Set(loaded.map(key));
+  return closed.filter(
+    (c) =>
+      c.value &&
+      !had.has(key(c)) &&
+      !rotating.includes(c.name) &&
+      !UNASKED_COOKIE.test(c.name) &&
+      !signInCookies([c], loginCookies, guest).length,
+  );
+}
+
+/**
+ * The names of the cookies the site gives anew on every load: the page's load changed the value the
+ * window opened with, or a signed-out visit (`given`) got another value than the window's load did. A
+ * value the site gives every visitor alike (a consent kept "pending") is neither.
+ */
+export function rotatingCookies(opened: StoredCookie[], loaded: StoredCookie[], given: Map<string, string>): string[] {
+  const same = (a: StoredCookie, b: StoredCookie) =>
+    a.name === b.name && a.domain.toLowerCase() === b.domain.toLowerCase() && a.path === b.path;
+  return loaded
+    .filter((c) => {
+      const before = opened.find((o) => same(o, c));
+      return (before !== undefined && before.value !== c.value) || (given.has(c.name) && given.get(c.name) !== c.value);
+    })
+    .map((c) => c.name);
+}
+
+/** Chrome's longest cookie lifetime: what a kept cookie the site gave no expiry lives in the profile. */
+const KEPT_S = 400 * 24 * 60 * 60;
+
+/**
+ * What a window that kept something and saw no sign-in says it kept. `account`: the kept names that
+ * may carry an account (`mayCarryAccount`), which are never called a consent: a sign-in by a cookie
+ * name api-anything does not know looks the same.
+ */
+export const keptNote = (site: string, kept: string[], account: string[] = []) =>
+  account.length
+    ? `no sign-in seen; kept what the site set while the window was open (${kept.join(", ")}), and calls of ${site} now send it: ${account.join(", ")} may carry an account`
+    : `no sign-in seen; kept what the site set while the window was open (${kept.join(", ")}), and calls of ${site} now send it. It may record a cookie consent or a cleared challenge, or be a tracker api-anything does not know: it does not show that anyone chose anything`;
+
+/** The `next` of a window that kept something and saw no sign-in, for each thing the user may have done there. */
+export const keptNext = (site: string, account: string[], how: string) =>
+  account.length
+    ? `ask the user what they did in the window. If they answered a consent page or cleared a challenge, retry the call. If they signed in, api-anything did not recognize the sign-in cookie: list the one of ${account.join(", ")} that is it in ${site}'s spec loginCookies, then ${how}`
+    : `retry the call: what the window kept reaches it. If it meets the same page again, nothing kept answered it: ask the user to make the choice on the site's page, then ${how}. If the user signed in there and calls still say auth, ${site}'s login cookie is named like a visitor's: list its name in the spec's loginCookies, then ${how}`;
+
+/** What a window that counted answers, over MCP and on the CLI alike. `how`: how to open the window again. */
+export function windowAnswer(site: string, w: Extract<WindowLogin, { ok: true }>, how: string) {
+  return {
+    ok: true as const,
+    site,
+    source: "window",
+    cookies: cookieNames(w.cookies),
+    loggedIn: !w.kept,
+    renewed: w.renewed,
+    ...(w.kept
+      ? { kept: w.kept, warning: keptNote(site, w.kept, w.account), next: keptNext(site, w.account ?? [], how) }
+      : {}),
+  };
+}
 
 /**
  * The visible-window sign-in. It counts only when login cookies appear or change while the window is
  * open (guest names aside), since a profile that already held them proves nothing: they may be the
- * ones the site has signed out. Only then is the jar replaced; otherwise the stored session stays.
+ * ones the site has signed out. Only then is the jar replaced. With no sign-in, the cookies the
+ * visitor changed after the page loaded (`visitorChoices`: a consent answered) are added to the jar,
+ * and nothing else of the profile; with none of those either, the stored session stays.
  * `publicOnly`: an address an agent gave over MCP, whose probe asks only public addresses.
+ * Attached (API_ANYTHING_CDP), the window is a tab of api-anything's own context in that browser,
+ * started with the stored session where the profile would hold it, so the same rules see the same
+ * cookies; what is kept reaches the next attached runs from the jar.
  */
 export async function windowLogin(
   site: string,
   url: string,
-  o: { loginCookies?: string[]; waitForEnter?: boolean; publicOnly?: boolean } = {},
+  o: { loginCookies?: string[]; waitForEnter?: boolean; publicOnly?: boolean; signal?: AbortSignal } = {},
 ): Promise<WindowLogin> {
-  const guest = await knownGuests(site, url, o.loginCookies, undefined, o.publicOnly ? publicAddress : undefined);
-  const { opened, closed } = await login({ url, profileDir: profileDir(), waitForEnter: o.waitForEnter });
+  // an attached window that would be refused (nothing at the endpoint, a proxy set too) sends nothing to the site
+  if (attached()) await attachEndpoint();
+  const given = new Map<string, string>();
+  const guest = await knownGuests(
+    site,
+    url,
+    o.loginCookies,
+    undefined,
+    o.publicOnly ? publicAddress : undefined,
+    given,
+  );
+  const { opened, loaded, closed } = await login({
+    url,
+    profileDir: profileDir(),
+    waitForEnter: o.waitForEnter,
+    ...(o.signal ? { signal: o.signal } : {}),
+    ...(attached() ? { jar: loadSession(site).cookies } : {}),
+  });
   // the user had the site open: a challenge cleared there counts even with no sign-in
   clearCoolDown(site);
   const renewed = renewedSignIn(opened, closed, o.loginCookies, guest);
@@ -421,6 +606,31 @@ export async function windowLogin(
       saveSession(site, { ...s, cookies: closed, source: "window", guestCookies: union(s.guestCookies, guest) });
     });
     return { ok: true, cookies: closed, renewed };
+  }
+  const chosen = visitorChoices(loaded, closed, guest, o.loginCookies, rotatingCookies(opened, loaded, given));
+  if (chosen.length) {
+    mergeCapture(site, chosen);
+    // api-anything's own profile drops a cookie with no expiry when the browser closes, as it does after
+    // the window: one the window kept is given a lifetime there, so tiers 2 and 3 carry it as tier 1 does.
+    // Only those: the profile is no copy of the jar. Attached, the jar seeds every run.
+    const lasting = chosen.filter((c) => !(c.expires > 0));
+    if (lasting.length && !attached() && browserAvailable()) {
+      const until = Math.floor(Date.now() / 1000) + KEPT_S;
+      await addCookiesToProfile(
+        lasting.map((c) => ({ ...c, expires: until })),
+        profileDir(),
+      ).catch(() => {
+        // an open browser elsewhere, a locked profile: tier 1 still sends it
+      });
+    }
+    const kept = cookieNames(chosen);
+    return {
+      ok: true,
+      cookies: closed,
+      renewed: [],
+      kept,
+      account: kept.filter((n) => mayCarryAccount(n, o.loginCookies, guest)),
+    };
   }
   const held = cookieNames(signInCookies(opened, o.loginCookies, guest));
   const visitors = guest.filter((n) => closed.some((c) => c.name === n));
@@ -508,9 +718,13 @@ export async function logout(target: string): Promise<LoggedOut> {
   const session = withLock(file, () => {
     const had = existsSync(file);
     rmSync(file, { force: true });
+    // a run of this process or another that began before now writes none of what it brings back
+    recordLogout(site);
     return had;
   });
   dropCaptures();
+  // the next attached run starts from the empty jar anyway; one open now must not keep the sign-in meanwhile
+  if (domain && attached()) await forgetAttachedSite(domain).catch(() => {});
   if (!existsSync(profileDir())) return { site, session, profile: "none" };
   // which cookies are the site's is unknown: none only when the profile holds no sign-in of any site
   if (!domain)

@@ -284,7 +284,8 @@ export interface Plan {
  * The uploads of `ops` (all of the site's when empty), with the export's stripping and scans, the shared
  * rules, a live-secret scan no `public` name waives over the exact bytes sent, and the privacy checks.
  * `guest`: the cookie names a signed-out visit of the site is given now (`isPublic`). `strict`: each op's
- * `borderline`, in the warnings too.
+ * `borderline`, in the warnings too. `spec`: the site as the caller read it, so the upload is built from
+ * the very ops the caller ran (a clean replay), not from a later read of the store.
  */
 export function plan(
   name: string,
@@ -296,16 +297,17 @@ export function plan(
     as?: string;
     guest?: readonly string[];
     strict?: boolean;
+    spec?: Site;
   } = {},
 ): Plan {
   name = safeName(name);
-  const r = loadSite(name);
+  const r = o.spec ? { site: o.spec } : loadSite(name);
   if (!r) throw new Error(`no site "${name}"`);
   const wanted = o.ops?.length ? o.ops : r.site.operations.map((op) => op.name);
   for (const n of wanted)
     if (!r.site.operations.some((op) => op.name === n)) throw new Error(`no operation "${n}" on ${name}`);
   // the learner arranges the param examples to be ones the user chose to share (learnsite.ts)
-  const ex = exportSite(name, { keepExamples: true });
+  const ex = exportSite(name, { keepExamples: true, spec: r.site });
   // The user's own notes go only with their yes; without it, only notes that came from the registry
   const notes = o.consent ? siteNotes(name) : siteNotes(name, { from: "registry" });
   const session = loadSession(name);

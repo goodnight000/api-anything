@@ -158,6 +158,8 @@ export interface CoolDown {
   reason: string;
   /** the answer's HTTP status (451: refused to this network or region) */
   status?: number;
+  /** the op whose call met it: what can clear the wall depends on what that op's calls carry (wall.ts) */
+  op?: string;
 }
 
 interface State {
@@ -336,7 +338,7 @@ export const BLOCKED_COOL_MS = 10 * 60_000;
 
 export function coolDown(
   site: string,
-  c: Pick<CoolDown, "class" | "reason" | "status">,
+  c: Pick<CoolDown, "class" | "reason" | "status" | "op">,
   ms: number,
   now = Date.now(),
 ): void {
@@ -714,13 +716,14 @@ export const unconfirmedWrite = (r: WriteRecord) =>
  * A shareable copy: example values stripped from the stored request (param slots become `{name}`,
  * or null in a typed JSON leaf) and from params (unless `keepExamples`: a human confirmed they
  * are public), response shapes dropped (their keys can be user data), then scanned against this
- * machine's live session. `strict` adds what `borderlineCredentials` reports to the warnings.
+ * machine's live session. `strict` adds what `borderlineCredentials` reports to the warnings. `spec`: the
+ * site as the caller already read it.
  */
 export function exportSite(
   name: string,
-  o: { keepExamples?: boolean; strict?: boolean } = {},
+  o: { keepExamples?: boolean; strict?: boolean; spec?: Site } = {},
 ): { spec: Site; secrets: string[]; warnings: string[] } {
-  const r = loadSite(name);
+  const r = o.spec ? { site: o.spec } : loadSite(name);
   if (!r) throw new Error(`no site "${name}"`);
   const spec = structuredClone(r.site);
   // where this copy was pulled from, when an op was learned and its registry version are this machine's history

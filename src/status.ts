@@ -5,13 +5,26 @@
  */
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
+import { windowWhere } from "./attach.js";
 import { loadRecord, type Outcome, opHash } from "./checks.js";
 import { settingsFix, settingsProblem } from "./identity.js";
 import { strayLogin } from "./login.js";
+import { meansOf, nextStep, type ReviewCategory } from "./review.js";
 import { plaintextFiles, plaintextSessions, SealError, type Sealing, sealing } from "./seal.js";
 import { home } from "./session.js";
-import type { Operation } from "./spec.js";
-import { type CallRecord, coolList, loadCalls, loadHeals, loadSite, loadWrites, staleList, tierList } from "./store.js";
+import type { Operation, Site } from "./spec.js";
+import {
+  type CallRecord,
+  coolList,
+  loadCalls,
+  loadHeals,
+  loadSite,
+  loadWrites,
+  staleList,
+  tierList,
+  userSitesDir,
+} from "./store.js";
+import { coolStep, wallStep } from "./wall.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 /** fewer calls than this in a window say nothing about a trend */
@@ -40,6 +53,8 @@ export interface OpStatus {
   writes?: Partial<Record<"accepted" | "applied" | "mayHaveApplied" | "notApplied" | "notSent", number>>;
   calls?: { "24h"?: Window; "7d": Window; last: { at: string; class: string; tier?: number } };
   degraded?: string;
+  /** this install's upload of it, which the registry held for review: its version and why, by category */
+  review?: { hash: string; reasons: string[] };
 }
 
 export interface SiteStatus {
@@ -61,7 +76,8 @@ export interface Problem {
     | "write"
     | "plaintext"
     | "settings"
-    | "login";
+    | "login"
+    | "review";
   detail: string;
   next: string;
 }
@@ -152,13 +168,25 @@ function lowerTier(site: string, op: Operation | undefined, name: string, rememb
   return `${command} --max-tier ${minTier} tries tier ${minTier} again (an answer there forgets tier ${remembered})${fill}; if it fails the same way, the op needs the browser: re-learn it with api-anything add ${site} ${name} ...`;
 }
 
-/** The step a failing class asks for, as nextFor in execute.ts says it. */
-function stepFor(cls: string, site: string, name: string, write: boolean): string {
+/**
+ * The step a failing class asks for, as nextFor in execute.ts says it. `op` and `shared`: a block's
+ * step is what can reach the op's calls (wall.ts), as a call's is.
+ */
+function stepFor(
+  cls: string,
+  site: string,
+  name: string,
+  write: boolean,
+  op?: Operation,
+  shared?: Site["shared"],
+): string {
   switch (cls) {
     case "auth":
       return `ask the user to run: api-anything login ${site}; then retry once`;
     case "blocked":
-      return `ask the user to run api-anything login ${site} --window and clear the challenge in the window, then retry once`;
+      return op
+        ? wallStep(site, op, shared, { kind: "challenge" })!.next
+        : `ask the user to run api-anything login ${site} --window${windowWhere()} and clear the challenge in the window, then retry once`;
     case "rate":
       return "rate limited: wait a few minutes before the next call";
     case "drift":
@@ -192,14 +220,31 @@ function sitesWithState(now: number): string[] {
   } catch {
     // no verify has run
   }
+  // a site whose upload the registry held for review: the user's own specs only
+  try {
+    for (const f of readdirSync(userSitesDir())) {
+      if (!f.endsWith(".json") || names.has(f.slice(0, -5))) continue;
+      try {
+        if (loadSite(f.slice(0, -5))?.site.operations.some((o) => o.version?.status === "review"))
+          names.add(f.slice(0, -5));
+      } catch {
+        // a spec that does not load has nothing to say here
+      }
+    }
+  } catch {
+    // no spec of the user's own
+  }
   return [...names].sort();
 }
 
 /** One site's status, and its problems. `named`: every op is listed, not only those with something to say. */
 function siteStatus(name: string, now: number, named: boolean): { status: SiteStatus; problems: Problem[] } {
   let ops: Operation[] = [];
+  let shared: Site["shared"];
   try {
-    ops = loadSite(name)?.site.operations ?? [];
+    const spec = loadSite(name)?.site;
+    ops = spec?.operations ?? [];
+    shared = spec?.shared;
   } catch {
     // a spec that does not load still has its local records
   }
@@ -219,7 +264,7 @@ function siteStatus(name: string, now: number, named: boolean): { status: SiteSt
           ? "the site refuses this network or region (HTTP 451): no call changes that; tell the user"
           : cool.class === "rate"
             ? `rate limited: wait until ${iso(cool.until)}; only if the user asks, send one sooner with api-anything call ${name} <op> --force`
-            : `ask the user to run api-anything login ${name} --window (a login ends the wait), then retry once`,
+            : coolStep(name, cool.op ? byName.get(cool.op) : undefined, shared).next,
     });
   }
 
@@ -304,6 +349,18 @@ function siteStatus(name: string, now: number, named: boolean): { status: SiteSt
       });
     const heal = heals.get(opName);
     if (heal) s.lastHeal = heal;
+    if (op?.version?.status === "review") {
+      const categories = (op.version.review ?? []) as ReviewCategory[];
+      s.review = { hash: op.version.hash, reasons: categories };
+      const why = meansOf(categories);
+      problem({
+        op: opName,
+        problem: "review",
+        // the record is the upload's answer and nothing since: status asks the registry nothing
+        detail: `the registry held its upload (${op.version.hash.slice(0, 12)}) for review when it was shared: served only to this install until a maintainer approves it${why.length ? `, because ${why.join("; ")}` : ""}`,
+        next: `${nextStep(categories, { site: name, op })}. This is the registry's answer when it was shared; to see whether a maintainer decided since, run api-anything publish ${name} ${opName} --yes: the same version sent again changes nothing there and answers its status now`,
+      });
+    }
     const rec = record[opName];
     if (rec?.results?.length) {
       const outcome = verdict(rec.results);
@@ -315,7 +372,7 @@ function siteStatus(name: string, now: number, named: boolean): { status: SiteSt
           op: opName,
           problem: "verify",
           detail: `verify at ${rec.at}: ${failed.case} expects ${failed.expect}, and answered ${failed.got}`,
-          next: failed.next ?? stepFor(failed.got, name, opName, write),
+          next: failed.next ?? stepFor(failed.got, name, opName, write, op, shared),
         });
       }
     }
@@ -364,7 +421,7 @@ function siteStatus(name: string, now: number, named: boolean): { status: SiteSt
             ...(okBefore ? [`the last ok was at ${okBefore.at}`] : []),
             ...(deg && !deg.tier ? [deg.why] : []),
           ].join("; "),
-          next: `${stepFor(last.class, name, opName, write)}${healedSince ? `; if the heal at ${heal.at} broke it: api-anything revert ${name} ${opName}` : ""}`,
+          next: `${stepFor(last.class, name, opName, write, op, shared)}${healedSince ? `; if the heal at ${heal.at} broke it: api-anything revert ${name} ${opName}` : ""}`,
         });
       } else if (deg && !deg.tier) {
         const lastFail = day.findLast((c) => c.class !== "ok");

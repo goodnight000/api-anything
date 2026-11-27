@@ -95,7 +95,8 @@ export async function verifyCandidates(
         publicOnly: true,
       });
       ran++;
-      const outcome = outcomeOf(r.class);
+      // the site's consent step answered, not the candidate: nothing to report about the version
+      const outcome = r.wall ? undefined : outcomeOf(r.class);
       if (outcome) queueReport({ hash: job.hash, outcome, tier: 1, ms: r.ms });
     }
   } catch {

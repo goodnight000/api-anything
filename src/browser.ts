@@ -1,24 +1,58 @@
 /**
  * The browser layer: an installed Chromium (Google Chrome by default, or Brave, Edge, Chromium,
  * Vivaldi, Arc, or any `API_ANYTHING_BROWSER`) via playwright-core, one persistent profile per
- * process. Produces raw Exchanges for the learner (tier 3 / create / heal) and tier-2 page fetches.
+ * process; or, with `API_ANYTHING_CDP`, a context of api-anything's own in a browser the user runs.
+ * Produces raw Exchanges for the learner (tier 3 / create / heal) and tier-2 page fetches.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isIP } from "node:net";
 import { basename, join } from "node:path";
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
-import type { BrowserContext, Cookie, chromium, Dialog, Frame, Page, Request, Response, Route } from "playwright-core";
+import type {
+  Browser,
+  BrowserContext,
+  Cookie,
+  chromium,
+  Dialog,
+  Frame,
+  Page,
+  Request,
+  Response,
+  Route,
+} from "playwright-core";
+import {
+  ATTACH_MS,
+  AttachError,
+  attachEndpoint,
+  attached,
+  attachLock,
+  attachSetting,
+  lockRefused,
+  ownProfileRefused,
+} from "./attach.js";
 import { botWall } from "./classify.js";
 import { MAX_BODY_BYTES } from "./http.js";
+import { claim, lockPath } from "./lock.js";
 import { browserProxy, proxied } from "./proxy.js";
 import { SIGN_IN_AUTOCOMPLETE, SIGN_IN_REFUSAL } from "./secrets.js";
 import { home, siteOf, writePrivate } from "./session.js";
 import type { Request as Hop } from "./spec.js";
+import { carriesField, isEventStream, STREAM_IDLE_MS, STREAM_MAX_MS, type StreamCut, streamCut } from "./stream.js";
 import type { CaptureResult, Exchange, SeenDialog, StoredCookie, TriggerStep } from "./types.js";
 
-let current: { profileDir: string; headless: boolean; ctx: Promise<BrowserContext> } | undefined;
+let current: { key: string; ctx: Promise<BrowserContext>; close: () => Promise<void> } | undefined;
 let headlessUA: string | undefined;
 const originPages = new Map<string, OriginPage>();
+/** the contexts api-anything opened in an attached browser (API_ANYTHING_CDP) */
+const guests = new WeakSet<BrowserContext>();
+/** attached browsers api-anything is disconnecting from itself */
+const leaving = new WeakSet<Browser>();
+/** the pages a sign-in window shows, so a second window opens a page of its own */
+const windowPages = new WeakSet<Page>();
+/** each attached browser's hold on its lock (one process at a time) */
+const locks = new WeakMap<Browser, () => void>();
+/** how many times an attached browser went away on its own: a call that saw one says so */
+let losses = 0;
 
 // A browser locks a profile to one process. A long-lived process (the MCP server) releases it
 // after this much idle time (an agent's calls are seconds apart, so the browser would mostly
@@ -29,10 +63,11 @@ const LOCKED = /ProcessSingleton|profile (directory )?is already in use|Singleto
 
 /** Another process holds api-anything's browser profile. */
 export class ProfileInUse extends Error {
-  constructor(dir: string) {
-    super(
-      `the api-anything browser profile is in use by another process (an MCP server or another api-anything command): ${dir}`,
-    );
+  constructor(
+    dir: string,
+    message = `the api-anything browser profile is in use by another process (an MCP server or another api-anything command): ${dir}`,
+  ) {
+    super(message);
     this.name = "ProfileInUse";
   }
 }
@@ -189,8 +224,8 @@ export function browserChoice(): { name: string; bin: string } | undefined {
   return undefined;
 }
 
-/** Checked up front so callers can skip cleanly. */
-export const browserAvailable = (): boolean => !!browserChoice();
+/** Checked up front so callers can skip cleanly. An attached browser counts: attaching says what is wrong with it. */
+export const browserAvailable = (): boolean => attached() || !!browserChoice();
 
 // Default headless UA says "HeadlessChrome/<v>" and x.com answers 403. sec-ch-ua already
 // carries the browser's name, so only the UA string needs the fix.
@@ -238,7 +273,8 @@ export async function headlessUserAgent(): Promise<string> {
 
 /**
  * The process-wide persistent context. A different profileDir or headless mode closes the old one
- * first, since Chrome locks a profile to one running instance.
+ * first, since Chrome locks a profile to one running instance. With API_ANYTHING_CDP it is a context
+ * of api-anything's own in the attached browser instead, whatever the profileDir and mode.
  */
 export function openBrowser({
   profileDir,
@@ -247,14 +283,31 @@ export function openBrowser({
   profileDir: string;
   headless?: boolean;
 }): Promise<BrowserContext> {
-  if (current && current.profileDir === profileDir && current.headless === headless) {
+  const cdp = attachSetting();
+  const key = cdp ? `attached ${cdp}` : `${headless ? "headless" : "headed"} ${profileDir}`;
+  if (current && current.key === key) {
     if (users === 0) scheduleIdleClose();
     return current.ctx;
   }
   clearTimeout(idleTimer);
   const prev = current;
+  if (cdp) {
+    const ctx = (async () => {
+      if (prev) await prev.close();
+      const c = await guest();
+      const gone = () => {
+        if (current?.ctx !== ctx) return;
+        current = undefined;
+        originPages.clear();
+      };
+      c.on("close", gone);
+      c.browser()?.on("disconnected", gone);
+      return c;
+    })();
+    return track({ key, ctx, close: () => leave(ctx) });
+  }
   const ctx = (async () => {
-    if (prev) await closeContext(prev.ctx);
+    if (prev) await prev.close();
     if (headless) headlessUA ??= await headlessUserAgent();
     const proxy = browserProxy();
     const c = await launch(profileDir, {
@@ -275,7 +328,13 @@ export function openBrowser({
     });
     return c;
   })();
-  current = { profileDir, headless, ctx };
+  return track({ key, ctx, close: () => closeContext(ctx) });
+}
+
+/** Make `entry` the process's browser, idle-closed once it is up and unused, forgotten if it fails. */
+function track(entry: NonNullable<typeof current>): Promise<BrowserContext> {
+  const { ctx } = entry;
+  current = entry;
   void ctx.then(
     () => {
       if (users === 0 && current?.ctx === ctx) scheduleIdleClose();
@@ -285,6 +344,191 @@ export function openBrowser({
     },
   );
   return ctx;
+}
+
+const firstLine = (e: unknown) => (e as Error).message.split("\n")[0]!;
+
+/**
+ * Attach to the browser API_ANYTHING_CDP names, and open a context of api-anything's own in it. The
+ * user's tabs, cookies, storage and service workers are in their default context, never in this one,
+ * and what api-anything installs on a context (routes, the socket guard, the service-worker block)
+ * reaches its own pages only. Throws AttachError when nothing of the call can have been sent.
+ */
+async function guest(): Promise<BrowserContext> {
+  const endpoint = await attachEndpoint();
+  const { host } = new URL(endpoint);
+  // One process at a time, as with the profile: another DevTools client takes this one's tabs for the
+  // browser's own and answers their dialogs (seen: a confirm a write's learning accepts, dismissed).
+  const file = attachLock(host);
+  const release = await claim(file, LOCK_WAIT_MS).catch((e) => {
+    throw lockRefused(host, lockPath(file), e);
+  });
+  if (!release)
+    throw new ProfileInUse(
+      host,
+      `the browser at ${host} (API_ANYTHING_CDP) is in use by another api-anything process (an MCP server or another api-anything command)`,
+    );
+  const { chromium } = await import("playwright-core");
+  let browser: Browser;
+  try {
+    // noDefaults: Playwright leaves the user's own context as it is (no emulated media, no downloads policy)
+    browser = await chromium.connectOverCDP(endpoint, { timeout: ATTACH_MS, noDefaults: true });
+  } catch (e) {
+    release();
+    throw new AttachError(
+      `could not attach to the browser at API_ANYTHING_CDP: ${firstLine(e)}`,
+      "check that the browser is running with --remote-debugging-port, or unset API_ANYTHING_CDP",
+    );
+  }
+  locks.set(browser, release);
+  browser.on("disconnected", () => {
+    release();
+    if (!leaving.has(browser)) losses++;
+  });
+  try {
+    // A service worker's fetches bypass routing (so write interception): in a fresh context none is registered, and none can be.
+    const c = await browser.newContext({ serviceWorkers: "block", viewport: null });
+    guests.add(c);
+    return c;
+  } catch (e) {
+    leaving.add(browser);
+    await within(browser.close(), undefined);
+    throw new AttachError(
+      `the browser at API_ANYTHING_CDP would not open a context for api-anything: ${firstLine(e)}`,
+      "attach to a Chromium browser, or unset API_ANYTHING_CDP",
+    );
+  }
+}
+
+/** Close api-anything's own context (its tabs only), then disconnect: the browser keeps running. */
+async function leave(ctx: Promise<BrowserContext>): Promise<void> {
+  const c = await ctx.catch(() => undefined);
+  const browser = c?.browser();
+  if (!c || !browser) return;
+  leaving.add(browser);
+  await within(c.close(), undefined);
+  await within(browser.close(), undefined);
+  // the disconnect lets go of it too, unless the browser did not answer
+  locks.get(browser)?.();
+}
+
+/** A run in api-anything's context of an attached browser, by the cookies of one site it was seeded with. */
+interface Carry {
+  site: string;
+  /** the cookies put in, or "none" for a run that carries no stored cookies */
+  key: string;
+  runs: number;
+  /** the site cleared and the cookies put in */
+  ready: Promise<void>;
+  freed: Promise<void>;
+  free: () => void;
+}
+/** per attached context, per site: the runs in flight and what they were seeded with */
+const carrying = new WeakMap<BrowserContext, Map<string, Carry>>();
+
+/** A registrable domain and every host under it, as a cookie's domain names one. */
+const under = (site: string) => new RegExp(`(^|\\.)${site.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
+/**
+ * Put into api-anything's context of an attached browser what a run may carry, and nothing else of
+ * its site: the site's cookies are cleared, then `jar`'s are added (undefined: a run that may carry
+ * none). The site is the registrable domain of `url` and of each cookie put in, the scope a run's
+ * cookies are read back in. The context is shared by the process's runs, so one seeded otherwise
+ * waits (up to `waitMs`, then ProfileInUse) for those in flight on the same site to end: clearing
+ * for it would take their cookies. One seeded alike joins them, as in api-anything's own profile.
+ * Returns what the run calls when it ends. In api-anything's own profile nothing happens: it holds
+ * the jar already.
+ */
+async function seed(ctx: BrowserContext, url: string, jar: StoredCookie[] | undefined, waitMs: number) {
+  if (!guests.has(ctx)) return () => {};
+  const now = Date.now() / 1000;
+  const live = (jar ?? []).filter((c) => !(c.expires > 0 && c.expires <= now));
+  // everything the browser stores of a cookie: two runs share a context only when all of it is equal
+  const key = jar
+    ? JSON.stringify(
+        live
+          .map((c) => [
+            c.name,
+            c.domain.toLowerCase(),
+            c.path || "/",
+            c.value,
+            c.expires,
+            c.httpOnly,
+            c.secure,
+            c.sameSite ?? "",
+          ])
+          .map((x) => JSON.stringify(x))
+          .sort(),
+      )
+    : "none";
+  const host = (d: string) => d.replace(/^\./, "").toLowerCase();
+  const sites = [...new Set([new URL(url).hostname, ...live.map((c) => c.domain)].map((h) => siteOf(host(h))))];
+  const held = carrying.get(ctx) ?? new Map<string, Carry>();
+  carrying.set(ctx, held);
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const other = sites.map((s) => held.get(s)).find((c) => c && c.key !== key);
+    if (!other) break;
+    const left = until - Date.now();
+    const ended = other.freed.then(() => true);
+    const freed = left > 0 && (await within(ended, false, left));
+    if (!freed)
+      throw new ProfileInUse(
+        other.site,
+        `api-anything's context in the attached browser (API_ANYTHING_CDP) stayed in use by another call to ${other.site} that carries other cookies`,
+      );
+  }
+  const fresh = sites.filter((s) => !held.has(s));
+  const ready = (async () => {
+    for (const s of fresh) await ctx.clearCookies({ domain: under(s) });
+    // one at a time: the browser refuses a whole batch for one cookie it will not take
+    for (const c of live)
+      if (fresh.includes(siteOf(host(c.domain)))) await ctx.addCookies([toPlaywright(c)]).catch(() => {});
+  })();
+  for (const site of fresh) {
+    let free = () => {};
+    const freed = new Promise<void>((r) => (free = r));
+    held.set(site, { site, key, runs: 0, ready, freed, free });
+  }
+  const mine = sites.map((s) => held.get(s)!);
+  for (const c of mine) c.runs++;
+  let ended = false;
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    for (const c of mine)
+      if (--c.runs === 0) {
+        if (held.get(c.site) === c) held.delete(c.site);
+        c.free();
+      }
+  };
+  try {
+    await Promise.all(mine.map((c) => c.ready));
+  } catch (e) {
+    end();
+    throw e;
+  }
+  return end;
+}
+
+/**
+ * Attached: take `site`'s cookies out of api-anything's context in the browser, if one is open
+ * (`logout`). A run being seeded is let finish first, so nothing it puts in comes after. The user's
+ * own context is not touched.
+ */
+export async function forgetAttachedSite(site: string): Promise<void> {
+  const ctx = current?.key.startsWith("attached ") ? await current.ctx.catch(() => undefined) : undefined;
+  if (!ctx || !guests.has(ctx)) return;
+  const s = siteOf(site.toLowerCase());
+  await Promise.allSettled([...(carrying.get(ctx)?.values() ?? [])].filter((c) => c.site === s).map((c) => c.ready));
+  await ctx.clearCookies({ domain: under(s) });
+}
+
+/** What a call that saw an attached browser go away throws: the reason first, of the same kind. */
+function lost(e: unknown, before: number): unknown {
+  if (losses === before || e instanceof AttachError) return e;
+  const message = `the attached browser (API_ANYTHING_CDP) went away during the call: ${firstLine(e)}`;
+  return e instanceof PageUnreachable ? new PageUnreachable(message) : new Error(message);
 }
 
 /**
@@ -318,7 +562,7 @@ export async function closeBrowser(): Promise<void> {
   const c = current;
   current = undefined;
   originPages.clear();
-  if (c) await closeContext(c.ctx);
+  if (c) await c.close();
 }
 
 /**
@@ -361,6 +605,7 @@ export async function profileCookies({
   url: string;
   profileDir: string;
 }): Promise<StoredCookie[]> {
+  if (attached()) throw ownProfileRefused("reading the profile's cookies");
   const release = hold();
   try {
     const ctx = await openBrowser({ profileDir });
@@ -370,25 +615,26 @@ export async function profileCookies({
   }
 }
 
+// Playwright wants a domain that starts with a dot or an exact host; a leading-dot domain plus path is safe.
+const toPlaywright = (c: StoredCookie) => ({
+  name: c.name,
+  value: c.value,
+  domain: c.domain,
+  path: c.path || "/",
+  expires: c.expires > 0 ? c.expires : undefined,
+  httpOnly: c.httpOnly,
+  secure: c.secure,
+  sameSite: c.sameSite,
+});
+
 /** Put imported cookies into api-anything's own Chrome profile, so tier 2/3 and heals are logged in too. */
 export async function addCookiesToProfile(cookies: StoredCookie[], profileDir: string): Promise<void> {
+  if (attached()) throw ownProfileRefused("putting cookies into the profile");
   if (!cookies.length) return;
   const release = hold();
   try {
     const ctx = await openBrowser({ profileDir });
-    // Playwright wants a domain that starts with a dot or an exact host; a leading-dot domain plus path is safe.
-    await ctx.addCookies(
-      cookies.map((c) => ({
-        name: c.name,
-        value: c.value,
-        domain: c.domain,
-        path: c.path || "/",
-        expires: c.expires > 0 ? c.expires : undefined,
-        httpOnly: c.httpOnly,
-        secure: c.secure,
-        sameSite: c.sameSite,
-      })),
-    );
+    await ctx.addCookies(cookies.map(toPlaywright));
   } finally {
     release();
   }
@@ -402,6 +648,8 @@ export async function addCookiesToProfile(cookies: StoredCookie[], profileDir: s
  * answers whether the storage was.
  */
 export async function clearProfileSite(site: string, profileDir: string, origins: string[] = []): Promise<boolean> {
+  // the attached browser's cookies and storage are the user's, and never cleared
+  if (attached()) throw ownProfileRefused("clearing the site from the profile");
   const release = hold();
   try {
     const ctx = await openBrowser({ profileDir });
@@ -441,8 +689,9 @@ export async function clearProfileSite(site: string, profileDir: string, origins
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-// Binary resources: their bodies are never useful to the learner and are not valid UTF-8. A stream's never ends.
-const NO_BODY = new Set(["image", "media", "font", "stylesheet", "eventsource", "websocket"]);
+// Binary resources: their bodies are never useful to the learner and are not valid UTF-8. A WebSocket's
+// messages are not a body. An event stream's is read as it arrives (streamTap), to a bound.
+const NO_BODY = new Set(["image", "media", "font", "stylesheet", "websocket"]);
 const QUIET_MS = 500;
 // Streams never finish; a request open this long is a long poll or a hung tracker, not the data.
 const LONG_LIVED = new Set(["eventsource", "websocket"]);
@@ -629,6 +878,157 @@ async function tap(
   };
 }
 
+/** One event stream a page is receiving, as its DevTools session reports it. */
+export interface Streaming {
+  url: string;
+  method: string;
+  chunks: Buffer[];
+  bytes: number;
+  /** when its response came, and when the last piece carrying a field did (stream.ts carriesField) */
+  start: number;
+  last: number;
+  ended: boolean;
+  /** the browser answered the ask to stream it, with what it had buffered: before that, an end says nothing */
+  ready: boolean;
+  /** the browser would not hand its body over as it streams: Playwright's own read is the fallback */
+  unread?: boolean;
+  /** taken by an exchange */
+  claimed?: boolean;
+}
+
+/**
+ * Keep a piece of a stream up to `MAX_BODY_BYTES`, and answer the part kept: a piece that crosses the
+ * cap keeps what came before it, and the stream is marked as past the cap (`bytes` infinite) from then on.
+ */
+export function keepPiece(s: Streaming, buf: Buffer): Buffer {
+  if (s.bytes === Number.POSITIVE_INFINITY) return buf.subarray(0, 0);
+  const room = MAX_BODY_BYTES - s.bytes;
+  const kept = buf.byteLength > room ? buf.subarray(0, room) : buf;
+  if (kept.byteLength) s.chunks.push(kept);
+  s.bytes = buf.byteLength > room ? Number.POSITIVE_INFINITY : s.bytes + buf.byteLength;
+  return kept;
+}
+
+/**
+ * A page's event streams, read as they arrive on a DevTools session of the run's own: Playwright's
+ * `text()` of a response settles only once its body has ended, which a stream may never do, and it
+ * never reads an EventSource's. Each stream's pieces are kept up to `MAX_BODY_BYTES`; the page itself
+ * is not touched and gets every byte as before.
+ */
+async function streamTap(ctx: BrowserContext, page: Page) {
+  const cdp = await ctx.newCDPSession(page);
+  const methods = new Map<string, string>();
+  const streams = new Map<string, Streaming>();
+  const decoders = new Map<string, TextDecoder>();
+  const add = (id: string, data: string | undefined) => {
+    const s = streams.get(id);
+    if (!s || !data) return;
+    const kept = keepPiece(s, Buffer.from(data, "base64"));
+    if (kept.byteLength && carriesField(decoders.get(id)!.decode(kept, { stream: true }))) s.last = Date.now();
+  };
+  cdp.on("Network.requestWillBeSent", (e) => void methods.set(e.requestId, e.request.method));
+  cdp.on("Network.responseReceived", (e) => {
+    const method = methods.get(e.requestId) ?? "GET";
+    if (!isEventStream(e.response.mimeType) && !isEventStream(e.response.headers["content-type"])) return;
+    const s: Streaming = {
+      url: e.response.url,
+      method,
+      chunks: [],
+      bytes: 0,
+      start: Date.now(),
+      last: Date.now(),
+      ended: false,
+      ready: false,
+      claimed: false,
+    };
+    streams.set(e.requestId, s);
+    decoders.set(e.requestId, new TextDecoder());
+    cdp.send("Network.streamResourceContent", { requestId: e.requestId }).then(
+      (r) => {
+        add(e.requestId, r.bufferedData);
+        s.ready = true;
+      },
+      () => {
+        s.unread = true;
+        s.ready = true;
+      },
+    );
+  });
+  cdp.on("Network.dataReceived", (e) => add(e.requestId, e.data));
+  const done = ({ requestId }: { requestId: string }) => {
+    methods.delete(requestId);
+    const s = streams.get(requestId);
+    if (s) s.ended = true;
+  };
+  cdp.on("Network.loadingFinished", done);
+  cdp.on("Network.loadingFailed", done);
+  await cdp.send("Network.enable");
+  return {
+    /** the stream answering this request, once the session has seen its response (up to a second later) */
+    async find(method: string, url: string): Promise<Streaming | undefined> {
+      for (const end = Date.now() + 1000; Date.now() < end; await sleep(20))
+        for (const s of streams.values())
+          if (s.claimed === false && s.method === method && s.url === url) {
+            s.claimed = true;
+            return s;
+          }
+      return undefined;
+    },
+    /** let go of a stream's pieces once read */
+    drop(s: Streaming) {
+      for (const [id, x] of streams)
+        if (x === s) {
+          streams.delete(id);
+          decoders.delete(id);
+        }
+    },
+  };
+}
+type StreamTap = Awaited<ReturnType<typeof streamTap>>;
+
+/**
+ * Read a tapped stream until it ends or a bound (stream.ts) stops it, or `stop` resolves (the run is
+ * done with it), or `until`, the run's deadline, comes. The body is what arrived, the bound its
+ * `truncated`; undefined when the browser would not stream it after all.
+ */
+export async function readTapped(
+  s: Streaming,
+  until: number,
+  stop: Promise<unknown>,
+): Promise<{ body: string; truncated?: string } | undefined> {
+  let stopped = false;
+  void stop.then(() => (stopped = true));
+  let cut: StreamCut | undefined;
+  for (;;) {
+    const now = Date.now();
+    if (s.unread) return undefined;
+    // the cap before the end: a stream that ended after passing it was still read only in part
+    if (s.bytes === Number.POSITIVE_INFINITY) cut = "bytes";
+    else if (s.ended && s.ready) break;
+    else if (stopped || now >= until) cut = "ended";
+    else if (now - s.start >= STREAM_MAX_MS) cut = "time";
+    else if (now - s.last >= STREAM_IDLE_MS) cut = "idle";
+    if (cut) break;
+    await sleep(50);
+  }
+  return {
+    body: Buffer.concat(s.chunks).toString("utf8"),
+    ...(cut ? { truncated: streamCut(cut, Date.now() - s.start) } : {}),
+  };
+}
+/**
+ * Leave a page for about:blank in an attached browser, where the back/forward cache is on (a browser
+ * api-anything launches has it off): a document left by a plain navigation is kept, frozen, and what
+ * its pagehide handler sends can come after the run has stopped waiting for it (seen: a handler that
+ * takes 400 ms). Replaced, its history entry is gone, so it cannot be kept and it unloads first.
+ */
+async function replaceWithBlank(p: Page): Promise<void> {
+  const left = p.waitForURL("about:blank", { timeout: SEAL_MS });
+  // the navigation ends the call it starts: its rejection says nothing
+  void p.evaluate(() => location.replace("about:blank")).catch(() => {});
+  await left;
+}
+
 export interface TriggerOptions {
   url: string;
   steps?: TriggerStep[];
@@ -659,6 +1059,8 @@ export interface TriggerOptions {
   settleMs?: number;
   /** overall budget; also the per-action Playwright timeout (default TRIGGER_BUDGET_MS) */
   timeoutMs?: number;
+  /** attached (API_ANYTHING_CDP) only: the stored cookies the run may carry, put into api-anything's context first */
+  jar?: StoredCookie[];
 }
 
 /**
@@ -666,6 +1068,15 @@ export interface TriggerOptions {
  * bundled specs' step waits add up to 7 s at most, and a test holds every one of them to a third of this.
  */
 export const TRIGGER_BUDGET_MS = 30_000;
+
+/** How long a soft navigation is given to show its first request or a new address before the page is taken for unrouted. */
+const SOFT_ROUTE_GRACE_MS = 1000;
+
+/** Whether a failed load of `url` says another navigation to that same address interrupted it. */
+export function takenOver(message: string, url: string): boolean {
+  const other = /interrupted by another navigation to "([^"]+)"/.exec(message)?.[1];
+  return !!other && URL.canParse(other) && URL.canParse(url) && new URL(other).href === new URL(url).href;
+}
 
 /** A page load that treats "this URL is a download" as loaded (the request is still captured). */
 async function goto(page: Page, url: string, referer?: string): Promise<void> {
@@ -741,14 +1152,29 @@ function requestBody(req: Request): string | undefined {
 
 /** Load the trigger in the browser and return every exchange it caused, with bodies and cookies. */
 export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
+  const before = losses;
+  try {
+    return await trigger(o);
+  } catch (e) {
+    throw lost(e, before);
+  }
+}
+
+async function trigger(o: TriggerOptions): Promise<CaptureResult> {
   const timeout = o.timeoutMs ?? TRIGGER_BUDGET_MS;
   const deadline = Date.now() + timeout;
-  const release = hold();
+  const using = hold();
+  let uncarry = () => {};
+  const release = () => {
+    uncarry();
+    using();
+  };
   let ctx: BrowserContext;
   let page: Page;
   let tabs: Tabs | undefined;
   try {
     ctx = await openBrowser(o);
+    uncarry = await seed(ctx, o.url, o.jar, Math.max(0, deadline - Date.now()));
     // a guarded run does not start without the browser's record of who opens which tab
     if (o.intercept) tabs = await tabsOf(ctx);
     page = await ctx.newPage();
@@ -845,6 +1271,15 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   };
   page.on("dialog", onDialog);
 
+  /** each page of the run's stream tap, once attached (undefined when that failed) */
+  const streamTaps = new Map<Page, Promise<StreamTap | undefined>>();
+  const watchStreams = (p: Page) => {
+    if (!streamTaps.has(p))
+      streamTaps.set(
+        p,
+        streamTap(ctx, p).catch(() => undefined),
+      );
+  };
   // This run's pages: its own and any popup they open. The context is shared with concurrent runs.
   const own = new Set<Page>([page]);
   const ownerOf = (req: Request): Page | undefined => {
@@ -873,6 +1308,7 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     if ((opener && own.has(opener)) || (await stray(p))) {
       own.add(p);
       cover(p);
+      watchStreams(p);
       p.on("dialog", onDialog);
     }
     return own.has(p);
@@ -955,16 +1391,46 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
   const onDone = (req: Request) => {
     if (pending.delete(req)) lastActivity = Date.now();
   };
+  /** event streams being read, each to its own bound (stream.ts), and how to stop each one sooner */
+  const streamReads: Promise<unknown>[] = [];
+  const streamStops = new Map<Exchange, () => void>();
+  const readStream = async (res: Response, ex: Exchange): Promise<{ body?: string; truncated?: string }> => {
+    let stop = () => {};
+    const stopped = new Promise<void>((r) => (stop = r));
+    streamStops.set(ex, stop);
+    const owner = ownerOf(res.request());
+    const t = owner && (await streamTaps.get(owner));
+    const s = await t?.find(res.request().method(), res.url());
+    const tapped = s && (await readTapped(s, deadline, stopped));
+    if (s) t!.drop(s);
+    if (tapped) return tapped;
+    // Playwright's own read buffers the whole body with no cap on its size (a frame of another site's
+    // process streams past the page's session): no stream is read that way, and the exchange says so
+    return { truncated: streamCut("unread", 0) };
+  };
   // Bodies must be read here: after the next navigation the browser discards them.
   const onResponse = (res: Response) => {
     if (!mine(res.request())) return;
     const ex = record(res.request());
+    // a stream is not "still loading": it is read on its own, to its bound
+    const streamed = isEventStream(res.headers()["content-type"]);
+    if (streamed && pending.delete(res.request())) lastActivity = Date.now();
     const read = (async () => {
       const headers = await res.allHeaders().catch(() => res.headers());
+      const contentType = headers["content-type"] ?? "";
+      if (streamed) {
+        const { body, truncated } = await readStream(res, ex);
+        ex.response = { status: res.status(), headers, body, contentType, ...(truncated ? { truncated } : {}) };
+        return;
+      }
       const body = NO_BODY.has(ex.resourceType) ? undefined : await res.text().catch(() => undefined);
-      ex.response = { status: res.status(), headers, body, contentType: headers["content-type"] ?? "" };
+      ex.response = { status: res.status(), headers, body, contentType };
     })();
     bodies.set(ex, read);
+    if (streamed) {
+      streamReads.push(read.catch(() => {}));
+      return;
+    }
     // a body its document outlives by 2 s is not coming (Playwright never settles it)
     const gone = nextDoc.then(() => sleep(2000));
     bounded(Promise.race([read, gone]));
@@ -1089,13 +1555,17 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       const tapOf = (p: Page) => within(Promise.resolve(taps.get(p)), undefined);
       const emptied = new Set<Page>();
       for (const end = Date.now() + 3 * SEAL_MS; Date.now() < end; ) {
+        // an attached browser that went away has no tab left to empty, and reports none closing
+        if (guests.has(ctx) && !ctx.browser()?.isConnected()) break;
         await within(Promise.all([...adopting, ...taps.values()]), []);
         const fresh = [...own].filter((p) => !emptied.has(p) && !p.isClosed());
         for (const p of fresh) {
           emptied.add(p);
           // A round trip through the new document, then (in `answered`) through the browser:
           // whatever the old one sent as it unloaded has been paused and failed before either returns.
-          const blank = p.goto("about:blank", { timeout: SEAL_MS }).then(() => true);
+          const blank = (guests.has(ctx) ? replaceWithBlank(p) : p.goto("about:blank", { timeout: SEAL_MS })).then(
+            () => true,
+          );
           if (await within(blank, false))
             await within(
               p.evaluate(() => 0),
@@ -1123,6 +1593,9 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
     if (intercept) dropSocketSends = await guardSockets(ctx, (ex) => intercept(ex, acting));
     // in place before the first document, so that what it defers (fetchLater) passes through it
     cover(page);
+    // and so is the stream tap, so that a stream the first document opens is read from its start
+    watchStreams(page);
+    await within(Promise.resolve(streamTaps.get(page)), undefined);
     if (intercept && !(await within(Promise.resolve(taps.get(page)), undefined)))
       throw new Error("could not attach the request guard to the page");
     if (o.softFrom) {
@@ -1145,10 +1618,23 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
         }
       }, o.url);
       await within(routing, undefined);
+      // A route's first request can lag its click (a handler that waits, a busy machine), and a page that
+      // looks quiet at once has not shown yet whether it routed: taken for unrouted, it gets a second
+      // load of the same address, which the link's own navigation then interrupts.
+      const shown = Math.min(deadline, Date.now() + SOFT_ROUTE_GRACE_MS);
+      while (Date.now() < shown && exchanges.length === before && page.url() === from) await sleep(50);
       await idle(5000);
       // ponytail: "fired anything" is the routed signal; a page whose analytics fire on pushState fools it.
       const routed = exchanges.slice(before).some((e) => ["xhr", "fetch", "document"].includes(e.resourceType));
-      if (!routed) await goto(page, o.url, from);
+      if (!routed)
+        await goto(page, o.url, from).catch(async (e: Error) => {
+          // a navigation of the page's own that began later still and took this load over: it is on its
+          // way to the same address, so that load is the one to wait for
+          if (!takenOver(e.message, o.url)) throw e;
+          await page.waitForLoadState("domcontentloaded").catch((x: Error) => {
+            throw new PageUnreachable(x.message);
+          });
+        });
     } else {
       await goto(page, o.url);
     }
@@ -1189,6 +1675,13 @@ export async function runTrigger(o: TriggerOptions): Promise<CaptureResult> {
       }
     })();
     await Promise.race([settled, grace]);
+    // Streams are read to their own bounds. With a match only the op's own is waited for: the others
+    // stop here, with what they sent so far.
+    for (let n = -1; n !== streamReads.length; ) {
+      n = streamReads.length;
+      for (const [ex, stop] of streamStops) if (o.match && !o.match(ex)) stop();
+      await Promise.all(streamReads);
+    }
     // Tokens an SPA keeps in web storage (not the jar); learning turns a request repeating one into a session: ref.
     const storage = await within(
       page.evaluate(() =>
@@ -1284,6 +1777,8 @@ export interface PageFetchResult {
   ms: number;
   /** the first answer was a redirect */
   redirected?: boolean;
+  /** the body is the part of an event stream read before a bound: why it stopped (stream.ts) */
+  truncated?: string;
 }
 
 /**
@@ -1421,11 +1916,29 @@ export async function pageFetch(o: {
   credentials?: "include" | "omit";
   /** waits for the site's send slot, once Chrome is up: its start overlaps the wait */
   pace?: () => Promise<void>;
+  /** attached (API_ANYTHING_CDP) only: the stored cookies the fetch may carry, put into api-anything's context first */
+  jar?: StoredCookie[];
 }): Promise<PageFetchResult> {
+  const before = losses;
+  try {
+    return await fetchInPage(o);
+  } catch (e) {
+    throw lost(e, before);
+  }
+}
+
+async function fetchInPage(o: Parameters<typeof pageFetch>[0]): Promise<PageFetchResult> {
   const timeoutMs = o.timeoutMs ?? 30_000;
+  // One deadline for the whole call, as a trigger run's: the browser's start, a wait for runs in flight
+  // with other cookies (seed), the pace, the origin page's load, every hop of the fetch and a recovery
+  // after the page navigated all draw on it.
+  const deadline = Date.now() + timeoutMs;
+  const left = () => Math.max(1, deadline - Date.now());
   const release = hold();
+  let uncarry = () => {};
   try {
     const ctx = await openBrowser(o);
+    uncarry = await seed(ctx, o.url, o.jar, Math.max(0, deadline - Date.now()));
     await o.pace?.();
     const once = async (entry: OriginPage, hop: Hop, left: number) => {
       const { page } = entry;
@@ -1439,8 +1952,15 @@ export async function pageFetch(o: {
       const redirects: Response[] = [];
       const onResponse = (res: Response) => void (res.status() >= 300 && res.status() < 400 && redirects.push(res));
       page.on("response", onResponse);
+      // An event stream is read here as it arrives, to the bounds of stream.ts, inside what is left of the
+      // fetch's time (its abort would throw away what arrived), and then closed.
+      const stream = {
+        idle: STREAM_IDLE_MS,
+        max: Math.max(0, Math.min(STREAM_MAX_MS, left - 500)),
+        cap: MAX_BODY_BYTES,
+      };
       const run = page.evaluate(
-        async ({ url, method, headers, body, left, credentials }) => {
+        async ({ url, method, headers, body, left, credentials, stream }) => {
           const r = await fetch(url, {
             method,
             headers,
@@ -1454,9 +1974,66 @@ export async function pageFetch(o: {
           r.headers.forEach((v, k) => {
             h[k] = v;
           });
-          return { opaque: false as const, status: r.status, headers: h, body: await r.text(), url: r.url };
+          let cut: "idle" | "time" | "bytes" | undefined;
+          const start = Date.now();
+          if (!r.body || !/^\s*text\/event-stream\s*(;|$)/i.test(r.headers.get("content-type") ?? ""))
+            return {
+              opaque: false as const,
+              status: r.status,
+              headers: h,
+              body: await r.text(),
+              url: r.url,
+              cut,
+              ms: 0,
+            };
+          const reader = r.body.getReader();
+          const decoder = new TextDecoder();
+          let text = "";
+          let bytes = 0;
+          let last = start;
+          let pending: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+          for (;;) {
+            const idleAt = last + stream.idle;
+            const end = start + stream.max;
+            const wait = Math.min(idleAt, end) - Date.now();
+            if (wait <= 0) {
+              cut = idleAt < end ? "idle" : "time";
+              break;
+            }
+            pending ??= reader.read();
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const got = await Promise.race([
+              pending,
+              new Promise<undefined>((done) => {
+                timer = setTimeout(() => done(undefined), wait);
+              }),
+            ]);
+            clearTimeout(timer);
+            if (!got) continue;
+            pending = undefined;
+            if (got.done) break;
+            bytes += got.value.byteLength;
+            if (bytes > stream.cap) {
+              cut = "bytes";
+              break;
+            }
+            const piece = decoder.decode(got.value, { stream: true });
+            text += piece;
+            // a piece with a field line is an event on its way; comments alone are a heartbeat
+            if (/(?:^|[\r\n])[^:\r\n]/.test(piece)) last = Date.now();
+          }
+          if (cut) void reader.cancel().catch(() => {});
+          return {
+            opaque: false as const,
+            status: r.status,
+            headers: h,
+            body: text,
+            url: r.url,
+            cut,
+            ms: Date.now() - start,
+          };
         },
-        { ...hop, left, credentials: o.credentials ?? ("include" as const) },
+        { ...hop, left, credentials: o.credentials ?? ("include" as const), stream },
       );
       // the page itself can hang (a stuck renderer): the budget holds either way
       let timer: NodeJS.Timeout | undefined;
@@ -1474,7 +2051,9 @@ export async function pageFetch(o: {
       });
       try {
         const r = await Promise.race([run, late, quiet]);
-        return r.opaque ? await redirectOf(redirects, hop, r.url) : { ...r, location: undefined };
+        if (r.opaque) return await redirectOf(redirects, hop, r.url);
+        const { cut, ms, ...answer } = r;
+        return { ...answer, ...(cut ? { truncated: streamCut(cut, ms) } : {}), location: undefined };
       } catch (e) {
         const message = (e as Error).message;
         const timedOut = /TimeoutError|timed out|signal timed out|no response within/i.test(message);
@@ -1496,10 +2075,6 @@ export async function pageFetch(o: {
         if (entry.retired) retire(entry);
       }
     };
-    // One deadline for the whole call from here, with Chrome up: the origin page's load, every hop
-    // of the fetch and a recovery after the page navigated all draw on it.
-    const deadline = Date.now() + timeoutMs;
-    const left = () => Math.max(1, deadline - Date.now());
     let entry = await originPage(ctx, o.origin, left);
     let replaced = false;
     let navigated = false;
@@ -1566,6 +2141,7 @@ export async function pageFetch(o: {
       throw e;
     }
   } finally {
+    uncarry();
     release();
   }
 }
@@ -1573,20 +2149,32 @@ export async function pageFetch(o: {
 /**
  * Open `url` headed so the user can sign in. Resolves when they close the window or press Enter
  * in the terminal; what counts as logged in is the caller's call. Returns the site's cookies as the
- * window opened, before the page loaded, and as it closed.
+ * window opened, before the page loaded; once it had loaded (`loaded`, `markLoaded`; the last read
+ * before the window ended, when it ended first); and as it closed. Attached (API_ANYTHING_CDP), the window
+ * is a tab of api-anything's own context in that browser, started with `jar`, and its cookies are
+ * that context's alone; the browser going away while it is open throws AttachError. `signal` ends the
+ * window as Enter does, then closes it (the MCP server's cap): its own pages, nothing else.
  */
 export async function login({
   url,
   profileDir,
   waitForEnter = true,
+  jar,
+  signal,
 }: {
   url: string;
   profileDir: string;
   waitForEnter?: boolean;
-}): Promise<{ opened: StoredCookie[]; closed: StoredCookie[] }> {
+  /** attached only: the stored cookies the window starts with, as api-anything's own profile would hold them */
+  jar?: StoredCookie[];
+  signal?: AbortSignal;
+}): Promise<{ opened: StoredCookie[]; loaded: StoredCookie[]; closed: StoredCookie[] }> {
   const release = hold();
+  const before = losses;
   try {
-    return await loginWindow(url, profileDir, waitForEnter);
+    return await loginWindow(url, profileDir, waitForEnter, jar, signal);
+  } catch (e) {
+    throw lost(e, before);
   } finally {
     release();
   }
@@ -1599,16 +2187,41 @@ async function loginWindow(
   url: string,
   profileDir: string,
   waitForEnter: boolean,
-): Promise<{ opened: StoredCookie[]; closed: StoredCookie[] }> {
+  jar?: StoredCookie[],
+  signal?: AbortSignal,
+): Promise<{ opened: StoredCookie[]; loaded: StoredCookie[]; closed: StoredCookie[] }> {
   const ctx = await openBrowser({ profileDir, headless: false });
-  const opened = siteCookies(await ctx.cookies(), url);
-  const page = ctx.pages()[0] ?? (await ctx.newPage());
+  const own = guests.has(ctx);
+  const uncarry = await seed(ctx, url, jar, LOCK_WAIT_MS);
+  let opened: StoredCookie[];
+  let page: Page;
+  try {
+    opened = siteCookies(await ctx.cookies(), url);
+    // attached: a tab of its own, never a page a call is using, shown in front where the browser lets it;
+    // api-anything's own: the blank window it opened with, unless a sign-in window (its tab or a popup)
+    // or a call shows it
+    const free = (p: Page) =>
+      !windowPages.has(p) && p.url() === "about:blank" && ![...originPages.values()].some((o) => o.page === p);
+    page = own ? await ctx.newPage() : (ctx.pages().find(free) ?? (await ctx.newPage()));
+    windowPages.add(page);
+  } catch (e) {
+    uncarry();
+    throw e;
+  }
+  if (own) await within(page.bringToFront(), undefined);
   // Playwright answers the window's dialogs, not the human: leaving or closing a page is never refused
   // (a dismissed beforeunload would keep it open), an alert is only read, a confirm or prompt declined.
   const onDialog = (d: Dialog) => answer(d, d.type() === "beforeunload" || d.type() === "alert");
-  const onPage = (p: Page) => p.on("dialog", onDialog);
+  // the window's pages: its tab and the popups it opened (an identity provider's sign-in), never the
+  // pages of a call or of another window in the same context
+  const mine = new Set<Page>();
+  const onPage = (p: Page) => {
+    mine.add(p);
+    windowPages.add(p);
+    p.on("dialog", onDialog);
+    p.on("popup", onPage);
+  };
   onPage(page);
-  ctx.on("page", onPage); // a sign-in popup (an identity provider) too
   // The cookies are read while the window is open, never after it closed: closing Chrome's last window
   // on Linux or Windows quits it, and a quitting Chrome's jar has lost its session cookies (a login
   // cookie among them, on many sites). So the jar is read on every response, where a Set-Cookie lands,
@@ -1618,6 +2231,9 @@ async function loginWindow(
   let snapshot: Cookie[] = [];
   let started = 0;
   let kept = 0;
+  /** the read that started first once the page had loaded (`markLoaded`): what the load itself set */
+  let loadRead = Number.POSITIVE_INFINITY;
+  let loaded: Cookie[] | undefined;
   /** no more reads start */
   let shut = false;
   /** the window began closing: no read that completes from here counts */
@@ -1628,7 +2244,9 @@ async function loginWindow(
     const n = ++started;
     const r = ctx.cookies().then(
       (c) => {
-        if (!closing && n > kept) [kept, snapshot] = [n, c];
+        if (closing) return;
+        if (n > kept) [kept, snapshot] = [n, c];
+        if (n === loadRead) loaded = c;
       },
       () => {},
     );
@@ -1637,32 +2255,73 @@ async function loginWindow(
   };
   ctx.on("response", read);
   const poll = setInterval(read, 500);
+  // Loaded is the page's DOMContentLoaded (its document's Set-Cookie is in the jar by then), or the end of
+  // the navigation for a page that fired none: not its load event, which a slow subresource can hold
+  // while the user already answers the page. A window that ended first did nothing after a load.
+  const markLoaded = () => {
+    if (loadRead !== Number.POSITIVE_INFINITY || shut) return;
+    loadRead = started + 1;
+    read();
+  };
+  page.once("domcontentloaded", markLoaded);
   let onEnter = () => {};
+  let close = () => {};
   let entered = false;
+  /** the context itself closed (api-anything's own browser quit), not just the window's tab */
+  let ctxGone = false;
+  const ctxClose = () => {
+    ctxGone = true;
+    close();
+  };
+  // a persistent context (api-anything's own profile) has no Browser object
+  const browserAtOpen = ctx.browser();
   const done = new Promise<void>((resolve) => {
     onEnter = () => {
       entered = true;
       resolve();
     };
-    const close = () => {
+    close = () => {
       closing = true;
       shut = true;
       resolve();
     };
-    ctx.once("close", close);
+    ctx.once("close", ctxClose);
     page.once("close", close);
+    browserAtOpen?.once("disconnected", close);
     // The MCP server's stdin is its transport; only the CLI reads Enter.
     if (waitForEnter) {
       process.stdin.once("data", onEnter);
       process.stdin.resume();
     }
+    if (signal?.aborted) onEnter();
+    else signal?.addEventListener("abort", onEnter, { once: true });
   });
   try {
     // A user who clicks away before the page has loaded interrupts this navigation; the window stays theirs.
     // Enter (or a close) ends the wait even while a slow subresource holds the page's load event.
     await Promise.race([page.goto(url).catch(() => {}), done]);
+    markLoaded();
     read();
     await done;
+    // A closed tab leaves a context that outlives it holding what the user did last there: that is read
+    // now, so a choice made a moment before closing is not lost to the poll's interval. Attached, the
+    // context is api-anything's own in a browser the user runs; in api-anything's own browser, only while
+    // another page keeps it open (another window's tab, a call's page): closing the last window quits
+    // Chrome, whose jar has lost its session cookies by then. A browser that went away (quit, killed)
+    // takes the context along, and those reads with it.
+    const browser = ctx.browser();
+    const outlives = own ? !!browser && !leaving.has(browser) : !ctxGone && ctx.pages().length > 0;
+    if (outlives) {
+      shut = true;
+      await Promise.all(reads);
+      const last = await within<Cookie[] | undefined>(ctx.cookies(), undefined, 2000);
+      if (!last && own)
+        throw new AttachError(
+          "the attached browser (API_ANYTHING_CDP) went away while the sign-in window was open: nothing was kept, and the stored session is unchanged",
+          "start the browser again with its DevTools port, then open the window again",
+        );
+      if (last) snapshot = last;
+    }
     // Enter leaves the window open, so one more read is current (unless the user closes it meanwhile).
     if (entered && !shut) read();
     shut = true;
@@ -1670,12 +2329,20 @@ async function loginWindow(
   } finally {
     clearInterval(poll);
     ctx.off("response", read);
-    ctx.off("page", onPage);
+    ctx.off("close", ctxClose);
+    page.off("domcontentloaded", markLoaded);
+    browserAtOpen?.off("disconnected", close);
+    signal?.removeEventListener("abort", onEnter);
     if (waitForEnter) {
       process.stdin.off("data", onEnter);
       process.stdin.pause();
     }
-    await closeBrowser();
+    uncarry();
+    // Ending the window ends its pages only: another window's tab and a call's page in the same context
+    // go on, and the context closes when idle, as after any call. api-anything's own browser that
+    // nothing else holds is closed now, as it always was: the profile is let go at once.
+    await Promise.allSettled([...mine].map((p) => within(p.close(), undefined)));
+    if (!own && users === 1) await closeBrowser();
   }
-  return { opened, closed: siteCookies(snapshot, url) };
+  return { opened, loaded: siteCookies(loaded ?? snapshot, url), closed: siteCookies(snapshot, url) };
 }

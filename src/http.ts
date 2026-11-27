@@ -2,14 +2,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIPv4, isIPv6 } from "node:net";
+import type { Transform } from "node:stream";
 import * as zlib from "node:zlib";
 import type { SendBudget } from "./budget.js";
 import { asText, fillSlotTemplate, setAt, templateRefs, walk } from "./codec.js";
+import { isHtmlType } from "./extract.js";
 import { matches } from "./learn.js";
 import { CleartextRefused, refuseCleartext, siteFetch } from "./proxy.js";
 import { cookieHeaderFor, cookieValue, insecureSet, parseSetCookie, type Session } from "./session.js";
 import type { Match, Operation, Param, Request } from "./spec.js";
 import { reserveSend } from "./store.js";
+import { carriesField, isEventStream, STREAM_IDLE_MS, STREAM_MAX_MS, type StreamCut, streamCut } from "./stream.js";
 import type { StoredCookie } from "./types.js";
 import { badAddress, graphqlDocuments, writesGraphql } from "./vet.js";
 
@@ -37,6 +40,8 @@ export interface Sent {
   redirected?: boolean;
   /** cookies the answers set (every hop), for the jar */
   setCookies?: StoredCookie[];
+  /** the body is the part of an event stream read before a bound: why it stopped (stream.ts) */
+  truncated?: string;
 }
 
 /** `jar` with each of `set` in place of the cookie of its name, domain and path, as a browser keeps them. */
@@ -630,9 +635,15 @@ export async function send(
         refuseCleartextHop(hop.url, refs || !!cookie, res.status);
         continue;
       }
-      const raw = await readCappedBody(res);
-      const text = decodeBody(unzstd(raw, res.headers.get("content-encoding")), res.headers.get("content-type") ?? "");
+      const type = res.headers.get("content-type") ?? "";
+      // a stream is read to its end or a bound, inside what is left of the request's timeout
+      const streamed = isEventStream(type)
+        ? await readStream(res, timeoutMs - (performance.now() - t0) - STREAM_MARGIN_MS)
+        : undefined;
+      const raw = streamed?.raw ?? (await readCappedBody(res));
+      const text = decodeBody(streamed ? raw : unzstd(raw, res.headers.get("content-encoding")), type);
       return {
+        ...(streamed?.truncated ? { truncated: streamed.truncated } : {}),
         status: res.status,
         headers: Object.fromEntries(res.headers),
         body: text,
@@ -688,29 +699,345 @@ async function readCappedBody(res: Response): Promise<Uint8Array> {
   return Buffer.concat(chunks);
 }
 
+/** What a stream's read leaves of the request's timeout: it stops before the abort would throw away what arrived. */
+const STREAM_MARGIN_MS = 250;
+
+/**
+ * An event stream's body, read until it ends, sends no event for `STREAM_IDLE_MS`, has been read for
+ * `STREAM_MAX_MS` (or `budgetMs`, when less is left of the request's time), or passes
+ * `MAX_BODY_BYTES`; a bound keeps what arrived before it, and closes the connection. A zstd body that
+ * fetch left compressed (`unzstd`) is decoded as it arrives, so the idle bound reads its lines and a
+ * cut keeps what was decoded; the bytes bound counts what it decodes to.
+ */
+async function readStream(res: Response, budgetMs: number): Promise<{ raw: Uint8Array; truncated?: string }> {
+  const encoding = res.headers.get("content-encoding");
+  if (!res.body) return { raw: unzstd(new Uint8Array(await res.arrayBuffer()), encoding) };
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
+  const start = Date.now();
+  const end = start + Math.max(0, Math.min(STREAM_MAX_MS, budgetMs));
+  let last = start;
+  let total = 0;
+  let cut: StreamCut | undefined;
+  let pending: ReturnType<typeof reader.read> | undefined;
+  // the first bytes say whether fetch decoded it already: held until there are enough to tell
+  let head: Buffer | undefined = /\bzstd\b/i.test(encoding ?? "") ? Buffer.alloc(0) : undefined;
+  let zstd: ReturnType<typeof zstdFrames> | undefined;
+  const take = async (piece: Uint8Array): Promise<{ bytes: Uint8Array; over?: boolean }> => {
+    if (head) {
+      head = Buffer.concat([head, piece]);
+      if (head.byteLength < 4) return { bytes: new Uint8Array(0) };
+      piece = head;
+      head = undefined;
+      if (zstdFrame(piece) || skippableFrame(piece)) {
+        if (!zstdCodec.stream) throw noZstd();
+        zstd = zstdFrames(zstdCodec.stream, MAX_BODY_BYTES);
+      }
+    }
+    return zstd ? zstd.write(piece) : { bytes: piece };
+  };
+  // a piece that crosses the cap keeps its part before it: the bound cuts there, not at the piece
+  const keep = (got: { bytes: Uint8Array; over?: boolean }): boolean => {
+    const room = MAX_BODY_BYTES - total;
+    const bytes = got.bytes.byteLength > room ? got.bytes.subarray(0, room) : got.bytes;
+    total += bytes.byteLength;
+    if (bytes.byteLength) {
+      chunks.push(bytes);
+      if (carriesField(decoder.decode(bytes, { stream: true }))) last = Date.now();
+    }
+    return !got.over && got.bytes.byteLength <= room;
+  };
+  try {
+    for (;;) {
+      const idleAt = last + STREAM_IDLE_MS;
+      const wait = Math.min(idleAt, end) - Date.now();
+      if (wait <= 0) {
+        cut = idleAt < end ? "idle" : "time";
+        break;
+      }
+      pending ??= reader.read();
+      let timer: NodeJS.Timeout | undefined;
+      const got = await Promise.race([
+        pending,
+        new Promise<undefined>((r) => {
+          timer = setTimeout(() => r(undefined), wait);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      if (!got) continue;
+      pending = undefined;
+      if (got.done) {
+        // fewer than 4 bytes in all are no zstd frame; a body that ends inside one throws (`zstdFrames`)
+        if (head?.byteLength) keep({ bytes: head });
+        else if (zstd && !keep(await zstd.end())) cut = "bytes";
+        break;
+      }
+      if (!keep(await take(got.value))) {
+        cut = "bytes";
+        break;
+      }
+    }
+  } catch (e) {
+    await reader.cancel().catch(() => {});
+    zstd?.close();
+    throw e;
+  }
+  if (cut) {
+    await reader.cancel().catch(() => {});
+    zstd?.close();
+  }
+  return { raw: Buffer.concat(chunks), ...(cut ? { truncated: streamCut(cut, Date.now() - start) } : {}) };
+}
+
+/** zlib's zstd decoders, where this Node has them (22.15 and later); a test takes them away. */
+export const zstdCodec: {
+  stream?: () => Transform;
+  sync?: (buf: Uint8Array, o: { maxOutputLength: number }) => Uint8Array;
+} = { stream: zlib.createZstdDecompress, sync: zlib.zstdDecompressSync };
+
+const zstdFrame = (b: Uint8Array) => b[0] === 0x28 && b[1] === 0xb5 && b[2] === 0x2f && b[3] === 0xfd;
+/** The standard lets a zstd stream open with skippable frames (magic 0x184D2A50 to 0x184D2A5F, little-endian). */
+const skippableFrame = (b: Uint8Array) => (b[0]! & 0xf0) === 0x50 && b[1] === 0x2a && b[2] === 0x4d && b[3] === 0x18;
+
+const CUT_FRAME = "the answer's zstd encoding could not be read: it ends inside a frame";
+
+/**
+ * Where a zstd body's frames begin and end, read from their headers and block headers (RFC 8878),
+ * without decoding: Node 22's decoder stops at the end of the first frame, and says nothing of the
+ * rest. `push` answers each piece of a zstd frame in order, with `end` on the frame's last byte;
+ * skippable frames are dropped. `done` says whether the body ended between frames.
+ */
+export class ZstdFrames {
+  private buf = Buffer.alloc(0);
+  private state: "start" | "fhd" | "header" | "blockHead" | "block" | "checksum" | "skip" = "start";
+  private left = 0;
+  private last = false;
+  private checksum = false;
+
+  push(piece: Uint8Array): { bytes: Buffer; end: boolean }[] {
+    this.buf = Buffer.concat([this.buf, piece]);
+    const out: { bytes: Buffer; end: boolean }[] = [];
+    const emit = (n: number, end = false) => {
+      out.push({ bytes: this.buf.subarray(0, n), end });
+      this.buf = this.buf.subarray(n);
+    };
+    for (;;) {
+      if (this.state === "start") {
+        if (this.buf.byteLength < 4) break;
+        if (zstdFrame(this.buf)) {
+          emit(4);
+          this.state = "fhd";
+        } else if (skippableFrame(this.buf)) {
+          if (this.buf.byteLength < 8) break;
+          this.left = this.buf.readUInt32LE(4);
+          this.buf = this.buf.subarray(8);
+          this.state = "skip";
+        } else throw new Error("the answer's zstd encoding could not be read: bytes after a frame are no frame");
+      } else if (this.state === "fhd") {
+        if (!this.buf.byteLength) break;
+        const fhd = this.buf[0]!;
+        const single = (fhd & 0x20) !== 0;
+        const fcs = [single ? 1 : 0, 2, 4, 8][fhd >> 6]!;
+        this.checksum = (fhd & 0x04) !== 0;
+        this.left = (single ? 0 : 1) + [0, 1, 2, 4][fhd & 0x03]! + fcs;
+        emit(1);
+        this.state = "header";
+      } else if (this.state === "blockHead") {
+        if (this.buf.byteLength < 3) break;
+        const h = this.buf.readUIntLE(0, 3);
+        const type = (h >> 1) & 0x03;
+        if (type === 3) throw new Error("the answer's zstd encoding could not be read: a block of a reserved type");
+        this.last = (h & 1) === 1;
+        this.left = type === 1 ? 1 : h >>> 3;
+        emit(3);
+        this.state = "block";
+      } else if (this.state === "skip") {
+        const n = Math.min(this.left, this.buf.byteLength);
+        this.buf = this.buf.subarray(n);
+        this.left -= n;
+        if (this.left) break;
+        this.state = "start";
+      } else {
+        // the rest of a header, a block's content, or the checksum: passed on as it comes
+        const n = Math.min(this.left, this.buf.byteLength);
+        this.left -= n;
+        if (this.left) {
+          if (n) emit(n);
+          break;
+        }
+        if (this.state === "header" || (this.state === "block" && !this.last)) {
+          emit(n);
+          this.state = "blockHead";
+        } else if (this.state === "block" && this.checksum) {
+          emit(n);
+          this.state = "checksum";
+          this.left = 4;
+        } else {
+          // the frame's last byte
+          emit(n, true);
+          this.state = "start";
+        }
+      }
+    }
+    return out;
+  }
+
+  get done(): boolean {
+    return this.state === "start" && !this.buf.byteLength;
+  }
+}
+
+/** Each zstd frame of a whole body, in order, the skippable ones dropped; throws when it ends inside one. */
+function framesOf(buf: Uint8Array): Buffer[] {
+  const split = new ZstdFrames();
+  const frames: Buffer[] = [];
+  let at: Buffer[] = [];
+  for (const p of split.push(buf)) {
+    at.push(p.bytes);
+    if (p.end) {
+      frames.push(Buffer.concat(at));
+      at = [];
+    }
+  }
+  if (!split.done) throw new Error(CUT_FRAME);
+  return frames;
+}
+
+/** Read as it came, the body would be its compressed bytes: a wrong answer that says nothing of why. */
+const noZstd = () =>
+  new Error(
+    `the answer is zstd-encoded and this Node (${process.version}) has no zstd decoder (22.15 and later have one), so its body could not be read`,
+  );
+
+/**
+ * A zstd decoder fed a stream's pieces as they arrive: each write answers what its piece decoded to,
+ * `over` once all of them pass `cap` (the decoder stops there: a few KB of zstd expand to gigabytes).
+ */
+function zstdPieces(make: () => Transform, cap: number) {
+  const d = make();
+  let out: Buffer[] = [];
+  let size = 0;
+  let over = false;
+  let failed: Error | undefined;
+  d.on("data", (b: Buffer) => {
+    if (over) return;
+    if (size + b.byteLength > cap) {
+      // what decoded up to the cap is kept; the decoder stops there
+      out.push(b.subarray(0, cap - size));
+      size = cap;
+      over = true;
+      d.destroy();
+    } else {
+      size += b.byteLength;
+      out.push(b);
+    }
+  });
+  d.on("error", (e) => {
+    failed ??= e;
+  });
+  const settle = (begin: (done: () => void) => void) =>
+    new Promise<{ bytes: Uint8Array; over: boolean }>((resolve, reject) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        // a write's callback usually wins: its listeners must not outlive it, one more per piece
+        d.off("close", done);
+        d.off("end", done);
+        // what a write decoded may still be on its way to "data"
+        setImmediate(() => {
+          if (failed && !over)
+            return reject(new Error(`the answer's zstd encoding could not be read: ${failed.message}`));
+          const bytes = Buffer.concat(out);
+          out = [];
+          resolve({ bytes, over });
+        });
+      };
+      d.once("close", done);
+      begin(done);
+    });
+  return {
+    write: (piece: Uint8Array) => settle((done) => d.write(piece, () => done())),
+    end: () =>
+      settle((done) => {
+        d.once("end", done);
+        d.end();
+      }),
+    close: () => d.destroy(),
+  };
+}
+
+/**
+ * `zstdPieces` for every frame of a stream (`ZstdFrames`): a decoder per frame, under one cap. `end`
+ * throws when the stream ended inside a frame.
+ */
+function zstdFrames(make: () => Transform, cap: number) {
+  const split = new ZstdFrames();
+  let current: ReturnType<typeof zstdPieces> | undefined;
+  let size = 0;
+  const write = async (piece: Uint8Array): Promise<{ bytes: Uint8Array; over: boolean }> => {
+    const out: Uint8Array[] = [];
+    for (const p of split.push(piece)) {
+      current ??= zstdPieces(make, cap - size);
+      const parts = [await current.write(p.bytes), ...(p.end ? [await current.end()] : [])];
+      if (p.end) current = undefined;
+      for (const got of parts) {
+        size += got.bytes.byteLength;
+        out.push(got.bytes);
+        if (got.over) {
+          current?.close();
+          return { bytes: Buffer.concat(out), over: true };
+        }
+      }
+    }
+    return { bytes: Buffer.concat(out), over: false };
+  };
+  return {
+    write,
+    end: async (): Promise<{ bytes: Uint8Array; over: boolean }> => {
+      if (!split.done) {
+        current?.close();
+        throw new Error(CUT_FRAME);
+      }
+      return { bytes: new Uint8Array(0), over: false };
+    },
+    close: () => current?.close(),
+  };
+}
+
 /**
  * Node 22's fetch hands back a zstd body still compressed (24 and later decode it). Decode it here
- * when that happened; zlib has zstd from 22.15, before that the body stays as it came. The output is
+ * when that happened; zlib has zstd from 22.15, and before that the call fails saying so. The output is
  * bounded too: a few KB of zstd expand to gigabytes.
  */
 function unzstd(buf: Uint8Array, encoding: string | null): Uint8Array {
-  const compressed = buf[0] === 0x28 && buf[1] === 0xb5 && buf[2] === 0x2f && buf[3] === 0xfd;
-  if (!compressed || !/\bzstd\b/i.test(encoding ?? "")) return buf;
-  try {
-    return zlib.zstdDecompressSync?.(buf, { maxOutputLength: MAX_BODY_BYTES }) ?? buf;
-  } catch (e) {
-    if ((e as { code?: string }).code === "ERR_BUFFER_TOO_LARGE")
-      throw new BodyTooLarge(
-        `the response is ${buf.byteLength} bytes of zstd that decode to over the ${CAP} cap on a response; refused`,
-      );
-    throw e;
+  if (!/\bzstd\b/i.test(encoding ?? "")) return buf;
+  if (buf.byteLength < 4 || !(zstdFrame(buf) || skippableFrame(buf))) return buf;
+  const frames = framesOf(buf);
+  if (!frames.length) return new Uint8Array(0);
+  if (!zstdCodec.sync) throw noZstd();
+  const out: Uint8Array[] = [];
+  let size = 0;
+  for (const frame of frames) {
+    try {
+      const d = zstdCodec.sync(frame, { maxOutputLength: MAX_BODY_BYTES - size });
+      size += d.byteLength;
+      out.push(d);
+    } catch (e) {
+      if ((e as { code?: string }).code === "ERR_BUFFER_TOO_LARGE")
+        throw new BodyTooLarge(
+          `the response is ${buf.byteLength} bytes of zstd that decode to over the ${CAP} cap on a response; refused`,
+        );
+      throw e;
+    }
   }
+  return Buffer.concat(out);
 }
 
 /** Decode with the declared charset (header, else an HTML <meta>), else UTF-8. A BOM is dropped. */
 export function decodeBody(buf: Uint8Array, contentType: string): string {
   let charset = /charset=["']?([\w.:-]+)/i.exec(contentType)?.[1];
-  if (!charset && /html/i.test(contentType))
+  if (!charset && isHtmlType(contentType))
     charset = /<meta[^>]+charset=["']?([\w.:-]+)/i.exec(new TextDecoder("latin1").decode(buf.subarray(0, 2048)))?.[1];
   try {
     return new TextDecoder(charset ?? "utf-8").decode(buf);

@@ -809,10 +809,13 @@ describe("write interception and tier-2 timeouts", { skip: noChrome }, () => {
         page = ctx.pages().find((p) => p.url() === `${fx.url}/chat`);
       assert.ok(page, "the run's page");
       const goto = page.goto.bind(page);
+      const evaluate = page.evaluate.bind(page) as (fn: unknown, arg?: unknown) => Promise<unknown>;
       close = page.close.bind(page);
       const never = new Promise<never>(() => {});
       Object.assign(page, {
         goto: (url: string, o?: Parameters<typeof goto>[1]) => (url === "about:blank" ? never : goto(url, o)),
+        // in an attached browser (API_ANYTHING_CDP) the page is emptied by replacing its history entry
+        evaluate: (fn: unknown, arg?: unknown) => (String(fn).includes("about:blank") ? never : evaluate(fn, arg)),
         close: () => never,
       });
       await run;

@@ -9,25 +9,26 @@ import {
   MAX_SEARCH_QUERY,
   nameHashText,
   type Report,
-  requestSig,
+  type SearchAnswer,
   type SearchMatch,
   type Status,
-  triggerSig,
   type UploadResult,
   type VerifyJob,
 } from "../../src/registry-api.js";
 import { domainOf } from "../../src/search.js";
 import type { Operation } from "../../src/spec.js";
-import { badAddress, interfaceAddress, MAX_INTERFACE_URL, uploadProblems } from "../../src/vet.js";
+import { aliasProblems, badAddress, interfaceAddress, MAX_INTERFACE_URL, uploadProblems } from "../../src/vet.js";
 import { networksOf, searcherOf, sha256Hex, signatureHeaders, signer } from "./auth.js";
-import { catalog, confirmed, entryOf, search } from "./catalog.js";
+import { catalog, confirmed, entryOf, related, search } from "./catalog.js";
 import { CSP, homePage, sitemap, sitePage } from "./pages.js";
+import { replaySkipped } from "./replay.js";
 import { nextStatus, type Thresholds, thresholds, toArchive } from "./rules.js";
 import { community, countCalls, forgetCalls, publicStats } from "./stats.js";
 import {
   activateKey,
   addSite,
   addVersion,
+  aliasOwner,
   archive,
   archiveCandidates,
   archiveOldSeeds,
@@ -43,7 +44,6 @@ import {
   getSite,
   getVersion,
   holders,
-  incumbent,
   interfacesOf,
   markPending,
   pendingVersions,
@@ -54,8 +54,9 @@ import {
   reportInterface,
   reseed,
   seedSite,
+  setAliases,
   setStatus,
-  siteOps,
+  siteHeld,
   sitesOn,
   touchKey,
   touchOk,
@@ -74,7 +75,7 @@ import {
   readUpload,
   refusals,
   reviewReasons,
-  SiteContextSchema,
+  SeedSiteSchema,
   type Upload,
   versionHash,
 } from "./upload.js";
@@ -285,15 +286,18 @@ async function searchApi(c: Ctx) {
         interfaces: own,
       });
   }
+  // another region's site is a hint beside no match: the asked domain is still uncovered, and still demand
+  const near = !matches.length && asked ? related(sites, q) : [];
+  const answer: SearchAnswer = { matches, ...(near.length ? { related: near } : {}) };
   // a site agents want and nobody shared: its public domain, never the words of a search
   if (!matches.length && asked && cleanDomain(asked)) {
     const { network, prefix } = await networksOf(c.request, salt(c));
     // the search is answered either way: past the bound nothing is kept
     if (await mayWant(c, prefix)) await wantDomain(c.env.DB, asked, network, new Date(c.now).toISOString());
     // not cached: the next network asking for it is counted too
-    return json({ matches }, 200, { "cache-control": "no-store" });
+    return json(answer, 200, { "cache-control": "no-store" });
   }
-  return json({ matches });
+  return json(answer);
 }
 
 /**
@@ -434,19 +438,7 @@ async function upload(c: Ctx) {
     return json({ hash: u.hash, status, duplicate: true, ...(reasons ? { reasons } : {}) } satisfies UploadResult);
   }
 
-  const ops = await siteOps(db, u.site.name, u.site.domain);
-  const loginCookies = bound?.login_cookies ? (JSON.parse(bound.login_cookies) as string[]).length > 0 : false;
-  const live = await incumbent(db, u.site.name, u.operation.name);
-  // what it sends and opens is read from its stored operation: a row's `sig` holds only what its uploader declared
-  const liveOp = live ? (JSON.parse(live.operation) as Operation) : undefined;
-  const reasons = reviewReasons(u.site, u.operation, u.evidence, {
-    opNames: ops.opNames,
-    login: loginCookies || ops.loginOp,
-    established: ops.established,
-    ...(live && liveOp
-      ? { incumbent: { match: live.sig, request: requestSig(liveOp), trigger: triggerSig(liveOp) } }
-      : {}),
-  });
+  const reasons = reviewReasons(u.site, u.operation, u.evidence, await siteHeld(db, u.site, bound, u.operation.name));
   const heal = await isHeal(c, u.evidence.healedFrom, u.site.name, u.operation.name, key);
   if (claimed) reasons.push(claimed.reason);
   const status: Status = reasons.length ? "review" : "candidate";
@@ -594,8 +586,42 @@ async function adminVersion(c: Ctx, hash: string) {
   return json({ hash, status: r.data.status });
 }
 
+/**
+ * Why a site may not take these aliases: one is another site's alias, or the domain of another site the
+ * registry serves (a search by it finds that one). One the site already holds stays: a site shared on that
+ * domain later would otherwise fail every reseed of the site.
+ */
+async function aliasCollisions(db: D1Database, name: string, aliases: string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const a of aliases) {
+    const owner = await aliasOwner(db, a);
+    if (owner === name) continue;
+    if (owner) out.push(`${a} is already an alias of ${owner}`);
+    for (const other of await sitesOn(db, a))
+      if (other !== name && (await catalog(db, undefined, other)).length)
+        out.push(`${a} is the domain of the served site ${other}`);
+  }
+  return out;
+}
+
+/** A maintainer sets the domains a site is known by: they replace its aliases, and [] clears them. */
+async function adminAliases(c: Ctx, name: string) {
+  const r = z.object({ aliases: z.array(z.string().max(253)).max(50) }).safeParse(parseJson(c.body));
+  if (!r.success) throw new HttpError(400, "the body is { aliases: string[] }", issues(r.error));
+  const row = await getSite(c.env.DB, name);
+  if (!row) throw new HttpError(404, `no site ${name}`);
+  const aliases = [...r.data.aliases].sort();
+  const refused = [
+    ...aliasProblems({ baseUrl: row.base_url, aliases }),
+    ...(await aliasCollisions(c.env.DB, name, aliases)),
+  ];
+  if (refused.length) throw new HttpError(422, "the aliases are refused", refused);
+  await setAliases(c.env.DB, name, aliases);
+  return json({ site: name, aliases });
+}
+
 async function adminSeed(c: Ctx) {
-  const r = z.object({ site: SiteContextSchema, operations: z.array(z.unknown()).min(1) }).safeParse(parseJson(c.body));
+  const r = z.object({ site: SeedSiteSchema, operations: z.array(z.unknown()).min(1) }).safeParse(parseJson(c.body));
   if (!r.success)
     throw new HttpError(400, "the body is { site: SiteContext, operations: Operation[] }", issues(r.error));
   const site = r.data.site;
@@ -606,11 +632,18 @@ async function adminSeed(c: Ctx) {
     ops.push(p.op);
   }
   // a seeded write is held to an upload's rule: its proof is inside its version, never a name
-  const refused = [...ops.flatMap(uploadProblems), ...refusals(site, ops)];
-  if (refused.length) throw new HttpError(422, "the seed is refused", refused);
   const db = c.env.DB;
+  const aliases = [...(site.aliases ?? [])].sort();
+  const refused = [
+    ...ops.flatMap(uploadProblems),
+    ...refusals(site, ops),
+    ...(await aliasCollisions(db, site.name, aliases)),
+  ];
+  if (refused.length) throw new HttpError(422, "the seed is refused", refused);
   const now = new Date(c.now).toISOString();
   await seedSite(db, site, now);
+  // a seed's spec is the whole of a seeded site's context: aliases it no longer lists go
+  await setAliases(db, site.name, aliases);
   const out: { name: string; hash: string; status: Status }[] = [];
   for (const op of ops) {
     const hash = await versionHash(site.name, op);
@@ -689,7 +722,8 @@ async function landing(c: Ctx, name: string) {
  */
 async function wanted(c: Ctx, domain: string) {
   if (!cleanDomain(domain)) throw new HttpError(404, "no wanted page for that domain");
-  for (const name of await sitesOn(c.env.DB, domain))
+  const known = await aliasOwner(c.env.DB, domain);
+  for (const name of [...(await sitesOn(c.env.DB, domain)), ...(known ? [known] : [])])
     if ((await catalog(c.env.DB, undefined, name)).length)
       return new Response(null, { status: 301, headers: { location: `/sites/${encodeURIComponent(name)}` } });
   const networks = await demandFor(c.env.DB, domain, demandSince(c));
@@ -737,6 +771,7 @@ const ROUTES: [method: string, path: RegExp, handler: Handler, auth?: Auth, maxB
   ["GET", /^\/v1\/claims$/, claims, "signed"],
   ["POST", /^\/v1\/admin\/versions\/([0-9a-f]{64})$/, adminVersion, "admin"],
   ["POST", /^\/v1\/admin\/seed$/, adminSeed, "admin", MAX_SEED],
+  ["POST", new RegExp(`^/v1/admin/sites/${NAME}/aliases$`), adminAliases, "admin"],
   ["GET", /^\/$/, home],
   ["GET", new RegExp(`^/sites/${NAME}/?$`), landing],
   ["GET", new RegExp(`^/wanted/${DOMAIN}/?$`), wanted],
@@ -811,7 +846,8 @@ export default {
   },
 
   /**
-   * Every minute: recount the versions whose recount a report found held back. Daily: archive stale
+   * Every minute: recount the versions whose recount a report found held back, then replay a few
+   * versions held only for a skipped clean replay (replay.ts). Daily: archive stale
    * candidates and degraded versions, and degraded versions a newer live one replaced; delete what was
    * archived over 30 days ago, with its reports; recount every version as reports age out.
    */
@@ -820,6 +856,12 @@ export default {
     const t = thresholds(env);
     if (controller.cron === EVERY_MINUTE) {
       for (const v of await pendingVersions(env.DB)) await judge(env.DB, t, now, v, true);
+      // a site's answer never holds the recounts up, and a failure here is the next minute's to retry
+      try {
+        await replaySkipped(env, now);
+      } catch (e) {
+        console.error(e);
+      }
       return;
     }
     const cutoff = new Date(now - t.recentDays * DAY).toISOString();

@@ -156,12 +156,15 @@ export interface Archivable {
   createdAt: string;
   /** the last ok from an install other than the uploader */
   lastOkAt?: string;
+  /** when the registry's own replay made it a candidate, out of review */
+  promotedAt?: string;
 }
 
 /**
  * The versions the daily job archives: a candidate or a degraded version with no ok since `cutoff`, and a
  * degraded version older than a live version of the same op, which replaced it. Never a live version: a
- * newer live one may be a takeover, so the old one leaves live only by degrading.
+ * newer live one may be a takeover, so the old one leaves live only by degrading. A version the registry
+ * promoted out of review is counted from the promotion, as a fresh upload is from its upload.
  */
 export function toArchive<V extends Archivable>(versions: V[], cutoff: string): V[] {
   const newestLive = new Map<string, string>();
@@ -172,7 +175,8 @@ export function toArchive<V extends Archivable>(versions: V[], cutoff: string): 
   return versions.filter((v) => {
     if (v.status !== "candidate" && v.status !== "degraded") return false;
     const replaced = v.status === "degraded" && v.createdAt < (newestLive.get(`${v.site}\n${v.op}`) ?? "");
-    const stale = (v.lastOkAt ?? v.createdAt) < cutoff;
+    const since = v.lastOkAt ?? v.createdAt;
+    const stale = (v.promotedAt && v.promotedAt > since ? v.promotedAt : since) < cutoff;
     return replaced || stale;
   });
 }

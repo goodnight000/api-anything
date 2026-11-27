@@ -172,9 +172,53 @@ describe("add: what it refuses to save, and what it doubts", () => {
         from: { capture: await captureOf(fx, "/stores?city=x", "/private?q=kittens"), id: 2 },
         response: { html: { items: "li", fields: { name: "" } } },
       }),
-      /refusing to save .*sign-in page.*api-anything login walled-add.*then add again/,
+      // no site "walled-add" yet: the login names the page as typed, keeping its session under the add's name
+      /refusing to save .*sign-in page.*api-anything login '[^']+\/stores\?city=x' --site walled-add, then add again/,
     );
     assert.equal(loadSite("walled-add"), undefined);
+  });
+
+  test("a sign-in or challenge hint names the page as typed, never a captured request's signed address", async () => {
+    const SIG = "X-Amz-Signature=5ec7e75ec7e7";
+    // the op's request carries a signed query string; the page typed carries none
+    await assert.rejects(
+      addOperation({
+        site: "walled-signed",
+        op: "secret",
+        examples: [{ q: "kittens" }],
+        from: { capture: await captureOf(fx, "/stores?city=x", `/private?q=kittens&${SIG}`), id: 2 },
+        response: { html: { items: "li", fields: { name: "" } } },
+      }),
+      (e: Error) => {
+        assert.doesNotMatch(e.message, /5ec7e75ec7e7/, e.message);
+        assert.match(e.message, /api-anything login '[^']+\/stores\?city=x' --site walled-signed, then add again/);
+        return true;
+      },
+    );
+    // a challenge the page's own document answered with, at a signed address of the site
+    const capture = await captureOf(fx, "/stores?city=york", "/api/stores?city=york");
+    capture.exchanges[0] = {
+      ...capture.exchanges[0]!,
+      request: { method: "GET", url: `${fx.url}/stores?city=york&${SIG}`, headers: {} },
+      response: {
+        status: 403,
+        headers: { "content-type": "text/html", "cf-mitigated": "challenge" },
+        body: "<html><head><title>Just a moment...</title></head></html>",
+        contentType: "text/html",
+      },
+    };
+    capture.exchanges.pop();
+    await assert.rejects(
+      addOperation({ site: "walled-signed", op: "near", examples: [{ city: "york" }], from: { capture, id: 3 } }),
+      (e: Error) => {
+        assert.doesNotMatch(e.message, /5ec7e75ec7e7/, e.message);
+        assert.match(
+          e.message,
+          /challenge.*api-anything login '[^']+\/stores\?city=york' --site walled-signed --window/,
+        );
+        return true;
+      },
+    );
   });
 });
 

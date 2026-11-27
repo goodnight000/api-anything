@@ -26,12 +26,22 @@ import { adopt, pull } from "../src/registry.js";
 import { anonymous, fingerprintText } from "../src/registry-api.js";
 import { afterCall, settle } from "../src/report.js";
 import { mergeCapture, type Session, saveSession } from "../src/session.js";
-import { answerClaims, HOLDOUT_PURPOSE, healBack, shareOps } from "../src/share.js";
+import { answerClaims, HOLDOUT_PURPOSE, healBack, shareOps as shareWith } from "../src/share.js";
 import { parseSite, type Site } from "../src/spec.js";
 import { exportSite, loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 import { vetShared } from "../src/vet.js";
 import { type FakeRegistry, hashOf, served, startRegistry } from "./fixture/registry.js";
+
+/** shareOps as its callers call it: a clean replay's evidence comes with the op it proved, the one on disk */
+const shareOps: typeof shareWith = (site, ops, o) =>
+  shareWith(
+    site,
+    ops,
+    o?.evidence.cleanReplay !== undefined && !o.proved
+      ? { ...o, proved: loadSite(site)?.site.operations.find((x) => ops.includes(x.name)) }
+      : o,
+  );
 
 let fake: FakeRegistry;
 let onUpload: FakeRegistry["onUpload"];
@@ -1078,6 +1088,26 @@ test("a heal that keeps a value of the call that healed it is not shared back", 
   assert.doesNotMatch(JSON.stringify(u!.operation.request), /jane/);
 });
 
+test("a call answered by the site's cookie-consent page reports nothing about the version", async () => {
+  shareOn();
+  const spec = site();
+  saveSite(spec);
+  const hash = "d".repeat(64);
+  const was = { ...spec.operations[0]!, version: { hash, status: "live" } };
+  const walled = { ok: false, class: "error", wall: "consent", tier: 1, ms: 5 } as CallResult;
+  afterCall("demo", was, "registry", walled);
+  await settle(5000);
+  assert.equal(fake.reports().length, 0, "the page asked this visitor a question: no word on the version");
+  // the same error without the wall is the version's failure, as before
+  const { wall: _, ...failed } = walled;
+  afterCall("demo", was, "registry", failed as CallResult);
+  await settle(5000);
+  assert.deepEqual(
+    fake.reports().map((r) => [r.hash, r.outcome]),
+    [[hash, "fail"]],
+  );
+});
+
 test("spelled: a call's value in what a heal learned, in the encodings a page copies it in", () => {
   const args = { q: "Jane Private Lookup", id: 48213, exact: true, tags: ["rare-orchids"], n: "ab" };
   const hit = (text: string) => spelled({ url: `https://www.example.com/api?${text}` }, args);
@@ -1189,6 +1219,28 @@ test("background verification checks the version a job names, even one its site 
   fake.jobs = [{ ...job, operation: tampered, baseUrl: other.baseUrl }];
   assert.equal(await verifyCandidates({ fetchImpl, minIntervalMs: 0, now }), 0);
   assert.deepEqual(sent, []);
+});
+
+test("background verification reports nothing for a candidate its consent wall answered", async () => {
+  shareOn();
+  const cand = site();
+  fake.sites.set("demo", served(cand, undefined, "candidate"));
+  const hash = hashOf("demo", cand.operations[0]!);
+  fake.jobs = [{ hash, site: "demo", op: "search", args: { q: "walled" } }];
+  const page =
+    '<!doctype html><html><head><title>Before you continue</title></head><body><h1>Before you continue</h1><form action="https://consent.example.com/save" method="post"><button>Reject all</button><button>Accept all</button></form></body></html>';
+  const fetchImpl = (async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    if (url.hostname === "consent.example.com")
+      return new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } });
+    return new Response("", {
+      status: 302,
+      headers: { location: `https://consent.example.com/m?continue=${encodeURIComponent(url.href)}` },
+    });
+  }) as typeof fetch;
+  const before = fake.reports().length;
+  assert.equal(await verifyCandidates({ fetchImpl, minIntervalMs: 0, now: new Date("2026-10-29T12:00:00Z") }), 1);
+  assert.deepEqual(fake.reports().slice(before), [], "a consent wall says nothing about the version");
 });
 
 test("background verification stops when the client goes away", async () => {

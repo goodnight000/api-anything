@@ -4,6 +4,7 @@
  */
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { AttachError, attached, windowWhere } from "./attach.js";
 import {
   atStep,
   browserAvailable,
@@ -13,7 +14,16 @@ import {
   TRIGGER_BUDGET_MS,
   waitReport,
 } from "./browser.js";
-import { botWall, type Class, judge, type Observed, pickedShape } from "./classify.js";
+import {
+  botWall,
+  type Class,
+  consentPage,
+  consentReason,
+  consentStep,
+  judge,
+  type Observed,
+  pickedShape,
+} from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, type Step, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
@@ -34,6 +44,7 @@ import {
   UUID,
   unplaced,
 } from "./learn.js";
+import { loginHint } from "./login.js";
 import { sendDerived } from "./lookup.js";
 
 export { unplaced };
@@ -79,7 +90,7 @@ import {
   templateHash,
   updateSite,
 } from "./store.js";
-import type { CaptureResult, Exchange, TriggerStep } from "./types.js";
+import type { CaptureResult, Exchange, StoredCookie, TriggerStep } from "./types.js";
 import {
   badAddress,
   graphqlDocuments,
@@ -94,6 +105,19 @@ import {
 } from "./vet.js";
 
 export const profileDir = () => join(home(), "profile");
+
+/**
+ * The stored cookies a run in an attached browser (API_ANYTHING_CDP) starts with, where api-anything's
+ * own profile would hold them: none for someone else's spec, and none when the jar cannot be read.
+ */
+function attachedJar(site: string, shared = false): StoredCookie[] | undefined {
+  if (!attached() || shared) return undefined;
+  try {
+    return loadSession(site).cookies;
+  } catch {
+    return undefined;
+  }
+}
 
 /** One transport try, judged. `ambiguous`: no response came back, so a write may have run. */
 export interface Attempt {
@@ -128,6 +152,12 @@ export interface Attempt {
   retryAfterMs?: number;
   /** the step `hint` asks for, when it is not the class's usual one; see CallResult.nextCall */
   step?: NextAction;
+  /** the same-site page the request was sent to instead of its data; see Classified.unfinished */
+  unfinished?: string;
+  /** with `unfinished`: that page is the site's cookie-consent step */
+  wall?: "consent";
+  /** the data is from the part of an event stream read before a bound; see Observed.truncated */
+  truncated?: string;
 }
 
 export const PROFILE_HINT =
@@ -510,6 +540,8 @@ export interface TriggerRun {
   unsaved?: string;
   /** the trigger landed on a sign-in page instead of the content */
   loginWall?: string;
+  /** a read's trigger was redirected to the site's cookie-consent page, at this address, instead of the content */
+  consent?: string;
   /** a write's own request was sent again by the page this many times, and stopped each time */
   repeats?: number;
   /** a write's own request was answered with a redirect that would have sent it again, and was stopped */
@@ -594,6 +626,30 @@ export function loginWall(capture: CaptureResult, triggerUrl: string): string | 
   return password || /(log|sign)[-_]?in|\/accounts\/login|\/i\/flow\/login/i.test(f.pathname) ? f.pathname : undefined;
 }
 
+/**
+ * The final page of a run, when the trigger was redirected to the site's cookie-consent step
+ * (`consentStep`), by the tier-1 classifier's own test (`consentPage`): only a 2xx page that is no bot
+ * challenge (and no sign-in page, which `consentStep` refuses); an outage or a challenge there stays what it is.
+ */
+export function consentWall(capture: CaptureResult, triggerUrl: string): string | undefined {
+  const doc =
+    lastLoad(capture) ??
+    capture.exchanges.filter((e) => e.resourceType === "document" && e.response?.body).at(-1)?.response;
+  if (!doc) return undefined;
+  return consentPage(triggerUrl, capture.finalUrl, { status: doc.status, headers: doc.headers, body: doc.body ?? "" })
+    ? capture.finalUrl
+    : undefined;
+}
+
+/** A read that ended on the site's cookie-consent page at `url`: an error, which nothing heals. */
+export const consentAttempt = (tier: Attempt["tier"], url: string): Attempt => ({
+  tier,
+  class: "error",
+  reason: consentReason(url),
+  unfinished: url,
+  wall: "consent",
+});
+
 /** Run an op's trigger with args in the shared profile and refresh the session from it. */
 export async function runOpTrigger(
   site: string,
@@ -603,6 +659,8 @@ export async function runOpTrigger(
 ): Promise<TriggerRun> {
   const refused = triggerRefusal(op.trigger, args);
   if (refused) throw new Error(`not opening ${op.name}'s page: ${refused}`);
+  // a logout while the run is out wins over what the run brings back (mergeCapture's `since`)
+  const started = Date.now();
   const t = fillTrigger(op.trigger, args);
   // What a read's guard stopped never left: it is no answer of the read's, and the run does not end on
   // it (seen: a click's POST to the address a GET read matches by path, taken for the read's answer).
@@ -614,7 +672,14 @@ export async function runOpTrigger(
   // Intercepted, a write's confirm sends nothing, so learning accepts it. For real, only what its
   // learning recorded is accepted, the question asked with this call's values; a read accepts none.
   const confirm = o.intercept ? () => true : once ? recordedConfirms(op.trigger.confirms ?? [], args) : undefined;
-  const capture = await runTrigger({ ...t, profileDir: profileDir(), intercept, match: isHit, confirm });
+  const capture = await runTrigger({
+    ...t,
+    profileDir: profileDir(),
+    intercept,
+    match: isHit,
+    confirm,
+    jar: attachedJar(site, shared),
+  });
   const hits = capture.exchanges.filter(isHit);
   // a real write's answer is a request that left: a repeat that was stopped answers nothing
   const sent = o.intercept || op.readOnly ? hits : hits.filter((e) => !e.aborted);
@@ -626,7 +691,7 @@ export async function runOpTrigger(
   const captured = source && { from: source.request.url, values };
   let unsaved: string | undefined;
   try {
-    mergeCapture(site, capture.cookies, captured);
+    mergeCapture(site, capture.cookies, captured, undefined, undefined, { since: started });
   } catch (e) {
     // A real write has left by now: a session that could not be saved (a busy lock, a read-only home)
     // must not turn its answer into a failure that reads as unsent and gets it sent again. The site may
@@ -637,6 +702,7 @@ export async function runOpTrigger(
   // a redirect is no answer: where the page ended up says what it was
   const hop = matched?.response && matched.response.status >= 300 && matched.response.status < 400;
   const wall = matched?.response && !hop ? undefined : loginWall(capture, t.url);
+  const consent = op.readOnly && !(matched?.response && !hop) ? consentWall(capture, t.url) : undefined;
   const { repeats, resends, others } = once?.stopped ?? {};
   const stopped = [...(others ?? [])];
   const left = [...(once?.left ?? [])];
@@ -646,6 +712,7 @@ export async function runOpTrigger(
     values,
     ...(unsaved ? { unsaved } : {}),
     ...(wall ? { loginWall: wall } : {}),
+    ...(consent ? { consent } : {}),
     ...(repeats ? { repeats } : {}),
     ...(resends ? { resends } : {}),
     ...(stopped.length || left.length ? { others: { stopped, left } } : {}),
@@ -740,7 +807,10 @@ export function cutShort(op: Pick<Operation, "trigger" | "readOnly">, capture: C
 /** The run ended on a bot challenge that did not solve: its requests never fired, which says nothing about the op. */
 export function challengePage(capture: CaptureResult): Attempt | undefined {
   const doc = lastLoad(capture);
-  const wall = doc && botWall({ status: doc.status, headers: doc.headers, body: doc.body ?? "" });
+  // a run sent from its first page to a consent address ends where the data was expected (consentPage)
+  const first = capture.exchanges.find((e) => e.resourceType === "document")?.request.url;
+  const atConsent = !!doc && !!first && consentStep(first, capture.finalUrl, doc.body ?? "");
+  const wall = doc && botWall({ status: doc.status, headers: doc.headers, body: doc.body ?? "" }, atConsent);
   return wall ? { tier: 3, class: "blocked", reason: `the trigger page stayed a bot challenge (${wall})` } : undefined;
 }
 
@@ -751,7 +821,13 @@ export function judgeExchange(op: Operation, e: Exchange): Attempt | undefined {
   return {
     tier: 3,
     status: r.status,
-    ...judged(op, { status: r.status, headers: r.headers, body: r.body ?? "", url: e.request.url }),
+    ...judged(op, {
+      status: r.status,
+      headers: r.headers,
+      body: r.body ?? "",
+      url: e.request.url,
+      truncated: r.truncated,
+    }),
   };
 }
 
@@ -1060,11 +1136,16 @@ export function putOperation(site: Site, op: Operation): Site {
   return { ...site, operations: [...rest, op] };
 }
 
-/** learnOperation, but a failure on a page that was a bot wall says so (the recipe or the pick is not the problem). */
+/**
+ * learnOperation, but a failure on a page that was a bot wall says so (the recipe or the pick is not
+ * the problem). `page`: the trigger page as the caller typed it, with its args: the one address a hint
+ * names, never one a captured request went to (a signed query string holds a credential).
+ */
 function learnOrExplain(
   site: string,
   run: CaptureResult,
   input: Parameters<typeof learnOperation>[0],
+  page: string,
 ): ReturnType<typeof learnOperation> {
   try {
     return learnOperation(input);
@@ -1078,7 +1159,7 @@ function learnOrExplain(
       botWall({ status: doc.response.status, headers: doc.response.headers, body: doc.response.body ?? "" });
     if (wall)
       throw new Error(
-        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} --window and clear it, then add again (learning said: ${(e as Error).message})`,
+        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${loginHint(site, page).cli} --window${windowWhere()} and clear it, then add again (learning said: ${(e as Error).message})`,
       );
     const asked = input.readOnly && run.dialogs?.find((d) => d.type === "confirm" && !d.accepted);
     if (asked)
@@ -1090,10 +1171,11 @@ function learnOrExplain(
 }
 
 /** The recipe finds data in this body (a non-empty list, or a value). */
-function resolves(spec: ResponseSpec, body: string | undefined): boolean {
+function resolves(spec: ResponseSpec, answer: Exchange["response"]): boolean {
+  const body = answer?.body;
   if (!body) return false;
   try {
-    const d = within(() => extract(spec, body), DEADLINE.read);
+    const d = within(() => extract(spec, body, undefined, answer.contentType), DEADLINE.read);
     return d !== undefined && d !== null && !(Array.isArray(d) && !d.length);
   } catch {
     return false;
@@ -1111,7 +1193,13 @@ function answerOf(op: Operation, r: Observed | undefined): string | undefined {
 
 const observed = (e: Exchange | undefined): Observed | undefined =>
   e?.response
-    ? { status: e.response.status, headers: e.response.headers, body: e.response.body ?? "", url: e.request.url }
+    ? {
+        status: e.response.status,
+        headers: e.response.headers,
+        body: e.response.body ?? "",
+        url: e.request.url,
+        truncated: e.response.truncated,
+      }
     : undefined;
 
 /** Both runs answered, through the op's recipe, with the same data, and it is not empty. */
@@ -1170,7 +1258,8 @@ const recipeWarnings = (warnings: string[], r: Recipe) =>
 
 /**
  * The end of every add: judge the op on the answer it was learned from (a preview, or a warning that
- * says what to fix), then save it. `again`: the capture a fixed recipe can be tried on.
+ * says what to fix), then save it. `again`: the capture a fixed recipe can be tried on. `page`: the
+ * trigger page as typed, which a sign-in hint names (`learnOrExplain`).
  */
 function saveOperation(
   site: string,
@@ -1179,6 +1268,7 @@ function saveOperation(
   warnings: string[],
   session: Session,
   again: string | undefined,
+  page: string,
   examples: readonly (Record<string, unknown> | undefined)[] = [],
 ): Omit<AddResult, "captures"> {
   let preview: AddResult["preview"];
@@ -1189,6 +1279,7 @@ function saveOperation(
       headers: res.headers,
       body: res.body ?? "",
       url: exchange.request.url,
+      truncated: res.truncated,
     });
     if (j.class === "ok") preview = previewOf(j.data);
     else if (learnedNothing(j)) {
@@ -1197,7 +1288,7 @@ function saveOperation(
         `refusing to save ${operation.name}: the captured response is ${j.class}: ${j.reason}, so it was learned from ${j.class === "rate" ? "a throttled answer" : j.class === "error" ? "a server failure" : "a challenge or sign-in page"}, not the op's own answer. ` +
           (j.class === "rate" || j.class === "error"
             ? "Wait a few minutes, then add again"
-            : `Ask the user to run api-anything login ${site}${j.class === "blocked" ? " --window and clear the challenge" : ""}, then add again`),
+            : `Ask the user to run api-anything login ${loginHint(site, page).cli}${j.class === "blocked" ? ` --window${windowWhere()} and clear the challenge` : ""}, then add again`),
       );
     } else
       warnings.push(
@@ -1226,6 +1317,7 @@ function saveOperation(
 }
 
 export async function addOperation(input: AddInput): Promise<AddResult> {
+  const started = Date.now();
   const stood = standIn(input.paging, input.examples, input.from, input.from2);
   const i = { ...input, site: safeName(input.site), ...stood };
   const existing = loadSite(i.site)?.site;
@@ -1287,6 +1379,8 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     if (!existing) throw new Error(`relative trigger ${trigger.url} needs an existing site; use a full URL`);
     trigger = { ...trigger, url: existing.baseUrl.replace(/\/$/, "") + trigger.url };
   }
+  // the page a hint names: as typed, with example 1's args
+  const page = fillTrigger(trigger, ex1).url;
   // a cursor is no part of the page's address: it is the site's answer to an earlier page
   const missing = unplaced(trigger, ex1).filter((k) => !(i.paging?.next && k === i.paging.param));
 
@@ -1314,6 +1408,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
             ? learnGuard(i.match)
             : undefined,
         confirm: i.write ? () => true : undefined,
+        jar: attachedJar(i.site),
       });
       const saved = saveCapture({ url: t.url, steps: t.steps, softFrom: t.softFrom, write: i.write }, r);
       captures.push(saved.id);
@@ -1327,10 +1422,15 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       return saved;
     };
     run1 = await run(ex1);
-    const wall = loginWall(run1, fillTrigger(trigger, ex1).url);
+    const wall = loginWall(run1, page);
     if (wall)
       throw new Error(
-        `the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${i.site}; then add again`,
+        `the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${loginHint(i.site, page).cli}; then add again`,
+      );
+    const consent = i.write ? undefined : consentWall(run1, page);
+    if (consent)
+      throw new Error(
+        `${consentReason(consent)}. Ask the user to run api-anything login ${loginHint(i.site, page).cli} --window${windowWhere()}, make the choice on the site's page there and close the window; then add again`,
       );
     run2 = await run(ex2 ?? ex1);
   }
@@ -1342,24 +1442,29 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       : flags;
   const spec: ResponseSpec = { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r };
   const learn = () =>
-    learnOrExplain(i.site, run1, {
-      exchanges: run1.exchanges,
-      pages: capturePages(run1),
-      exchanges2: run2?.exchanges,
-      examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
-      cookies: (run2 ?? run1).cookies,
-      storage: { ...run2?.storage, ...run1.storage },
-      match: i.match,
-      id: i.from?.id,
-      name: i.op,
-      trigger,
-      readOnly: !i.write,
-      loginCookies: existing?.loginCookies,
-      guestCookies: loadSession(i.site).guestCookies,
-      public: i.public,
-      // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
-      ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response?.body) } : {}),
-    });
+    learnOrExplain(
+      i.site,
+      run1,
+      {
+        exchanges: run1.exchanges,
+        pages: capturePages(run1),
+        exchanges2: run2?.exchanges,
+        examples: run2 ? [ex1, ex2 ?? ex1] : [ex1],
+        cookies: (run2 ?? run1).cookies,
+        storage: { ...run2?.storage, ...run1.storage },
+        match: i.match,
+        id: i.from?.id,
+        name: i.op,
+        trigger,
+        readOnly: !i.write,
+        loginCookies: existing?.loginCookies,
+        guestCookies: loadSession(i.site).guestCookies,
+        public: i.public,
+        // With a response recipe, the request it resolves on is the answer (not a beacon echoing the page URL).
+        ...(r.html || r.embedded || r.extract ? { accepts: (e: Exchange) => resolves(spec, e.response) } : {}),
+      },
+      page,
+    );
   let learned: ReturnType<typeof learn>;
   // said when the stored examples do not fit the capture
   const stored = () =>
@@ -1487,6 +1592,8 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       urls: opUrls(operation),
       pages: opPages(operation, examples),
     },
+    undefined,
+    { since: started },
   );
 
   // Values that differ between two page loads are often session-scoped ids, not per-request
@@ -1545,7 +1652,7 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
   }
 
   const again = captures[0] ?? i.from?.capture.id;
-  const saved = saveOperation(i.site, operation, learned.exchange, warnings, session, again, examples);
+  const saved = saveOperation(i.site, operation, learned.exchange, warnings, session, again, page, examples);
   rememberTier(i.site, operation.name, undefined);
   return { ...saved, captures };
 }
@@ -1844,7 +1951,9 @@ export type HealResult =
 // A check answered with these, or with the server's own failure, says nothing about the candidate:
 // stop, and don't spend a browser run on it.
 const STOP: ReadonlySet<Class> = new Set(["rate", "blocked", "auth"]);
-export const learnedNothing = (a: Pick<Attempt, "class" | "server">) => STOP.has(a.class) || !!a.server;
+// A page the site wants finished first (a consent step) says nothing about the request either.
+export const learnedNothing = (a: Pick<Attempt, "class" | "server" | "unfinished">) =>
+  STOP.has(a.class) || !!a.server || !!a.unfinished;
 
 function saveHealed(
   site: string,
@@ -1988,6 +2097,7 @@ export async function healOperation(
     browser?: boolean;
   },
 ): Promise<HealResult> {
+  const started = Date.now();
   let budget = op.readOnly ? 2 : 1;
   let last: Attempt | undefined;
   const callArgs = withDefaults(op, args);
@@ -2040,6 +2150,9 @@ export async function healOperation(
         transient: true,
         reason,
       };
+    // nor when the attached browser was refused or did not answer
+    if (e instanceof AttachError)
+      return { outcome: "failed", attempt: { tier: 3, class: "error", reason, hint: e.next }, transient: true, reason };
     // the page did not load: nothing it would have sent was seen
     if (e instanceof PageUnreachable)
       return { outcome: "failed", attempt: { tier: 3, class: "error", reason, server: true }, transient: true, reason };
@@ -2054,6 +2167,10 @@ export async function healOperation(
       attempt: { tier: 3, class: "auth", reason: `the trigger landed on a sign-in page (${run.loginWall})` },
       reason: `the trigger landed on a sign-in page (${run.loginWall})`,
     };
+  }
+  if (run.consent) {
+    const a = consentAttempt(3, run.consent);
+    return { outcome: "failed", transient: true, attempt: a, reason: a.reason };
   }
   // A read learns from what left the browser. What its guard stopped is not the read's request: learned,
   // it would be replayed from here as one (seen: a GET read healed into the POST its click sends).
@@ -2152,6 +2269,8 @@ export async function healOperation(
     [],
     { from: fresh.request.url, values: sessionValues },
     { settings, urls: opUrls(fresh), pages: opPages(fresh, [learnArgs, callArgs]) },
+    undefined,
+    { since: started },
   );
   // An arg equal to a constant the old template had there ("search" in /api/search) is not a param position.
   const oldLeaves = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.value.toLowerCase()]));

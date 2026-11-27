@@ -4,6 +4,7 @@
  * reactive only.
  */
 import { randomBytes } from "node:crypto";
+import { AttachError } from "./attach.js";
 import {
   browserAvailable,
   type PageFetchResult,
@@ -14,13 +15,14 @@ import {
 } from "./browser.js";
 import { BudgetSpent, limited, PaceConfigError, type SendBudget, sitePace } from "./budget.js";
 import { type Changes, capChanges, changesOf } from "./changes.js";
-import { type Class, judge } from "./classify.js";
+import { type Class, judge, signedInRead } from "./classify.js";
 import { asText, fillTemplate, templateRefs } from "./codec.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { getPath, MAX_PAGE_ELEMENTS } from "./extract.js";
 import {
   type Attempt,
   challengePage,
+  consentAttempt,
   cutShort,
   fillTrigger,
   firedNothing,
@@ -89,6 +91,10 @@ import {
   watchKey,
 } from "./snapshots.js";
 import { type Operation, readbackName, type Site } from "./spec.js";
+import { bareCall, coolStep, type Wall, wallSaid, wallStep } from "./wall.js";
+
+export { bareCall };
+
 import {
   appendCall,
   BLOCKED_COOL_MS,
@@ -207,6 +213,8 @@ export interface NextCall {
   op?: string;
   /** login: a visible window, for a challenge or a sign-in the user clears by hand */
   mode?: "window";
+  /** login: the page to open, for a site not learned yet; its session is kept under `site` */
+  url?: string;
   /** raise_tier: the tier the call needs */
   tier?: Tier;
   /**
@@ -264,6 +272,11 @@ export interface CallResult {
   retryAfterMs?: number;
   /** failures only: `next` as data */
   nextCall?: NextCall;
+  /**
+   * `error` only: the site redirected the read to its cookie-consent page instead of the data. The
+   * operation is fine; the visitor has a question to answer (`next`)
+   */
+  wall?: "consent";
   /** the server failed or could not be reached: the answer says nothing about the request or the args */
   server?: true;
   /** the site cools down after a rate limit or block: nothing was sent, so no version of the op answered */
@@ -431,22 +444,6 @@ export function unsendable(site: string, op: Operation, e: unknown): Result {
   return { ok: false, class: "input", reason: (e as Error).message, next };
 }
 
-/**
- * Whether this op goes without the user's cookies and session values: a request that is no GET or HEAD,
- * of a spec an agent pulled (page text may have steered it there), may change something whatever the
- * spec says it is. A human's pull and a bundled spec upgraded from the registry keep them: the registry
- * serves no such op to anyone but its uploader until a maintainer reviewed it (a POST read, a slot
- * holding a cookie or session ref), and the seeded POST reads need theirs (airbnb search).
- */
-export function bareCall(site: Pick<Site, "shared">, op: Operation): boolean {
-  // An unreviewed candidate is a public read by the registry's rules, so it needs no session; and a
-  // GET can do harm with the user's cookies too (a one-click account action), whoever pulled it.
-  if (site.shared && op.version?.status === "candidate") return true;
-  if (site.shared?.by !== "agent") return false;
-  const method = op.request.method.toUpperCase();
-  return method !== "GET" && method !== "HEAD";
-}
-
 /** The session a call of `op` may send (none when `bareCall`), filtered in memory: no file is written. */
 export function callSession(site: Pick<Site, "shared">, op: Operation, session: Session, theirs = false): Session {
   if (bareCall(site, op)) return NO_SESSION;
@@ -483,9 +480,23 @@ function writeStatus(log: Attempt[]): WriteStatus {
   return "not_sent";
 }
 
-/** The step an attempt's own facts ask for, before the class's usual one. */
-export function stepOf(a: Attempt): Partial<Result> {
+/**
+ * The step an attempt's own facts ask for, before the class's usual one. `op`: whose read it was, for
+ * a page the site wants finished first (a public read's consent step is answered in a window).
+ */
+export function stepOf(a: Attempt, op?: Operation, site?: string): Partial<Result> {
   const wait = a.retryAfterMs !== undefined ? { retryAfterMs: a.retryAfterMs } : {};
+  // a wall's step is what can reach this call (wall.ts), the same one `next` says
+  const w = op && wallOf(a, op);
+  const walled = site && op && w ? wallStep(site, op, sharedOf(site), w) : undefined;
+  if (walled) return { ...wait, ...(a.wall ? { wall: a.wall } : {}), nextCall: walled.nextCall, retry: walled.retry };
+  if (a.unfinished) {
+    const windowed = a.wall === "consent" && !!op && !signedInRead(op);
+    return {
+      ...(a.wall ? { wall: a.wall } : {}),
+      nextCall: { action: "login", ...(windowed ? { mode: "window" as const } : {}) },
+    };
+  }
   if (a.hint === PROFILE_HINT) return { ...wait, nextCall: { action: "retry" }, retry: "after_wait" };
   // refused to this network or region: no tier, login or wait changes that
   if (a.class === "blocked" && a.status === 451) return { nextCall: { action: "report" }, retry: "no" };
@@ -546,6 +557,46 @@ export function finish(r: Result, op: Operation | undefined, site: string | unde
 const REGION =
   "the site says this is not available from this network or region (HTTP 451): do not retry; tell the user";
 
+/** The `shared` record of the site's spec on disk: who wrote it decides what a wall's step can reach (wall.ts). */
+function sharedOf(site: string): Site["shared"] {
+  try {
+    return loadSite(site)?.site.shared;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The wall `a` met, when it is one: a page the site wants finished first (a public read's consent
+ * step among them), a bot challenge, or a refusal of this network. A 451 and a block with its own hint
+ * are no wall a window or a step of the user's clears.
+ */
+function wallOf(a: Attempt, op: Operation): Wall | undefined {
+  if (a.unfinished)
+    return { kind: a.wall === "consent" && !signedInRead(op) ? "consent" : "page", at: shownAddress(a.unfinished) };
+  if (a.class === "blocked" && a.status !== 451 && !a.hint) return { kind: a.missing ? "refused" : "challenge" };
+  return undefined;
+}
+
+/** A hint that already says the write may have run, and asks for no send (tryTier's). */
+const SAYS_RAN = /\bmay have (run|gone through)\b/;
+
+/**
+ * What to do after a write the server may have run, whatever else the answer met: check the site.
+ * Nothing in it invites a second send; a wall the write met is named, not offered as a step.
+ */
+function ranNext(c: CallResult["class"], site: string, op: Operation, a: Attempt, signIn: string): string {
+  if (a.hint && SAYS_RAN.test(a.hint)) return a.hint;
+  if (c === "drift")
+    return `the write may have run: check the site first, then re-learn it with api-anything add ${site} ${op.name} ... --write`;
+  if (c === "auth") return `ask the user to ${signIn}; then check the site, and retry only if the write is not there`;
+  const check = "the write may have gone through: check the site before any retry";
+  const w = wallOf(a, op);
+  return w
+    ? `${check}. The site answered it with a wall (${wallSaid(w)}), which may stand in front of the write's own answer; clearing it does not tell whether the write ran`
+    : check;
+}
+
 /** `signIn`: how the user signs in again, when it is not `api-anything login` (`reimportIfBrowser`) */
 function nextFor(
   c: CallResult["class"],
@@ -557,33 +608,45 @@ function nextFor(
   if (c === "ok") return undefined;
   if (c === "refused")
     return "only if the user asked for this write: rerun with --allow-writes (MCP: start the server with --allow-writes)";
+  // Asked before any other hint: a write the server may have run is never invited to a second send.
+  if (a && !op.readOnly && statusOf(a) === "may_have_applied") return ranNext(c, site, op, a, signIn);
+  const w = a && wallOf(a, op);
+  const walled = w && wallStep(site, op, sharedOf(site), w);
+  if (walled) return walled.next;
+  if (a?.unfinished) return unfinishedNext(site, op, a.unfinished, a.wall);
   if (a?.hint) return a.hint;
-  // A write the server may have run: never invite a second send.
-  const ran = !op.readOnly && a !== undefined && statusOf(a) === "may_have_applied";
-  if (ran && c !== "drift" && c !== "auth") return "the write may have gone through: check the site before any retry";
   if (a?.rejected && c === "error")
     return `the site refused the write, so it did not run: read reason, check the args against: api-anything ops ${site}; do not send it again unchanged`;
   switch (c) {
     case "auth":
-      return `ask the user to ${signIn}; then ${ran ? "check the site, and retry only if the write is not there" : "retry once"}`;
+      return `ask the user to ${signIn}; then retry once`;
     case "rate":
       return a?.retryAfterMs !== undefined
         ? "rate limited: do not retry before retryAfterMs (the time in reason)"
         : "rate limited: do not retry now; wait a few minutes";
     case "blocked":
       if (a?.status === 451) return REGION;
-      if (a?.missing)
-        return `the site refuses requests from this machine or network (a 403 with no challenge or sign-in to clear): do not retry as it is; a window may show why: ask the user to run api-anything login ${site} --window, then retry once`;
-      return `the site is challenging automated requests: ask the user to run api-anything login ${site} --window and clear the challenge in the window, then retry once`;
+      return wallStep(site, op, sharedOf(site), { kind: a?.missing ? "refused" : "challenge" })!.next;
     case "drift":
-      if (!op.readOnly)
-        return `${ran ? "the write may have run: check the site first, then " : ""}re-learn it with api-anything add ${site} ${op.name} ... --write`;
+      if (!op.readOnly) return `re-learn it with api-anything add ${site} ${op.name} ... --write`;
       return `api-anything heal ${site} ${op.name}; if that fails, re-learn it with api-anything add ${site} ${op.name} ...`;
     case "input":
       return `check the args against: api-anything ops ${site}`;
     default:
       return "retry once; if it fails the same way, stop and report the reason";
   }
+}
+
+/**
+ * What to do about a read sent to a page the site wants finished first, other than a public read's
+ * consent step (wall.ts). The address is the site's own text (where its redirect led): shown as a
+ * spec's address is. A signed-in read's session is the everyday browser's, and so is the page to finish.
+ */
+function unfinishedNext(site: string, op: Operation, at: string, wall?: "consent"): string {
+  const shown = shownAddress(at);
+  if (wall === "consent" && signedInRead(op))
+    return `the site asks for a cookie-consent choice first: ask the user to open ${shown} in their browser and finish it, then run api-anything login ${site}; then retry once`;
+  return `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${shown} in their browser and finish it, then run api-anything login ${site}; then retry once`;
 }
 
 function success(a: Attempt, extra: Partial<Result> = {}): Result {
@@ -594,6 +657,7 @@ function success(a: Attempt, extra: Partial<Result> = {}): Result {
     data: a.data,
     ...(a.nextPage !== undefined ? { nextPage: a.nextPage } : {}),
     ...(a.hasMore !== undefined ? { hasMore: a.hasMore } : {}),
+    ...(a.truncated ? { truncated: a.truncated } : {}),
     ...extra,
   };
 }
@@ -743,6 +807,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       const answer = run.matched && judgeExchange(op, run.matched);
       // the op's request was redirected and the run ended on a sign-in page: that page is the answer
       const judged = answer && answer.class === "error" && run.loginWall ? undefined : answer;
+      // the trigger page itself was sent to the site's consent step, so the op's own request never fired
+      const consent = run.consent && judged?.class !== "ok" ? consentAttempt(tier, run.consent) : undefined;
       // The page is told nothing of a redirect that was stopped, its status included: this is the answer.
       const resent: Attempt | undefined = run.resends
         ? {
@@ -754,6 +820,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
           }
         : undefined;
       const a: Attempt =
+        consent ||
         judged ||
         resent ||
         challengePage(run.capture) ||
@@ -792,6 +859,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       if (e instanceof DeadlineExceeded) return { tier, ...slowArgs(op, e), unsent: true };
     }
     const none = bareCall(ctx, op);
+    // a logout while this request is out wins over the cookies its answer sets (mergeCapture's `since`)
+    const loaded = Date.now();
     const session = none ? NO_SESSION : loadSession(ctx.site);
     let r: Sent | PageFetchResult;
     if (tier === 1) {
@@ -810,7 +879,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       if (sent.setCookies) ctx.seen.push(...sent.setCookies);
       if (sent.setCookies && !none) {
         try {
-          mergeCapture(ctx.site, sent.setCookies);
+          mergeCapture(ctx.site, sent.setCookies, undefined, undefined, undefined, { since: loaded });
         } catch {
           /* a read-only home still answers this call */
         }
@@ -836,6 +905,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
           // the page's own cookies, unless they may not go (`bare`)
           ...(none ? { credentials: "omit" as const } : {}),
           pace: () => pace(ctx.site, ctx.opts.minIntervalMs, ctx.budget),
+          // attached: what tier 1 may send of the user's own spec; someone else's spec gets none put in
+          ...(ctx.shared ? {} : { jar: session.cookies }),
           // tier 1's policy, one hop at a time: a page's own fetch() would follow with everything aboard
           redirect: async (from, status, location, taken) => {
             const next = nextHop(o, session, from, status, location, taken);
@@ -848,17 +919,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       r = await viaPage(await derive(op, viaPage));
     }
     const j = within(() => judge(op, r), DEADLINE.read);
-    const hint = j.unfinished
-      ? // the address is the site's own text (where its redirect led): shown as a spec's address is
-        `the site wants a page finished first (consent, terms, or verify it's you): ask the user to open ${shownAddress(j.unfinished)} in their browser and finish it, then run api-anything login ${ctx.site}; then retry once`
-      : undefined;
-    return pageTooLarge(op, {
-      tier,
-      status: r.status,
-      ...(r.redirected ? { redirected: true } : {}),
-      ...j,
-      ...(hint ? { hint, step: "login" as const } : {}),
-    });
+    return pageTooLarge(op, { tier, status: r.status, ...(r.redirected ? { redirected: true } : {}), ...j });
   } catch (thrown) {
     // nothing was sent: the call ends with the budget's answer (`run`)
     if (thrown instanceof BudgetSpent) throw thrown;
@@ -901,6 +962,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
     if (e instanceof LookupFailed) return { tier, ...e.judged, unsent: true };
     // nothing was sent when the browser could not start
     if (e instanceof ProfileInUse) return { tier, class: "error", reason: e.message, hint: PROFILE_HINT, unsent: true };
+    // the attached browser (API_ANYTHING_CDP) was refused or did not answer: nothing was sent
+    if (e instanceof AttachError) return { tier, class: "error", reason: e.message, hint: e.next, unsent: true };
     // the send slot's lock stayed busy (reserveSend): nothing was sent, and a retry may get it
     if (e instanceof SendSlotBusy) return { tier, class: "error", reason: e.message, hint: e.next, unsent: true };
     // any other busy lock may be one taken after the send (saving what it answered): a write may have run
@@ -1042,7 +1105,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     tier: b.tier,
     reason: b.reason,
     next: nextFor(b.class, ctx.site, op, b),
-    ...stepOf(b),
+    ...stepOf(b, op, ctx.site),
     ...(b.server ? { server: true as const } : {}),
     ...extra,
   });
@@ -1380,16 +1443,14 @@ function whereToLook(op: Operation, args: Record<string, unknown>, given: Record
   return `. Look on ${shownAddress(fillTrigger(op.trigger, args).url)}${read}`;
 }
 
-/** The answer while the site cools down (`coolAfter`): nothing is sent. */
-function cooled(c: CoolDown, site: string, now = Date.now()): Result {
-  const reason = `not sent: ${site} answered ${c.class} at ${new Date(c.at).toISOString()} (${c.reason}), so nothing goes to it until ${new Date(c.until).toISOString()}`;
+/** The answer while the site cools down (`coolAfter`): nothing is sent. `op`: the call's, whose reach decides the step. */
+function cooled(c: CoolDown, site: Site, op: Operation, now = Date.now()): Result {
+  const name = site.name;
+  const reason = `not sent: ${name} answered ${c.class} at ${new Date(c.at).toISOString()} (${c.reason}), so nothing goes to it until ${new Date(c.until).toISOString()}`;
   const wait = { ok: false, class: c.class, reason, retryAfterMs: Math.max(0, c.until - now), cooling: true as const };
   if (c.class === "rate") return { ...wait, next: "rate limited: do not retry before retryAfterMs; nothing was sent" };
   if (c.status === 451) return { ...wait, next: REGION, nextCall: { action: "report" }, retry: "no" };
-  return {
-    ...wait,
-    next: `the site blocked its last call at every tier: do not retry before retryAfterMs. To look sooner, ask the user to run api-anything login ${site} --window (a login ends the wait), then retry once`,
-  };
+  return { ...wait, ...coolStep(name, op, site.shared) };
 }
 
 /**
@@ -1405,7 +1466,12 @@ function coolAfter(site: string, op: Operation, r: Result, log: Attempt[]): void
   } else if (r.class === "blocked" && (last.status === 451 || last.tier === (op.readOnly ? 3 : 2)))
     coolDown(
       site,
-      { class: "blocked", reason: r.reason ?? last.reason, ...(last.status ? { status: last.status } : {}) },
+      {
+        class: "blocked",
+        reason: r.reason ?? last.reason,
+        op: op.name,
+        ...(last.status ? { status: last.status } : {}),
+      },
       BLOCKED_COOL_MS,
     );
 }
@@ -1480,6 +1546,8 @@ function shape(
       data: out.data,
       ...(out.nextPage !== undefined ? { nextPage: out.nextPage } : {}),
       ...(out.hasMore !== undefined ? { hasMore: out.hasMore } : {}),
+      // the stream's own cut (the view's is added below): an answer kept, and served, says it
+      ...(out.truncated ? { truncated: out.truncated } : {}),
     };
     const at = hit?.at ?? clock.now();
     if (!hit) saveSnapshot(keep.cache, { at, op: keep.op, ...(out.tier ? { tier: out.tier } : {}), ...kept });
@@ -1489,11 +1557,13 @@ function shape(
         // a baseline of another recipe answers another shape: no comparison, a new start
         const base = prev && prev.op === keep.recipe ? prev : undefined;
         // a cache entry older than the baseline would move it back
-        if (base && base.at > at) return { out: changesOf(asAnswer(base, opts), now, base.at, op.response.key) };
-        return {
-          out: base ? changesOf(asAnswer(base, opts), now, base.at, op.response.key) : { first: true as const },
-          next: { at, op: keep.recipe, ...kept },
+        const compared = base && {
+          ...changesOf(asAnswer(base, opts), now, base.at, op.response.key),
+          // what a cut baseline lacked shows as added: the comparison says it was cut
+          ...(base.truncated ? { sinceTruncated: base.truncated } : {}),
         };
+        if (compared && base.at > at) return { out: compared };
+        return { out: compared || { first: true as const }, next: { at, op: keep.recipe, ...kept } };
       });
       changes = swapped.out;
       if (swapped.saved && !swapped.saved.kept)
@@ -1513,7 +1583,9 @@ function shape(
   const viewed = resultView(out.data, opts.view, undefined, opts.callOnly);
   if (viewed.truncated && out.nextPage !== undefined)
     viewed.truncated += `; nextPage starts after the last item of this page, cut or not${opts.callOnly ? "" : "; more stays on this page"}`;
-  return { ...out, ...viewed, ...(changes ? { changes } : {}) };
+  // a stream read to a bound (out.truncated) and the view's cap each say what they cut
+  const truncated = [out.truncated, viewed.truncated].filter(Boolean).join("; ");
+  return { ...out, ...viewed, ...(truncated ? { truncated } : {}), ...(changes ? { changes } : {}) };
 }
 
 const asAnswer = (s: Snapshot, opts: CallOptions) => ({ full: s.data, shown: projectView(s.data, opts.view) });
@@ -1748,6 +1820,7 @@ async function run(
           data: hit.data,
           ...(hit.nextPage !== undefined ? { nextPage: hit.nextPage } : {}),
           ...(hit.hasMore !== undefined ? { hasMore: hit.hasMore } : {}),
+          ...(hit.truncated ? { truncated: hit.truncated } : {}),
           cached: true,
           ageMs,
           ms: Date.now() - t0,
@@ -1767,7 +1840,7 @@ async function run(
   if (unsafeWrite) return done(unsafeWrite);
   // A site that said stop is not asked again until its wait is over: before the write's ledger, as nothing is sent.
   held = opts.ignoreCoolDown ? undefined : cooling(siteName);
-  if (held) return done(cooled(held, siteName));
+  if (held) return done(cooled(held, site, op));
   // An early answer, before a write's ledger; each send is held to the budget again as it goes (`reserveSend`).
   const over = sendBudget && !sendBudget.exempt ? budgetCheck(siteName, budget) : undefined;
   if (over) return overBudget(over);
@@ -1884,7 +1957,7 @@ async function run(
       reason,
       next: nextFor(x.class, siteName, op, x, signIn?.text),
       ...(x.class === "auth" && signIn ? { nextCall: signIn.step } : {}),
-      ...stepOf(x),
+      ...stepOf(x, op, siteName),
       ...(x.server ? { server: true as const } : {}),
     });
   // A send the budget refuses, at any tier or retry, ends the call: nothing more went.
@@ -2135,7 +2208,7 @@ export async function heal(
       next: recipe
         ? `if the site works in a browser, re-learn the response recipe: api-anything add ${siteName} ${op.name} ... --extract <path> (api-anything capture <trigger url> shows the response); otherwise report it`
         : nextFor(b.class, siteName, op, b),
-      ...stepOf(b),
+      ...stepOf(b, op, siteName),
       ...(recipe ? { nextCall: { action: "relearn" } } : {}),
     });
   }
@@ -2146,7 +2219,7 @@ export async function heal(
     tier: b?.tier,
     reason: h.reason,
     next: nextFor(b?.class ?? "drift", siteName, op, b),
-    ...(b ? stepOf(b) : {}),
+    ...(b ? stepOf(b, op, siteName) : {}),
     // this was the heal: what is left is learning it again
     ...((b?.class ?? "drift") === "drift" ? { nextCall: { action: "relearn" } } : {}),
   });

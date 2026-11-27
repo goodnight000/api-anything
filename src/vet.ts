@@ -40,6 +40,7 @@ export const LIMITS = {
    */
   paceIntervalMs: [1000, 60_000],
   perHour: [1, 1000],
+  aliases: 10,
 } as const;
 
 const READ_METHODS = new Set(["GET", "HEAD", "POST"]);
@@ -473,6 +474,35 @@ export function badAddress(url: string): string | undefined {
   return undefined;
 }
 
+const LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
+const DOMAIN = new RegExp(`^(?=.{4,253}$)(?:${LABEL}\\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$`);
+
+/**
+ * Whether `s` is a lowercase registrable domain on a public suffix and nothing more: no host, port or path.
+ * Not a name of someone's own network (corp.internal, printer.home.arpa, nas.local). What demand records,
+ * and all an alias may be.
+ */
+export const cleanDomain = (s: string) => DOMAIN.test(s) && siteOf(s) === s && !badAddress(`https://${s}`);
+
+/**
+ * Why a site's aliases are refused: each a clean registrable domain (`cleanDomain`), not the site's own,
+ * listed once, at most `LIMITS.aliases`. An alias is a search key only: nothing here or anywhere reads it
+ * as a host an op may call or a cookie's site.
+ */
+export function aliasProblems(site: Pick<Site, "baseUrl" | "aliases">): string[] {
+  const list = site.aliases ?? [];
+  const own = hostOf(site.baseUrl) && siteOf(hostOf(site.baseUrl)!);
+  const out: string[] = [];
+  if (list.length > LIMITS.aliases) out.push(`${list.length} aliases; at most ${LIMITS.aliases}`);
+  for (const [i, a] of list.entries()) {
+    const at = `alias ${JSON.stringify(a.slice(0, 260))}`;
+    if (!cleanDomain(a)) out.push(`${at} is not a lowercase registrable domain on a public suffix`);
+    else if (a === own) out.push(`${at} is the site's own domain`);
+    else if (list.indexOf(a) !== i) out.push(`${at} is listed twice`);
+  }
+  return out;
+}
+
 export const MAX_INTERFACE_URL = 300;
 
 /**
@@ -841,6 +871,7 @@ export function vetShared(site: Site, notes?: string): Vetted {
   };
   bounded("minIntervalMs", site.pace?.minIntervalMs, LIMITS.paceIntervalMs);
   bounded("perHour", site.pace?.perHour, LIMITS.perHour);
+  errors.push(...aliasProblems(site));
   const allowed = new Set<string>();
   // `at` says whose problem it is; `path` is where the op sits in the spec, for the secret scan
   const vetOp = (op: Operation, at: (what: string) => string, path: string) => {

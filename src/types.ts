@@ -21,6 +21,8 @@ export interface Exchange {
     /** raw body text, read inside the response handler; absent for redirects/beacons */
     body?: string;
     contentType: string;
+    /** the body is the part of an event stream read before a bound (stream.ts): why it stopped there */
+    truncated?: string;
   };
   /** true when the request was intercepted and aborted before leaving the browser (write learning) */
   aborted?: boolean;

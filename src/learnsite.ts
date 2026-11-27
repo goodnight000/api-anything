@@ -5,9 +5,10 @@
  * then a holdout call through call(), a replay with no cookies, and shareOps.
  */
 import { readFileSync } from "node:fs";
+import { AttachError, learnAgain, windowWhere } from "./attach.js";
 import { browserAvailable, ProfileInUse } from "./browser.js";
 import { type Proof, recordCases } from "./checks.js";
-import { botWall, judge } from "./classify.js";
+import { botWall, consentReason, judge } from "./classify.js";
 import { cleanCall } from "./clean.js";
 import { asText } from "./codec.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
@@ -20,6 +21,7 @@ import {
   type CaptureFile,
   CaptureUnavailable,
   capturePage,
+  consentWall,
   fillTrigger,
   loadCapture,
   loginWall,
@@ -29,7 +31,7 @@ import {
 import { buildRequest } from "./http.js";
 import { answerShare, loadSettings, localOnly, QUESTION } from "./identity.js";
 import { type Args, capturePages, lookedUp, pageUrls, rankCandidates } from "./learn.js";
-import { resolveLoginTarget } from "./login.js";
+import { loginHint, resolveLoginTarget } from "./login.js";
 import { lookupOp } from "./lookup.js";
 import { outline } from "./outline.js";
 import { pagingHints } from "./paging.js";
@@ -39,9 +41,10 @@ import type { Evidence, ServedSite } from "./registry-api.js";
 import { summarize } from "./search.js";
 import { captureLive, redact } from "./secrets.js";
 import { safeName } from "./session.js";
-import { HOLDOUT_PURPOSE, type ShareOutcome, shareOps } from "./share.js";
+import { CONSENT_SKIP, cleanEvidence, HOLDOUT_PURPOSE, type ShareOutcome, shareOps } from "./share.js";
 import { CheckSchema, type Operation, type Paging } from "./spec.js";
 import { loadSite, updateSite } from "./store.js";
+import { isEventStream } from "./stream.js";
 import type { Exchange, TriggerStep } from "./types.js";
 import { badAddress, LIMITS, notARead } from "./vet.js";
 
@@ -136,6 +139,8 @@ export interface LearnSiteResult {
   warnings?: string[];
   captures?: string[];
   saved?: string;
+  /** the trigger page was sent to the site's cookie-consent page: nothing was learned */
+  wall?: "consent";
   error?: string;
   next?: string;
   nextCall?: NextCall;
@@ -221,7 +226,7 @@ const empty = (d: unknown) =>
 /** The recipe run 1's outline suggests for one request, if it can read the example values out of it. */
 function suggest(e: Exchange, carries: string[], values: string[]): Pick<Choice, "recipe" | "fields"> | undefined {
   const r = e.response;
-  const o = r?.body ? outline(r.contentType, r.body, values) : undefined;
+  const o = r && (r.body || isEventStream(r.contentType)) ? outline(r.contentType, r.body ?? "", values) : undefined;
   if (!o) return undefined;
   // a JSON answer is learnable only from a request that carries the args
   if (o.json)
@@ -260,11 +265,18 @@ function lookedUpData(run: CaptureFile, args: Args): { id: number; why: string }
 }
 
 /** The recipe reads something out of this answer. */
-function resolves(r: Recipe, body: string | undefined): boolean {
+function resolves(r: Recipe, answer: Exchange["response"]): boolean {
+  const body = answer?.body;
   if (!body) return false;
   try {
     const d = within(
-      () => extract({ format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r }, body),
+      () =>
+        extract(
+          { format: r.html ? "html" : r.embedded ? "embedded" : "json", ...r },
+          body,
+          undefined,
+          answer.contentType,
+        ),
       DEADLINE.read,
     );
     return !empty(d);
@@ -545,12 +557,17 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   const existing = loadSite(site)?.site;
   // One name is one site, as pull holds it (registry.ts) and the default name does (`defaultSiteName`):
   // an operation saved under a site on another registrable domain would be called as that site's.
-  if (existing && domainOf(existing.baseUrl) !== domainOf(input.trigger))
+  // An alias is no exception: it finds the site in a search, and never makes its domain a host the site's ops call.
+  const pageDomain = domainOf(input.trigger);
+  if (existing && domainOf(existing.baseUrl) !== pageDomain)
     return {
       ok: false,
       class: "refused",
       site,
-      error: `site "${site}" is ${clip(existing.baseUrl)}, another site than the trigger's: a name holds one site`,
+      error:
+        pageDomain && existing.aliases?.includes(pageDomain)
+          ? `site "${site}" is ${clip(existing.baseUrl)}: ${pageDomain} is only a search alias of ${site}, and a name holds one site`
+          : `site "${site}" is ${clip(existing.baseUrl)}, another site than the trigger's: a name holds one site`,
       next: "leave site out (it is named from the trigger), or pass a name no site has",
       nextCall: { action: "fix_args" },
     };
@@ -584,6 +601,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   let second: (() => Promise<CaptureFile>) | undefined;
   const failedRun = (e: unknown): LearnSiteResult => {
     if (e instanceof ProfileInUse) return fail(e.message, PROFILE_HINT, { nextCall: { action: "retry" } });
+    if (e instanceof AttachError) return fail(e.message, e.next);
     if (e instanceof CaptureUnavailable)
       return fail(e.message, e.recapture ? "learn again without captures: the two runs are made afresh" : e.next);
     return fail((e as Error).message.split("\n")[0]!, "check the trigger URL, then learn again");
@@ -606,18 +624,30 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       const url1 = t1.url;
       c1 = await capturePage(t1);
       const wall = loginWall(c1, url1);
-      if (wall)
+      if (wall) {
+        const login = loginHint(site, url1);
         return fail(
           `the page landed on a sign-in page (${wall}): the site needs an account`,
-          `ask the user to run api-anything login ${site}; then learn again`,
-          { nextCall: { action: "login", site }, captures: [c1.id] },
+          `ask the user to run api-anything login ${login.cli}; then learn again`,
+          { nextCall: { action: "login", ...login.call }, captures: [c1.id] },
         );
+      }
       second = () => capturePage(fillTrigger(trigger, input.args2));
     }
   } catch (e) {
     return failedRun(e);
   }
   const captures = c2 ? [c1.id, c2.id] : [c1.id];
+  // the page was sent to the site's consent step: no request of the data's was made to learn from
+  const consent = consentWall(c1, c1.url);
+  // the page as the caller typed it, never a captured address (a redirect's signed query holds a credential)
+  const login = loginHint(site, fillTrigger({ url: input.trigger }, input.args).url);
+  if (consent)
+    return fail(
+      consentReason(consent),
+      `ask the user to run api-anything login ${login.cli} --window${windowWhere()}, make the choice on the site's page there and close the window; then ${learnAgain("learn again", "learn_site", site, op)}`,
+      { captures, wall: "consent", nextCall: { action: "login", ...login.call, mode: "window" } },
+    );
   // The rule holds for what the page requested, not only for the trigger typed: a request to this
   // machine or the local network (the page's redirect, a request its script sent, a capture of another
   // page) is no part of the run. Never ranked, shown in alternatives, picked, learned or replayed.
@@ -689,7 +719,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     // a request that is no read is picked only when nothing else would do, and then refused below
     const reads = [...options.filter((x) => !refusal(x.request)), ...options.filter((x) => refusal(x.request))];
     chosen = told
-      ? (reads.find((x) => resolves(given, exchange(x.request)?.response?.body)) ?? reads[0])
+      ? (reads.find((x) => resolves(given, exchange(x.request)?.response)) ?? reads[0])
       : reads.find((x) => x.recipe);
   }
   const page = c1.exchanges.filter((e) => e.resourceType === "document" && e.response).at(-1)?.response;
@@ -697,8 +727,8 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   if (!chosen && wall)
     return fail(
       `the site served a bot challenge (${wall})`,
-      `ask the user to run api-anything login ${site} --window and clear it; then learn again`,
-      { captures, nextCall: { action: "login", site, mode: "window" } },
+      `ask the user to run api-anything login ${login.cli} --window${windowWhere()} and clear it; then ${learnAgain("learn again", "learn_site", site, op)}`,
+      { captures, nextCall: { action: "login", ...login.call, mode: "window" } },
     );
   if (!chosen && page && page.status >= 400)
     return fail(
@@ -788,17 +818,17 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
   } catch (e) {
     const m = (e as Error).message.split("\n")[0]!;
     if (e instanceof NotARead) return notRead(m);
-    const login = /api-anything login/.test(m);
+    const needsLogin = /api-anything login/.test(m);
     return fail(
       m,
-      login
-        ? `ask the user to run api-anything login ${site}; then learn again`
+      needsLogin
+        ? `ask the user to run api-anything login ${login.cli}; then learn again`
         : "learn again with captures (no browser) and another pickRequest from alternatives, or a recipe",
       {
         chosen: shown,
         alternatives,
         captures,
-        nextCall: login ? { action: "login", site } : { action: "relearn", site, op },
+        nextCall: needsLogin ? { action: "login", ...login.call } : { action: "relearn", site, op },
       },
     );
   }
@@ -816,6 +846,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
           headers: res.headers,
           body: res.body ?? "",
           url: answered.request.url,
+          truncated: res.truncated,
         }),
       DEADLINE.read,
     );
@@ -875,11 +906,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     now.minTier > 1
       ? undefined
       : await cleanCall(now, input.args2, { site, minIntervalMs: o.minIntervalMs, publicOnly: o.publicOnly });
-  const cleanReplay: Evidence["cleanReplay"] = !clean
-    ? "skipped"
-    : clean.class === "ok" || clean.class === "blocked"
-      ? clean.class
-      : "failed";
+  const cleanReplay: Evidence["cleanReplay"] = clean ? cleanEvidence(clean).cleanReplay : "skipped";
 
   const proof: NonNullable<LearnSiteResult["proof"]> = {
     holdout: {
@@ -890,7 +917,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       ...(!held && holdout.reason ? { reason: holdout.reason } : {}),
     },
     cleanReplay,
-    ...(clean && clean.class !== "ok" ? { cleanReason: clean.reason } : {}),
+    ...(clean && clean.class !== "ok" ? { cleanReason: clean.wall === "consent" ? CONSENT_SKIP : clean.reason } : {}),
   };
   const proven: Proof = {
     learnedLoggedIn: now.learnedLoggedIn,
@@ -942,7 +969,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     // the user has their answer whatever sharing does
     const share = async (consent?: true): Promise<ShareOutcome> => {
       try {
-        const [one] = await hooks.share(site, [op], { evidence, ...(consent ? { consent } : {}) });
+        const [one] = await hooks.share(site, [op], { evidence, proved: now, ...(consent ? { consent } : {}) });
         return one ?? { site, op, shared: false, reason: "sharing answered nothing" };
       } catch (e) {
         return { site, op, shared: false, reason: (e as Error).message.split("\n")[0] };
@@ -970,6 +997,9 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       else if (yes === undefined)
         next = `ask the user whether to share ${op} with the catalog (${shared.reason ?? "it needs their yes"})${found ? `, showing them what may be theirs: ${found.join("; ")}` : ""}; only on their yes, run: ${publish}`;
     }
+    // held for review: `shared.reason` says why, and this what to do about it
+    if (shared.shared && shared.status === "review" && shared.next)
+      next = `tell the user: ${shared.reason}; ${shared.next}`;
     if (!shared.shared && !loadSettings().askedAt && !localOnly()) {
       next = next
         ? `${next}. ${ASK}`

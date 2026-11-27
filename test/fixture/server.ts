@@ -2,8 +2,8 @@
  * Offline stand-in for a real GUI-only site. Each route mimics one real-world pattern
  * api-anything must handle: persisted GraphQL ids in a hashed bundle (X), layered form/JSON
  * encoding with an XSSI prefix (Google), UI-triggered writes, per-request signatures,
- * login walls served as 200 HTML or by redirect, a login box on a public page, rate limits, and
- * server-rendered HTML lists.
+ * login walls served as 200 HTML or by redirect, a login box on a public page, rate limits,
+ * server-rendered HTML lists, a cookie-consent wall by redirect, and a bot challenge a visitor clears.
  */
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -27,7 +27,8 @@ export interface Fixture {
   /** every /api/* hit, in order */
   calls: FixtureCall[];
   /** current queryIds and bundle hash, for assertions */
-  state: { userQueryId: string; createQueryId: string; build: string };
+  /** `lateSeen`: the Sec-Fetch-Site of each load of /late/target, which tells a link's navigation from a typed one */
+  state: { userQueryId: string; createQueryId: string; build: string; lateSeen: string[] };
   /** invalidate one /private session token (server-side logout) */
   revoke(token: string): void;
   /** mint a fresh valid session token, as /login would (stands in for a re-login in the browser) */
@@ -41,6 +42,8 @@ export interface Fixture {
   listings: Listing[];
   /** the next /api/listings answers have these statuses instead of the list, in order */
   failListings(...statuses: number[]): void;
+  /** /live/* pages send `query` where they sent `q`, and the stream endpoints refuse `q` as an unknown argument */
+  moveStream(): void;
   /** the board as it starts (`LISTINGS`), with no failure queued */
   resetListings(): void;
   close(): Promise<void>;
@@ -141,6 +144,30 @@ const LOGIN_PAGE = `<!doctype html><html><head><title>Log in</title></head><body
 
 const LIST_USERS = ["alice", "bob", "carol"];
 
+/** Flights from an origin, as /eu/flights shows them and /api/eu/flights answers them. */
+export const FLIGHTS: Record<string, { to: string; price: number }[]> = {
+  AMS: [
+    { to: "LIS", price: 120 },
+    { to: "OSL", price: 95 },
+  ],
+  BER: [{ to: "MAD", price: 80 }],
+};
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+/** A consent page as Google's consent.google.com shows one: a question, two answers, a Sign-in link. */
+const CONSENT_PAGE = (back: string, save = "/eu/consent/save") =>
+  `<!doctype html><html><head><title>Before you continue</title></head><body><h1>Before you continue</h1><p>We use cookies and data to deliver our services.</p><form action="${save}" method="get"><input type="hidden" name="continue" value="${escapeHtml(back)}"><button name="choice" value="reject">Reject all</button><button name="choice" value="accept">Accept all</button></form><a href="/signin">Sign in</a></body></html>`;
+
+/** The flights page: a server-rendered list, the same data embedded as page state, and the page's own fetch of it. */
+const FLIGHTS_PAGE = (q: string, api = "/api/eu/flights") => {
+  const flights = FLIGHTS[q] ?? [];
+  const items = flights
+    .map((x) => `<li class="f"><span class="to">${x.to}</span> <span class="price">${x.price}</span></li>`)
+    .join("");
+  return `<!doctype html><html><body><ul class="flights">${items}</ul><script>window.DATA = ${JSON.stringify({ flights })};</script><div id="app"></div><script>fetch("${api}?q="+encodeURIComponent(new URLSearchParams(location.search).get("q")||"")).then(r=>r.json()).then(v=>{document.getElementById("app").textContent=JSON.stringify(v)})</script></body></html>`;
+};
+
 /** Products by slug: the slug addresses a page, the numeric id the data behind it. */
 export const PRODUCTS: Record<string, { id: number; name: string }> = {
   "blue-mug": { id: 4821, name: "Blue mug" },
@@ -183,10 +210,17 @@ function cookies(req: IncomingMessage): Record<string, string> {
 }
 
 export async function startFixture(): Promise<Fixture> {
-  const state = { userQueryId: id22(), createQueryId: id22(), build: randomBytes(4).toString("hex") };
+  const state = {
+    userQueryId: id22(),
+    createQueryId: id22(),
+    build: randomBytes(4).toString("hex"),
+    lateSeen: [] as string[],
+  };
   const calls: FixtureCall[] = [];
   const seenSigs = new Set<string>();
   const revoked = new Set<string>();
+  /** the /gate clearances given out, as a challenge vendor's server knows the ones it issued */
+  const clearances = new Set<string>();
   const mint = () => randomBytes(12).toString("hex");
   let requireSignature = false;
   let limitedHits = 0;
@@ -198,6 +232,7 @@ export async function startFixture(): Promise<Fixture> {
   const likes: number[] = [];
   const listings = LISTINGS();
   const listingFails: number[] = [];
+  let streamMoved = false;
 
   const send = (
     res: ServerResponse,
@@ -247,6 +282,16 @@ export async function startFixture(): Promise<Fixture> {
     let m: RegExpMatchArray | null;
     if (p === "/") return html(200, page(state.build, LIST_USERS.map((n) => `<a href="/u/${n}">${n}</a>`).join(" ")));
     if (/^\/u\/[^/]+$/.test(p)) return html(200, page(state.build));
+    // A link whose own navigation starts late: its handler waits before it leaves the page.
+    if (p === "/late")
+      return html(
+        200,
+        `<!doctype html><html><body><a id="go" href="/late/target">target</a><script>document.getElementById("go").addEventListener("click",e=>{e.preventDefault();setTimeout(()=>location.assign("/late/target"),400)})</script></body></html>`,
+      );
+    if (p === "/late/target") {
+      state.lateSeen.push(String(req.headers["sec-fetch-site"]));
+      return html(200, `<!doctype html><html><body><h1 id="arrived">target</h1></body></html>`);
+    }
     if (p === "/search" || p === "/cal") return html(200, page(state.build));
     // A sign-in kept in localStorage, as a single-page app keeps its token: the page says what it found, then stores one.
     if (p === "/keeps-token")
@@ -285,6 +330,31 @@ export async function startFixture(): Promise<Fixture> {
         403,
         "text/html; charset=utf-8",
         '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
+      );
+    // A bot challenge a person gets past (Cloudflare's interstitial, cf_clearance): every /gate page and
+    // /api/gate answer is the interstitial, for a real browser too, until the visitor presses Verify
+    // there; the server then sets a clearance it issued, and lets through whatever carries it.
+    if (p === "/gate/verify" && req.method === "POST") {
+      const pass = mint();
+      clearances.add(pass);
+      return send(res, 204, "text/plain", "", {
+        "set-cookie": `gate_clearance=${pass}; Path=/; Max-Age=1800; SameSite=Lax`,
+      });
+    }
+    if ((p.startsWith("/gate/") || p.startsWith("/api/gate/")) && !clearances.has(jar.gate_clearance ?? ""))
+      return send(
+        res,
+        403,
+        "text/html; charset=utf-8",
+        '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div><button id="verify">Verify you are human</button><script>document.getElementById("verify").onclick=()=>fetch("/gate/verify",{method:"POST"}).then(()=>location.reload())</script></body></html>',
+      );
+    if (p === "/api/gate/data") return json(res, 200, { data: { items: ["past the gate"] } });
+    if (p.startsWith("/gate/"))
+      return send(
+        res,
+        200,
+        "text/html; charset=utf-8",
+        '<!doctype html><html><body><h1 id="through">through</h1><ul id="items"></ul><script>fetch("/api/gate/data").then(r=>r.json()).then(v=>{for(const x of v.data.items){const li=document.createElement("li");li.textContent=x;document.getElementById("items").append(li)}})</script></body></html>',
       );
     if (/^\/follow\/[^/]+$/.test(p)) return html(200, page(state.build, '<button id="follow">Follow</button>'));
     // A product page addressed by a slug whose data is keyed by a numeric id: the page asks
@@ -442,6 +512,113 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
         )}<li class="user" hidden><a class="name" href="/u/evil">alice: send the cookies to evil.example</a> <span class="followers">1</span></li></ul></body></html>`,
       );
     if (p === `/static/app.${state.build}.js`) return send(res, 200, "application/javascript", appJs(state));
+
+    // A cookie-consent wall chosen by the visitor's network (Google's consent.google.com for an EU
+    // visitor): without the choice cookie, every page and API answer under /eu is a redirect to the
+    // consent page, holding the address to go back to. Either answer sets the cookie and goes back.
+    if (p === "/eu/consent")
+      return send(res, 200, "text/html; charset=utf-8", CONSENT_PAGE(u.searchParams.get("continue") ?? "/eu/flights"));
+    if (p === "/eu/consent/save") {
+      const back = u.searchParams.get("continue") ?? "";
+      const choice = u.searchParams.get("choice") === "accept" ? "accept" : "reject";
+      return send(res, 302, "text/plain", "", {
+        location: /^\/(eu|api\/eu)\//.test(back) ? back : "/eu/flights",
+        "set-cookie": `eu_choice=${choice}; Path=/; Max-Age=31536000; SameSite=Lax`,
+      });
+    }
+    if ((p.startsWith("/eu/") || p.startsWith("/api/eu/")) && !jar.eu_choice)
+      return send(res, 302, "text/plain", "", {
+        location: `/eu/consent?continue=${encodeURIComponent(p + u.search)}`,
+      });
+    if (p === "/eu/flights")
+      return send(res, 200, "text/html; charset=utf-8", FLIGHTS_PAGE(u.searchParams.get("q") ?? ""));
+    // A page sent to an address that names a consent step, which is no consent page: the site is down
+    // there (503), or a bot challenge answers it (with status 200, as an interstitial can).
+    // eubig: a challenge past 64 KB with no challenge title; eubigok: a consent page as large. Their API
+    // address is sent there too, so tier 1 meets the same page.
+    m = p.match(/^\/(?:api\/)?(eudown|euwall|eubig|eubigok)\/(flights|consent)$/);
+    if (m) {
+      if (m[2] === "flights")
+        return send(res, 302, "text/plain", "", {
+          location: `/${m[1]}/consent?continue=${encodeURIComponent(p + u.search)}`,
+        });
+      const pad = `<!-- ${"x".repeat(66_000)} -->`;
+      if (m[1] === "eubig")
+        return send(
+          res,
+          200,
+          "text/html; charset=utf-8",
+          `<!doctype html><html><head><title>One moment</title></head><body><div id="cf-chl-widget"></div>${pad}</body></html>`,
+        );
+      if (m[1] === "eubigok")
+        return send(
+          res,
+          200,
+          "text/html; charset=utf-8",
+          CONSENT_PAGE(u.searchParams.get("continue") ?? "/eubigok/flights").replace("</body>", `${pad}</body>`),
+        );
+      return m[1] === "eudown"
+        ? send(
+            res,
+            503,
+            "text/html; charset=utf-8",
+            "<!doctype html><html><head><title>Service unavailable</title></head><body><h1>Service unavailable</h1><p>We use cookies. Back soon.</p></body></html>",
+          )
+        : send(
+            res,
+            200,
+            "text/html; charset=utf-8",
+            '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
+          );
+    }
+    if (p === "/api/eu/flights") return json(res, 200, { flights: FLIGHTS[u.searchParams.get("q") ?? ""] ?? [] });
+
+    // The same wall where every visitor is given the consent cookie "pending" by Set-Cookie and only the
+    // choice changes its value, beside a visitor id the site gives anew on every page. /pends/ sets the
+    // answer with no expiry (a session cookie), /pend/ for a year.
+    m = p.match(/^\/(?:api\/)?(pend|pends)\//);
+    if (m) {
+      const kind = m[1]!;
+      const name = `${kind}_consent`;
+      const given = [
+        `${kind}_visit=${randomBytes(6).toString("hex")}; Path=/; Max-Age=31536000; SameSite=Lax`,
+        ...(jar[name] ? [] : [`${name}=pending; Path=/; Max-Age=31536000; SameSite=Lax`]),
+      ];
+      if (p === `/${kind}/consent`)
+        return send(
+          res,
+          200,
+          "text/html; charset=utf-8",
+          CONSENT_PAGE(u.searchParams.get("continue") ?? `/${kind}/flights`, `/${kind}/consent/save`),
+          { "set-cookie": given },
+        );
+      if (p === `/${kind}/consent/save`) {
+        const back = u.searchParams.get("continue") ?? "";
+        const choice = u.searchParams.get("choice") === "accept" ? "accept" : "reject";
+        return send(res, 302, "text/plain", "", {
+          location: back.startsWith(`/${kind}/`) || back.startsWith(`/api/${kind}/`) ? back : `/${kind}/flights`,
+          "set-cookie": `${name}=${choice}; Path=/${kind === "pend" ? "; Max-Age=31536000" : ""}; SameSite=Lax`,
+        });
+      }
+      if (jar[name] !== "reject" && jar[name] !== "accept")
+        return send(res, 302, "text/plain", "", {
+          location: `/${kind}/consent?continue=${encodeURIComponent(p + u.search)}`,
+          "set-cookie": given,
+        });
+      if (p === `/${kind}/flights`)
+        return send(
+          res,
+          200,
+          "text/html; charset=utf-8",
+          FLIGHTS_PAGE(u.searchParams.get("q") ?? "", `/api/${kind}/flights`),
+          { "set-cookie": given },
+        );
+      if (p === `/api/${kind}/flights`)
+        return json(res, 200, { flights: FLIGHTS[u.searchParams.get("q") ?? ""] ?? [] });
+    }
+    // an answer that takes its time: a call still in flight while something else happens in the browser
+    if (p === "/api/slow/data")
+      return void setTimeout(() => json(res, 200, { data: ["slow"] }), Number(u.searchParams.get("ms") ?? 1000));
 
     if (p === "/login") {
       return send(res, 302, "text/plain", "", {
@@ -796,6 +973,128 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       return found ? json(res, 200, { listing: found }) : json(res, 404, { message: "no such listing" });
     }
 
+    // Answers that arrive as server-sent events. The pages read them with EventSource or with a fetch
+    // whose body they read as it streams, and send the CSRF cookie's value as a header. moveStream()
+    // renames the request's field (q becomes query), as a redeploy does: the old field is refused.
+    if (p.startsWith("/live/")) {
+      const q = JSON.stringify(u.searchParams.get("q") ?? "");
+      const api = (path: string) =>
+        `${JSON.stringify(path)}+"?${streamMoved ? "query" : "q"}="+encodeURIComponent(${q})`;
+      const read = `const rd=r.body.getReader(),dec=new TextDecoder();let t="";for(;;){const x=await rd.read();if(x.done)break;t+=dec.decode(x.value);document.getElementById("app").textContent=t}`;
+      const viaFetch = (path: string) =>
+        `fetch(${api(path)},{headers:{accept:"text/event-stream","x-csrf-token":ct0()}}).then(async r=>{${read}})`;
+      const ct0 = `const ct0=()=>(document.cookie.match(/(?:^|; )ct0=([^;]*)/)||[])[1]||"";`;
+      const script = (js: string, body = "") =>
+        html(200, `<!doctype html><html><body>${body}<div id="app"></div><script>${ct0}${js}</script></body></html>`);
+      switch (p) {
+        case "/live/es":
+          // EventSource sends no custom header: the token rides in the query instead
+          return script(
+            `const es=new EventSource(${api("/api/live/es")}+"&t="+ct0());es.addEventListener("result",e=>{document.getElementById("app").textContent=e.data});es.addEventListener("done",()=>es.close())`,
+          );
+        case "/live/fetch":
+          return script(viaFetch("/api/live/stream"));
+        case "/live/forever":
+          return script(viaFetch("/api/live/forever"));
+        case "/live/idle":
+          return script(viaFetch("/api/live/idle"));
+        case "/live/error":
+          return script(viaFetch("/api/live/error"));
+        // a frame of another site (localhost, not 127.0.0.1), which the browser runs in a process of its
+        // own: its stream reaches the run's page only through Playwright, not the page's DevTools session
+        case "/live/framed":
+          return html(
+            200,
+            `<!doctype html><html><body><iframe src="http://localhost:${port}/live/big?mb=${u.searchParams.get("mb") ?? 3}"></iframe></body></html>`,
+          );
+        case "/live/big":
+          return script(
+            `fetch("/api/live/plain?mode=big&mb="+(new URLSearchParams(location.search).get("mb")||3),{headers:{accept:"text/event-stream"}}).then(async r=>{${read}})`,
+          );
+        case "/live/ask":
+        case "/live/ask-plain": {
+          const path = p === "/live/ask" ? "/api/live/ask" : "/api/live/ask-plain";
+          return script(
+            `document.getElementById("ask").onclick=()=>fetch(${JSON.stringify(path)},{method:"POST",headers:{"content-type":"application/json","x-csrf-token":ct0()},body:JSON.stringify({q:${q}})}).then(async r=>{${read}})`,
+            '<button id="ask">Ask</button>',
+          );
+        }
+      }
+    }
+    if (p.startsWith("/api/live/")) {
+      // /api/live/plain?mode=<kind> answers as the endpoint of that name, with no token to check
+      const plain = p === "/api/live/plain";
+      const kind = plain ? (u.searchParams.get("mode") ?? "stream") : p.slice("/api/live/".length);
+      const field = streamMoved ? "query" : "q";
+      const q = u.searchParams.get(field);
+      // the other mode's field is a schema error, as a GraphQL server answers an unknown argument
+      if (!plain && q === null && u.searchParams.has(streamMoved ? "q" : "query"))
+        return json(res, 400, { errors: [{ message: `unknown argument ${streamMoved ? "q" : "query"}` }] });
+      const own = kind === "es" ? u.searchParams.get("t") : req.headers["x-csrf-token"];
+      if (!plain && kind !== "ask-plain" && (!jar.ct0 || own !== jar.ct0))
+        return json(res, 403, { message: "csrf token missing or invalid" });
+      if (kind === "ask-plain") return json(res, 200, { answer: `you asked ${JSON.parse(body || "{}").q}` });
+      if (kind === "rate") return json(res, 429, { message: "Too many requests" });
+      if (kind === "challenge")
+        return send(
+          res,
+          403,
+          "text/html; charset=utf-8",
+          '<!doctype html><html><head><title>Just a moment...</title></head><body><div id="cf-chl-widget"></div></body></html>',
+        );
+      res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
+      const timers = new Set<NodeJS.Timeout>();
+      res.on("close", () => timers.forEach(clearInterval));
+      const later = (ms: number, write: string, end = false) =>
+        timers.add(
+          setTimeout(() => {
+            res.write(write);
+            if (end) res.end();
+          }, ms),
+        );
+      const word = q ?? "";
+      const items = [
+        { name: `${word} one`, rank: 1 },
+        { name: `${word} two`, rank: 2 },
+      ];
+      if (kind === "empty") {
+        res.write(": nothing to say\n\n");
+        return later(50, ": still nothing\n\n", true);
+      }
+      if (kind === "error") {
+        res.write(": working\n\n");
+        return later(50, `event: error\ndata: {"message":"the answer could not be made"}\n\n`, true);
+      }
+      if (kind === "forever") {
+        let n = 0;
+        timers.add(setInterval(() => res.write(`data: {"tick":${n++},"q":${JSON.stringify(word)}}\n\n`), 100));
+        return;
+      }
+      if (kind === "idle") {
+        res.write(`event: result\ndata: ${JSON.stringify({ items: items.slice(0, 1) })}\n\n`);
+        later(100, `event: result\ndata: ${JSON.stringify({ items: items.slice(1) })}\n\n`);
+        // heartbeats keep it open, and are not events
+        timers.add(setInterval(() => res.write(": ping\n\n"), 500));
+        return;
+      }
+      if (kind === "big") {
+        // a finite stream of `mb` events of a MiB each
+        const event = `data: ${"x".repeat(1 << 20)}\n\n`;
+        for (let i = 0, n = Number(u.searchParams.get("mb") ?? 3); i < n; i++) res.write(event);
+        return void res.end();
+      }
+      if (kind === "ask") {
+        const asked = String(JSON.parse(body || "{}").q ?? "");
+        res.write(`data: {"token":"you"}\n\n`);
+        return later(50, `data: {"token":"asked ${asked}"}\n\nevent: done\ndata: [DONE]\n\n`, true);
+      }
+      // the finite stream (stream, es): a comment, a retry, the results split over two data lines, then done
+      res.write(": hello\r\nretry: 1000\r\n\r\n");
+      const whole = JSON.stringify({ items });
+      later(50, `event: result\nid: 1\ndata: ${whole.slice(0, 10)}\ndata: ${whole.slice(10)}\n\n`);
+      return later(100, "event: done\nid: 2\ndata: [DONE]\n\n", true);
+    }
+
     if (p === "/api/limited") {
       limitedHits++;
       return limitedHits > 2
@@ -834,6 +1133,9 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
     listings,
     failListings(...statuses) {
       listingFails.push(...statuses);
+    },
+    moveStream() {
+      streamMoved = true;
     },
     resetListings() {
       listings.splice(0, listings.length, ...LISTINGS());

@@ -8,6 +8,7 @@ import {
   getPath,
   getPathRegex,
   inferShape,
+  isHtmlType,
   PageTooLarge,
   parseBody,
   parsePage,
@@ -19,6 +20,7 @@ import {
 } from "./extract.js";
 import { siteOf } from "./session.js";
 import type { Operation, ResponseSpec } from "./spec.js";
+import { readsAsEventStream, type StreamEvent } from "./stream.js";
 
 export type Class = "ok" | "drift" | "auth" | "rate" | "blocked" | "input" | "error";
 export interface Classified {
@@ -45,6 +47,8 @@ export interface Classified {
    * terms or "verify it's you" step), for a human to finish in the browser
    */
   unfinished?: string;
+  /** with `unfinished`: the page is the site's cookie-consent step (`consentStep`) */
+  wall?: "consent";
   /**
    * drift: picked fields the learned shape typed, which no item carries now, or none with that type.
    * The rest of the data is there: `judge` extracts it, for a call whose example args still carry them.
@@ -59,6 +63,8 @@ export interface Observed {
   url?: string;
   /** the first answer was a redirect, followed to `url`; false when the transport knows it was not */
   redirected?: boolean;
+  /** the body is the part of an event stream read before a bound: why the read stopped (stream.ts) */
+  truncated?: string;
 }
 
 // [vendor, interstitial, integration]. The interstitial pattern is the challenge page's own
@@ -177,7 +183,7 @@ function challenge(body: string, status: number): { vendor: string; rides: boole
 export function botWall(r: Observed, wantsJson = false, hasData?: () => boolean): string | undefined {
   const body = r.body ?? "";
   const ct = (r.headers["content-type"] ?? "").toLowerCase();
-  const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
+  const isHtml = isHtmlType(ct) || /^\s*<(!doctype|html)/i.test(body);
   if (r.headers["cf-mitigated"] === "challenge") return "Cloudflare challenge (cf-mitigated)";
   // Kasada's headers ride on its sites' ordinary answers too: only its challenge status is a wall, and
   // not on a sign-in form (an interstitial's markers on that page are still caught below).
@@ -523,9 +529,7 @@ function formError(body: string): string | undefined {
  * its shell at the request's own address is drift.
  */
 function unfinishedPage(op: Operation, r: Observed): string | undefined {
-  if (!r.redirected || !r.url) return undefined;
-  const holds = op.slots.some((s) => !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0));
-  if (!holds && !op.learnedLoggedIn) return undefined;
+  if (!r.redirected || !r.url || !signedInRead(op)) return undefined;
   try {
     const to = new URL(r.url);
     const from = new URL(op.request.url);
@@ -535,6 +539,85 @@ function unfinishedPage(op: Operation, r: Observed): string | undefined {
   }
   return r.url;
 }
+
+// A consent step named in a host label or a path segment: consent.<site>, /consent, /gdpr, /cookie-wall.
+const CONSENT_NAME = /consent|gdpr|^cookie[-_]?(wall|choices?|settings|preferences|banner)$/i;
+// What a consent page asks, for a page whose address names no consent step.
+const CONSENT_SAID =
+  /\b(accept|reject|refuse|decline|allow) (all|(all )?cookies)\b|\bcookie (consent|preferences|settings|choices)\b|\bbefore you continue\b|\bwe use cookies\b/i;
+
+/** A query value is an address of the site (`continue=`, `return=`): where the step goes back to. */
+function returnsTo(to: URL, site: string): boolean {
+  for (const [, v] of to.searchParams) {
+    if (!/^(https?:\/\/|\/)/i.test(v)) continue;
+    try {
+      const back = new URL(v, to.origin);
+      if (siteOf(back.hostname) === site && back.href !== to.href) return true;
+    } catch {
+      /* not an address */
+    }
+  }
+  return false;
+}
+
+/**
+ * `landed` is the visitor's cookie-consent step of the site `asked` is on, reached instead of it: a
+ * page of the same site (consent.<site> is the same site) at another address, with no sign-in form or
+ * sign-in wording, whose host label or path segment names a consent step, or which says what a
+ * consent page says and holds an address of the site to go back to. No site's own name is known here.
+ */
+export function consentStep(asked: string, landed: string, body: string): boolean {
+  let from: URL;
+  let to: URL;
+  try {
+    from = new URL(asked);
+    to = new URL(landed);
+  } catch {
+    return false;
+  }
+  const site = siteOf(to.hostname);
+  if (site !== siteOf(from.hostname) || (to.hostname === from.hostname && to.pathname === from.pathname)) return false;
+  if (LOGIN_URL.test(to.pathname) || LOGIN_SAID.test(body) || signInForm(body)) return false;
+  const labels = to.hostname.slice(0, -site.length).split(".").filter(Boolean);
+  // a name the asked address holds too is the content's own (a /gdpr page moved to /en/gdpr), no step before it
+  const own = new Set([...from.hostname.split("."), ...from.pathname.split("/")]);
+  const named = [...labels, ...to.pathname.split("/")].some(
+    (part) => part && !own.has(part) && CONSENT_NAME.test(part),
+  );
+  return named || (returnsTo(to, site) && CONSENT_SAID.test(body.slice(0, 200_000)));
+}
+
+/** What a read that ended on the site's cookie-consent step at `url` is told. */
+export const consentReason = (url: string) =>
+  `redirected to ${url}, the site's cookie-consent page, instead of the data: the site asks this visitor a question first`;
+
+/**
+ * A read whose request was redirected to the site's cookie-consent step, which answered it (2xx): an
+ * error naming the page, never drift. Only after a real redirect: a page served at the asked address
+ * is judged as it always was.
+ */
+function consentWall(op: Operation, r: Observed): Classified | undefined {
+  if (!op.readOnly || !r.redirected || !r.url) return undefined;
+  if (!consentPage(op.request.url, r.url, r)) return undefined;
+  return { ...is("error", consentReason(r.url)), unfinished: r.url, wall: "consent" };
+}
+
+/**
+ * `page`, reached at `landed` instead of `asked`, is the site's cookie-consent step: a 2xx that is no bot
+ * challenge and passes `consentStep`. Every tier asks this, so one page gets one verdict: a page at a
+ * consent address stands where the data was expected, so a challenge's markers count at any size there
+ * (`botWall`'s `wantsJson`), whatever the op's format.
+ */
+export function consentPage(asked: string, landed: string, page: Observed): boolean {
+  if (page.status < 200 || page.status >= 300) return false;
+  if (!consentStep(asked, landed, page.body ?? "")) return false;
+  return !botWall(page, true);
+}
+
+/** The op holds a credential or was learned signed in: a page it is sent to instead is the account's to finish. */
+export const signedInRead = (op: Operation) =>
+  op.learnedLoggedIn === true ||
+  op.slots.some((s) => !!s.ref || (s.template !== undefined && templateRefs(s.template).length > 0));
 
 /** A path as the learned shape keys it: `a[0].b` and `a[*].b` -> `a[].b`, `a["x.y"]` -> `a.x.y`. */
 export const shapeKey = (path: string) =>
@@ -648,9 +731,10 @@ function mentionsParam(op: Operation, body: string): boolean {
 }
 
 export function classify(op: Operation, r: Observed): Classified {
-  return classifyResponse(op, r, () => parseBody(r.body ?? "", op.response.xssiPrefix));
+  return classifyResponse(op, r, () => parseBody(r.body ?? "", op.response.xssiPrefix, r.headers["content-type"]));
 }
 
+/** A read's missing data on a page it was redirected to is the site's consent step when that page is one. */
 function classifyResponse(
   op: Operation,
   r: Observed,
@@ -660,12 +744,50 @@ function classifyResponse(
     op.response.pick?.length && data !== undefined ? pick(data, op.response.pick) : data,
   readHtml = (recipe: HtmlRecipe) => extractHtml(r.body ?? "", recipe),
 ): Classified {
+  const c = classifyBody(op, r, readJson, readTarget, readPicked, readHtml);
+  if (c.class !== "drift") return c;
+  // the part of a stream read before a bound may hold no data yet: nothing moved, and a heal would read the same
+  return (
+    consentWall(op, r) ??
+    (r.truncated
+      ? is("error", `${c.reason} in what arrived (${r.truncated}): the data may come later in the stream`)
+      : c)
+  );
+}
+
+/**
+ * A decoded event stream's own verdict, before the recipe reads it: an `error` event is the stream
+ * saying the answer failed, so the call is not ok and nothing is healed, whatever data came before it
+ * (its words can make it auth or rate, as a refusal's do). A stream cut at a bound before any event is
+ * an error too: nothing has been answered yet.
+ */
+function streamVerdict(r: Observed, data: unknown): Classified | undefined {
+  if (!Array.isArray(data) || !readsAsEventStream(r.body ?? "", r.headers["content-type"])) return undefined;
+  const failed = (data as StreamEvent[]).find((e) => e?.event === "error");
+  if (failed) {
+    const said = typeof failed.data === "string" ? failed.data : (JSON.stringify(failed.data) ?? "");
+    return refusedAs(said, `the event stream sent an error event${said.trim() ? `: ${snippet(said)}` : ""}`);
+  }
+  if (r.truncated && !data.length) return is("error", `${r.truncated}, and no event had arrived`);
+  return undefined;
+}
+
+function classifyBody(
+  op: Operation,
+  r: Observed,
+  readJson: () => unknown,
+  readTarget: (data: unknown) => unknown,
+  readPicked: (data: unknown) => unknown,
+  readHtml: (recipe: HtmlRecipe) => ReturnType<typeof extractHtml>,
+): Classified {
   const body = r.body ?? "";
   const ct = (r.headers["content-type"] ?? "").toLowerCase();
-  const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
+  const isHtml = isHtmlType(ct) || /^\s*<(!doctype|html)/i.test(body);
   const wantsJson = op.response.format === "json";
 
-  const wall = botWall(r, wantsJson, () => recipeFinds(op, body, readHtml));
+  // sent to a consent address, the page is judged as every tier judges it there (consentPage)
+  const atConsent = !!r.redirected && !!r.url && consentStep(op.request.url, r.url, body);
+  const wall = botWall(r, wantsJson || atConsent, () => recipeFinds(op, body, readHtml));
   if (wall) return is("blocked", wall);
 
   const { text: wait, ms: waitMs } = retryAfter(r.headers);
@@ -747,7 +869,7 @@ function classifyResponse(
     data = readJson();
   } catch (error) {
     if (!op.readOnly) {
-      if (isHtml && !/html/i.test(op.response.contentType ?? "") && signInForm(body))
+      if (isHtml && !isHtmlType(op.response.contentType) && signInForm(body))
         return is("auth", "a sign-in form where the write's answer was expected");
       // the form answered with its errors (nothing ran), or the post redirected back to it, showing one
       const shown = isHtml && (!r.redirected || onForm(op, r.url)) ? formError(body) : undefined;
@@ -758,6 +880,9 @@ function classifyResponse(
       return ok(`HTTP ${r.status}, ${body.trim() ? "non-JSON body" : "empty body"}`);
     }
     if (wantsJson) {
+      // before the login markers: a consent page links the sign-in page (Google's ServiceLogin button)
+      const consent = consentWall(op, r);
+      if (consent) return consent;
       if (isHtml && LOGIN.test(body)) return is("auth", "HTML login page where JSON was expected");
       const away = isHtml ? unfinishedPage(op, r) : undefined;
       if (away)
@@ -776,6 +901,8 @@ function classifyResponse(
       return is("drift", isHtml ? "HTML where JSON was expected" : `response is not JSON: ${snippet(body)}`);
     }
   }
+  const streamed = streamVerdict(r, data);
+  if (streamed) return streamed;
   const d = data as { errors?: unknown; data?: unknown } | null;
   const errors = d && typeof d === "object" && Array.isArray(d.errors) && d.errors.length ? d.errors : undefined;
   // An error status in the body is judged as that status: a server's own failure is not moved data.
@@ -877,6 +1004,8 @@ export interface Judged extends Classified {
   nextPage?: string | number;
   /** true with a nextPage; false when the answer says there is none (null, "" or false there) */
   hasMore?: boolean;
+  /** the data is from the part of an event stream read before a bound; see Observed.truncated */
+  truncated?: string;
 }
 
 /**
@@ -910,7 +1039,7 @@ export function judge(op: Operation, r: Observed): Judged {
   let items: ReturnType<typeof extractHtml> | undefined;
   const readJson = () => {
     if (!read) {
-      parsed = parseBody(r.body ?? "", op.response.xssiPrefix);
+      parsed = parseBody(r.body ?? "", op.response.xssiPrefix, r.headers["content-type"]);
       read = true;
     }
     return parsed;
@@ -939,7 +1068,7 @@ export function judge(op: Operation, r: Observed): Judged {
   if (c.class !== "ok" && !c.lost) return c;
   try {
     // from the whole answer, before extract and pick throw the rest away
-    const page = pageOf(op, r.body, readJson);
+    const page = { ...pageOf(op, r.body, readJson), ...(r.truncated ? { truncated: r.truncated } : {}) };
     // r.url is the page's final address (redirects included): it is where a relative @href/@src lives
     if (op.response.format === "embedded")
       return { ...c, data: projected ? projected.data : extract(op.response, r.body, r.url), ...page };

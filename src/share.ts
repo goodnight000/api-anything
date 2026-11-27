@@ -4,11 +4,14 @@
  */
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { limited, PaceConfigError, sitePace } from "./budget.js";
+import { proofOf } from "./checks.js";
 import { cleanCall } from "./clean.js";
 import { siteOf } from "./domain.js";
+import type { CallResult } from "./execute.js";
 import { publicAddress } from "./http.js";
 import { loadSettings, localOnly, localOnlyOff } from "./identity.js";
-import { accountMaybe, hostsOfOp, type OpPlan, personal, plan, spelled, uploadName } from "./publish.js";
+import { accountMaybe, hostsOfOp, isPublic, type OpPlan, personal, plan, spelled, uploadName } from "./publish.js";
 import { registryRequest } from "./registry.js";
 import {
   anonymous,
@@ -22,9 +25,10 @@ import {
   type VersionUpload,
 } from "./registry-api.js";
 import { flushReports } from "./report.js";
+import { type Held, heldForReview, unreplayable } from "./review.js";
 import { home, loadSession, readJson, withLock, writePrivate } from "./session.js";
-import type { Operation } from "./spec.js";
-import { exportSite, loadSite, updateSite } from "./store.js";
+import type { Operation, Site } from "./spec.js";
+import { budgetCheck, coolDown, cooling, exportSite, loadSite, RATE_COOL_MS, updateSite } from "./store.js";
 
 /** The purpose of the check learn_site records from its holdout call: the one kind an automatic share may carry. */
 export const HOLDOUT_PURPOSE = "learn_site holdout";
@@ -46,6 +50,14 @@ export interface ShareOutcome {
   personal?: string[];
   /** with `strict`: what `--strict-scan` reports of the upload (publish.ts `OpPlan`), for the caller to show them */
   borderline?: string[];
+  /** the clean replay this share ran, nothing on record having proved one (`replayClean`) */
+  cleanReplay?: Evidence["cleanReplay"];
+  /** what that replay met, or why it did not run */
+  cleanReason?: string;
+  /** status review: each reason the registry gave, with its category and in words (review.ts) */
+  held?: Held[];
+  /** the step to take, when there is one */
+  next?: string;
 }
 
 /** Why a public op stays here: the user never answered the question, or said no. */
@@ -80,18 +92,26 @@ async function visitorNames(site: string, ops: string[], fetchImpl?: typeof fetc
  * One that holds what may be the user's own waits for their yes too. `parent`: the version it replaces.
  * `guest`: the names a signed-out visit is given, when the caller asked already (`visitorNames`, through
  * `fetchImpl` otherwise). `strict`: each outcome carries its op's `borderline`.
+ * An op about to go up with no clean replay on record (the caller's evidence, or what a learn_site proved
+ * of this version) gets one first (`replayClean`), so an op made with `add` is not held for review for
+ * want of it. Nothing is sent to the site for an op that would not go up anyway. A `cleanReplay` in
+ * `evidence` comes with `proved`, the op that replay was sent for: what goes up is that op or nothing.
  */
 export async function shareOps(
   site: string,
   ops: string[],
   o: {
     evidence: Partial<Evidence>;
+    /** the op the caller's `evidence.cleanReplay` proved, as it was when the replay was sent */
+    proved?: Operation;
     consent?: boolean;
     parent?: string;
     signal?: AbortSignal;
     guest?: string[];
     fetchImpl?: typeof fetch;
     strict?: boolean;
+    /** the clean replay's pacing (http.ts `pace`); tests pass 0 */
+    minIntervalMs?: number;
   } = { evidence: {} },
 ): Promise<ShareOutcome[]> {
   // plan reads no names as all of them
@@ -104,12 +124,19 @@ export async function shareOps(
       reason: `this install is local-only: nothing is sent to the shared catalog (${localOnlyOff()})`,
     }));
   let p: ReturnType<typeof plan>;
+  let planned: NonNullable<Parameters<typeof plan>[1]>;
+  // One read of the site: every upload below is built from the ops replayed and checked here, so another
+  // process learning the op meanwhile cannot put its op under this op's proof.
+  let read: Site | undefined;
   try {
+    read = loadSite(site)?.site;
+    // planned from this read alone: a site saved meanwhile is the next share's
+    if (!read) return ops.map((op) => ({ site, op, shared: false, reason: `no site "${site}" here` }));
     // the registry is asked for the site's name only when something may go up
     const as = o.consent || loadSettings().share ? await uploadName(site, { signal: o.signal }) : undefined;
     // with the user's yes, public or not decides nothing
     const guest = o.guest ?? (o.consent ? [] : await visitorNames(site, ops, o.fetchImpl));
-    p = plan(site, {
+    planned = {
       ops,
       evidence: o.evidence,
       parent: o.parent,
@@ -117,13 +144,22 @@ export async function shareOps(
       guest,
       strict: o.strict,
       ...(as ? { as } : {}),
-    });
+      spec: read,
+    };
+    p = plan(site, planned);
   } catch (e) {
     return ops.map((op) => ({ site, op, shared: false, reason: (e as Error).message.split("\n")[0] }));
   }
+  const spec = read;
   const share = loadSettings().share;
+  let session: ReturnType<typeof loadSession>;
+  try {
+    session = loadSession(p.site);
+  } catch (e) {
+    return ops.map((op) => ({ site, op, shared: false, reason: (e as Error).message.split("\n")[0] }));
+  }
   const out: ShareOutcome[] = [];
-  for (const op of p.ops) {
+  for (let op of p.ops) {
     const base = {
       site: p.site,
       op: op.op,
@@ -144,7 +180,24 @@ export async function shareOps(
       const j = /\.checks\[(\d+)\] sends /.exec(x)?.[1];
       return j === undefined || checks[Number(j)]?.purpose !== HOLDOUT_PURPOSE;
     });
-    if (!o.consent && !(op.public && share && !holding.length)) {
+    const mine = spec.operations.find((x) => x.name === op.op)!;
+    // the caller's replay proved the op it was sent for: another one in its place goes up with nothing of it
+    if (o.evidence.cleanReplay !== undefined && JSON.stringify(o.proved) !== JSON.stringify(mine)) {
+      out.push({
+        ...base,
+        shared: false,
+        reason:
+          "the op changed after its clean replay was sent (learned or healed again): the replay proved the op it replaced, so nothing went up",
+        next: `run api-anything publish ${p.site} ${op.op} --yes to replay and share the op as it is now`,
+      });
+      continue;
+    }
+    const proven = o.evidence.cleanReplay !== undefined || proofOf(p.site, mine)?.cleanReplay !== undefined;
+    // with no replay on record, whether it would be public once one answers ok
+    const could = proven
+      ? op.public
+      : isPublic(spec, mine, { ...op.upload.evidence, cleanReplay: "ok" }, session, planned.guest);
+    if (!o.consent && !(could && share && !holding.length)) {
       // An op learned signed in may still go, without asking anyone: by its fingerprint now, and its
       // anonymous body only once installs on enough networks hold the same op (claim).
       const claimed = share ? await claim(p.site, op, o.signal) : undefined;
@@ -160,16 +213,56 @@ export async function shareOps(
       out.push({
         ...base,
         shared: false,
-        ...(op.public && !holding.length
+        ...(could && !holding.length
           ? { reason: offReason() }
           : {
               needsConsent: true,
-              reason: op.public
+              reason: could
                 ? "it may hold something of the user's own (personal): shared only with their yes"
-                : "it needed a login or was learned in a session that may be signed in, writes, sends off its site or uses a public credential: shared only with the user's yes",
+                : NEEDS_YES,
             }),
       });
       continue;
+    }
+    let replayed: Pick<ShareOutcome, "cleanReplay" | "cleanReason"> = {};
+    if (!proven) {
+      const r = await replayClean(p.site, spec, mine, o);
+      if ("notNow" in r) {
+        out.push({ ...base, shared: false, reason: r.notNow, next: r.next });
+        continue;
+      }
+      replayed = r;
+      if (r.cleanReplay !== "skipped") {
+        try {
+          op = plan(site, { ...planned, ops: [op.op], evidence: { ...o.evidence, cleanReplay: r.cleanReplay } })
+            .ops[0]!;
+        } catch (e) {
+          out.push({ ...base, ...replayed, shared: false, reason: (e as Error).message.split("\n")[0] });
+          continue;
+        }
+        if (op.errors.length) {
+          out.push({ ...base, ...replayed, shared: false, reason: `refused: ${op.errors.join("; ")}` });
+          continue;
+        }
+        // the upload is the op replayed; one another process learned or healed meanwhile would take its version
+        const now = loadSite(p.site)?.site.operations.find((x) => x.name === op.op);
+        if (JSON.stringify(now) !== JSON.stringify(mine)) {
+          out.push({
+            ...base,
+            ...replayed,
+            shared: false,
+            reason:
+              "the op changed while its clean replay was out (learned or healed again): the replay proved the op it replaced, so nothing went up",
+            next: `run api-anything publish ${p.site} ${op.op} --yes again to replay and share the op as it is now`,
+          });
+          continue;
+        }
+      }
+      // the replay did not show it public: an automatic share waits for the user's yes
+      if (!o.consent && !op.public) {
+        out.push({ ...base, ...replayed, shared: false, needsConsent: true, reason: NEEDS_YES });
+        continue;
+      }
     }
     try {
       const r = await registryRequest<UploadResult>("/v1/versions", {
@@ -179,27 +272,138 @@ export async function shareOps(
         cap: 64 * 1024,
         signal: o.signal,
       });
-      record(p.site, op.op, { hash: r.hash, status: r.status });
+      const review =
+        r.status === "review"
+          ? heldForReview(r.reasons ?? [], { site: p.site, op: mine, cleanReason: replayed.cleanReason })
+          : undefined;
+      record(p.site, op.op, {
+        hash: r.hash,
+        status: r.status,
+        ...(review ? { review: review.held.map((h) => h.category) } : {}),
+      });
       out.push({
         ...base,
+        ...replayed,
         shared: true,
         hash: r.hash,
         status: r.status,
-        ...(r.reasons?.length ? { reason: r.reasons.join("; ") } : {}),
+        ...(review
+          ? { reason: review.reason, held: review.held, next: review.next }
+          : r.reasons?.length
+            ? { reason: r.reasons.join("; ") }
+            : {}),
       });
     } catch (e) {
-      out.push({ ...base, shared: false, reason: (e as Error).message.split("\n")[0] });
+      out.push({ ...base, ...replayed, shared: false, reason: (e as Error).message.split("\n")[0] });
     }
   }
   return out;
 }
 
+/**
+ * What `publish`'s preview says of each op's clean replay: the one on record, why none can run, or that
+ * `--yes` runs it. The preview itself sends nothing to the site.
+ */
+export function cleanReplayPreview(site: string, ops: string[]): Record<string, string> {
+  const spec = loadSite(site)?.site;
+  const out: Record<string, string> = {};
+  for (const name of ops) {
+    const op = spec?.operations.find((x) => x.name === name);
+    if (!op) continue;
+    const proof = proofOf(site, op)?.cleanReplay;
+    const why = unreplayable(op);
+    out[name] = proof ? `${proof} (on record)` : why ? `skipped: ${why}` : "will run on publish";
+  }
+  return out;
+}
+
+const NEEDS_YES =
+  "it needed a login or was learned in a session that may be signed in, writes, sends off its site or uses a public credential: shared only with the user's yes";
+
+type Replay =
+  | { cleanReplay: Evidence["cleanReplay"]; cleanReason?: string }
+  /** nothing was sent now (a cool-down, the site's budget, its rate limit): the op does not go up skipped */
+  | { notNow: string; next: string };
+
+/**
+ * The clean replay of an op no proof on record covers, as learn_site runs it: plain HTTP with no
+ * cookies and no session values, with its own examples (`unreplayable` says when it cannot be),
+ * once, at the site's pace and inside its budget and cool-down. A site that says stop cools down as
+ * after any call. An op learned over MCP or a pulled site's goes only to public addresses.
+ */
+async function replayClean(
+  site: string,
+  spec: Site,
+  op: Operation,
+  o: { fetchImpl?: typeof fetch; minIntervalMs?: number },
+): Promise<Replay> {
+  const why = unreplayable(op);
+  if (why) return { cleanReplay: "skipped", cleanReason: why };
+  const again = `run api-anything publish ${site} ${op.name} --yes again`;
+  const notSent = "its clean replay was not sent";
+  const held = cooling(site);
+  if (held) {
+    const until = new Date(held.until).toISOString();
+    return {
+      notNow: `${notSent}: ${site} is cooling down after ${held.class} until ${until}`,
+      next: `${again} after ${until}`,
+    };
+  }
+  let pace: ReturnType<typeof sitePace>;
+  try {
+    pace = sitePace(spec);
+  } catch (e) {
+    if (!(e instanceof PaceConfigError)) throw e;
+    return { notNow: `${notSent}: ${e.message}`, next: `ask the user to fix API_ANYTHING_PACE, then ${again}` };
+  }
+  const budget = limited(pace) ? { site, pace } : undefined;
+  const over = budget && budgetCheck(site, pace);
+  if (over)
+    return { notNow: `${notSent}: ${over.message}`, next: `${again} in ${Math.ceil(over.retryAfterMs / 1000)} s` };
+  const r = await cleanCall(op, examplesOf(op)!, {
+    site,
+    fetchImpl: o.fetchImpl,
+    minIntervalMs:
+      pace.minIntervalMs !== undefined ? Math.max(o.minIntervalMs ?? 1000, pace.minIntervalMs) : o.minIntervalMs,
+    publicOnly: !!op.publicOnly || !!spec.shared,
+    budget,
+  });
+  if (r.class === "rate") {
+    const ms = r.retryAfterMs ?? RATE_COOL_MS;
+    if (!r.budget && ms > 0) coolDown(site, { class: "rate", reason: r.reason }, ms);
+    return {
+      notNow: r.budget ? `${notSent}: ${r.reason}` : `its clean replay answered rate: ${r.reason}`,
+      next: `${again} in ${Math.ceil(ms / 1000)} s`,
+    };
+  }
+  return cleanEvidence(r);
+}
+
+/** A consent step says nothing of the op (classify.ts): the registry settles a skipped replay by its own. */
+export const CONSENT_SKIP =
+  "the clean replay met the site's cookie-consent step, which says nothing of the operation: the registry replays it itself";
+
+/** What a clean call's answer is as evidence: ok and blocked as they are, a consent wall skipped, else failed. */
+export function cleanEvidence(r: Pick<CallResult, "class" | "reason" | "wall">): {
+  cleanReplay: Evidence["cleanReplay"];
+  cleanReason?: string;
+} {
+  if (r.class === "ok") return { cleanReplay: "ok" };
+  if (r.class === "blocked") return { cleanReplay: "blocked", cleanReason: `blocked: ${r.reason}` };
+  if (r.wall === "consent") return { cleanReplay: "skipped", cleanReason: CONSENT_SKIP };
+  return { cleanReplay: "failed", cleanReason: `${r.class}: ${r.reason}` };
+}
 /** The local op now is that registry version: its calls report on it. */
-function record(site: string, op: string, version: { hash: string; status: string }): void {
-  updateSite(site, (s) => ({
-    ...s!,
-    operations: s!.operations.map((x) => (x.name === op ? { ...x, version } : x)),
-  }));
+function record(site: string, op: string, version: NonNullable<Operation["version"]>): void {
+  try {
+    updateSite(site, (s) => {
+      // the site went meanwhile (a logout of its spec, a delete): there is nothing to mark
+      if (!s) throw new Error("gone");
+      return { ...s, operations: s.operations.map((x) => (x.name === op ? { ...x, version } : x)) };
+    });
+  } catch {
+    // the upload stands; the next pull or share records the version
+  }
 }
 
 /** The op's stored example args, with defaults; undefined when a required param has none. */
@@ -265,11 +469,13 @@ export async function healBack(
     // an op an agent learned or someone shared: the page its heal learned from chose the request
     publicOnly: !!op.publicOnly || !!mine.shared,
   });
-  if (clean.class !== "ok" && clean.class !== "blocked") return undefined;
+  const evidence = cleanEvidence(clean);
+  if (evidence.cleanReplay === "failed") return undefined;
   // the registry counts it as a heal only after this install's `fail` report on `parent`: send that first
   await flushReports(o.signal);
   const [shared] = await shareOps(site, [opName], {
-    evidence: { cleanReplay: clean.class, healedFrom: parent },
+    evidence: { cleanReplay: evidence.cleanReplay, healedFrom: parent },
+    proved: op,
     parent,
     signal: o.signal,
     guest,

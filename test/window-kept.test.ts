@@ -1,0 +1,294 @@
+/**
+ * What the sign-in window keeps and answers when no sign-in it knows appeared: analytics alone keep
+ * nothing and answer as a window that saw nothing; a cookie that may carry an account is kept but
+ * never called a consent, and the answer says what to do whichever the user did. A session filled
+ * this way is never judged public.
+ */
+import assert from "node:assert/strict";
+import type { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { createServer as httpServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, before, describe, test } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { Page } from "playwright-core";
+import { browserAvailable, closeBrowser, openBrowser } from "../src/browser.js";
+import { profileDir } from "../src/heal.js";
+import { visitorChoices, windowAnswer, windowLogin } from "../src/login.js";
+import { createServer } from "../src/mcp.js";
+import { isPublic } from "../src/publish.js";
+import { loadSession } from "../src/session.js";
+import { parseSite } from "../src/spec.js";
+import { loadSite, saveSite } from "../src/store.js";
+import type { StoredCookie } from "../src/types.js";
+
+const HOME = mkdtempSync(join(tmpdir(), "api-anything-window-kept-"));
+process.env.API_ANYTHING_HOME = HOME;
+after(() => rmSync(HOME, { recursive: true, force: true }));
+
+const cookie = (name: string, value = "v-0123456789"): StoredCookie => ({
+  name,
+  value,
+  domain: "127.0.0.1",
+  path: "/",
+  expires: -1,
+  httpOnly: false,
+  secure: false,
+});
+
+test("analytics and tracking cookies alone are not a visitor's choice; a consent or a cleared challenge is", () => {
+  const names = (c: StoredCookie[]) => c.map((x) => x.name);
+  assert.deepEqual(
+    names(visitorChoices([], [cookie("_ga"), cookie("_gid"), cookie("_fbp"), cookie("_hjSessionUser_1")], [])),
+    [],
+  );
+  // the families of the vendors in common use, Meta's click id and Matomo's per-site ids among them
+  const trackers = [
+    "_fbc",
+    "_pk_id.1.abcd",
+    "_pk_ses.1.abcd",
+    "__utma",
+    "_gac_UA-1234-1",
+    "MUID",
+    "_scid",
+    "_rdt_uuid",
+    "__qca",
+    "cto_bundle",
+    "s_vi",
+    "AMCV_0123456789ABCDEF%40AdobeOrg",
+    "AMP_0123456789",
+    "mp_0123456789abcdef_mixpanel",
+    "_hp2_id.123456",
+    "fs_uid",
+    "_lr_uf_abc-123",
+    "_ym_uid",
+    "optimizelyEndUserId",
+    "_vwo_uuid_v2",
+  ];
+  assert.deepEqual(
+    names(
+      visitorChoices(
+        [],
+        trackers.map((n) => cookie(n)),
+        [],
+      ),
+    ),
+    [],
+  );
+  // a name of a vendor's that names a user is no tracker of an anonymous visitor
+  assert.deepEqual(names(visitorChoices([], [cookie("ajs_user_id")], [])), ["ajs_user_id"]);
+  assert.deepEqual(names(visitorChoices([], [cookie("_ga"), cookie("OptanonConsent"), cookie("cf_clearance")], [])), [
+    "OptanonConsent",
+    "cf_clearance",
+  ]);
+  // a name nothing knows may be a consent or a sign-in: kept, and told apart in the answer
+  assert.deepEqual(names(visitorChoices([], [cookie("_ga"), cookie("PHPSESSID")], [])), ["PHPSESSID"]);
+});
+
+test("the answer for kept cookies: a known consent says retry; one that may carry an account is never called a consent", () => {
+  const how = "api-anything login shop --window";
+  const consent = windowAnswer(
+    "shop",
+    { ok: true, cookies: [], renewed: [], kept: ["OptanonConsent"], account: [] },
+    how,
+  );
+  assert.equal(consent.ok, true);
+  assert.equal(consent.loggedIn, false);
+  assert.match(String(consent.warning), /OptanonConsent.*may record a cookie consent or a cleared challenge/);
+  // a cookie api-anything does not know to be a tracker is kept too: the answer claims no choice
+  assert.match(String(consent.warning), /does not show that anyone chose anything/);
+  assert.doesNotMatch(String(consent.warning), /its record of/);
+  // a load balancer's cookie every visitor is given, set with nobody asked anything
+  const unknownTracker = windowAnswer(
+    "shop",
+    { ok: true, cookies: [], renewed: [], kept: ["__cf_bm"], account: [] },
+    how,
+  );
+  assert.match(String(unknownTracker.warning), /does not show that anyone chose anything/);
+  assert.match(String(unknownTracker.next), /same page again.*make the choice on the site's page/);
+  assert.match(String(consent.next), /^retry the call/);
+  assert.match(String(consent.next), /loginCookies/);
+
+  const unknown = windowAnswer(
+    "shop",
+    { ok: true, cookies: [], renewed: [], kept: ["PHPSESSID"], account: ["PHPSESSID"] },
+    how,
+  );
+  assert.deepEqual([unknown.ok, unknown.loggedIn, unknown.kept], [true, false, ["PHPSESSID"]]);
+  assert.doesNotMatch(String(unknown.warning), /consent/, "a cookie that may carry an account is not called a consent");
+  assert.match(String(unknown.warning), /PHPSESSID may carry an account/);
+  assert.match(String(unknown.next), /answered a consent page or cleared a challenge.*retry the call/);
+  assert.match(
+    String(unknown.next),
+    /signed in.*did not recognize.*PHPSESSID.*loginCookies.*api-anything login shop --window/,
+  );
+
+  const signedIn = windowAnswer("shop", { ok: true, cookies: [cookie("sessionid")], renewed: ["sessionid"] }, how);
+  assert.deepEqual(signedIn, {
+    ok: true,
+    site: "shop",
+    source: "window",
+    cookies: ["sessionid"],
+    loggedIn: true,
+    renewed: ["sessionid"],
+  });
+});
+
+/** A site whose pages set analytics from script; /signin gives a session cookie of a name nothing knows. */
+function shop(): Promise<{ base: string; server: Server }> {
+  const page = `<html><body><p>shop</p><button id="choose" onclick="document.cookie = 'shop_choice=yes; path=/; max-age=3600'">Choose</button><button id="pop" onclick="window.open('/?popup=1')">Help</button><script>document.cookie = "_ga=GA1.1.1234567890.1700000000; path=/"; document.cookie = "_gid=GA1.1.987654321.1700000000; path=/";</script></body></html>`;
+  const server = httpServer((req, res) => {
+    if (req.url === "/signin") {
+      res.writeHead(302, { location: "/", "set-cookie": "PHPSESSID=9f8e7d6c5b4a39281706f5e4; Path=/; HttpOnly" });
+      return res.end();
+    }
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end(page);
+  });
+  return new Promise((r) =>
+    server.listen(0, "127.0.0.1", () =>
+      r({ base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, server }),
+    ),
+  );
+}
+
+async function windowPage(part = "127.0.0.1"): Promise<Page> {
+  for (let i = 0; i < 300; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    const page = (await openBrowser({ profileDir: profileDir(), headless: false }))
+      .pages()
+      .find((p) => p.url().includes(part));
+    if (page) return page;
+  }
+  throw new Error("the window did not open");
+}
+
+/** The user closes the window once the window has read the jar after what they did. */
+async function userCloses(page: Page): Promise<void> {
+  await new Promise((r) => setTimeout(r, 1200));
+  await page.close({ runBeforeUnload: true });
+}
+
+describe("the window on a site with analytics", {
+  skip: !browserAvailable() && "no Chromium browser installed",
+}, () => {
+  let base: string;
+  let server: Server;
+  before(async () => ({ base, server } = await shop()));
+  after(async () => {
+    await closeBrowser();
+    await new Promise((r) => server.close(r));
+  });
+
+  test("closed with nothing done: the analytics are not kept, and it answers ok false with the reason", async () => {
+    const pending = windowLogin("trk", `${base}/`, { waitForEnter: false });
+    await userCloses(await windowPage());
+    const w = await pending;
+    assert.equal(w.ok, false, JSON.stringify(w));
+    assert.match(w.ok ? "" : w.reason, /no sign-in seen: no login cookie appeared while the window was open/);
+    assert.deepEqual(loadSession("trk").cookies, [], "the stored session is unchanged");
+  });
+
+  test("in api-anything's own browser too, ending one window ends that window alone", async () => {
+    const stop = new AbortController();
+    const first = windowLogin("trk", `${base}/?w=1`, { waitForEnter: false, signal: stop.signal });
+    const one = await windowPage("w=1");
+    const second = windowLogin("trk", `${base}/?w=2`, { waitForEnter: false });
+    const two = await windowPage("w=2");
+    assert.notEqual(one, two, "each window has a page of its own");
+    // the MCP server's cap on the first, then the user closes the second
+    stop.abort();
+    await first;
+    assert.deepEqual([one.isClosed(), two.isClosed()], [true, false], "the other window is still open");
+    await userCloses(two);
+    await second;
+  });
+
+  test("in api-anything's own browser, a window's popup is its own, a choice made just before closing is kept, and nothing is left listening", async () => {
+    // the first window opens a popup, as an identity provider's sign-in does, and stays open
+    const stop = new AbortController();
+    const first = windowLogin("trk-pop", `${base}/?w=3`, { waitForEnter: false, signal: stop.signal });
+    const one = await windowPage("w=3");
+    await one.click("#pop");
+    const popup = await windowPage("popup=1");
+    // the context the first window keeps open, and what listens on it with that one window
+    // Playwright's context is an EventEmitter, which its types do not say
+    const ctx = (await openBrowser({ profileDir: profileDir(), headless: false })) as unknown as EventEmitter;
+    const listening = () => [ctx.listenerCount("close"), ctx.listenerCount("response")];
+    const withOne = listening();
+    // the next window is a page of its own, not the first one's popup
+    const second = windowLogin("trk-pop", `${base}/?w=4`, { waitForEnter: false });
+    const two = await windowPage("w=4");
+    assert.notEqual(two, popup, "the popup stays the first window's");
+    assert.equal(popup.url().includes("popup=1"), true, "the popup was not taken over");
+    // the user chooses by a script's cookie and closes the tab at once, before any half-second read
+    await two.click("#choose");
+    await two.close({ runBeforeUnload: true });
+    const w = await second;
+    assert.equal(w.ok, true, JSON.stringify(w));
+    assert.deepEqual(w.ok && w.kept, ["shop_choice"]);
+    assert.deepEqual(listening(), withOne, "the ended window took its listeners along");
+    stop.abort();
+    await first;
+  });
+
+  test("a sign-in by a cookie name nothing knows: kept, said plainly over MCP, and the session is never public", async () => {
+    saveSite(
+      parseSite({
+        name: "php",
+        baseUrl: `${base}/`,
+        operations: [
+          {
+            name: "list",
+            readOnly: true,
+            trigger: { url: `${base}/` },
+            match: { method: "GET", path: "/api/list" },
+            request: { method: "GET", url: `${base}/api/list`, headers: {} },
+            slots: [],
+            volatile: [],
+            params: [],
+            response: { format: "json" },
+          },
+        ],
+      }),
+    );
+    const client = new Client({ name: "agent", version: "0" });
+    const [x, y] = InMemoryTransport.createLinkedPair();
+    await createServer({ waitMs: 120_000 }).connect(x);
+    await client.connect(y);
+    let r: Record<string, unknown>;
+    try {
+      const pending = client.callTool({ name: "login", arguments: { site: "php", mode: "window" } });
+      const page = await windowPage();
+      await page.goto(`${base}/signin`);
+      await userCloses(page);
+      r = JSON.parse(((await pending).content as { text: string }[])[0]!.text);
+    } finally {
+      await client.close();
+    }
+    assert.deepEqual([r.ok, r.loggedIn, r.kept], [true, false, ["PHPSESSID"]], JSON.stringify(r));
+    assert.doesNotMatch(String(r.warning), /consent/);
+    assert.match(String(r.next), /did not recognize.*PHPSESSID.*loginCookies/);
+    const s = loadSession("php");
+    assert.deepEqual(
+      s.cookies.map((c) => c.name),
+      ["PHPSESSID"],
+      "the analytics were not kept",
+    );
+    const spec = loadSite("php")!.site;
+    const op = spec.operations[0]!;
+    assert.equal(
+      isPublic(spec, op, { cleanReplay: "ok" }, s),
+      false,
+      "a session holding the kept cookie is not public",
+    );
+    assert.equal(
+      isPublic(spec, op, { cleanReplay: "ok" }, { cookies: [] }),
+      true,
+      "the same op with no such cookie would be",
+    );
+  });
+});

@@ -22,6 +22,13 @@ export const SiteContextSchema = z.object({
   notes: z.string().optional(),
 });
 
+/**
+ * A seed's site: an upload's, with the aliases a maintainer gives it. An upload's are dropped with every
+ * other field `SiteContextSchema` does not name: an alias says searches for a domain should get the site,
+ * which is no stranger's to say.
+ */
+export const SeedSiteSchema = SiteContextSchema.extend({ aliases: z.array(z.string().max(253)).max(50).optional() });
+
 const Tier = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 const UploadSchema = z.object({
   site: SiteContextSchema,
@@ -78,6 +85,7 @@ export function refusals(site: SiteContext, ops: Operation[]): string[] {
     description: site.description,
     loginCookies: site.loginCookies,
     pace: site.pace,
+    aliases: site.aliases,
     operations: ops,
   });
   if (!spec.success) return issues(spec.error);
@@ -177,6 +185,10 @@ export interface SiteHeld {
   incumbent?: { match: string; request: string; trigger: string };
 }
 
+/** The review reason of a clean replay that was not ok; replay.ts finds the versions held for "skipped" alone by it. */
+export const cleanReplayReason = (evidence: Pick<Evidence, "cleanReplay">) =>
+  `its clean replay was ${evidence.cleanReplay}, not ok`;
+
 /** Why a version is outside the automatic rules: served to its uploader only until a maintainer decides. */
 export function reviewReasons(
   site: SiteContext,
@@ -227,8 +239,7 @@ export function reviewReasons(
   }
   if (op.public?.length) reasons.push(`lists public values: ${op.public.join(", ")}`);
   // blocked: a bot wall answered the cookie-free replay, so the data is public behind it
-  if (evidence.cleanReplay !== "ok" && evidence.cleanReplay !== "blocked")
-    reasons.push(`its clean replay was ${evidence.cleanReplay}, not ok`);
+  if (evidence.cleanReplay !== "ok" && evidence.cleanReplay !== "blocked") reasons.push(cleanReplayReason(evidence));
   // the export scan's heuristics: a JWT, a bearer, a long blob; they misfire, so a maintainer looks
   const spec = SiteSchema.parse({ name: site.name, baseUrl: site.baseUrl, operations: [op] });
   for (const w of vetShared(spec).warnings) if (w.startsWith("$")) reasons.push(w);
