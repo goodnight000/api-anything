@@ -81,7 +81,7 @@ test("each op gets one entry, decided by its worst case: fail, then inconclusive
   assert.equal(e.item!.ms, 80);
   assert.equal(e.deals!.result, "inconclusive");
   assert.equal(e.deals!.case, "next page");
-  assert.equal(e.deals!.reason, "page 1 is empty");
+  assert.equal(e.deals!.reason, "no next page to go on to");
   assert.equal(e.locked!.result, "skipped");
   assert.match(e.locked!.reason!, /needs login/);
   assert.equal(e.gone!.result, "inconclusive", "an op verify said nothing about tested nothing");
@@ -92,72 +92,78 @@ test("an entry carries no args, purposes or answers, and its reason names no arg
   const entries = siteEntries(run());
   const text = JSON.stringify(entries);
   assert.doesNotMatch(text, /tea kettle|blue-widget-0042|a second query|"args"|"purpose"|"next"/);
-  assert.equal(byOp(entries).item!.reason, "no item <arg> at https://shop.test/…");
+  assert.equal(
+    byOp(entries).item!.reason,
+    "answered input: the site refused the args, or has nothing for them, where it expects data",
+  );
 });
 
-test("a reason is one short line", () => {
-  const long = `answered drift\n  ${"x".repeat(500)}`;
-  const e = siteEntries(
-    run({ output: { ok: false, results: [caseRow("search", "example", "fail", { reason: long })] } }),
-  );
-  const reason = byOp(e).search!.reason!;
-  assert.ok(reason.length <= 200, `${reason.length} chars`);
-  assert.doesNotMatch(reason, /\n/);
-  assert.match(reason, /^answered drift x+…$/);
-});
-
-test("a reason keeps verify's words and drops the page text it quotes", () => {
-  const reasons = [
-    "HTTP 403 with no login or challenge markers: <body class=theme-beta><div>page text</div>",
-    'HTTP 200 carrying batchexecute error 13 (INTERNAL), judged as HTTP 500: )]}\' 269 [["wrb.fr",null]]',
-    'HTTP 400: {"error":"bad date"}',
-    "not sent: shop answered blocked (HTTP 403: <!doctype html> <title>Denied</title>), so nothing goes to it until later",
-  ];
-  const e = siteEntries(
-    run({
-      ops: ["a", "b", "c", "d"],
-      output: {
-        ok: false,
-        results: reasons.map((reason, i) => caseRow("abcd"[i]!, "example", "inconclusive", { got: "blocked", reason })),
-      },
-    }),
-  );
-  assert.deepEqual(
-    e.map((x) => x.reason),
+test("no text a site sent reaches the record: a reason is a fixed phrase chosen by verify's own values", () => {
+  // each reason verify gives quotes something the site sent: a body, a redirect's path, a server's cursor
+  const said: [string, string, string][] = [
+    ["redirected to /login/review-marker", "auth", "answered auth: the site asked for a sign-in"],
     [
-      "HTTP 403 with no login or challenge markers: …",
-      "HTTP 200 carrying batchexecute error 13 (INTERNAL), judged as HTTP 500: …",
-      "HTTP 400: …",
-      "not sent: …",
+      "cursor=srv-cursor-7f3a answered page 1's items again: the server does not read cursor where the request puts it",
+      "page 1 again",
+      "the next page answered page 1's items again",
     ],
-  );
-});
-
-test("no text a site sent reaches the record: verify's own words and the status, and an address's origin", () => {
-  const said: [string, string][] = [
-    ["HTTP 503: The service is offline for maintenance.", "HTTP 503: …"],
-    ["HTTP 429 (retry after 60 s): Slow down, friend", "HTTP 429 (retry after 60 s): …"],
-    ["GraphQL: Viewer quota exceeded for this account", "GraphQL: …"],
-    ["the event stream sent an error event: model overloaded, try later", "the event stream sent an error event: …"],
-    ["response is not JSON: Service temporarily down", "response is not JSON: …"],
+    ["HTTP 503: The service is offline for maintenance.", "error", "answered error"],
     [
-      "redirected to https://shop.test/consent?continue=%2Fp&note=Hello%20there, the site's cookie-consent page, instead of the data: the site asks this visitor a question first",
-      "redirected to https://shop.test/…, the site's cookie-consent page, instead of the data: …",
+      "HTTP 403 with no login or challenge markers: <body class=theme-beta>",
+      "blocked",
+      "answered blocked: a bot challenge or a block",
     ],
+    ["GraphQL: Viewer quota exceeded for this account", "rate", "answered rate: the site limited the requests"],
+    [
+      "response is not JSON: Service temporarily down",
+      "drift",
+      "answered drift: the answer is not the shape the op learned",
+    ],
+    ["something new: with words", "a class this record never heard of", "answered in a way this record does not name"],
   ];
   const e = siteEntries(
     run({
       ops: said.map((_, i) => `op${i}`),
       output: {
         ok: false,
-        results: said.map(([reason], i) => caseRow(`op${i}`, "example", "fail", { got: "error", reason })),
+        results: said.map(([reason, got], i) =>
+          caseRow(`op${i}`, i === 1 ? "next page" : "example", "inconclusive", { got, reason }),
+        ),
       },
     }),
   );
   assert.deepEqual(
     e.map((x) => x.reason),
-    said.map(([, kept]) => kept),
+    said.map(([, , kept]) => kept),
   );
+  const text = JSON.stringify(e);
+  for (const word of [
+    "review-marker",
+    "/login",
+    "srv-cursor",
+    "maintenance",
+    "theme-beta",
+    "quota",
+    "temporarily",
+    "with words",
+  ])
+    assert.ok(!text.includes(word), word);
+  // a failure says what was expected, from the case's own expect
+  const failed = siteEntries(
+    run({
+      ops: ["a"],
+      output: { ok: false, results: [caseRow("a", "example", "fail", { got: "empty", reason: "x" })] },
+    }),
+  );
+  assert.equal(failed[0]!.reason, "answered with no results, where it expects data");
+});
+
+test("the summary and the issue say once where the site's own words are", () => {
+  const md = summary(health());
+  assert.equal(md.split("api-anything verify <site>").length - 1, 1);
+  const now = health();
+  const body = issueBody(now, persistentFailures(now, only("shop", "item", "fail"))!);
+  assert.equal(body.split("api-anything verify <site>").length - 1, 1);
 });
 
 test("a site verify could not load fails every op; a run that did not finish tests nothing", () => {
@@ -167,8 +173,8 @@ test("a site verify could not load fails every op; a run that did not finish tes
   assert.deepEqual(
     broken.map((e) => [e.op, e.result, e.class, e.reason]),
     [
-      ["a", "fail", "error", 'verify could not run the site: no site "shop"'],
-      ["b", "fail", "error", 'verify could not run the site: no site "shop"'],
+      ["a", "fail", "error", "verify could not run the site"],
+      ["b", "fail", "error", "verify could not run the site"],
     ],
   );
   const stopped = siteEntries(run({ ops: ["a"], output: undefined, problem: "verify did not finish in 20 min" }));
@@ -219,20 +225,20 @@ test("the summary gives totals, then each failing and inconclusive op with its r
   assert.match(md, /\| pass \| 1 \|/);
   assert.match(md, /\| fail \| 1 \|/);
   const failing = md.slice(md.indexOf("### Failing"), md.indexOf("### Inconclusive"));
-  assert.match(failing, /`shop\.item` \| example \| input \| 1 \| no item <arg>/);
+  assert.match(failing, /`shop\.item` \| example \| input \| 1 \| answered input/);
   const inconclusive = md.slice(md.indexOf("### Inconclusive"));
   assert.match(inconclusive, /`shop\.deals`/);
   assert.match(inconclusive, /`shop\.gone`/);
   assert.doesNotMatch(md, /shop\.search|shop\.locked/, "passing and skipped ops are counted, not listed");
 });
 
-test("the summary keeps a reason with a pipe in its table cell", () => {
+test("a reason verify wrote never reaches the summary, a pipe in it neither", () => {
   const md = summary(
     health([
       run({ ops: ["a"], output: { ok: false, results: [caseRow("a", "example", "fail", { reason: "a | b\\c" })] } }),
     ]),
   );
-  assert.match(md, /a \\\| b\\\\c \|$/m);
+  assert.doesNotMatch(md, /a \| b|a \\\| b/);
 });
 
 test("a run with nothing failing or inconclusive says so", () => {
@@ -270,7 +276,7 @@ test("the issue body lists each op failing twice, with the latest run", () => {
   const now = health();
   const body = issueBody(now, persistentFailures(now, only("shop", "item", "fail"))!);
   assert.match(body, /1 bundled operation failed in two consecutive/);
-  assert.match(body, /\| `shop\.item` \| example \| input \(tier 1\) \| no item <arg> at https:\/\/shop\.test\/… \|/);
+  assert.match(body, /\| `shop\.item` \| example \| input \(tier 1\) \| answered input: .* \|/);
   assert.match(body, /\[the run\]\(https:\/\/github\.com\/o\/r\/actions\/runs\/1\)/);
   assert.match(body, /1 pass, 1 fail, 2 inconclusive, 1 skipped/);
   assert.match(issueBody(now, []), /No bundled operation failed in two consecutive runs/);
@@ -393,7 +399,7 @@ test("a verify that crashed or hangs is a problem, not an outcome", async () => 
     );
     const r = await runSite("shop", { command: [process.execPath, crash], env: process.env, timeoutMs: 10_000 });
     assert.equal(r.output, undefined);
-    assert.equal(r.problem, "verify stopped: the lock is busy");
+    assert.equal(r.problem, "verify stopped with an error", "its error can quote the site");
     const hang = fake(dir, "setInterval(() => {}, 1000);");
     const started = Date.now();
     const h = await runSite("shop", { command: [process.execPath, hang], env: process.env, timeoutMs: 500 });
@@ -401,7 +407,7 @@ test("a verify that crashed or hangs is a problem, not an outcome", async () => 
     assert.ok(Date.now() - started < 8000, "the hung verify is killed");
     const garbage = fake(dir, `process.stderr.write("TypeError: boom\\n"); process.exit(3);`);
     const g = await runSite("shop", { command: [process.execPath, garbage], env: process.env, timeoutMs: 10_000 });
-    assert.match(g.problem!, /verify exited 3 with no answer: TypeError: boom/);
+    assert.equal(g.problem, "verify exited 3 with no answer", "its stderr can quote the site");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

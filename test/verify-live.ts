@@ -54,6 +54,7 @@ interface Row {
   site?: string;
   op?: string;
   case?: string;
+  expect?: string;
   outcome?: string;
   got?: string;
   tier?: number;
@@ -77,7 +78,7 @@ export interface SiteRun {
   site: string;
   /** every op of the bundled spec, in its order */
   ops: string[];
-  /** the spec's example, default and check values: a reason quoting one has it replaced */
+  /** the spec's example, default and check values */
   values: string[];
   at: string;
   output?: VerifyOutput;
@@ -85,47 +86,54 @@ export interface SiteRun {
   problem?: string;
 }
 
-const REASON_CHARS = 200;
-
 /**
- * Verify's reason on one line, with nothing a site sent in it: the record holds outcomes, not answers.
- * Every reason that quotes an answer (classify.ts `snippet`, a GraphQL message, an error event, a
- * parser's complaint) does it after a ": ", so what follows the first one goes, whatever it opens with;
- * an address keeps its origin, since its path and query are the site's to write; the spec's arg values
- * are replaced. Losing detail is fine: the whole reason is one `verify` away. `own`: this script's words
- * before verify's, kept whole.
+ * What a case answered, in words of this script's own. A reason in the record is only ever one of these
+ * (or another fixed phrase below), chosen by values api-anything produced: verify's reasons quote what
+ * the site sent (a body, a redirect's path, a cursor), so none of their text is kept. The whole reason
+ * is one `verify` away (`FULL_REASON`).
  */
-function shortReason(text: string, values: string[], own = ""): string {
-  let s = text.replace(/\s+/g, " ").trim();
-  const said = s.indexOf(": ");
-  if (said >= 0) s = `${s.slice(0, said + 2)}…`;
-  s = own + s;
-  s = s.replace(/\bhttps?:\/\/[^\s,)]+/gi, (u) => {
-    try {
-      const url = new URL(u);
-      return url.pathname === "/" && !url.search && !url.hash ? url.origin : `${url.origin}/…`;
-    } catch {
-      return "…";
-    }
-  });
-  const forms = values
-    .filter((v) => v.length >= 3)
-    .flatMap((v) => [v, encodeURIComponent(v)])
-    .sort((a, b) => b.length - a.length);
-  for (const v of forms) s = s.split(v).join("<arg>");
-  return s.length > REASON_CHARS ? `${s.slice(0, REASON_CHARS - 1)}…` : s;
+const ANSWERED: Record<string, string> = {
+  result: "answered with data",
+  empty: "answered with no results",
+  input: "answered input: the site refused the args, or has nothing for them",
+  drift: "answered drift: the answer is not the shape the op learned",
+  auth: "answered auth: the site asked for a sign-in",
+  rate: "answered rate: the site limited the requests",
+  blocked: "answered blocked: a bot challenge or a block",
+  error: "answered error",
+  "no next page": "no next page to go on to",
+  "page 1 again": "the next page answered page 1's items again",
+};
+const EXPECTED: Record<string, string> = { result: "data", empty: "no results", input: "input" };
+
+/** One case's reason, from its class, its outcome and what it expected. */
+function answered(row: Row): string {
+  const said = (row.got !== undefined && ANSWERED[row.got]) || "answered in a way this record does not name";
+  const expected = row.expect !== undefined ? EXPECTED[row.expect] : undefined;
+  return row.outcome === "fail" && expected && row.got !== row.expect ? `${said}, where it expects ${expected}` : said;
 }
+
+/** Why verify skipped an op, by the start of verify's own words; a reason it may add is not echoed. */
+const skippedWhy = (text: string) =>
+  text.startsWith("needs login:")
+    ? "needs login: it was learned signed in, and this run is logged out"
+    : text.startsWith("no example for ")
+      ? "no example args and no checks to run"
+      : "verify skipped it";
+
+/** Where the record's reasons send a reader for the site's own words: once in the summary and the issue. */
+export const FULL_REASON =
+  "Each reason here is a fixed phrase; the site's own words are in the output of `api-anything verify <site>`.";
 
 /** Each op's entry from its site's verify: the worst of its cases decides (fail, inconclusive, pass). */
 export function siteEntries(run: SiteRun): Entry[] {
   const { site, at } = run;
-  const reason = (t: string, own?: string) => shortReason(t, run.values, own);
   if (!run.output)
     return run.ops.map((op) => ({
       site,
       op,
       result: "inconclusive",
-      reason: reason(run.problem ?? "verify gave no answer"),
+      reason: run.problem ?? "verify gave no answer",
       at,
     }));
   const rows = run.output.results ?? [];
@@ -137,12 +145,12 @@ export function siteEntries(run: SiteRun): Entry[] {
         op,
         result: "fail",
         class: "error",
-        reason: reason(String(broken.error), "verify could not run the site: "),
+        reason: "verify could not run the site",
         at,
       };
     const mine = rows.filter((r) => r.op === op);
     const skipped = mine.find((r) => r.skipped !== undefined);
-    if (skipped) return { site, op, result: "skipped", reason: reason(skipped.skipped!), at };
+    if (skipped) return { site, op, result: "skipped", reason: skippedWhy(skipped.skipped!), at };
     if (mine.some((r) => r.preflight !== undefined))
       return { site, op, result: "skipped", reason: "a write: verify never sends one", at };
     const cases = mine.filter((r) => r.outcome !== undefined);
@@ -159,7 +167,7 @@ export function siteEntries(run: SiteRun): Entry[] {
       ...(decider.got !== undefined ? { class: decider.got } : {}),
       ...(decider.tier !== undefined ? { tier: decider.tier } : {}),
       ...(decider.ms !== undefined ? { ms: decider.ms } : {}),
-      ...(decider.outcome !== "pass" && decider.reason ? { reason: reason(decider.reason) } : {}),
+      ...(decider.outcome !== "pass" ? { reason: answered(decider) } : {}),
       at,
     };
   });
@@ -229,6 +237,7 @@ export function summary(h: Health): string {
       "",
       ...table(inconclusive),
     );
+  if (fail.length || inconclusive.length) lines.push("", FULL_REASON);
   return `${lines.join("\n")}\n`;
 }
 
@@ -282,7 +291,7 @@ export function issueBody(current: Health, failing: Entry[]): string {
   ];
   if (failing.length > shown.length)
     lines.push("", `and ${failing.length - shown.length} more: the run's health.json lists them.`);
-  lines.push("", head);
+  lines.push("", FULL_REASON, "", head);
   return `${lines.join("\n")}\n`;
 }
 
@@ -347,17 +356,14 @@ export function runSite(
     const child = spawn(bin!, [...args, "verify", site], {
       cwd: ROOT,
       env: o.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      // its stderr can quote a site, and the record keeps none of it
+      stdio: ["ignore", "pipe", "ignore"],
       // its own process group, so a kill reaches the Chrome it started
       detached: process.platform !== "win32",
     });
     let stdout = "";
-    let stderr = "";
     child.stdout.on("data", (d) => {
       stdout += d;
-    });
-    child.stderr.on("data", (d) => {
-      stderr = (stderr + d).slice(-4000);
     });
     let timedOut = false;
     const kill = (signal: NodeJS.Signals) => {
@@ -380,9 +386,9 @@ export function runSite(
         parsed = JSON.parse(last) as VerifyOutput;
       } catch {}
       if (parsed && Array.isArray(parsed.results)) return resolve({ output: parsed });
-      if (parsed?.error) return resolve({ problem: `verify stopped: ${parsed.error}` });
-      const why = stderr.trim().split("\n").pop() ?? "";
-      resolve({ problem: `verify exited ${code} with no answer${why ? `: ${why}` : ""}` });
+      // verify's error can quote the site: the record says only that it stopped
+      if (parsed?.error) return resolve({ problem: "verify stopped with an error" });
+      resolve({ problem: `verify exited ${code} with no answer` });
     });
   });
 }
