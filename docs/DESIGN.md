@@ -836,10 +836,22 @@ went to, which can carry a signed query string. `capture` has no site name, so i
 under the one `login` would give it (a known site on the host, else the host), and its MCP text names
 the `login` tool with `site` and `url` (`mcpNext`). The window
 keeps the choice under that name, where the learning that follows (an `add` of the same site
-while attached) reads it. The cookies the site set while it was open that are the visitor's own choices
-(`visitorChoices`: new or changed there, none every visitor is given unasked, no analytics,
-advertising or CSRF name, none that shows a sign-in) are added to the site's jar, and nothing else of the profile, so tier 1 sends them; tiers 2
-and 3 send the profile's, which holds them. The spec gains no cookie value and no ref, so a shared spec
+while attached) reads it. The cookies that are the visitor's own answer (`visitorChoices`) are added to the site's jar,
+and nothing else of the profile, so tier 1 sends them; tiers 2 and 3 send the profile's, which holds
+them. An answer is a cookie whose value at closing differs from its value once the page had loaded,
+whether or not a signed-out visitor is given one of that name (a site that gives every visitor its
+consent cookie "pending" and changes only the value on the choice). "Loaded" is the first jar read
+the window starts after the page's DOMContentLoaded, or after the navigation ends for a page that fired
+none (`markLoaded`): the document's Set-Cookie is in the jar then, and a slow subresource holding the
+load event does not hold it; a window that ended first did nothing after a load. Not an answer: a
+cookie the load set that nothing changed since; one the site gives anew on every load
+(`rotatingCookies`: the load changed the value the window opened with, or the signed-out probe was
+given another value than the window's load); an analytics, advertising or CSRF name
+(`UNASKED_COOKIE`); one that shows a sign-in (the sign-in path's). In api-anything's own browser the
+profile drops a cookie with no expiry when the browser closes, as it does after the window: one the
+window kept is put back in the profile with Chrome's longest lifetime (400 days; the jar keeps it until
+a logout or a newer value), so tiers 2 and 3 carry it as tier 1 does. Only those: the profile is no
+copy of the jar. Attached, every run is seeded from the jar. The spec gains no cookie value and no ref, so a shared spec
 and `vetShared` are unchanged, and the clean replay (`clean.ts`) still sends nothing of the user's:
 from a network the site walls, a consent-walled site's clean replay answers this `error`, and the op
 is not shared automatically from there. A signed-in read's `next` names the page to finish in the
@@ -1386,8 +1398,11 @@ attach to. A DevTools endpoint is full control of a browser.
   window's tab and a call's page in the same context go on, and the context closes on idle, after
   which the next call's context is seeded from the jar. It used to close the whole context, taking
   a second sign-in tab and the page of a call in flight with it. In api-anything's own browser the
-  same holds between windows (each opens a page of its own; the browser is closed at once only
-  when nothing else holds it); a call in flight there is a headless browser of the same profile,
+  same holds between windows (each opens a page of its own, never another window's tab or a popup it
+  opened, nor a call's page; the browser is closed at once only when nothing else holds it), and the
+  closing cookies are read after the tab closed whenever another page keeps the context open (another
+  window's tab, a call's page), as attached; a window that ended takes its listeners on the shared
+  context with it. A call in flight there is a headless browser of the same profile,
   which opening a headed window replaces, as before. Before any of it, an attached window checks
   the endpoint: a window that will be refused (nothing at the endpoint, the proxy set as well)
   sends the site nothing, not even the signed-out probe that tells its visitor cookies. The attach
@@ -2468,8 +2483,8 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   only when a login cookie (not a guest name) appeared or changed in between: a profile that already
   held one proves nothing, since it may be the very cookie the site has signed out. Then the jar is
   replaced and `login` answers `ok: true` with the `renewed` names. With no sign-in, the cookies the
-  visitor's own choices set there (a consent answered, a challenge cleared: `visitorChoices`, see
-  "A consent wall" under the classifier) are added to the jar alone, and `login` answers `ok: true`,
+  visitor changed after the page loaded (a consent answered, a challenge cleared: `visitorChoices`,
+  see "A consent wall" under the classifier) are added to the jar alone, and `login` answers `ok: true`,
   `loggedIn: false`, with their names in `kept`, a `warning` and a `next` (`windowAnswer`, the
   same over MCP and on the CLI, which exits 0); the session's `source` stays as it was. Analytics,
   advertising and CSRF names (`UNASKED_COOKIE`) are never a choice: a window in which only those

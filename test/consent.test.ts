@@ -194,13 +194,10 @@ describe("a consent wall at tier 1, cleared once", () => {
   });
 
   test("the cookies the consent step set reach tier 1, alone, and keep answering; nothing of them is in the spec", async () => {
-    // what a window keeps: the choice, not a sign-in it held already nor a cookie every visitor gets
+    // what a window keeps: the choice, not a sign-in it held already nor a cookie the page's load gave
     const signedIn = cookie("sessionid", "0123456789abcdef");
-    const kept = visitorChoices(
-      [signedIn],
-      [signedIn, cookie("eu_choice", "reject"), cookie("app_session", "guest-value")],
-      ["app_session"],
-    );
+    const guest = cookie("app_session", "guest-value");
+    const kept = visitorChoices([signedIn, guest], [signedIn, cookie("eu_choice", "reject"), guest], ["app_session"]);
     assert.deepEqual(
       kept.map((c) => c.name),
       ["eu_choice"],

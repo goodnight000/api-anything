@@ -1086,9 +1086,15 @@ Known limits in detail:
 - A read redirected to the site's cookie-consent page (Google's `consent.google.com` for a caller in
   the EU), signed in or not, JSON, html or embedded, at any tier, is `error` with `wall: "consent"`,
   not drift: it is not healed, not marked stale, and starts no cool-down. For a read learned signed
-  out, `next` asks you to run `api-anything login <site> --window`, make the choice on the site's
-  page there and close the window: the cookies the site set then are kept for that site alone, and
-  later calls send them at every tier. For a signed-in read it names the page to finish in your
+  out of your own spec, `next` asks you to run `api-anything login <site> --window`, make the choice
+  on the site's page there and close the window: the cookies whose value you changed after the page
+  loaded are kept for that site alone (a consent cookie every visitor is given "pending" included;
+  never one the site gives anew on every load), and later calls of your own spec send them at every
+  tier, in api-anything's own browser and attached alike. A spec pulled from the catalog, while
+  attached, is told to use api-anything's own browser instead. A call that sends no stored cookie at
+  all (a pulled operation the registry has not confirmed, or a non-GET operation of a spec an agent
+  pulled) is told that no window helps and what does. A write that may have run is told to check the
+  site first, whatever page it met. For a signed-in read it names the page to finish in your
   browser before `api-anything login <site>`. `learn_site`, `add`, `capture` and a heal say the same
   instead of finding no request. For a page no site has yet, the hint names the page and the name
   the learning will use, `api-anything login '<url>' --site <name> --window` (MCP: `login` with

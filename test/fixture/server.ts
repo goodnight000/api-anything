@@ -156,16 +156,16 @@ export const FLIGHTS: Record<string, { to: string; price: number }[]> = {
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 /** A consent page as Google's consent.google.com shows one: a question, two answers, a Sign-in link. */
-const CONSENT_PAGE = (back: string) =>
-  `<!doctype html><html><head><title>Before you continue</title></head><body><h1>Before you continue</h1><p>We use cookies and data to deliver our services.</p><form action="/eu/consent/save" method="get"><input type="hidden" name="continue" value="${escapeHtml(back)}"><button name="choice" value="reject">Reject all</button><button name="choice" value="accept">Accept all</button></form><a href="/signin">Sign in</a></body></html>`;
+const CONSENT_PAGE = (back: string, save = "/eu/consent/save") =>
+  `<!doctype html><html><head><title>Before you continue</title></head><body><h1>Before you continue</h1><p>We use cookies and data to deliver our services.</p><form action="${save}" method="get"><input type="hidden" name="continue" value="${escapeHtml(back)}"><button name="choice" value="reject">Reject all</button><button name="choice" value="accept">Accept all</button></form><a href="/signin">Sign in</a></body></html>`;
 
 /** The flights page: a server-rendered list, the same data embedded as page state, and the page's own fetch of it. */
-const FLIGHTS_PAGE = (q: string) => {
+const FLIGHTS_PAGE = (q: string, api = "/api/eu/flights") => {
   const flights = FLIGHTS[q] ?? [];
   const items = flights
     .map((x) => `<li class="f"><span class="to">${x.to}</span> <span class="price">${x.price}</span></li>`)
     .join("");
-  return `<!doctype html><html><body><ul class="flights">${items}</ul><script>window.DATA = ${JSON.stringify({ flights })};</script><div id="app"></div><script>fetch("/api/eu/flights?q="+encodeURIComponent(new URLSearchParams(location.search).get("q")||"")).then(r=>r.json()).then(v=>{document.getElementById("app").textContent=JSON.stringify(v)})</script></body></html>`;
+  return `<!doctype html><html><body><ul class="flights">${items}</ul><script>window.DATA = ${JSON.stringify({ flights })};</script><div id="app"></div><script>fetch("${api}?q="+encodeURIComponent(new URLSearchParams(location.search).get("q")||"")).then(r=>r.json()).then(v=>{document.getElementById("app").textContent=JSON.stringify(v)})</script></body></html>`;
 };
 
 /** Products by slug: the slug addresses a page, the numeric id the data behind it. */
@@ -572,6 +572,50 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
           );
     }
     if (p === "/api/eu/flights") return json(res, 200, { flights: FLIGHTS[u.searchParams.get("q") ?? ""] ?? [] });
+
+    // The same wall where every visitor is given the consent cookie "pending" by Set-Cookie and only the
+    // choice changes its value, beside a visitor id the site gives anew on every page. /pends/ sets the
+    // answer with no expiry (a session cookie), /pend/ for a year.
+    m = p.match(/^\/(?:api\/)?(pend|pends)\//);
+    if (m) {
+      const kind = m[1]!;
+      const name = `${kind}_consent`;
+      const given = [
+        `${kind}_visit=${randomBytes(6).toString("hex")}; Path=/; Max-Age=31536000; SameSite=Lax`,
+        ...(jar[name] ? [] : [`${name}=pending; Path=/; Max-Age=31536000; SameSite=Lax`]),
+      ];
+      if (p === `/${kind}/consent`)
+        return send(
+          res,
+          200,
+          "text/html; charset=utf-8",
+          CONSENT_PAGE(u.searchParams.get("continue") ?? `/${kind}/flights`, `/${kind}/consent/save`),
+          { "set-cookie": given },
+        );
+      if (p === `/${kind}/consent/save`) {
+        const back = u.searchParams.get("continue") ?? "";
+        const choice = u.searchParams.get("choice") === "accept" ? "accept" : "reject";
+        return send(res, 302, "text/plain", "", {
+          location: back.startsWith(`/${kind}/`) || back.startsWith(`/api/${kind}/`) ? back : `/${kind}/flights`,
+          "set-cookie": `${name}=${choice}; Path=/${kind === "pend" ? "; Max-Age=31536000" : ""}; SameSite=Lax`,
+        });
+      }
+      if (jar[name] !== "reject" && jar[name] !== "accept")
+        return send(res, 302, "text/plain", "", {
+          location: `/${kind}/consent?continue=${encodeURIComponent(p + u.search)}`,
+          "set-cookie": given,
+        });
+      if (p === `/${kind}/flights`)
+        return send(
+          res,
+          200,
+          "text/html; charset=utf-8",
+          FLIGHTS_PAGE(u.searchParams.get("q") ?? "", `/api/${kind}/flights`),
+          { "set-cookie": given },
+        );
+      if (p === `/api/${kind}/flights`)
+        return json(res, 200, { flights: FLIGHTS[u.searchParams.get("q") ?? ""] ?? [] });
+    }
     // an answer that takes its time: a call still in flight while something else happens in the browser
     if (p === "/api/slow/data")
       return void setTimeout(() => json(res, 200, { data: ["slow"] }), Number(u.searchParams.get("ms") ?? 1000));

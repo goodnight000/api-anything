@@ -5,6 +5,7 @@
  * this way is never judged public.
  */
 import assert from "node:assert/strict";
+import type { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer as httpServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -138,7 +139,7 @@ test("the answer for kept cookies: a known consent says retry; one that may carr
 
 /** A site whose pages set analytics from script; /signin gives a session cookie of a name nothing knows. */
 function shop(): Promise<{ base: string; server: Server }> {
-  const page = `<html><body><p>shop</p><script>document.cookie = "_ga=GA1.1.1234567890.1700000000; path=/"; document.cookie = "_gid=GA1.1.987654321.1700000000; path=/";</script></body></html>`;
+  const page = `<html><body><p>shop</p><button id="choose" onclick="document.cookie = 'shop_choice=yes; path=/; max-age=3600'">Choose</button><button id="pop" onclick="window.open('/?popup=1')">Help</button><script>document.cookie = "_ga=GA1.1.1234567890.1700000000; path=/"; document.cookie = "_gid=GA1.1.987654321.1700000000; path=/";</script></body></html>`;
   const server = httpServer((req, res) => {
     if (req.url === "/signin") {
       res.writeHead(302, { location: "/", "set-cookie": "PHPSESSID=9f8e7d6c5b4a39281706f5e4; Path=/; HttpOnly" });
@@ -204,6 +205,34 @@ describe("the window on a site with analytics", {
     assert.deepEqual([one.isClosed(), two.isClosed()], [true, false], "the other window is still open");
     await userCloses(two);
     await second;
+  });
+
+  test("in api-anything's own browser, a window's popup is its own, a choice made just before closing is kept, and nothing is left listening", async () => {
+    // the first window opens a popup, as an identity provider's sign-in does, and stays open
+    const stop = new AbortController();
+    const first = windowLogin("trk-pop", `${base}/?w=3`, { waitForEnter: false, signal: stop.signal });
+    const one = await windowPage("w=3");
+    await one.click("#pop");
+    const popup = await windowPage("popup=1");
+    // the context the first window keeps open, and what listens on it with that one window
+    // Playwright's context is an EventEmitter, which its types do not say
+    const ctx = (await openBrowser({ profileDir: profileDir(), headless: false })) as unknown as EventEmitter;
+    const listening = () => [ctx.listenerCount("close"), ctx.listenerCount("response")];
+    const withOne = listening();
+    // the next window is a page of its own, not the first one's popup
+    const second = windowLogin("trk-pop", `${base}/?w=4`, { waitForEnter: false });
+    const two = await windowPage("w=4");
+    assert.notEqual(two, popup, "the popup stays the first window's");
+    assert.equal(popup.url().includes("popup=1"), true, "the popup was not taken over");
+    // the user chooses by a script's cookie and closes the tab at once, before any half-second read
+    await two.click("#choose");
+    await two.close({ runBeforeUnload: true });
+    const w = await second;
+    assert.equal(w.ok, true, JSON.stringify(w));
+    assert.deepEqual(w.ok && w.kept, ["shop_choice"]);
+    assert.deepEqual(listening(), withOne, "the ended window took its listeners along");
+    stop.abort();
+    await first;
   });
 
   test("a sign-in by a cookie name nothing knows: kept, said plainly over MCP, and the session is never public", async () => {
