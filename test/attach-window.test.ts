@@ -304,7 +304,13 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
   test("what the window keeps is read after the last thing the user did, however soon the tab closes", async () => {
     // a cookie a script sets, and one a response sets, each the moment before the tab closes
     const cases: [string, (p: Page) => Promise<void>, string][] = [
-      ["late-script", (p) => p.evaluate(() => void (document.cookie = "late_choice=yes; path=/")), "late_choice"],
+      [
+        "late-script",
+        async (p) => {
+          await p.evaluate("document.cookie = 'late_choice=yes; path=/'");
+        },
+        "late_choice",
+      ],
       [
         "late-response",
         async (p) => void (await p.goto(`${fx.url}/eu/consent/save?choice=reject&continue=%2Feu%2Fflights`)),
@@ -321,7 +327,10 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
       const w = await pending;
       assert.equal(w.ok, true, `${site}: ${JSON.stringify(w)}`);
       assert.ok(w.ok && w.kept?.includes(name), `${site}: ${JSON.stringify(w)}`);
-      assert.ok(loadSession(site).cookies.some((c) => c.name === name), `${site}: ${name} is in the jar`);
+      assert.ok(
+        loadSession(site).cookies.some((c) => c.name === name),
+        `${site}: ${name} is in the jar`,
+      );
     }
     await closeBrowser();
     await untouched("late_choice", "eu_choice");
@@ -428,9 +437,13 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
     assert.deepEqual(walled.nextCall, { action: "report", site: "gate-pulled", op: "data" });
     // a challenge the browser tiers met says the same step
     const pulled = loadSite("gate-pulled")!.site.operations[0]!;
-    assert.deepEqual(stepOf({ tier: 2, class: "blocked", reason: "Cloudflare challenge page (HTTP 403)" }, pulled, "gate-pulled").nextCall, {
-      action: "report",
-    });
+    assert.deepEqual(
+      stepOf({ tier: 2, class: "blocked", reason: "Cloudflare challenge page (HTTP 403)" }, pulled, "gate-pulled")
+        .nextCall,
+      {
+        action: "report",
+      },
+    );
     // the user's own spec keeps the window: the attached window does reach its calls
     assert.equal(stepOf({ tier: 2, class: "blocked", reason: "x" }, pulled, "gate").nextCall, undefined);
     // followed as written: in api-anything's own browser the window keeps the clearance in the profile,

@@ -570,9 +570,7 @@ const REGION =
 
 /** An answer whose `next` sends the user to the window: a challenge, or a public read's consent step. */
 const windowWall = (a: Attempt, op: Operation) =>
-  a.unfinished
-    ? a.wall === "consent" && !signedInRead(op)
-    : a.class === "blocked" && a.status !== 451 && !a.hint;
+  a.unfinished ? a.wall === "consent" && !signedInRead(op) : a.class === "blocked" && a.status !== 451 && !a.hint;
 
 /**
  * A spec someone else wrote, while attached: its tiers 2 and 3 there get none of the stored cookies

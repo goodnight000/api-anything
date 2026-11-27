@@ -67,7 +67,16 @@ test("analytics and tracking cookies alone are not a visitor's choice; a consent
     "optimizelyEndUserId",
     "_vwo_uuid_v2",
   ];
-  assert.deepEqual(names(visitorChoices([], trackers.map((n) => cookie(n)), [])), []);
+  assert.deepEqual(
+    names(
+      visitorChoices(
+        [],
+        trackers.map((n) => cookie(n)),
+        [],
+      ),
+    ),
+    [],
+  );
   // a name of a vendor's that names a user is no tracker of an anonymous visitor
   assert.deepEqual(names(visitorChoices([], [cookie("ajs_user_id")], [])), ["ajs_user_id"]);
   assert.deepEqual(names(visitorChoices([], [cookie("_ga"), cookie("OptanonConsent"), cookie("cf_clearance")], [])), [
@@ -92,7 +101,11 @@ test("the answer for kept cookies: a known consent says retry; one that may carr
   assert.match(String(consent.warning), /does not show that anyone chose anything/);
   assert.doesNotMatch(String(consent.warning), /its record of/);
   // a load balancer's cookie every visitor is given, set with nobody asked anything
-  const unknownTracker = windowAnswer("shop", { ok: true, cookies: [], renewed: [], kept: ["__cf_bm"], account: [] }, how);
+  const unknownTracker = windowAnswer(
+    "shop",
+    { ok: true, cookies: [], renewed: [], kept: ["__cf_bm"], account: [] },
+    how,
+  );
   assert.match(String(unknownTracker.warning), /does not show that anyone chose anything/);
   assert.match(String(unknownTracker.next), /same page again.*make the choice on the site's page/);
   assert.match(String(consent.next), /^retry the call/);

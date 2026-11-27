@@ -6,7 +6,7 @@
  * of a site from a browser profile waits for a person's yes (`ImportRefused` without one).
  */
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { attached, attachEndpoint } from "./attach.js";
+import { attachEndpoint, attached } from "./attach.js";
 import { addCookiesToProfile, browserAvailable, clearProfileSite, forgetAttachedSite, login } from "./browser.js";
 import { dropCaptures, profileDir } from "./heal.js";
 import { publicAddress } from "./http.js";

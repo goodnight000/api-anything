@@ -206,8 +206,9 @@ describe("API_ANYTHING_CDP refused before anything connects", () => {
         paths.add(file);
       }
     } finally {
-      for (const [n, v] of saved) if (v === undefined) delete process.env[n];
-      else process.env[n] = v;
+      for (const [n, v] of saved)
+        if (v === undefined) delete process.env[n];
+        else process.env[n] = v;
     }
     assert.equal(paths.size, 1, [...paths].join(" and "));
     assert.notEqual(attachLock("127.0.0.1:9223"), [...paths][0], "another endpoint has a lock of its own");

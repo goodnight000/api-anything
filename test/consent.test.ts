@@ -453,7 +453,10 @@ describe("a consent wall at tiers 2 and 3, learning on it, and the window that c
     assert.equal(c.wall, "consent", out);
     assert.match(c.finalUrl, /\/eu\/consent\?continue=/);
     // the page by its address, and the name the agent then adds it under: followable as written
-    assert.match(c.next, /cookie-consent page.*login '?http:\/\/127\.0\.0\.1:\d+\/eu\/flights\?q=AMS'? --site <site> --window/);
+    assert.match(
+      c.next,
+      /cookie-consent page.*login '?http:\/\/127\.0\.0\.1:\d+\/eu\/flights\?q=AMS'? --site <site> --window/,
+    );
     // an outage or a challenge at a consent address is no consent step
     for (const kind of ["eudown", "euwall"]) {
       const o = await new Promise<string>((resolve, reject) =>
