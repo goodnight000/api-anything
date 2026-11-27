@@ -408,8 +408,11 @@ async function zstdFlushed(texts: string[]): Promise<Buffer[]> {
     pieces.push(Buffer.concat(got));
     got = [];
   }
-  await new Promise<void>((r) => z.end(() => r()));
-  await new Promise((r) => setImmediate(r));
+  // the frame's last block comes out when the readable side ends, which can be after the writable side
+  // finished (seen in CI: a last piece without it, read as a body that ends inside a frame)
+  const ended = new Promise<void>((r) => z.once("end", () => r()));
+  z.end();
+  await ended;
   pieces[pieces.length - 1] = Buffer.concat([pieces.at(-1)!, ...got]);
   return pieces;
 }
