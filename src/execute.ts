@@ -4,7 +4,7 @@
  * reactive only.
  */
 import { randomBytes } from "node:crypto";
-import { AttachError, windowWhere } from "./attach.js";
+import { AttachError, attached, windowWhere } from "./attach.js";
 import {
   browserAvailable,
   type PageFetchResult,
@@ -496,8 +496,11 @@ function writeStatus(log: Attempt[]): WriteStatus {
  * The step an attempt's own facts ask for, before the class's usual one. `op`: whose read it was, for
  * a page the site wants finished first (a public read's consent step is answered in a window).
  */
-export function stepOf(a: Attempt, op?: Operation): Partial<Result> {
+export function stepOf(a: Attempt, op?: Operation, site?: string): Partial<Result> {
   const wait = a.retryAfterMs !== undefined ? { retryAfterMs: a.retryAfterMs } : {};
+  // the attached window clears nothing for a pulled spec's browser tiers: the step is the user's (PULLED_WALL)
+  if (site && op && windowWall(a, op) && pulledAttached(site))
+    return { ...(a.wall ? { wall: a.wall } : {}), nextCall: { action: "report" }, retry: "after_fix" };
   if (a.unfinished) {
     const windowed = a.wall === "consent" && !!op && !signedInRead(op);
     return {
@@ -565,6 +568,32 @@ export function finish(r: Result, op: Operation | undefined, site: string | unde
 const REGION =
   "the site says this is not available from this network or region (HTTP 451): do not retry; tell the user";
 
+/** An answer whose `next` sends the user to the window: a challenge, or a public read's consent step. */
+const windowWall = (a: Attempt, op: Operation) =>
+  a.unfinished
+    ? a.wall === "consent" && !signedInRead(op)
+    : a.class === "blocked" && a.status !== 451 && !a.hint;
+
+/**
+ * A spec someone else wrote, while attached: its tiers 2 and 3 there get none of the stored cookies
+ * (browser.ts `seed`), so what the window keeps does not reach them.
+ */
+function pulledAttached(site: string): boolean {
+  if (!attached()) return false;
+  try {
+    return !!loadSite(site)?.site.shared;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What works for that case: api-anything's own browser, whose window keeps what the user clears in its
+ * profile, which a pulled spec's tiers 2 and 3 there run in.
+ */
+const PULLED_WALL = (site: string, what: string) =>
+  `${what}: ${site} is a spec pulled from the catalog, which carries none of the stored cookies in the attached browser (API_ANYTHING_CDP), so a window there would clear nothing for its calls. Ask the user to unset API_ANYTHING_CDP and run api-anything login ${site} --window, which opens api-anything's own browser, whose profile keeps what they do there; then retry once with API_ANYTHING_CDP unset`;
+
 /** `signIn`: how the user signs in again, when it is not `api-anything login` (`reimportIfBrowser`) */
 function nextFor(
   c: CallResult["class"],
@@ -576,6 +605,15 @@ function nextFor(
   if (c === "ok") return undefined;
   if (c === "refused")
     return "only if the user asked for this write: rerun with --allow-writes (MCP: start the server with --allow-writes)";
+  if (a && windowWall(a, op) && pulledAttached(site))
+    return PULLED_WALL(
+      site,
+      a.unfinished
+        ? `the site asks this visitor for a cookie-consent choice first (${shownAddress(a.unfinished)})`
+        : a.missing
+          ? "the site refuses requests from this machine or network"
+          : "the site is challenging automated requests",
+    );
   if (a?.unfinished) return unfinishedNext(site, op, a.unfinished, a.wall);
   if (a?.hint) return a.hint;
   // A write the server may have run: never invite a second send.
@@ -1077,7 +1115,7 @@ async function onDrift(ctx: Ctx, site: Site, op: Operation, a: Attempt): Promise
     tier: b.tier,
     reason: b.reason,
     next: nextFor(b.class, ctx.site, op, b),
-    ...stepOf(b, op),
+    ...stepOf(b, op, ctx.site),
     ...(b.server ? { server: true as const } : {}),
     ...extra,
   });
@@ -1926,7 +1964,7 @@ async function run(
       reason,
       next: nextFor(x.class, siteName, op, x, signIn?.text),
       ...(x.class === "auth" && signIn ? { nextCall: signIn.step } : {}),
-      ...stepOf(x, op),
+      ...stepOf(x, op, siteName),
       ...(x.server ? { server: true as const } : {}),
     });
   // A send the budget refuses, at any tier or retry, ends the call: nothing more went.
@@ -2177,7 +2215,7 @@ export async function heal(
       next: recipe
         ? `if the site works in a browser, re-learn the response recipe: api-anything add ${siteName} ${op.name} ... --extract <path> (api-anything capture <trigger url> shows the response); otherwise report it`
         : nextFor(b.class, siteName, op, b),
-      ...stepOf(b, op),
+      ...stepOf(b, op, siteName),
       ...(recipe ? { nextCall: { action: "relearn" } } : {}),
     });
   }
@@ -2188,7 +2226,7 @@ export async function heal(
     tier: b?.tier,
     reason: h.reason,
     next: nextFor(b?.class ?? "drift", siteName, op, b),
-    ...(b ? stepOf(b, op) : {}),
+    ...(b ? stepOf(b, op, siteName) : {}),
     // this was the heal: what is left is learning it again
     ...((b?.class ?? "drift") === "drift" ? { nextCall: { action: "relearn" } } : {}),
   });

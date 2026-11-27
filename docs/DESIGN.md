@@ -1381,7 +1381,12 @@ attach to. A DevTools endpoint is full control of a browser.
   window says, while attached, that it is a new window of the browser they run (`windowWhere`). A
   hint after a wall met by `capture` or `learn_site` names `add` instead of learning again
   (`learnAgain`): their runs start with none of the stored cookies (above), so they would meet the
-  wall again, while `add`'s runs for the user's own site carry what the window kept.
+  wall again, while `add`'s runs for the user's own site carry what the window kept. A spec pulled
+  from the catalog gets none of the jar at tiers 2 and 3 while attached (above), so the window
+  clears nothing for it there: its challenge or consent `next` asks the user to unset
+  `API_ANYTHING_CDP` and open the window in api-anything's own browser, whose profile keeps what they
+  do and which a pulled spec's tiers 2 and 3 run in, then retry with the variable unset; its
+  `nextCall` is `report`, a step for the user, not the attached window.
 - Refused while attached: `API_ANYTHING_PROXY` set as well (the attached browser's traffic does not
   go through the proxy, and the cleartext guard cannot be installed on it); and everything that
   works on api-anything's own profile, which is never opened while attached: putting imported

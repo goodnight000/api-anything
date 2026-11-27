@@ -13,16 +13,17 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Page } from "playwright-core";
 import { AttachError, attachLock } from "../src/attach.js";
-import { browserChoice, closeBrowser, openBrowser, ProfileInUse } from "../src/browser.js";
-import { call } from "../src/execute.js";
+import { browserChoice, closeBrowser, openBrowser, ProfileInUse, pageFetch } from "../src/browser.js";
+import { call, stepOf } from "../src/execute.js";
 import { addOperation, profileDir } from "../src/heal.js";
+import { resolver } from "../src/http.js";
 import { learnSite } from "../src/learnsite.js";
 import { claim, lockPath } from "../src/lock.js";
 import { resolveLoginTarget, windowLogin } from "../src/login.js";
 import { createServer } from "../src/mcp.js";
 import { loadSession } from "../src/session.js";
 import { parseSite } from "../src/spec.js";
-import { cooling, saveSite } from "../src/store.js";
+import { cooling, loadSite, saveSite } from "../src/store.js";
 import { type Fixture, FLIGHTS, startFixture } from "./fixture/server.js";
 import {
   freePort,
@@ -386,6 +387,79 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
     }
   });
 
+  test("a pulled spec walled while attached: the hint sends the user to api-anything's own browser, and following it answers", async () => {
+    // a spec someone else wrote is https-only; its walls, met at tier 1 here, say what a call would
+    saveSite(
+      parseSite({
+        name: "gate-pulled",
+        baseUrl: "https://gate.example.com/",
+        operations: [
+          {
+            ...read("https://gate.example.com", "data", "/api/gate/data", 2, "data.items", "/gate/"),
+            minTier: 1,
+          },
+        ],
+        shared: { from: "https://registry.example/v1/sites/gate-pulled", sha256: "0".repeat(64) },
+      }),
+    );
+    // the site sends a visitor to its consent step: met at tier 1, which climbs no further for it
+    const consentAt = "https://gate.example.com/consent?continue=%2Fapi%2Fgate%2Fdata";
+    const fetchImpl = (async (input: string | URL | Request) =>
+      String(input).includes("/consent")
+        ? new Response(
+            '<!doctype html><html><head><title>Before you continue</title></head><body><p>We use cookies.</p><form action="/consent/save"><button name="choice" value="reject">Reject all</button></form></body></html>',
+            { status: 200, headers: { "content-type": "text/html" } },
+          )
+        : new Response("", { status: 302, headers: { location: consentAt } })) as unknown as typeof fetch;
+    // a public address, as the guard on someone else's spec asks; no DNS query leaves the machine
+    const realLookup = resolver.lookup;
+    resolver.lookup = async () => [{ address: "93.184.215.14" }];
+    let walled: Awaited<ReturnType<typeof call>>;
+    try {
+      walled = await call("gate-pulled", "data", {}, { ...fast, fetchImpl });
+    } finally {
+      resolver.lookup = realLookup;
+    }
+    assert.deepEqual([walled.class, walled.wall], ["error", "consent"], JSON.stringify(walled));
+    assert.match(
+      walled.next ?? "",
+      /pulled from the catalog.*attached browser.*unset API_ANYTHING_CDP and run api-anything login gate-pulled --window/,
+    );
+    assert.deepEqual(walled.nextCall, { action: "report", site: "gate-pulled", op: "data" });
+    // a challenge the browser tiers met says the same step
+    const pulled = loadSite("gate-pulled")!.site.operations[0]!;
+    assert.deepEqual(stepOf({ tier: 2, class: "blocked", reason: "Cloudflare challenge page (HTTP 403)" }, pulled, "gate-pulled").nextCall, {
+      action: "report",
+    });
+    // the user's own spec keeps the window: the attached window does reach its calls
+    assert.equal(stepOf({ tier: 2, class: "blocked", reason: "x" }, pulled, "gate").nextCall, undefined);
+    // followed as written: in api-anything's own browser the window keeps the clearance in the profile,
+    // and a page fetch with nothing of the jar put in (as a pulled spec's is sent) carries it
+    await closeBrowser();
+    const was = process.env.API_ANYTHING_CDP;
+    delete process.env.API_ANYTHING_CDP;
+    try {
+      const pending = windowLogin("gate-pulled-own", `${fx.url}/gate/`, { waitForEnter: false });
+      const page = await windowTab("/gate/");
+      await page.click("#verify");
+      await page.waitForSelector("#through");
+      await userCloses(page);
+      assert.equal((await pending).ok, true);
+      const r = await pageFetch({
+        origin: fx.url,
+        url: `${fx.url}/api/gate/data`,
+        method: "GET",
+        headers: {},
+        profileDir: profileDir(),
+      });
+      assert.equal(r.status, 200, r.body.slice(0, 200));
+      assert.match(r.body, /past the gate/);
+    } finally {
+      await closeBrowser();
+      process.env.API_ANYTHING_CDP = was;
+      rmSync(profileDir(), { recursive: true, force: true });
+    }
+  });
   test("the browser killed while the window waits fails the login with the reason, keeps the session, and leaves nothing hanging", async () => {
     const before = loadSession("members");
     const seen: unknown[] = [];

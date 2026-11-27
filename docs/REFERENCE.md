@@ -387,7 +387,10 @@ in the terminal). What the site set there is kept for that site, as with api-any
 and the next calls in that browser carry it. A challenge you clear in your own tabs does not count:
 they are a separate context. `capture` and `learn_site` start without the stored session in this
 mode, so after the window, learn a walled page with `api-anything add <site> <op> --trigger <url>`,
-as their `next` says.
+as their `next` says. A spec you pulled from the catalog gets no stored cookies in this browser, so
+the window cannot clear a wall for it here: its `next` asks you to unset `API_ANYTHING_CDP`, run
+`api-anything login <site> --window` in api-anything's own browser, and call it with the variable
+unset.
 
 Attached mode refuses, with a reason and a `next`:
 
