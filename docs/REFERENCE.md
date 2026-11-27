@@ -1103,7 +1103,8 @@ Known limits in detail:
   same site is recognised (its address names a consent step, or the page asks the question and holds
   the address to go back to); a consent overlay served at the page's own address still reads as
   drift. From a network that gets the wall, a learned operation's clean replay (no cookies) answers
-  the wall, so it is not shared automatically from there. This was checked against a local fixture
+  the wall, which says nothing of the operation: it goes up with its clean replay skipped, for the
+  registry's own replay to settle, and the share's outcome says why. This was checked against a local fixture
   only, not against a real site's consent page.
 - A signed-in read redirected to a terms or "verify it's you" page of the same site is `error`. Its
   `next` names the page, which the user finishes in the browser before running

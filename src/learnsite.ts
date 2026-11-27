@@ -41,7 +41,7 @@ import type { Evidence, ServedSite } from "./registry-api.js";
 import { summarize } from "./search.js";
 import { captureLive, redact } from "./secrets.js";
 import { safeName } from "./session.js";
-import { HOLDOUT_PURPOSE, type ShareOutcome, shareOps } from "./share.js";
+import { CONSENT_SKIP, cleanEvidence, HOLDOUT_PURPOSE, type ShareOutcome, shareOps } from "./share.js";
 import { CheckSchema, type Operation, type Paging } from "./spec.js";
 import { loadSite, updateSite } from "./store.js";
 import { isEventStream } from "./stream.js";
@@ -906,11 +906,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     now.minTier > 1
       ? undefined
       : await cleanCall(now, input.args2, { site, minIntervalMs: o.minIntervalMs, publicOnly: o.publicOnly });
-  const cleanReplay: Evidence["cleanReplay"] = !clean
-    ? "skipped"
-    : clean.class === "ok" || clean.class === "blocked"
-      ? clean.class
-      : "failed";
+  const cleanReplay: Evidence["cleanReplay"] = clean ? cleanEvidence(clean).cleanReplay : "skipped";
 
   const proof: NonNullable<LearnSiteResult["proof"]> = {
     holdout: {
@@ -921,7 +917,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
       ...(!held && holdout.reason ? { reason: holdout.reason } : {}),
     },
     cleanReplay,
-    ...(clean && clean.class !== "ok" ? { cleanReason: clean.reason } : {}),
+    ...(clean && clean.class !== "ok" ? { cleanReason: clean.wall === "consent" ? CONSENT_SKIP : clean.reason } : {}),
   };
   const proven: Proof = {
     learnedLoggedIn: now.learnedLoggedIn,
@@ -973,7 +969,7 @@ export async function learnSite(input: LearnSiteInput, o: LearnSiteOptions = {})
     // the user has their answer whatever sharing does
     const share = async (consent?: true): Promise<ShareOutcome> => {
       try {
-        const [one] = await hooks.share(site, [op], { evidence, ...(consent ? { consent } : {}) });
+        const [one] = await hooks.share(site, [op], { evidence, proved: now, ...(consent ? { consent } : {}) });
         return one ?? { site, op, shared: false, reason: "sharing answered nothing" };
       } catch (e) {
         return { site, op, shared: false, reason: (e as Error).message.split("\n")[0] };

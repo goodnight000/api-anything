@@ -853,8 +853,10 @@ window kept is put back in the profile with Chrome's longest lifetime (400 days;
 a logout or a newer value), so tiers 2 and 3 carry it as tier 1 does. Only those: the profile is no
 copy of the jar. Attached, every run is seeded from the jar. The spec gains no cookie value and no ref, so a shared spec
 and `vetShared` are unchanged, and the clean replay (`clean.ts`) still sends nothing of the user's:
-from a network the site walls, a consent-walled site's clean replay answers this `error`, and the op
-is not shared automatically from there. A signed-in read's `next` names the page to finish in the
+from a network the site walls, a consent-walled site's clean replay answers this `error`, which says
+nothing of the op: it goes up as `cleanReplay: "skipped"` (`cleanEvidence`, in `shareOps`'s replay,
+`learn_site` and the heal-back alike), which the registry settles by its own replay, and the outcome's
+`cleanReason` says why; it is not shared automatically from there. A signed-in read's `next` names the page to finish in the
 everyday browser, then `api-anything login <site>` imports it with the session. The tool never answers
 a consent question for the user and sets no site's consent cookie itself: that would be a choice made
 for them, and site-specific.
@@ -2185,7 +2187,12 @@ since a re-upload of the same version is a duplicate that changes nothing: the o
 `next`. An op learned over MCP or a pulled site's op goes only to public addresses (`publicOnly`). The
 result is not kept: a second share of the same op replays again. What goes up is the op that was
 replayed: when the stored op changed while the request was out (another process learned or healed it),
-nothing goes up, and the outcome says why with a `next` to publish again. A failed replay still uploads; the
+nothing goes up, and the outcome says why with a `next` to publish again. The same holds for a replay
+the caller ran: whoever passes `cleanReplay` in the evidence passes `proved`, the op it was sent for
+(learn_site's op after its holdout, the heal-back's healed op), and an op on record that is not that one
+goes up with nothing of it: it is not shared, and the outcome says why. A share planned on a read that
+found no site answers "no site" for each op; one whose site went or was replaced meanwhile ends in an
+outcome too, never an exception. A failed replay still uploads; the
 registry holds it, and the outcome carries `cleanReplay` and `cleanReason`. `publish`'s preview sends
 nothing to the site and says per op what the replay will be (`cleanReplay`: on record, `skipped` and
 why, or "will run on publish").

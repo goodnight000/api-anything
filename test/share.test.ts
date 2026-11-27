@@ -26,12 +26,22 @@ import { adopt, pull } from "../src/registry.js";
 import { anonymous, fingerprintText } from "../src/registry-api.js";
 import { afterCall, settle } from "../src/report.js";
 import { mergeCapture, type Session, saveSession } from "../src/session.js";
-import { answerClaims, HOLDOUT_PURPOSE, healBack, shareOps } from "../src/share.js";
+import { answerClaims, HOLDOUT_PURPOSE, healBack, shareOps as shareWith } from "../src/share.js";
 import { parseSite, type Site } from "../src/spec.js";
 import { exportSite, loadSite, registryDir, saveSite, userSitesDir } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 import { vetShared } from "../src/vet.js";
 import { type FakeRegistry, hashOf, served, startRegistry } from "./fixture/registry.js";
+
+/** shareOps as its callers call it: a clean replay's evidence comes with the op it proved, the one on disk */
+const shareOps: typeof shareWith = (site, ops, o) =>
+  shareWith(
+    site,
+    ops,
+    o?.evidence.cleanReplay !== undefined && !o.proved
+      ? { ...o, proved: loadSite(site)?.site.operations.find((x) => ops.includes(x.name)) }
+      : o,
+  );
 
 let fake: FakeRegistry;
 let onUpload: FakeRegistry["onUpload"];
