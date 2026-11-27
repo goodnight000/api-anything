@@ -534,12 +534,29 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
       return send(res, 200, "text/html; charset=utf-8", FLIGHTS_PAGE(u.searchParams.get("q") ?? ""));
     // A page sent to an address that names a consent step, which is no consent page: the site is down
     // there (503), or a bot challenge answers it (with status 200, as an interstitial can).
-    m = p.match(/^\/(eudown|euwall)\/(flights|consent)$/);
+    // eubig: a challenge past 64 KB with no challenge title; eubigok: a consent page as large. Their API
+    // address is sent there too, so tier 1 meets the same page.
+    m = p.match(/^\/(?:api\/)?(eudown|euwall|eubig|eubigok)\/(flights|consent)$/);
     if (m) {
       if (m[2] === "flights")
         return send(res, 302, "text/plain", "", {
           location: `/${m[1]}/consent?continue=${encodeURIComponent(p + u.search)}`,
         });
+      const pad = `<!-- ${"x".repeat(66_000)} -->`;
+      if (m[1] === "eubig")
+        return send(
+          res,
+          200,
+          "text/html; charset=utf-8",
+          `<!doctype html><html><head><title>One moment</title></head><body><div id="cf-chl-widget"></div>${pad}</body></html>`,
+        );
+      if (m[1] === "eubigok")
+        return send(
+          res,
+          200,
+          "text/html; charset=utf-8",
+          CONSENT_PAGE(u.searchParams.get("continue") ?? "/eubigok/flights").replace("</body>", `${pad}</body>`),
+        );
       return m[1] === "eudown"
         ? send(
             res,
@@ -555,6 +572,9 @@ document.getElementById("gql").onclick=()=>fetch("/api/gql",{method:"POST",heade
           );
     }
     if (p === "/api/eu/flights") return json(res, 200, { flights: FLIGHTS[u.searchParams.get("q") ?? ""] ?? [] });
+    // an answer that takes its time: a call still in flight while something else happens in the browser
+    if (p === "/api/slow/data")
+      return void setTimeout(() => json(res, 200, { data: ["slow"] }), Number(u.searchParams.get("ms") ?? 1000));
 
     if (p === "/login") {
       return send(res, 302, "text/plain", "", {

@@ -208,7 +208,11 @@ export function mcpNextCall(nc: NextCall, again?: ToolCall): NextCall & Partial<
     case "login":
       // an import the user never made is no step this server can take: `next` says what they run
       if (!nc.mode && !(site && userImported(site))) return nc;
-      return { ...nc, tool: "login", args: { site, ...(nc.mode ? { mode: nc.mode } : {}) } };
+      return {
+        ...nc,
+        tool: "login",
+        args: { site, ...(nc.url ? { url: nc.url } : {}), ...(nc.mode ? { mode: nc.mode } : {}) },
+      };
     case "fix_args":
       // list_operations needs a site; without one (learn_site's own args) `next` says what to fix
       return site ? { ...nc, tool: "list_operations", args: { site } } : nc;
@@ -1038,7 +1042,10 @@ export function createToolset({
       description:
         "Sign in to a site so its operations work; use after a call returns class 'auth'. mode 'import' (default) refreshes the session from the browser profile the user already chose with `api-anything login` (no password); 'window' opens a visible browser for the user to sign in and clear 2FA/captcha by hand, or answer a cookie-consent page (a call's wall 'consent'): tell the user to close that window when done. With API_ANYTHING_CDP set it is a new window of the browser the user runs. A window still open after about 25 s answers class pending with a job (get_job); a second login for the site meanwhile returns the same job, and the window closes by itself after 10 minutes.",
       inputSchema: {
-        site: z.string().optional().describe("site name from list_sites"),
+        site: z
+          .string()
+          .optional()
+          .describe("site name from list_sites; with url, the name to keep a site not learned yet under"),
         url: z.string().optional().describe("a full URL, if the site is not yet known (window mode only)"),
         mode: z.enum(["import", "window"]).optional(),
       },
@@ -1051,7 +1058,8 @@ export function createToolset({
         if (!target) return reply({ error: "give a site or a url" }, true);
         let t: ReturnType<typeof resolveLoginTarget>;
         try {
-          t = resolveLoginTarget(target);
+          // a site not learned yet, by its page and the name the learning that follows uses (loginHint)
+          t = site && url ? resolveLoginTarget(url, site) : resolveLoginTarget(target);
         } catch (e) {
           return reply({ error: (e as Error).message, next: "list_sites" }, true);
         }
@@ -1084,13 +1092,16 @@ export function createToolset({
             async () => {
               // a human signs in by hand: they see which site and which account
               let capped = false;
+              // the cap ends this window alone: another window's tab and a call in flight go on
+              const stop = new AbortController();
               const cap = setTimeout(() => {
                 capped = true;
-                void closeBrowser();
+                stop.abort();
               }, WINDOW_MS);
               const w = await signInWindow(t.site, t.url, {
                 loginCookies: t.loginCookies,
                 waitForEnter: false,
+                signal: stop.signal,
                 // the probe keeps the rule on its redirects, unless the address is the site's own
                 publicOnly: !users,
               }).finally(() => clearTimeout(cap));

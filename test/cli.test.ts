@@ -193,6 +193,13 @@ describe("flags and command names", () => {
     }
   });
 
+  test("login's help says what a window answers that kept a choice and saw no sign-in, and the --site of a new page", async () => {
+    const help = (await cli("login", "--help")).stdout.replace(/\s+/g, " ");
+    assert.doesNotMatch(help, /appears or changes while it is open; else ok:false/);
+    assert.match(help, /ok:true, loggedIn:false, with kept/);
+    assert.match(help, /With nothing of that either, ok:false and the stored session is kept/);
+    assert.match(help, /--site with a page's URL/);
+  });
   test("a malformed JSON flag points at the help of the command it was given to", async () => {
     seed("cflags", { url: `${fx.url}/list`, exchanges: [await answered(1, "document", "/list")] });
     const bad = {

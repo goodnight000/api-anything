@@ -44,6 +44,41 @@ test("analytics and tracking cookies alone are not a visitor's choice; a consent
     names(visitorChoices([], [cookie("_ga"), cookie("_gid"), cookie("_fbp"), cookie("_hjSessionUser_1")], [])),
     [],
   );
+  // the families of the vendors in common use, Meta's click id and Matomo's per-site ids among them
+  const trackers = [
+    "_fbc",
+    "_pk_id.1.abcd",
+    "_pk_ses.1.abcd",
+    "__utma",
+    "_gac_UA-1234-1",
+    "MUID",
+    "_scid",
+    "_rdt_uuid",
+    "__qca",
+    "cto_bundle",
+    "s_vi",
+    "AMCV_0123456789ABCDEF%40AdobeOrg",
+    "AMP_0123456789",
+    "mp_0123456789abcdef_mixpanel",
+    "_hp2_id.123456",
+    "fs_uid",
+    "_lr_uf_abc-123",
+    "_ym_uid",
+    "optimizelyEndUserId",
+    "_vwo_uuid_v2",
+  ];
+  assert.deepEqual(
+    names(
+      visitorChoices(
+        [],
+        trackers.map((n) => cookie(n)),
+        [],
+      ),
+    ),
+    [],
+  );
+  // a name of a vendor's that names a user is no tracker of an anonymous visitor
+  assert.deepEqual(names(visitorChoices([], [cookie("ajs_user_id")], [])), ["ajs_user_id"]);
   assert.deepEqual(names(visitorChoices([], [cookie("_ga"), cookie("OptanonConsent"), cookie("cf_clearance")], [])), [
     "OptanonConsent",
     "cf_clearance",
@@ -61,7 +96,18 @@ test("the answer for kept cookies: a known consent says retry; one that may carr
   );
   assert.equal(consent.ok, true);
   assert.equal(consent.loggedIn, false);
-  assert.match(String(consent.warning), /OptanonConsent.*cookie consent or a cleared challenge/);
+  assert.match(String(consent.warning), /OptanonConsent.*may record a cookie consent or a cleared challenge/);
+  // a cookie api-anything does not know to be a tracker is kept too: the answer claims no choice
+  assert.match(String(consent.warning), /does not show that anyone chose anything/);
+  assert.doesNotMatch(String(consent.warning), /its record of/);
+  // a load balancer's cookie every visitor is given, set with nobody asked anything
+  const unknownTracker = windowAnswer(
+    "shop",
+    { ok: true, cookies: [], renewed: [], kept: ["__cf_bm"], account: [] },
+    how,
+  );
+  assert.match(String(unknownTracker.warning), /does not show that anyone chose anything/);
+  assert.match(String(unknownTracker.next), /same page again.*make the choice on the site's page/);
   assert.match(String(consent.next), /^retry the call/);
   assert.match(String(consent.next), /loginCookies/);
 
@@ -108,12 +154,12 @@ function shop(): Promise<{ base: string; server: Server }> {
   );
 }
 
-async function windowPage(): Promise<Page> {
+async function windowPage(part = "127.0.0.1"): Promise<Page> {
   for (let i = 0; i < 300; i++) {
     await new Promise((r) => setTimeout(r, 100));
     const page = (await openBrowser({ profileDir: profileDir(), headless: false }))
       .pages()
-      .find((p) => p.url().includes("127.0.0.1"));
+      .find((p) => p.url().includes(part));
     if (page) return page;
   }
   throw new Error("the window did not open");
@@ -143,6 +189,21 @@ describe("the window on a site with analytics", {
     assert.equal(w.ok, false, JSON.stringify(w));
     assert.match(w.ok ? "" : w.reason, /no sign-in seen: no login cookie appeared while the window was open/);
     assert.deepEqual(loadSession("trk").cookies, [], "the stored session is unchanged");
+  });
+
+  test("in api-anything's own browser too, ending one window ends that window alone", async () => {
+    const stop = new AbortController();
+    const first = windowLogin("trk", `${base}/?w=1`, { waitForEnter: false, signal: stop.signal });
+    const one = await windowPage("w=1");
+    const second = windowLogin("trk", `${base}/?w=2`, { waitForEnter: false });
+    const two = await windowPage("w=2");
+    assert.notEqual(one, two, "each window has a page of its own");
+    // the MCP server's cap on the first, then the user closes the second
+    stop.abort();
+    await first;
+    assert.deepEqual([one.isClosed(), two.isClosed()], [true, false], "the other window is still open");
+    await userCloses(two);
+    await second;
   });
 
   test("a sign-in by a cookie name nothing knows: kept, said plainly over MCP, and the session is never public", async () => {

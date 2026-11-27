@@ -27,11 +27,11 @@ import {
   runTrigger,
 } from "../src/browser.js";
 import { call } from "../src/execute.js";
-import { addOperation, capturePage, PROFILE_HINT, profileDir } from "../src/heal.js";
+import { addOperation, capturePage, PROFILE_HINT, profileDir, runOpTrigger } from "../src/heal.js";
 import { claim, lockPath } from "../src/lock.js";
 import { logout } from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
-import { parseSite } from "../src/spec.js";
+import { OperationSchema, parseSite } from "../src/spec.js";
 import { saveSite } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
@@ -184,7 +184,7 @@ describe("API_ANYTHING_CDP refused before anything connects", () => {
 
   test("the attach lock is in a directory of this OS user's alone, so another user's lock never blocks it", () => {
     const file = lockPath(attachLock("127.0.0.1:9222"));
-    if (process.platform === "win32") return; // the temp directory is the user's own there
+    if (process.platform === "win32") return; // the profile directory is the user's own there
     const dir = dirname(file);
     assert.notEqual(dir, tmpdir(), "not in the temp directory every user shares");
     const s = statSync(dir);
@@ -192,6 +192,27 @@ describe("API_ANYTHING_CDP refused before anything connects", () => {
     assert.equal(s.mode & 0o077, 0, "no other user can enter it");
   });
 
+  test("one OS user and one endpoint have one lock path, whatever the process's environment, and no home's", () => {
+    const names = ["TMPDIR", "TMP", "TEMP", "HOME", "API_ANYTHING_HOME"] as const;
+    const saved = names.map((n) => [n, process.env[n]] as const);
+    const paths = new Set<string>();
+    try {
+      // an MCP service and a shell of one user: each with its own temp directory, HOME and home
+      for (const tag of ["a", "b"]) {
+        const dir = mkdtempSync(join(tmpdir(), `aa-env-${tag}-`));
+        for (const n of names) process.env[n] = dir;
+        const file = attachLock("127.0.0.1:9222");
+        assert.ok(!file.startsWith(dir), `${file} is under the process's own ${dir}`);
+        paths.add(file);
+      }
+    } finally {
+      for (const [n, v] of saved)
+        if (v === undefined) delete process.env[n];
+        else process.env[n] = v;
+    }
+    assert.equal(paths.size, 1, [...paths].join(" and "));
+    assert.notEqual(attachLock("127.0.0.1:9223"), [...paths][0], "another endpoint has a lock of its own");
+  });
   test("a lock that cannot be opened, or a lock directory that is not this user's alone, is refused cleanly with a next", async () => {
     saveSite(minTier2(fx));
     const devtools = await fakeDevTools();
@@ -413,6 +434,66 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
     assert.ok((await userCookies(port)).includes(USER_COOKIE), "the user's own context is untouched");
   });
 
+  test("a logout while a run is out: what the run brings back is not written into the jar the logout deleted", async () => {
+    saveSite(parseSite({ ...minTier2(fx), name: "inflight" }));
+    const op = OperationSchema.parse({
+      name: "user",
+      readOnly: true,
+      // the page that sets ct0 is opened after the logout has cleared api-anything's context
+      trigger: {
+        url: `${fx.url}/list`,
+        steps: [
+          { action: "wait", ms: 1500 },
+          { action: "goto", value: `${fx.url}/u/alice` },
+          { action: "wait", ms: 300 },
+        ],
+      },
+      match: { method: "GET", path: "/nothing-here" },
+      request: { method: "GET", url: `${fx.url}/nothing-here`, headers: {} },
+      slots: [],
+      params: [],
+      response: { format: "json" },
+    });
+    const run = runOpTrigger("inflight", op, {});
+    await sleep(700);
+    await logout("inflight");
+    const r = await run;
+    assert.ok(
+      r.capture.cookies.some((c) => c.name === "ct0"),
+      "the page set its cookie after the logout, during the run",
+    );
+    assert.deepEqual(loadSession("inflight").cookies, [], "nothing of the run reached the jar after the logout");
+  });
+
+  test("two runs share the context only when every stored part of their cookies is equal", async () => {
+    for (const [what, other] of [
+      ["httpOnly", { ...JAR_COOKIE, httpOnly: false }],
+      ["expiry", { ...JAR_COOKIE, expires: Math.floor(Date.now() / 1000) + 3600 }],
+      ["secure", { ...JAR_COOKIE, secure: true }],
+    ] as const) {
+      const holding = runTrigger({
+        url: `${fx.url}/api/result-list?tag=hold`,
+        profileDir: profileDir(),
+        jar: [JAR_COOKIE],
+        steps: [{ action: "wait", ms: 1500 }],
+      });
+      await sleep(300);
+      await assert.rejects(
+        pageFetch({
+          origin: fx.url,
+          url: `${fx.url}/list`,
+          method: "GET",
+          headers: {},
+          profileDir: profileDir(),
+          jar: [other],
+          timeoutMs: 500,
+        }),
+        (e: Error) => /stayed in use by another call/.test(e.message),
+        `a jar that differs in ${what} waits for the other run`,
+      );
+      await holding;
+    }
+  });
   test("a run that carries no stored cookies, right after or during one that carries the jar, carries none of it; neither breaks the other", async () => {
     const sent = (tag: string) =>
       fx.calls.filter((c) => c.path.includes(`tag=${tag}`)).map((c) => String(c.headers.cookie ?? ""));
@@ -448,6 +529,50 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
       "the bare run read none of the jar back",
     );
     assert.equal(sentUserCookie(), false);
+  });
+  test("a page fetch keeps one deadline through every wait: for a run in flight with other cookies, and the pace", async () => {
+    const fetchOf = (o: { pace?: () => Promise<void> } = {}) =>
+      pageFetch({
+        origin: fx.url,
+        url: `${fx.url}/api/slow/data?ms=1500`,
+        method: "GET",
+        headers: {},
+        profileDir: profileDir(),
+        timeoutMs: 1200,
+        ...o,
+      });
+    const settles = async (p: Promise<unknown>) => {
+      const t0 = Date.now();
+      const said = await p.then(
+        (r) => `answered ${(r as { status?: number }).status}`,
+        (e: Error) => e.message.split("\n")[0],
+      );
+      return [Date.now() - t0, said] as const;
+    };
+    // a fetch that carries the jar holds the site for 700 ms; this one carries none, so it waits for it first
+    const own = pageFetch({
+      origin: fx.url,
+      url: `${fx.url}/api/slow/data?ms=700`,
+      method: "GET",
+      headers: {},
+      profileDir: profileDir(),
+      jar: [JAR_COOKIE],
+    });
+    await sleep(100);
+    const queued = await settles(fetchOf());
+    await own;
+    const paced = await settles(
+      fetchOf({
+        pace: async () => {
+          await sleep(800);
+        },
+      }),
+    );
+    for (const [what, [ms, said]] of [
+      ["queued behind a run", queued],
+      ["paced", paced],
+    ] as const)
+      assert.ok(ms < 1200 + 500, `${what}: settled after ${ms} ms (${said}), for a timeout of 1200 ms`);
   });
   test("idle close and closeBrowser() leave the browser and the user's tab as they were, and take api-anything's tabs", async () => {
     await runTrigger({ url: `${fx.url}/u/alice`, profileDir: profileDir() });

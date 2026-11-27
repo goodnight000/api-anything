@@ -387,7 +387,10 @@ in the terminal). What the site set there is kept for that site, as with api-any
 and the next calls in that browser carry it. A challenge you clear in your own tabs does not count:
 they are a separate context. `capture` and `learn_site` start without the stored session in this
 mode, so after the window, learn a walled page with `api-anything add <site> <op> --trigger <url>`,
-as their `next` says.
+as their `next` says. A spec you pulled from the catalog gets no stored cookies in this browser, so
+the window cannot clear a wall for it here: its `next` asks you to unset `API_ANYTHING_CDP`, run
+`api-anything login <site> --window` in api-anything's own browser, and call it with the variable
+unset.
 
 Attached mode refuses, with a reason and a `next`:
 
@@ -401,9 +404,10 @@ Attached mode refuses, with a reason and a `next`:
   unset the variable and log out again to clear them);
 - a second api-anything process of the same OS user while one is attached: it waits up to 15 s,
   then fails with a hint, as with the profile. Keep other automation off the port while
-  api-anything uses it. The lock is kept in a directory of your own in the temp directory
-  (`api-anything-<uid>`), so another user's never gets in your way; a lock or directory there that
-  cannot be used is refused with a `next`.
+  api-anything uses it. The lock is kept in `~/.api-anything-locks` (your home directory as the OS
+  records it, whatever `HOME`, `TMPDIR` or `API_ANYTHING_HOME` say), so every process of yours
+  shares one lock per browser and another user's never gets in your way; a lock or directory there
+  that cannot be used is refused with a `next`.
 
 ### Health: `api-anything status [site]`
 
@@ -564,8 +568,9 @@ go — avoid heavy automated traffic on it. Other ways in:
   the second factor is done. It counts as a sign-in only if a login cookie appeared or changed while
   it was open. Without one, the cookies your own choices set there (a cookie-consent answer, a
   cleared challenge) are kept for the site and `login` answers `ok: true`, `loggedIn: false`, with
-  their names in `kept`, a `warning` and a `next`. Analytics and advertising cookies never count as
-  a choice. A kept cookie whose name api-anything cannot tell from a session cookie is said to maybe
+  their names in `kept`, a `warning` and a `next`. Analytics, advertising and session-replay
+  cookies of the vendors api-anything knows never count as a choice. A cookie api-anything does not
+  know to be a tracker is kept, so this answer does not prove you chose anything. A kept cookie whose name api-anything cannot tell from a session cookie is said to maybe
   carry an account, and `next` says what to do either way: retry the call if you answered a consent
   page or cleared a challenge; if you signed in, list the session cookie's name in the spec's
   `loginCookies` and open the window again. With none of those either, it answers `ok: false`, says
@@ -624,7 +629,9 @@ In short:
   (`laravel_session`, `_app_session`). `login` notes which ones a signed-out visit gets, and those
   never count as signed in.
 - **A window sign-in has to show a login.** It counts only if a login cookie appears or changes
-  while the window is open. Otherwise `login` says so and keeps the session you had.
+  while the window is open. Otherwise what the site set there that is no known tracker (a consent
+  answer, a cleared challenge) is added to the session, `loggedIn: false`; with nothing of that
+  either, `login` says so and keeps the session you had.
 - **On an unauthorized call**, API Anything tries each of these at most once, retrying the call after
   each one that changes something: re-import from the profile you chose; take cookies from its own
   browser profile; for an op with session tokens, reload the page so the site issues fresh ones. A
@@ -1083,7 +1090,9 @@ Known limits in detail:
   page there and close the window: the cookies the site set then are kept for that site alone, and
   later calls send them at every tier. For a signed-in read it names the page to finish in your
   browser before `api-anything login <site>`. `learn_site`, `add`, `capture` and a heal say the same
-  instead of finding no request. api-anything never answers a consent question for you (no automatic
+  instead of finding no request. For a page no site has yet, the hint names the page and the name
+  the learning will use, `api-anything login '<url>' --site <name> --window` (MCP: `login` with
+  `site` and `url`), so what the window keeps is stored where that learning reads it. api-anything never answers a consent question for you (no automatic
   "reject all") and sets no site's consent cookie itself. Only a real redirect to another page of the
   same site is recognised (its address names a consent step, or the page asks the question and holds
   the address to go back to); a consent overlay served at the page's own address still reads as

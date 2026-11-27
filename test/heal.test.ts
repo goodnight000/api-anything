@@ -172,7 +172,8 @@ describe("add: what it refuses to save, and what it doubts", () => {
         from: { capture: await captureOf(fx, "/stores?city=x", "/private?q=kittens"), id: 2 },
         response: { html: { items: "li", fields: { name: "" } } },
       }),
-      /refusing to save .*sign-in page.*api-anything login walled-add.*then add again/,
+      // no site "walled-add" yet: the login names the page, keeping its session under the add's name
+      /refusing to save .*sign-in page.*api-anything login '[^']+\/private\?q=kittens' --site walled-add, then add again/,
     );
     assert.equal(loadSite("walled-add"), undefined);
   });

@@ -249,6 +249,22 @@ export function saveSession(
 
 const expired = (c: StoredCookie, now: number) => c.expires > 0 && c.expires * 1000 <= now;
 
+/** When each site was last logged out (ms since the epoch): site names and times, nothing of a session. */
+const logoutsFile = () => join(home(), "logouts.json");
+
+/** Called by `logout` under the site's session lock: from now, nothing begun before it writes the site back. */
+export function recordLogout(site: string, at = Date.now()): void {
+  withLock(logoutsFile(), () => {
+    const all = readJson<Record<string, number>>(logoutsFile(), {});
+    all[site] = Math.max(all[site] ?? 0, at);
+    writePrivate(logoutsFile(), JSON.stringify(all));
+  });
+}
+
+/** `site` was logged out at or after `since`, in this process or another. */
+export const loggedOutSince = (site: string, since: number): boolean =>
+  (readJson<Record<string, number>>(logoutsFile(), {})[site] ?? -Infinity) >= since;
+
 /**
  * Merge a browser run's cookies and session values into the stored session and save it. `captured`:
  * the values, and the URL of the request they were sent in, whose host each is bound to.
@@ -263,10 +279,16 @@ export function mergeCapture(
    */
   learned?: { settings: string[]; urls?: (string | undefined)[]; pages?: readonly string[] },
   now = Date.now(),
+  /**
+   * `since`: when the run these came from began. A logout of the site since then (by any process) wins:
+   * nothing is written, and the session is answered as it is.
+   */
+  o: { since?: number } = {},
 ): Session {
   const { values } = captured;
   return withLock(sessionFile(site), () => {
     const s = loadSession(site);
+    if (o.since !== undefined && loggedOutSince(site, o.since)) return s;
     const valueHosts = { ...s.valueHosts };
     if (Object.keys(values).length) {
       const host = new URL(captured.from).hostname.toLowerCase();
@@ -492,14 +514,34 @@ export function signInCookies(
 
 /**
  * Cookies a page sets on every visit without asking the visitor anything: analytics, advertising,
- * Google's signed-out preference cookies, CSRF tokens. None carries an account, and none is a
- * visitor's answer to the page. Analytics scripts set many of these from page script, where a
- * cookie-less probe never sees them (Google Ads, Hotjar, Segment, Clarity, HubSpot, Bing, Pinterest,
- * TikTok, Stripe's fraud ids, Datadog RUM). HubSpot's are named one by one: its `__hsmem` is a
- * member's sign-in.
+ * session replay, Google's signed-out preference cookies, CSRF tokens. None carries an account, and
+ * none is a visitor's answer to the page. Analytics scripts set many of these from page script, where
+ * a cookie-less probe never sees them. By vendor, never a site's own name: Google Analytics (and its
+ * older __utm*), Google Ads, Meta, Matomo, Hotjar, Segment, Microsoft Clarity and Ads, HubSpot,
+ * Pinterest, TikTok, Snap, Reddit, X, LinkedIn's Insight tag, Quantcast, Criteo, Stripe's fraud ids,
+ * Datadog RUM, Adobe Analytics and Experience Cloud, Amplitude, Mixpanel, Heap, FullStory,
+ * LogRocket, Mouseflow, Crazy Egg, Yandex Metrica, Optimizely and VWO. HubSpot's are named one by
+ * one: its `__hsmem` is a member's sign-in; Segment's `ajs_user_id` names a user and stays out. No
+ * list can be whole: a tracker missing here is kept by the window, which then says it cannot tell
+ * (`keptNote`).
  */
-export const UNASKED_COOKIE =
-  /^(_ga|_ga_[\w-]+|_gid|_gat|_gat_[\w-]+|_fbp|csrftoken|XSRF-TOKEN|_csrf|NID|AEC|1P_JAR|__Secure-ENID|_gcl_[\w-]+|_hj[\w-]+|ajs_anonymous_id|_clck|_clsk|__hstc|__hssc|__hssrc|hubspotutk|_uetsid|_uetvid|_pin_unauth|_ttp|_tt_enable_cookie|__stripe_mid|__stripe_sid|_dd_s)$/;
+export const UNASKED_COOKIE = new RegExp(
+  `^(${[
+    // Google: Analytics and its older urchin cookies, Ads, signed-out preferences; CSRF tokens
+    "_ga|_ga_[\\w-]+|_gid|_gat|_gat_[\\w-]+|__utm[abctvz]|_gcl_[\\w-]+|_gac_[\\w.-]+|NID|AEC|1P_JAR|__Secure-ENID",
+    "csrftoken|XSRF-TOKEN|_csrf",
+    // Meta, Matomo, Hotjar, Segment, Microsoft Clarity and Ads, HubSpot
+    "_fbp|_fbc|_pk_(id|ses|ref|cvar|hsr|testcookie)(\\.[\\w.-]+)?|_hj[\\w-]+|ajs_anonymous_id",
+    "_clck|_clsk|MUID|_uetsid|_uetvid|_uetmsclkid|__hstc|__hssc|__hssrc|hubspotutk",
+    // Pinterest, TikTok, Snap, Reddit, X, LinkedIn Insight, Quantcast, Criteo, Stripe, Datadog
+    "_pin_unauth|_pinterest_ct_ua|_ttp|_tt_enable_cookie|_scid|_scid_r|_sctr|_rdt_uuid|_twclid|_li_dcdm_c|li_fat_id",
+    "__qca|cto_bundle|__stripe_mid|__stripe_sid|_dd_s",
+    // Adobe, Amplitude, Mixpanel, Heap, FullStory, LogRocket, Mouseflow, Crazy Egg, Yandex, Optimizely, VWO
+    "s_(cc|sq|vi|fid|ecid|nr|ppv|ppvl|tp|plt|pltp)|AMCVS?_[\\w%@.-]+|AMP_[\\w-]+|amp_[0-9a-f]{6}(_[\\w.-]+)?",
+    "mp_[0-9a-f]+_mixpanel|_hp2_[\\w.-]+|fs_uid|fs_lua|fs_cid|_lr_[\\w-]+|mf_user|mf_[0-9a-f-]{36}",
+    "_ce\\.[\\w]+|cebs|cebsp_?|_ym_[\\w]+|optimizelyEndUserId|optimizelySegments|optimizelyBuckets|_vwo_[\\w]+|_vis_opt_[\\w]+",
+  ].join("|")})$`,
+);
 
 /** Cookies that record a visitor's answer and carry no account: a cookie consent, a cleared bot check. */
 export const ANSWER_COOKIE =

@@ -120,8 +120,12 @@ export async function shareOps(
       reason: `this install is local-only: nothing is sent to the shared catalog (${localOnlyOff()})`,
     }));
   let p: ReturnType<typeof plan>;
-  let planned: Parameters<typeof plan>[1];
+  let planned: NonNullable<Parameters<typeof plan>[1]>;
+  // One read of the site: every upload below is built from the ops replayed and checked here, so another
+  // process learning the op meanwhile cannot put its op under this op's proof.
+  let read: Site | undefined;
   try {
+    read = loadSite(site)?.site;
     // the registry is asked for the site's name only when something may go up
     const as = o.consent || loadSettings().share ? await uploadName(site, { signal: o.signal }) : undefined;
     // with the user's yes, public or not decides nothing
@@ -134,13 +138,15 @@ export async function shareOps(
       guest,
       strict: o.strict,
       ...(as ? { as } : {}),
+      ...(read ? { spec: read } : {}),
     };
     p = plan(site, planned);
   } catch (e) {
     return ops.map((op) => ({ site, op, shared: false, reason: (e as Error).message.split("\n")[0] }));
   }
+  // plan found the site, so there was one to read
+  const spec = read!;
   const share = loadSettings().share;
-  const spec = loadSite(p.site)!.site;
   const session = loadSession(p.site);
   const out: ShareOutcome[] = [];
   for (let op of p.ops) {
@@ -217,7 +223,7 @@ export async function shareOps(
           out.push({ ...base, ...replayed, shared: false, reason: `refused: ${op.errors.join("; ")}` });
           continue;
         }
-        // plan read the site again: an op another process learned or healed meanwhile is not the one replayed
+        // the upload is the op replayed; one another process learned or healed meanwhile would take its version
         const now = loadSite(p.site)?.site.operations.find((x) => x.name === op.op);
         if (JSON.stringify(now) !== JSON.stringify(mine)) {
           out.push({

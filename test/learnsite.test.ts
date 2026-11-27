@@ -499,7 +499,14 @@ describe("learn_site stops after run 1", { skip: !browserAvailable() && "no Chro
     );
     assert.equal(r.ok, false, JSON.stringify(r));
     assert.match(r.error ?? "", /bot challenge/);
-    assert.deepEqual(r.nextCall, { action: "login", site: "fx", mode: "window" });
+    // no site "fx" yet: the login is named by the page, keeping its session under the learning's name
+    assert.deepEqual(r.nextCall, {
+      action: "login",
+      site: "fx",
+      url: `${fx.url}/challenged?q=alice`,
+      mode: "window",
+    });
+    assert.match(r.next ?? "", /api-anything login '[^']+\/challenged\?q=alice' --site fx --window/);
     assert.equal(r.captures?.length, 1, "only run 1 was made");
   });
 });

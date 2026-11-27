@@ -818,7 +818,11 @@ drift.
 
 Its `next` leads to a step that works. A public read (no credential ref, learned signed out): the
 user answers the question in `api-anything login <site> --window`, api-anything's own profile, and
-closes the window. The cookies the site set while it was open that are the visitor's own choices
+closes the window. For a page no site has yet (`learn_site`, `add`, `capture`), `<site>` would not
+resolve, so the hint names the page and the name the learning uses (`loginHint`: `login '<url>'
+--site <name> --window`, MCP `login` with `site` and `url`, a `nextCall` with `url`): the window
+keeps the choice under that name, where the learning that follows (an `add` of the same site
+while attached) reads it. The cookies the site set while it was open that are the visitor's own choices
 (`visitorChoices`: new or changed there, none every visitor is given unasked, no analytics,
 advertising or CSRF name, none that shows a sign-in) are added to the site's jar, and nothing else of the profile, so tier 1 sends them; tiers 2
 and 3 send the profile's, which holds them. The spec gains no cookie value and no ref, so a shared spec
@@ -1311,9 +1315,12 @@ attach to. A DevTools endpoint is full control of a browser.
   the other's tabs as tabs of the browser and answers their dialogs (seen: two test processes
   attached at once dismissed each other's confirms, and an order a read's learning should have
   stopped reached the server). The lock is per OS user, keyed by the address and port, not under a
-  home: `api-anything-<uid>/api-anything-cdp-<host>_<port>.lk` in the temp directory, a directory
-  of the user's own (0700; one that is not a directory, is another user's, or is open to others is
-  refused as `AttachError` with a `next`). It used to be in the temp directory itself, which Linux
+  home: `.api-anything-locks/api-anything-cdp-<host>_<port>.lk` in the user's home directory as the
+  OS records it (`os.userInfo()`: the password database, the profile directory on Windows), a
+  directory of the user's own (0700; one that is not a directory, is another user's, or is open to
+  others is refused as `AttachError` with a `next`). Nothing of a process's environment moves it:
+  it was in the temp directory, so an MCP service and a shell of one user with two TMPDIR values
+  took two locks for one browser. Before that it was in the temp directory itself, which Linux
   shares: once one user had attached to a port, another user's every attached call failed with
   SQLite's "unable to open database file" and no `next`. A lock file that cannot be opened is
   refused as `AttachError` with a `next` too, nothing sent. Another process of the same user waits
@@ -1333,9 +1340,14 @@ attach to. A DevTools endpoint is full control of a browser.
   sign-in, which a tier-3 run then merged back into the jar. The runs of one process share the
   context, so a run seeded with other cookies than those in flight on the same site waits for them
   to end (within its own time budget; a window up to 15 s), then fails as `ProfileInUse`, sent
-  nothing: clearing for it would take theirs. Runs seeded alike run together, sharing what the site
-  sets meanwhile, as in api-anything's own profile. `logout` takes the site's cookies out of an
-  open context at once, after any seeding in progress. What a run's pages set is merged into the jar
+  nothing: clearing for it would take theirs. Runs seeded alike (every part the browser stores of
+  each cookie equal: name, domain, path, value, expiry, `httpOnly`, `secure`, `sameSite`) run
+  together, sharing what the site sets meanwhile, as in api-anything's own profile. `logout` takes
+  the site's cookies out of an open context at once, after any seeding in progress. A run already
+  in flight can still set cookies there afterwards, so `logout` also records its time in
+  `logouts.json` (site names and times only), under the session's lock: whatever a run, a tier-1
+  answer, `add` or a heal brings back is merged into the jar only if it began after the site's
+  last logout (`mergeCapture`'s `since`), in either browser mode and whichever process ran it. What a run's pages set is merged into the jar
   as after any browser run: those cookies are api-anything's context's, never the user's. Tier 1 is
   unchanged: it sends from the sealed session file, and nothing reads the attached browser's
   cookies.
@@ -1348,17 +1360,33 @@ attach to. A DevTools endpoint is full control of a browser.
   api-anything's profile would hold them, so `windowLogin` decides as it does unattached, fed with
   that context's cookies as the window opened and as it closed: login cookies that appeared or
   changed replace the jar, else the visitor's choices (a cleared challenge, a consent answer) are
-  merged into it. The window ends as it does unattached (the user closes the tab or its window,
-  Enter on the CLI, the MCP job's 10-minute cap); the context then closes, as on idle, and the next
-  call's context is seeded from the jar, so it carries what the site set. The attach rules hold
-  for it: the lock (another process holding it fails as `ProfileInUse`, after the wait), loopback
-  only, refused with the proxy, the user's default context never read. The attached browser going
+  merged into it. The closing cookies are read from the context after the tab closed, which it
+  outlives: the half-second poll alone lost a choice made just before closing (an attached
+  context does not quit with its last tab, as api-anything's own Chrome can on Linux and Windows,
+  where only reads made while the window was open count). The window ends as it does unattached
+  (the user closes the tab or its window, Enter on the CLI, the MCP job's 10-minute cap, which
+  aborts it). Ending it closes its own pages only (its tab and the popups it opened): another
+  window's tab and a call's page in the same context go on, and the context closes on idle, after
+  which the next call's context is seeded from the jar. It used to close the whole context, taking
+  a second sign-in tab and the page of a call in flight with it. In api-anything's own browser the
+  same holds between windows (each opens a page of its own; the browser is closed at once only
+  when nothing else holds it); a call in flight there is a headless browser of the same profile,
+  which opening a headed window replaces, as before. Before any of it, an attached window checks
+  the endpoint: a window that will be refused (nothing at the endpoint, the proxy set as well)
+  sends the site nothing, not even the signed-out probe that tells its visitor cookies. The attach
+  rules hold for it: the lock (another process holding it fails as `ProfileInUse`, after the
+  wait), loopback only, refused with the proxy, the user's default context never read. The attached browser going
   away while the window is open (a read of the context no longer answers, and api-anything did not
   close it) fails the login as `AttachError`, nothing kept. Every hint that sends the user to the
   window says, while attached, that it is a new window of the browser they run (`windowWhere`). A
   hint after a wall met by `capture` or `learn_site` names `add` instead of learning again
   (`learnAgain`): their runs start with none of the stored cookies (above), so they would meet the
-  wall again, while `add`'s runs for the user's own site carry what the window kept.
+  wall again, while `add`'s runs for the user's own site carry what the window kept. A spec pulled
+  from the catalog gets none of the jar at tiers 2 and 3 while attached (above), so the window
+  clears nothing for it there: its challenge or consent `next` asks the user to unset
+  `API_ANYTHING_CDP` and open the window in api-anything's own browser, whose profile keeps what they
+  do and which a pulled spec's tiers 2 and 3 run in, then retry with the variable unset; its
+  `nextCall` is `report`, a step for the user, not the attached window.
 - Refused while attached: `API_ANYTHING_PROXY` set as well (the attached browser's traffic does not
   go through the proxy, and the cleartext guard cannot be installed on it); and everything that
   works on api-anything's own profile, which is never opened while attached: putting imported

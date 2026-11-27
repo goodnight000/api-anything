@@ -721,27 +721,43 @@ async function readStream(res: Response, budgetMs: number): Promise<{ raw: Uint8
   let cut: StreamCut | undefined;
   let pending: ReturnType<typeof reader.read> | undefined;
   // the first bytes say whether fetch decoded it already: held until there are enough to tell
-  let head: Uint8Array | undefined = /\bzstd\b/i.test(encoding ?? "") ? new Uint8Array(0) : undefined;
+  let head: Buffer | undefined = /\bzstd\b/i.test(encoding ?? "") ? Buffer.alloc(0) : undefined;
+  // what is left of a skippable frame the stream opened with (Node's decoder stops at the end of one)
+  let skip = 0;
+  let skipped = false;
   let zstd: ReturnType<typeof zstdPieces> | undefined;
   const take = async (piece: Uint8Array): Promise<{ bytes: Uint8Array; over?: boolean }> => {
     if (head) {
       head = Buffer.concat([head, piece]);
-      if (head.byteLength < 4) return { bytes: new Uint8Array(0) };
+      for (;;) {
+        const n = Math.min(skip, head.byteLength);
+        head = head.subarray(n);
+        skip -= n;
+        if (skip || head.byteLength < 4) return { bytes: new Uint8Array(0) };
+        if (!skippableFrame(head)) break;
+        if (head.byteLength < 8) return { bytes: new Uint8Array(0) };
+        skip = 8 + head.readUInt32LE(4);
+        skipped = true;
+      }
       piece = head;
       head = undefined;
-      if (zstdFrame(piece)) {
+      if (skipped || zstdFrame(piece)) {
         if (!zstdCodec.stream) throw noZstd();
         zstd = zstdPieces(zstdCodec.stream, MAX_BODY_BYTES);
       }
     }
     return zstd ? zstd.write(piece) : { bytes: piece };
   };
+  // a piece that crosses the cap keeps its part before it: the bound cuts there, not at the piece
   const keep = (got: { bytes: Uint8Array; over?: boolean }): boolean => {
-    total += got.bytes.byteLength;
-    if (got.over || total > MAX_BODY_BYTES) return false;
-    chunks.push(got.bytes);
-    if (got.bytes.byteLength && carriesField(decoder.decode(got.bytes, { stream: true }))) last = Date.now();
-    return true;
+    const room = MAX_BODY_BYTES - total;
+    const bytes = got.bytes.byteLength > room ? got.bytes.subarray(0, room) : got.bytes;
+    total += bytes.byteLength;
+    if (bytes.byteLength) {
+      chunks.push(bytes);
+      if (carriesField(decoder.decode(bytes, { stream: true }))) last = Date.now();
+    }
+    return !got.over && got.bytes.byteLength <= room;
   };
   try {
     for (;;) {
@@ -762,6 +778,8 @@ async function readStream(res: Response, budgetMs: number): Promise<{ raw: Uint8
       if (!got) continue;
       pending = undefined;
       if (got.done) {
+        if (head?.byteLength && skipped)
+          throw new Error("the answer's zstd encoding could not be read: it ends inside a frame");
         // fewer than 4 bytes in all are no zstd frame
         if (head?.byteLength) keep({ bytes: head });
         else if (zstd && !keep(await zstd.end())) cut = "bytes";
@@ -791,6 +809,16 @@ export const zstdCodec: {
 } = { stream: zlib.createZstdDecompress, sync: zlib.zstdDecompressSync };
 
 const zstdFrame = (b: Uint8Array) => b[0] === 0x28 && b[1] === 0xb5 && b[2] === 0x2f && b[3] === 0xfd;
+/** The standard lets a zstd stream open with skippable frames (magic 0x184D2A50 to 0x184D2A5F, little-endian). */
+const skippableFrame = (b: Uint8Array) => (b[0]! & 0xf0) === 0x50 && b[1] === 0x2a && b[2] === 0x4d && b[3] === 0x18;
+
+/** A whole zstd body after the skippable frames it opens with. */
+function pastSkippable(buf: Uint8Array): Uint8Array {
+  const b = Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
+  let at = 0;
+  while (b.byteLength - at >= 8 && skippableFrame(b.subarray(at))) at += 8 + b.readUInt32LE(at + 4);
+  return b.subarray(Math.min(at, b.byteLength));
+}
 
 /** Read as it came, the body would be its compressed bytes: a wrong answer that says nothing of why. */
 const noZstd = () =>
@@ -810,11 +838,16 @@ function zstdPieces(make: () => Transform, cap: number) {
   let failed: Error | undefined;
   d.on("data", (b: Buffer) => {
     if (over) return;
-    size += b.byteLength;
-    if (size > cap) {
+    if (size + b.byteLength > cap) {
+      // what decoded up to the cap is kept; the decoder stops there
+      out.push(b.subarray(0, cap - size));
+      size = cap;
       over = true;
       d.destroy();
-    } else out.push(b);
+    } else {
+      size += b.byteLength;
+      out.push(b);
+    }
   });
   d.on("error", (e) => {
     failed ??= e;
@@ -825,6 +858,9 @@ function zstdPieces(make: () => Transform, cap: number) {
       const done = () => {
         if (settled) return;
         settled = true;
+        // a write's callback usually wins: its listeners must not outlive it, one more per piece
+        d.off("close", done);
+        d.off("end", done);
         // what a write decoded may still be on its way to "data"
         setImmediate(() => {
           if (failed && !over)
@@ -854,7 +890,12 @@ function zstdPieces(make: () => Transform, cap: number) {
  * bounded too: a few KB of zstd expand to gigabytes.
  */
 function unzstd(buf: Uint8Array, encoding: string | null): Uint8Array {
-  if (!zstdFrame(buf) || !/\bzstd\b/i.test(encoding ?? "")) return buf;
+  if (!/\bzstd\b/i.test(encoding ?? "")) return buf;
+  const skipped = pastSkippable(buf);
+  if (skipped.byteLength < buf.byteLength) {
+    if (!skipped.byteLength) return skipped;
+    buf = skipped;
+  } else if (!zstdFrame(buf)) return buf;
   if (!zstdCodec.sync) throw noZstd();
   try {
     return zstdCodec.sync(buf, { maxOutputLength: MAX_BODY_BYTES });

@@ -6,7 +6,7 @@
  * of a site from a browser profile waits for a person's yes (`ImportRefused` without one).
  */
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { attached } from "./attach.js";
+import { attachEndpoint, attached } from "./attach.js";
 import { addCookiesToProfile, browserAvailable, clearProfileSite, forgetAttachedSite, login } from "./browser.js";
 import { dropCaptures, profileDir } from "./heal.js";
 import { publicAddress } from "./http.js";
@@ -28,6 +28,7 @@ import {
   mayCarryAccount,
   mergeCapture,
   parseSetCookie,
+  recordLogout,
   renewedSignIn,
   type Session,
   safeName,
@@ -58,7 +59,21 @@ function siteOnHost(host: string): string | undefined {
  * ("linkedin.com", "www.linkedin.com") or a URL. A domain or URL on a known site's host is that
  * site; any other one is a new site named after its host.
  */
-export function resolveLoginTarget(target: string): { site: string; url: string; loginCookies?: string[] } {
+export function resolveLoginTarget(
+  target: string,
+  /**
+   * the name to keep a page's session under when no site has it yet: a learning the window clears the
+   * way for then reads it there (`loginHint`). A site of that name already on another domain is refused.
+   */
+  as?: string,
+): { site: string; url: string; loginCookies?: string[] } {
+  if (as !== undefined && /^https?:\/\//i.test(target)) {
+    const name = safeName(as);
+    const known = loadSite(name)?.site;
+    if (known && siteOf(new URL(known.baseUrl).hostname.toLowerCase()) !== hostOf(target))
+      throw new Error(`site "${name}" is ${known.baseUrl}, not on ${hostOf(target)}: a name holds one site`);
+    return known ? { site: name, url: target, loginCookies: known.loginCookies } : { site: name, url: target };
+  }
   let url = target;
   if (!/^https?:\/\//i.test(target)) {
     const known = /^[a-z0-9][a-z0-9._-]*$/i.test(target) ? loadSite(target) : undefined;
@@ -75,6 +90,24 @@ export function resolveLoginTarget(target: string): { site: string; url: string;
     return { site: s.name, url: url === target ? url : s.baseUrl, loginCookies: s.loginCookies };
   }
   return { site: host.replace(/^www\./, ""), url };
+}
+
+/** A shell word as typed: quoted when it holds anything a shell reads (a URL's ? or &). */
+const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
+
+/**
+ * How a hint names the login of `site` for the page at `url`, so it can be followed as written: by the
+ * site's name once that resolves, else by the page with the name the learning that follows uses
+ * (`--site`; MCP: `url` beside `site`), so what the window keeps is stored where that learning reads it.
+ */
+export function loginHint(site: string, url: string): { cli: string; call: { site: string; url?: string } } {
+  let known = false;
+  try {
+    known = resolveLoginTarget(site).site === site;
+  } catch {
+    // no site of that name yet
+  }
+  return known ? { cli: site, call: { site } } : { cli: `${shellWord(url)} --site ${site}`, call: { site, url } };
 }
 
 /**
@@ -438,13 +471,13 @@ export function visitorChoices(
 export const keptNote = (site: string, kept: string[], account: string[] = []) =>
   account.length
     ? `no sign-in seen; kept what the site set while the window was open (${kept.join(", ")}), and calls of ${site} now send it: ${account.join(", ")} may carry an account`
-    : `no sign-in seen; kept what the site set while the window was open (${kept.join(", ")}), its record of a cookie consent or a cleared challenge: calls of ${site} now send them`;
+    : `no sign-in seen; kept what the site set while the window was open (${kept.join(", ")}), and calls of ${site} now send it. It may record a cookie consent or a cleared challenge, or be a tracker api-anything does not know: it does not show that anyone chose anything`;
 
 /** The `next` of a window that kept something and saw no sign-in, for each thing the user may have done there. */
 export const keptNext = (site: string, account: string[], how: string) =>
   account.length
     ? `ask the user what they did in the window. If they answered a consent page or cleared a challenge, retry the call. If they signed in, api-anything did not recognize the sign-in cookie: list the one of ${account.join(", ")} that is it in ${site}'s spec loginCookies, then ${how}`
-    : `retry the call: what the window kept reaches it. If the user signed in there and calls still say auth, ${site}'s login cookie is named like a visitor's: list its name in the spec's loginCookies, then ${how}`;
+    : `retry the call: what the window kept reaches it. If it meets the same page again, nothing kept answered it: ask the user to make the choice on the site's page, then ${how}. If the user signed in there and calls still say auth, ${site}'s login cookie is named like a visitor's: list its name in the spec's loginCookies, then ${how}`;
 
 /** What a window that counted answers, over MCP and on the CLI alike. `how`: how to open the window again. */
 export function windowAnswer(site: string, w: Extract<WindowLogin, { ok: true }>, how: string) {
@@ -475,13 +508,16 @@ export function windowAnswer(site: string, w: Extract<WindowLogin, { ok: true }>
 export async function windowLogin(
   site: string,
   url: string,
-  o: { loginCookies?: string[]; waitForEnter?: boolean; publicOnly?: boolean } = {},
+  o: { loginCookies?: string[]; waitForEnter?: boolean; publicOnly?: boolean; signal?: AbortSignal } = {},
 ): Promise<WindowLogin> {
+  // an attached window that would be refused (nothing at the endpoint, a proxy set too) sends nothing to the site
+  if (attached()) await attachEndpoint();
   const guest = await knownGuests(site, url, o.loginCookies, undefined, o.publicOnly ? publicAddress : undefined);
   const { opened, closed } = await login({
     url,
     profileDir: profileDir(),
     waitForEnter: o.waitForEnter,
+    ...(o.signal ? { signal: o.signal } : {}),
     ...(attached() ? { jar: loadSession(site).cookies } : {}),
   });
   // the user had the site open: a challenge cleared there counts even with no sign-in
@@ -592,6 +628,8 @@ export async function logout(target: string): Promise<LoggedOut> {
   const session = withLock(file, () => {
     const had = existsSync(file);
     rmSync(file, { force: true });
+    // a run of this process or another that began before now writes none of what it brings back
+    recordLogout(site);
     return had;
   });
   dropCaptures();

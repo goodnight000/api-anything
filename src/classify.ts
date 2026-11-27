@@ -596,9 +596,21 @@ export const consentReason = (url: string) =>
  * is judged as it always was.
  */
 function consentWall(op: Operation, r: Observed): Classified | undefined {
-  if (!op.readOnly || !r.redirected || !r.url || r.status < 200 || r.status >= 300) return undefined;
-  if (!consentStep(op.request.url, r.url, r.body ?? "")) return undefined;
+  if (!op.readOnly || !r.redirected || !r.url) return undefined;
+  if (!consentPage(op.request.url, r.url, r)) return undefined;
   return { ...is("error", consentReason(r.url)), unfinished: r.url, wall: "consent" };
+}
+
+/**
+ * `page`, reached at `landed` instead of `asked`, is the site's cookie-consent step: a 2xx that is no bot
+ * challenge and passes `consentStep`. Every tier asks this, so one page gets one verdict: a page at a
+ * consent address stands where the data was expected, so a challenge's markers count at any size there
+ * (`botWall`'s `wantsJson`), whatever the op's format.
+ */
+export function consentPage(asked: string, landed: string, page: Observed): boolean {
+  if (page.status < 200 || page.status >= 300) return false;
+  if (!consentStep(asked, landed, page.body ?? "")) return false;
+  return !botWall(page, true);
 }
 
 /** The op holds a credential or was learned signed in: a page it is sent to instead is the account's to finish. */
@@ -772,7 +784,9 @@ function classifyBody(
   const isHtml = ct.includes("html") || /^\s*<(!doctype|html)/i.test(body);
   const wantsJson = op.response.format === "json";
 
-  const wall = botWall(r, wantsJson, () => recipeFinds(op, body, readHtml));
+  // sent to a consent address, the page is judged as every tier judges it there (consentPage)
+  const atConsent = !!r.redirected && !!r.url && consentStep(op.request.url, r.url, body);
+  const wall = botWall(r, wantsJson || atConsent, () => recipeFinds(op, body, readHtml));
   if (wall) return is("blocked", wall);
 
   const { text: wait, ms: waitMs } = retryAfter(r.headers);

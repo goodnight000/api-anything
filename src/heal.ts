@@ -14,7 +14,16 @@ import {
   TRIGGER_BUDGET_MS,
   waitReport,
 } from "./browser.js";
-import { botWall, type Class, consentReason, consentStep, judge, type Observed, pickedShape } from "./classify.js";
+import {
+  botWall,
+  type Class,
+  consentPage,
+  consentReason,
+  consentStep,
+  judge,
+  type Observed,
+  pickedShape,
+} from "./classify.js";
 import { asText, escapeTemplate, fillTemplate, getAt, type Step, setAt, templateRefs, walk } from "./codec.js";
 import { acceptedConfirms, recordedConfirms } from "./confirm.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
@@ -35,6 +44,7 @@ import {
   UUID,
   unplaced,
 } from "./learn.js";
+import { loginHint } from "./login.js";
 import { sendDerived } from "./lookup.js";
 
 export { unplaced };
@@ -618,16 +628,17 @@ export function loginWall(capture: CaptureResult, triggerUrl: string): string | 
 
 /**
  * The final page of a run, when the trigger was redirected to the site's cookie-consent step
- * (`consentStep`). As the tier-1 classifier holds it: only a 2xx page that is no bot challenge (and
- * no sign-in page, which `consentStep` refuses); an outage or a challenge there stays what it is.
+ * (`consentStep`), by the tier-1 classifier's own test (`consentPage`): only a 2xx page that is no bot
+ * challenge (and no sign-in page, which `consentStep` refuses); an outage or a challenge there stays what it is.
  */
 export function consentWall(capture: CaptureResult, triggerUrl: string): string | undefined {
   const doc =
     lastLoad(capture) ??
     capture.exchanges.filter((e) => e.resourceType === "document" && e.response?.body).at(-1)?.response;
-  if (!doc || doc.status < 200 || doc.status >= 300) return undefined;
-  if (botWall({ status: doc.status, headers: doc.headers, body: doc.body ?? "" })) return undefined;
-  return consentStep(triggerUrl, capture.finalUrl, doc.body ?? "") ? capture.finalUrl : undefined;
+  if (!doc) return undefined;
+  return consentPage(triggerUrl, capture.finalUrl, { status: doc.status, headers: doc.headers, body: doc.body ?? "" })
+    ? capture.finalUrl
+    : undefined;
 }
 
 /** A read that ended on the site's cookie-consent page at `url`: an error, which nothing heals. */
@@ -648,6 +659,8 @@ export async function runOpTrigger(
 ): Promise<TriggerRun> {
   const refused = triggerRefusal(op.trigger, args);
   if (refused) throw new Error(`not opening ${op.name}'s page: ${refused}`);
+  // a logout while the run is out wins over what the run brings back (mergeCapture's `since`)
+  const started = Date.now();
   const t = fillTrigger(op.trigger, args);
   // What a read's guard stopped never left: it is no answer of the read's, and the run does not end on
   // it (seen: a click's POST to the address a GET read matches by path, taken for the read's answer).
@@ -678,7 +691,7 @@ export async function runOpTrigger(
   const captured = source && { from: source.request.url, values };
   let unsaved: string | undefined;
   try {
-    mergeCapture(site, capture.cookies, captured);
+    mergeCapture(site, capture.cookies, captured, undefined, undefined, { since: started });
   } catch (e) {
     // A real write has left by now: a session that could not be saved (a busy lock, a read-only home)
     // must not turn its answer into a failure that reads as unsent and gets it sent again. The site may
@@ -794,7 +807,10 @@ export function cutShort(op: Pick<Operation, "trigger" | "readOnly">, capture: C
 /** The run ended on a bot challenge that did not solve: its requests never fired, which says nothing about the op. */
 export function challengePage(capture: CaptureResult): Attempt | undefined {
   const doc = lastLoad(capture);
-  const wall = doc && botWall({ status: doc.status, headers: doc.headers, body: doc.body ?? "" });
+  // a run sent from its first page to a consent address ends where the data was expected (consentPage)
+  const first = capture.exchanges.find((e) => e.resourceType === "document")?.request.url;
+  const atConsent = !!doc && !!first && consentStep(first, capture.finalUrl, doc.body ?? "");
+  const wall = doc && botWall({ status: doc.status, headers: doc.headers, body: doc.body ?? "" }, atConsent);
   return wall ? { tier: 3, class: "blocked", reason: `the trigger page stayed a bot challenge (${wall})` } : undefined;
 }
 
@@ -1138,7 +1154,7 @@ function learnOrExplain(
       botWall({ status: doc.response.status, headers: doc.response.headers, body: doc.response.body ?? "" });
     if (wall)
       throw new Error(
-        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${site} --window${windowWhere()} and clear it, then add again (learning said: ${(e as Error).message})`,
+        `the page served a bot challenge (${wall}): ask the user to run api-anything login ${loginHint(site, doc.request.url).cli} --window${windowWhere()} and clear it, then add again (learning said: ${(e as Error).message})`,
       );
     const asked = input.readOnly && run.dialogs?.find((d) => d.type === "confirm" && !d.accepted);
     if (asked)
@@ -1265,7 +1281,7 @@ function saveOperation(
         `refusing to save ${operation.name}: the captured response is ${j.class}: ${j.reason}, so it was learned from ${j.class === "rate" ? "a throttled answer" : j.class === "error" ? "a server failure" : "a challenge or sign-in page"}, not the op's own answer. ` +
           (j.class === "rate" || j.class === "error"
             ? "Wait a few minutes, then add again"
-            : `Ask the user to run api-anything login ${site}${j.class === "blocked" ? ` --window${windowWhere()} and clear the challenge` : ""}, then add again`),
+            : `Ask the user to run api-anything login ${loginHint(site, exchange.request.url).cli}${j.class === "blocked" ? ` --window${windowWhere()} and clear the challenge` : ""}, then add again`),
       );
     } else
       warnings.push(
@@ -1294,6 +1310,7 @@ function saveOperation(
 }
 
 export async function addOperation(input: AddInput): Promise<AddResult> {
+  const started = Date.now();
   const stood = standIn(input.paging, input.examples, input.from, input.from2);
   const i = { ...input, site: safeName(input.site), ...stood };
   const existing = loadSite(i.site)?.site;
@@ -1399,12 +1416,12 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
     const wall = loginWall(run1, fillTrigger(trigger, ex1).url);
     if (wall)
       throw new Error(
-        `the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${i.site}; then add again`,
+        `the trigger landed on a sign-in page (${wall}): the site needs an account. Ask the user to run: api-anything login ${loginHint(i.site, fillTrigger(trigger, ex1).url).cli}; then add again`,
       );
     const consent = i.write ? undefined : consentWall(run1, fillTrigger(trigger, ex1).url);
     if (consent)
       throw new Error(
-        `${consentReason(consent)}. Ask the user to run api-anything login ${i.site} --window${windowWhere()}, make the choice on the site's page there and close the window; then add again`,
+        `${consentReason(consent)}. Ask the user to run api-anything login ${loginHint(i.site, fillTrigger(trigger, ex1).url).cli} --window${windowWhere()}, make the choice on the site's page there and close the window; then add again`,
       );
     run2 = await run(ex2 ?? ex1);
   }
@@ -1561,6 +1578,8 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       urls: opUrls(operation),
       pages: opPages(operation, examples),
     },
+    undefined,
+    { since: started },
   );
 
   // Values that differ between two page loads are often session-scoped ids, not per-request
@@ -2064,6 +2083,7 @@ export async function healOperation(
     browser?: boolean;
   },
 ): Promise<HealResult> {
+  const started = Date.now();
   let budget = op.readOnly ? 2 : 1;
   let last: Attempt | undefined;
   const callArgs = withDefaults(op, args);
@@ -2235,6 +2255,8 @@ export async function healOperation(
     [],
     { from: fresh.request.url, values: sessionValues },
     { settings, urls: opUrls(fresh), pages: opPages(fresh, [learnArgs, callArgs]) },
+    undefined,
+    { since: started },
   );
   // An arg equal to a constant the old template had there ("search" in /api/search) is not a param position.
   const oldLeaves = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.value.toLowerCase()]));
