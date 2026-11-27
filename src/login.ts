@@ -28,6 +28,7 @@ import {
   mayCarryAccount,
   mergeCapture,
   parseSetCookie,
+  recordLogout,
   renewedSignIn,
   type Session,
   safeName,
@@ -595,6 +596,8 @@ export async function logout(target: string): Promise<LoggedOut> {
   const session = withLock(file, () => {
     const had = existsSync(file);
     rmSync(file, { force: true });
+    // a run of this process or another that began before now writes none of what it brings back
+    recordLogout(site);
     return had;
   });
   dropCaptures();

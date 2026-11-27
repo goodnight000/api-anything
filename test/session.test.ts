@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { LockBusy, lockPath } from "../src/lock.js";
 import {
   cookieHeaderFor,
@@ -14,6 +16,7 @@ import {
   mergeCapture,
   parseCookieHeader,
   parseSetCookie,
+  recordLogout,
   renewedSignIn,
   safeName,
   saveSession,
@@ -147,6 +150,34 @@ test("guest cookie names live in the session file, kept by every merge", () => {
   assert.equal(loadSession("g").cookies.length, 1);
 });
 
+test("a logout, in this process or another, wins over what a run begun before it brings back", async () => {
+  process.env.API_ANYTHING_HOME = mkdtempSync(join(tmpdir(), "aa-"));
+  const begun = Date.now();
+  await new Promise((r) => setTimeout(r, 5));
+  // another api-anything process logs the site out while this one's run is out
+  execFileSync(
+    process.execPath,
+    ["--import", "tsx", "-e", 'import("./src/session.ts").then((m) => m.recordLogout("lo"))'],
+    { cwd: fileURLToPath(new URL("..", import.meta.url)), env: { ...process.env } },
+  );
+  const merged = mergeCapture("lo", [c("sid", "from-before-the-logout", "lo.test")], undefined, undefined, undefined, {
+    since: begun,
+  });
+  assert.deepEqual(merged.cookies, [], "nothing was written back");
+  assert.deepEqual(loadSession("lo").cookies, []);
+  // a run begun after the logout is the session's again; a merge that names no start is too
+  const after = Date.now() + 1;
+  await new Promise((r) => setTimeout(r, 5));
+  mergeCapture("lo", [c("sid", "after", "lo.test")], undefined, undefined, undefined, { since: after });
+  assert.deepEqual(
+    loadSession("lo").cookies.map((x) => x.value),
+    ["after"],
+  );
+  // a logout of another site changes nothing here
+  recordLogout("other");
+  mergeCapture("lo", [c("more", "v", "lo.test")], undefined, undefined, undefined, { since: begun });
+  assert.equal(loadSession("lo").cookies.length, 1, "lo's own logout still wins for a run begun before it");
+});
 test("session store: API_ANYTHING_HOME override, 0700 dirs, 0600 files, merge by name/domain/path", () => {
   process.env.API_ANYTHING_HOME = mkdtempSync(join(tmpdir(), "aa-"));
   assert.equal(home(), process.env.API_ANYTHING_HOME);

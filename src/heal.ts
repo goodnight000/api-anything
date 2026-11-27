@@ -658,6 +658,8 @@ export async function runOpTrigger(
 ): Promise<TriggerRun> {
   const refused = triggerRefusal(op.trigger, args);
   if (refused) throw new Error(`not opening ${op.name}'s page: ${refused}`);
+  // a logout while the run is out wins over what the run brings back (mergeCapture's `since`)
+  const started = Date.now();
   const t = fillTrigger(op.trigger, args);
   // What a read's guard stopped never left: it is no answer of the read's, and the run does not end on
   // it (seen: a click's POST to the address a GET read matches by path, taken for the read's answer).
@@ -688,7 +690,7 @@ export async function runOpTrigger(
   const captured = source && { from: source.request.url, values };
   let unsaved: string | undefined;
   try {
-    mergeCapture(site, capture.cookies, captured);
+    mergeCapture(site, capture.cookies, captured, undefined, undefined, { since: started });
   } catch (e) {
     // A real write has left by now: a session that could not be saved (a busy lock, a read-only home)
     // must not turn its answer into a failure that reads as unsent and gets it sent again. The site may
@@ -1307,6 +1309,7 @@ function saveOperation(
 }
 
 export async function addOperation(input: AddInput): Promise<AddResult> {
+  const started = Date.now();
   const stood = standIn(input.paging, input.examples, input.from, input.from2);
   const i = { ...input, site: safeName(input.site), ...stood };
   const existing = loadSite(i.site)?.site;
@@ -1574,6 +1577,8 @@ export async function addOperation(input: AddInput): Promise<AddResult> {
       urls: opUrls(operation),
       pages: opPages(operation, examples),
     },
+    undefined,
+    { since: started },
   );
 
   // Values that differ between two page loads are often session-scoped ids, not per-request
@@ -2077,6 +2082,7 @@ export async function healOperation(
     browser?: boolean;
   },
 ): Promise<HealResult> {
+  const started = Date.now();
   let budget = op.readOnly ? 2 : 1;
   let last: Attempt | undefined;
   const callArgs = withDefaults(op, args);
@@ -2248,6 +2254,8 @@ export async function healOperation(
     [],
     { from: fresh.request.url, values: sessionValues },
     { settings, urls: opUrls(fresh), pages: opPages(fresh, [learnArgs, callArgs]) },
+    undefined,
+    { since: started },
   );
   // An arg equal to a constant the old template had there ("search" in /api/search) is not a param position.
   const oldLeaves = new Map(walk(op.request).map((l) => [JSON.stringify(l.at), l.value.toLowerCase()]));

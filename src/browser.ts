@@ -443,8 +443,23 @@ async function seed(ctx: BrowserContext, url: string, jar: StoredCookie[] | unde
   if (!guests.has(ctx)) return () => {};
   const now = Date.now() / 1000;
   const live = (jar ?? []).filter((c) => !(c.expires > 0 && c.expires <= now));
+  // everything the browser stores of a cookie: two runs share a context only when all of it is equal
   const key = jar
-    ? JSON.stringify(live.map((c) => [c.name, c.domain.toLowerCase(), c.path || "/", c.value]).sort())
+    ? JSON.stringify(
+        live
+          .map((c) => [
+            c.name,
+            c.domain.toLowerCase(),
+            c.path || "/",
+            c.value,
+            c.expires,
+            c.httpOnly,
+            c.secure,
+            c.sameSite ?? "",
+          ])
+          .map((x) => JSON.stringify(x))
+          .sort(),
+      )
     : "none";
   const host = (d: string) => d.replace(/^\./, "").toLowerCase();
   const sites = [...new Set([new URL(url).hostname, ...live.map((c) => c.domain)].map((h) => siteOf(host(h))))];

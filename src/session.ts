@@ -249,6 +249,22 @@ export function saveSession(
 
 const expired = (c: StoredCookie, now: number) => c.expires > 0 && c.expires * 1000 <= now;
 
+/** When each site was last logged out (ms since the epoch): site names and times, nothing of a session. */
+const logoutsFile = () => join(home(), "logouts.json");
+
+/** Called by `logout` under the site's session lock: from now, nothing begun before it writes the site back. */
+export function recordLogout(site: string, at = Date.now()): void {
+  withLock(logoutsFile(), () => {
+    const all = readJson<Record<string, number>>(logoutsFile(), {});
+    all[site] = Math.max(all[site] ?? 0, at);
+    writePrivate(logoutsFile(), JSON.stringify(all));
+  });
+}
+
+/** `site` was logged out at or after `since`, in this process or another. */
+export const loggedOutSince = (site: string, since: number): boolean =>
+  (readJson<Record<string, number>>(logoutsFile(), {})[site] ?? -Infinity) >= since;
+
 /**
  * Merge a browser run's cookies and session values into the stored session and save it. `captured`:
  * the values, and the URL of the request they were sent in, whose host each is bound to.
@@ -263,10 +279,16 @@ export function mergeCapture(
    */
   learned?: { settings: string[]; urls?: (string | undefined)[]; pages?: readonly string[] },
   now = Date.now(),
+  /**
+   * `since`: when the run these came from began. A logout of the site since then (by any process) wins:
+   * nothing is written, and the session is answered as it is.
+   */
+  o: { since?: number } = {},
 ): Session {
   const { values } = captured;
   return withLock(sessionFile(site), () => {
     const s = loadSession(site);
+    if (o.since !== undefined && loggedOutSince(site, o.since)) return s;
     const valueHosts = { ...s.valueHosts };
     if (Object.keys(values).length) {
       const host = new URL(captured.from).hostname.toLowerCase();

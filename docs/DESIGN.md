@@ -1336,9 +1336,14 @@ attach to. A DevTools endpoint is full control of a browser.
   sign-in, which a tier-3 run then merged back into the jar. The runs of one process share the
   context, so a run seeded with other cookies than those in flight on the same site waits for them
   to end (within its own time budget; a window up to 15 s), then fails as `ProfileInUse`, sent
-  nothing: clearing for it would take theirs. Runs seeded alike run together, sharing what the site
-  sets meanwhile, as in api-anything's own profile. `logout` takes the site's cookies out of an
-  open context at once, after any seeding in progress. What a run's pages set is merged into the jar
+  nothing: clearing for it would take theirs. Runs seeded alike (every part the browser stores of
+  each cookie equal: name, domain, path, value, expiry, `httpOnly`, `secure`, `sameSite`) run
+  together, sharing what the site sets meanwhile, as in api-anything's own profile. `logout` takes
+  the site's cookies out of an open context at once, after any seeding in progress. A run already
+  in flight can still set cookies there afterwards, so `logout` also records its time in
+  `logouts.json` (site names and times only), under the session's lock: whatever a run, a tier-1
+  answer, `add` or a heal brings back is merged into the jar only if it began after the site's
+  last logout (`mergeCapture`'s `since`), in either browser mode and whichever process ran it. What a run's pages set is merged into the jar
   as after any browser run: those cookies are api-anything's context's, never the user's. Tier 1 is
   unchanged: it sends from the sealed session file, and nothing reads the attached browser's
   cookies.

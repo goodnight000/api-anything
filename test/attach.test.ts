@@ -27,11 +27,11 @@ import {
   runTrigger,
 } from "../src/browser.js";
 import { call } from "../src/execute.js";
-import { addOperation, capturePage, PROFILE_HINT, profileDir } from "../src/heal.js";
+import { addOperation, capturePage, PROFILE_HINT, profileDir, runOpTrigger } from "../src/heal.js";
 import { claim, lockPath } from "../src/lock.js";
 import { logout } from "../src/login.js";
 import { loadSession, saveSession } from "../src/session.js";
-import { parseSite } from "../src/spec.js";
+import { OperationSchema, parseSite } from "../src/spec.js";
 import { saveSite } from "../src/store.js";
 import type { StoredCookie } from "../src/types.js";
 import { type Fixture, PUBLIC_BEARER, startFixture } from "./fixture/server.js";
@@ -433,6 +433,66 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
     assert.ok((await userCookies(port)).includes(USER_COOKIE), "the user's own context is untouched");
   });
 
+  test("a logout while a run is out: what the run brings back is not written into the jar the logout deleted", async () => {
+    saveSite(parseSite({ ...minTier2(fx), name: "inflight" }));
+    const op = OperationSchema.parse({
+      name: "user",
+      readOnly: true,
+      // the page that sets ct0 is opened after the logout has cleared api-anything's context
+      trigger: {
+        url: `${fx.url}/list`,
+        steps: [
+          { action: "wait", ms: 1500 },
+          { action: "goto", value: `${fx.url}/u/alice` },
+          { action: "wait", ms: 300 },
+        ],
+      },
+      match: { method: "GET", path: "/nothing-here" },
+      request: { method: "GET", url: `${fx.url}/nothing-here`, headers: {} },
+      slots: [],
+      params: [],
+      response: { format: "json" },
+    });
+    const run = runOpTrigger("inflight", op, {});
+    await sleep(700);
+    await logout("inflight");
+    const r = await run;
+    assert.ok(
+      r.capture.cookies.some((c) => c.name === "ct0"),
+      "the page set its cookie after the logout, during the run",
+    );
+    assert.deepEqual(loadSession("inflight").cookies, [], "nothing of the run reached the jar after the logout");
+  });
+
+  test("two runs share the context only when every stored part of their cookies is equal", async () => {
+    for (const [what, other] of [
+      ["httpOnly", { ...JAR_COOKIE, httpOnly: false }],
+      ["expiry", { ...JAR_COOKIE, expires: Math.floor(Date.now() / 1000) + 3600 }],
+      ["secure", { ...JAR_COOKIE, secure: true }],
+    ] as const) {
+      const holding = runTrigger({
+        url: `${fx.url}/api/result-list?tag=hold`,
+        profileDir: profileDir(),
+        jar: [JAR_COOKIE],
+        steps: [{ action: "wait", ms: 1500 }],
+      });
+      await sleep(300);
+      await assert.rejects(
+        pageFetch({
+          origin: fx.url,
+          url: `${fx.url}/list`,
+          method: "GET",
+          headers: {},
+          profileDir: profileDir(),
+          jar: [other],
+          timeoutMs: 500,
+        }),
+        (e: Error) => /stayed in use by another call/.test(e.message),
+        `a jar that differs in ${what} waits for the other run`,
+      );
+      await holding;
+    }
+  });
   test("a run that carries no stored cookies, right after or during one that carries the jar, carries none of it; neither breaks the other", async () => {
     const sent = (tag: string) =>
       fx.calls.filter((c) => c.path.includes(`tag=${tag}`)).map((c) => String(c.headers.cookie ?? ""));
@@ -500,7 +560,13 @@ describe("attached to a running Chromium", { skip: !BIN && "no Chromium browser 
     await sleep(100);
     const queued = await settles(fetchOf());
     await own;
-    const paced = await settles(fetchOf({ pace: () => sleep(800) }));
+    const paced = await settles(
+      fetchOf({
+        pace: async () => {
+          await sleep(800);
+        },
+      }),
+    );
     for (const [what, [ms, said]] of [
       ["queued behind a run", queued],
       ["paced", paced],

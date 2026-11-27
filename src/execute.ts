@@ -829,6 +829,8 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       if (e instanceof DeadlineExceeded) return { tier, ...slowArgs(op, e), unsent: true };
     }
     const none = bareCall(ctx, op);
+    // a logout while this request is out wins over the cookies its answer sets (mergeCapture's `since`)
+    const loaded = Date.now();
     const session = none ? NO_SESSION : loadSession(ctx.site);
     let r: Sent | PageFetchResult;
     if (tier === 1) {
@@ -847,7 +849,7 @@ async function tryTier(ctx: Ctx, op: Operation, tier: Tier): Promise<Attempt> {
       if (sent.setCookies) ctx.seen.push(...sent.setCookies);
       if (sent.setCookies && !none) {
         try {
-          mergeCapture(ctx.site, sent.setCookies);
+          mergeCapture(ctx.site, sent.setCookies, undefined, undefined, undefined, { since: loaded });
         } catch {
           /* a read-only home still answers this call */
         }
