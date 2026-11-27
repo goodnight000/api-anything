@@ -2312,11 +2312,11 @@ removed (logged out), and one `api-anything verify <site>` process per site, in 
 spec's pace, the budget and the cool-downs are the only pacing, as for one user; a site still
 running after `--site-timeout` (20 min) is killed with its browser. It judges nothing itself: each
 op's entry in `health.json` is its worst case in verify's own JSON (a failing case, else an
-inconclusive one, else a passing one), with that case's label, class (`got`), tier and ms, verify's
-reason cut to one line of 200 characters with nothing a site sent in it (every reason that quotes an
-answer, its markup, a body, plain text, a GraphQL message or an error event, does it after a `: `, so
-what follows the first one goes; an address keeps only its origin) and with the spec's example and
-check values replaced by `<arg>`, and the time. A skipped op (or a write's preflight) is `skipped`; a site verify could not
+inconclusive one, else a passing one), with that case's label, class (`got`), tier and ms, a reason
+that is a fixed phrase of the script's own chosen by the case's class, outcome and what it expected
+(`answered`, `skippedWhy`: no text of verify's reason is kept, since verify's reasons quote what the
+site sent, a body, a redirect's path or a cursor; the summary and the issue say once that the site's
+own words are in `api-anything verify <site>`), and the time. A skipped op (or a write's preflight) is `skipped`; a site verify could not
 load fails each of its ops; a verify that crashed, hung, or reported nothing about an op is
 `inconclusive`, since it tested nothing. No args, no answers. The header has the version, the
 commit, the run's start, end and duration, the op totals and verify's case counts summed; a

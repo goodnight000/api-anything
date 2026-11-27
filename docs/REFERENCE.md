@@ -1144,6 +1144,19 @@ Known limits in detail:
 - The recorded answers in `test/fixture/sites/` prove that a bundled recipe still parses the
   answer it was recorded from, not that the site still answers that way. Ops that send a cookie or
   session value have none.
+- A logout is told apart from a sign-in by comparing wall-clock times, so a clock that moves back can
+  let a run's cookies through after it; and a sign-in window that was open across a logout saves what
+  it sees when it closes.
+- A tier-2 call waits for the site's pacing even past its own timeout.
+- A page at an address that names a consent step and also holds the data is `ok` at tier 1 and a
+  consent wall at tier 3.
+- A DevTools endpoint (`API_ANYTHING_CDP`) that answers `/json/version` and then refuses the
+  connection lets the window's signed-out probe reach the site before the login is refused.
+- Cookies a site sets during a tier-2 fetch in a browser you already run (`API_ANYTHING_CDP`) are not
+  merged into the jar.
+- The kept cookie of a consent answered in the window, when the site gave it no expiry, lives in
+  api-anything's own browser profile for 400 days (Chrome's longest), or until a logout or a new
+  value; the jar keeps it until then too.
 
 
 ## Bundled sites
