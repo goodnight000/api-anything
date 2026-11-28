@@ -579,7 +579,7 @@ export async function windowLogin(
   url: string,
   o: { loginCookies?: string[]; waitForEnter?: boolean; publicOnly?: boolean; signal?: AbortSignal } = {},
 ): Promise<WindowLogin> {
-  // an attached window that would be refused (nothing at the endpoint, a proxy set too) sends nothing to the site
+  // an attached window that would be refused (nothing at the endpoint) sends nothing to the site
   if (attached()) await attachEndpoint();
   const given = new Map<string, string>();
   const guest = await knownGuests(

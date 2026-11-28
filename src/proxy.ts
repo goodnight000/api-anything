@@ -8,6 +8,7 @@
  * loaded only when a proxy is set) and the browser (`browserProxy`, Playwright's `proxy` option), so
  * the two never disagree about which host goes through it.
  */
+import { BlockList, isIP } from "node:net";
 import type { LaunchOptions } from "playwright-core";
 
 export interface ProxyConfig {
@@ -41,32 +42,56 @@ export function proxyConfig(env: NodeJS.ProcessEnv = process.env): ProxyConfig |
     .split(/[\s,]+/)
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
-  // what tier 1 cannot match the way Chrome would is refused, so the two never route a host differently
-  const odd = noProxy.find(
-    (e) => e !== LOOPBACK && e !== "*" && (e.includes("/") || e.replace(/^\*\./, "").includes("*")),
-  );
-  if (odd)
-    throw new Error(
-      `API_ANYTHING_NO_PROXY entry ${odd} is not supported: use host names (a.com covers its subdomains), host:port, IP addresses or *`,
-    );
+  for (const e of noProxy) {
+    if (e === LOOPBACK || e === "*") continue;
+    if (e.includes("/") && !parseCidr(e))
+      throw new Error(
+        `API_ANYTHING_NO_PROXY entry ${e} is not supported: use host names, wildcard host patterns, CIDR ranges, host:port, IP addresses, or *`,
+      );
+  }
   return { url, noProxy };
 }
 
 const LOOPBACK = "<-loopback>";
+
+const stripBrackets = (host: string) => (host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host);
+
+function parseCidr(entry: string): { net: string; prefix: number; family: "ipv4" | "ipv6" } | undefined {
+  const slash = entry.indexOf("/");
+  if (slash <= 0 || entry.indexOf("/", slash + 1) !== -1) return undefined;
+  const net = stripBrackets(entry.slice(0, slash));
+  const rawPrefix = entry.slice(slash + 1);
+  if (!/^\d+$/.test(rawPrefix)) return undefined;
+  const kind = isIP(net);
+  if (!kind) return undefined;
+  const prefix = Number(rawPrefix);
+  const maxPrefix = kind === 4 ? 32 : 128;
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > maxPrefix) return undefined;
+  return { net, prefix, family: kind === 4 ? "ipv4" : "ipv6" };
+}
 
 /** Chrome's own default, kept for tier 1 too: a proxy cannot reach this machine's loopback. */
 function loopback(host: string): boolean {
   return host === "localhost" || host.endsWith(".localhost") || /^127\.\d+\.\d+\.\d+$/.test(host) || host === "[::1]";
 }
 
-/** Host and port of one NO_PROXY entry: `.a.com` and `*.a.com` are `a.com`, which covers its subdomains. */
-function entryOf(entry: string): { host: string; port?: string } {
-  const e = entry.replace(/^\*?\./, "");
+/** Split optional `:port` from a non-CIDR host pattern (preserving bare or bracketed IPv6). */
+function splitHostPort(e: string): { host: string; port?: string } {
   const v6 = /^(\[[^\]]+\])(?::(\d+))?$/.exec(e);
   if (v6) return { host: v6[1]!, port: v6[2] };
   if (e.includes(":") && !/^[^:]+:\d+$/.test(e)) return { host: `[${e}]` }; // a bare IPv6 address
   const [host, port] = e.split(":");
   return { host: host!, port };
+}
+
+const isWildcardPattern = (entry: string): boolean => {
+  const { host } = splitHostPort(entry);
+  return entry !== "*" && (host.startsWith("*.") ? host.slice(2).includes("*") : host.includes("*"));
+};
+
+/** Host and port of one plain NO_PROXY entry: `.a.com` and `*.a.com` are `a.com`, which covers its subdomains. */
+function entryOf(entry: string): { host: string; port?: string } {
+  return splitHostPort(entry.replace(/^\*?\./, ""));
 }
 
 /** Whether a request to `url` goes through the proxy. */
@@ -75,11 +100,26 @@ export function proxied(url: string, cfg: ProxyConfig | undefined = proxyConfig(
   const u = new URL(url);
   if (u.protocol !== "http:" && u.protocol !== "https:") return false;
   const host = u.hostname.toLowerCase();
+  const bareHost = stripBrackets(host);
+  const ipKind = isIP(bareHost);
   const port = u.port || (u.protocol === "https:" ? "443" : "80");
   if (!cfg.noProxy.includes(LOOPBACK) && loopback(host)) return false;
   return !cfg.noProxy.some((raw) => {
     if (raw === LOOPBACK) return false;
     if (raw === "*") return true;
+    const cidr = parseCidr(raw);
+    if (cidr) {
+      if (!ipKind || (ipKind === 4 ? "ipv4" : "ipv6") !== cidr.family) return false;
+      const bl = new BlockList();
+      bl.addSubnet(cidr.net, cidr.prefix, cidr.family);
+      return bl.check(bareHost, cidr.family);
+    }
+    if (isWildcardPattern(raw)) {
+      const { host: pat, port: patPort } = splitHostPort(raw);
+      if (patPort && patPort !== port) return false;
+      const re = new RegExp(`^${pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`, "i");
+      return re.test(host) || re.test(bareHost);
+    }
     const e = entryOf(raw);
     if (e.port && e.port !== port) return false;
     return host === e.host || host.endsWith(`.${e.host}`);
@@ -87,13 +127,17 @@ export function proxied(url: string, cfg: ProxyConfig | undefined = proxyConfig(
 }
 
 /**
- * The same rules as Chrome's bypass list. Chrome reads `a.com` as that host alone, so a NO_PROXY
- * entry becomes the host and `*.` its subdomains, each with its port when it named one.
+ * The same rules as Chrome's bypass list. Chrome reads `a.com` as that host alone, so a plain
+ * domain entry becomes the host and `*.` its subdomains; CIDRs and wildcard patterns pass through
+ * as written, each with its port when it named one.
  */
 export function bypassList(noProxy: string[]): string {
   return noProxy
     .flatMap((raw) => {
       if (raw === LOOPBACK || raw === "*") return [raw];
+      const cidr = parseCidr(raw);
+      if (cidr) return [`${cidr.net}/${cidr.prefix}`];
+      if (isWildcardPattern(raw)) return [raw];
       const { host, port } = entryOf(raw);
       const p = port ? `:${port}` : "";
       return host.startsWith("[") || /^\d+(\.\d+){3}$/.test(host) ? [host + p] : [host + p, `*.${host}${p}`];

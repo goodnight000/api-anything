@@ -382,12 +382,12 @@ describe("the sign-in window in an attached browser", { skip: !BIN && "no Chromi
       );
       assert.ok(Date.now() - t0 < 5000, `took ${Date.now() - t0} ms`);
       assert.equal(asked(), before, "no guest probe reached the site");
-      // another refusal for its configuration: a proxy set as well
-      process.env.API_ANYTHING_CDP = was;
+      // loopback CDP with API_ANYTHING_PROXY set still resolves cleanly to the DevTools check
+      process.env.API_ANYTHING_CDP = `http://127.0.0.1:${await freePort()}`;
       process.env.API_ANYTHING_PROXY = "http://127.0.0.1:9";
       await assert.rejects(
         windowLogin("members", `${fx.url}/members`, { waitForEnter: false }),
-        (e: Error) => e instanceof AttachError && /API_ANYTHING_PROXY are both set/.test(e.message),
+        (e: Error) => e instanceof AttachError && /nothing answers/.test(e.message),
       );
       assert.equal(asked(), before, "no guest probe reached the site");
     } finally {

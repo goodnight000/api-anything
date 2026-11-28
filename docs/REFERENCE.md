@@ -344,7 +344,7 @@ On a network that requires a proxy, or for `serve` behind an egress gateway, set
 
 ```sh
 export API_ANYTHING_PROXY=http://user:pass@proxy.internal:3128   # http:// or https://
-export API_ANYTHING_NO_PROXY=intranet.example.com,10.0.0.5        # optional; a name covers its subdomains
+export API_ANYTHING_NO_PROXY=intranet.example.com,*.corp.local,10.0.0.0/8  # optional; names, globs, IPs or CIDRs
 ```
 
 Every tier goes through it: tier 1, the browser tiers, learning and `login --window`. Registry
@@ -396,7 +396,6 @@ Attached mode refuses, with a reason and a `next`:
 
 - an endpoint that is not this machine's loopback address (`127.0.0.1`, `[::1]`, `localhost`), or
   where no browser answers;
-- `API_ANYTHING_PROXY` set as well: the attached browser's traffic would not go through the proxy;
 - what works on api-anything's own browser profile, which is not opened in this mode: putting
   imported cookies into it (`api-anything login <site>` still imports, into the stored session
   only), refreshing cookies from it on `auth`, and clearing it on `logout` (`logout` still

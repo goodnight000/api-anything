@@ -160,13 +160,17 @@ describe("API_ANYTHING_CDP refused before anything connects", () => {
     );
   });
 
-  test("the combination with API_ANYTHING_PROXY is refused", async () => {
-    process.env.API_ANYTHING_CDP = "http://127.0.0.1:9222";
+  test("API_ANYTHING_CDP works alongside API_ANYTHING_PROXY (reaches endpoint check instead of refusing)", async () => {
+    const devtools = await fakeDevTools();
+    process.env.API_ANYTHING_CDP = `http://${devtools.host}`;
     process.env.API_ANYTHING_PROXY = "http://127.0.0.1:9";
     try {
-      await assert.rejects(fetchOnce(), (e: Error) => e instanceof AttachError && /API_ANYTHING_PROXY/.test(e.message));
+      const { attachEndpoint } = await import("../src/attach.js");
+      const ws = await attachEndpoint(process.env);
+      assert.match(ws, /^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/fake$/);
     } finally {
       delete process.env.API_ANYTHING_PROXY;
+      await devtools.close();
     }
   });
 
