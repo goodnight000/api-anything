@@ -11,6 +11,7 @@ import { parseDuration, sitePace } from "./budget.js";
 import { verifySite } from "./checks.js";
 import { botWall, consentReason, emptyResults, htmlFinds, loginPath, signInForm } from "./classify.js";
 import { launchOf, printConfig } from "./clients.js";
+import { contextOf } from "./context.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { describeOperation } from "./describe.js";
 import { type CallOptions, type CallResult, call, heal, type Tier } from "./execute.js";
@@ -56,7 +57,7 @@ import { settle } from "./report.js";
 import { getResult, type ResultView, viewProblem } from "./results.js";
 import { onPlaintext, plaintextWarning, SealError } from "./seal.js";
 import { captureLive, redact } from "./secrets.js";
-import { loadSession, placeholders } from "./session.js";
+import { loadSession, loggedIn, placeholders } from "./session.js";
 import {
   AGENTS,
   type Agent,
@@ -154,7 +155,7 @@ const HELP: Record<string, string> = {
   Loads the page in the browser and lists the requests it made, noise filtered and ranked (requests carrying
   the --example values first). Saves everything as a capture id for: add --from <id> --pick-request <n>,
   and for: inspect <id> <n>. Captures hold cookie values; the newest 20 are kept, none past 24 h.
-  --steps      JSON array of {action: click|fill|press|wait|goto, selector?, value?, ms?}
+  --steps      JSON array of {action: click|fill|press|wait|goto, selector?, value?, state?, ms?}; a wait with selector or value returns as soon as it holds, ms bounds it
   --soft-from  load this page first, then navigate in-app to <url> (SPAs only fire their data XHRs that way)
   --write      abort every non-GET request, and every xhr/fetch sent during --steps, before it leaves the browser.
                Without it, a POST, PUT, PATCH or DELETE sent once the steps run is stopped too (a GraphQL query
@@ -181,7 +182,7 @@ const HELP: Record<string, string> = {
   Runs the trigger twice in the browser (with --example, then --example2 or --example again), picks the request
   carrying the example values, and saves the learned operation to ~/.api-anything/sites/<site>.json.
   --trigger       page URL with {param} placeholders, e.g. https://site.com/u/{name}
-  --steps <json>  UI steps after load, [{action: click|fill|press|wait|goto, selector?, value?, ms?}];
+  --steps <json>  UI steps after load, [{action: click|fill|press|wait|goto, selector?, value?, state?, ms?}];
                   {param} is filled in selector/value
   --soft-from     neutral page to load first, then navigate in-page to the trigger
   --match k=v     pin the request: method=, host=, path= (* = one segment), operationName= (or JSON).
@@ -474,7 +475,7 @@ const USAGE = `api-anything ${VERSION}: turn a website into operations an agent 
   api-anything call <site> <op> [k=v ...] [--allow-writes]
   api-anything batch [--input <file> | -] [--concurrency 1..4] [--limit 1..200]
   api-anything result <resultId> [--offset n] [--fields a,b] [--max-chars n]
-  api-anything inspect <captureId> [<requestId>]
+  api-anything context "<words | domain | url>" [--budget n] [--site s]
   api-anything search <words|domain> | pull <site> | publish <site> [--yes]
   api-anything interface mcp|openapi <url>
   api-anything check <site> <op> [k=v ...] --expect result|empty|input
@@ -600,6 +601,7 @@ const OPTIONS = {
   "max-tier": { type: "string" },
   dry: { type: "boolean" },
   limit: { type: "string" },
+  budget: { type: "string" },
   out: { type: "string" },
   force: { type: "boolean" },
   yes: { type: "boolean" },
@@ -1327,7 +1329,17 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
     if (!op) throw new Fail(`no operation "${name}" on ${site}`, `api-anything ops ${site}`);
     const unknown = unknownArgs(op, args);
     if (unknown) throw new Fail(unknown, `api-anything ops ${site}`);
-    const session = placeholders(loadSession(site));
+    const jar = loadSession(site);
+    const session = placeholders(jar);
+    const preflight =
+      !op.readOnly && op.learnedLoggedIn && !loggedIn(jar.cookies, s.loginCookies)
+        ? {
+            class: "auth",
+            write: "not_sent",
+            reason:
+              "this write is learnedLoggedIn but the jar holds no live login cookie; a real call re-imports once, then refuses before sending if still none",
+          }
+        : undefined;
     let request: ReturnType<typeof buildRequest>;
     try {
       request = within(() => buildRequest(op, args, session), DEADLINE.args);
@@ -1338,7 +1350,13 @@ async function cmdCall({ v, pos }: Parsed): Promise<number> {
         "nothing was sent; tell the user",
       );
     }
-    out({ ok: true, dry: true, request, ...(pulled ? { pulled: site } : {}) });
+    out({
+      ok: true,
+      dry: true,
+      request,
+      ...(preflight ? { preflight } : {}),
+      ...(pulled ? { pulled: site } : {}),
+    });
     return 0;
   }
   const maxTier = v["max-tier"] ? (Number(v["max-tier"]) as Tier) : undefined;
@@ -1666,7 +1684,7 @@ async function cmdHeal({ pos }: Parsed): Promise<number> {
   return r.ok ? 0 : 1;
 }
 
-function cmdExport({ v, pos }: Parsed): number {
+function _cmdExport({ v, pos }: Parsed): number {
   requireSite(pos[0]);
   const r = exportSite(pos[0]!, { keepExamples: v["keep-examples"], strict: v["strict-scan"] });
   if (r.secrets.length && !v.force) {
@@ -1682,6 +1700,41 @@ function cmdExport({ v, pos }: Parsed): number {
     writeFileSync(v.out, text);
     out({ ok: true, out: v.out, warnings: r.warnings.length });
   } else process.stdout.write(text);
+  return 0;
+}
+
+/** One call from a task to the operations that can answer it, as a ranked, budgeted map. */
+function cmdContext({ pos, v }: Parsed): number {
+  const query = pos.join(" ").trim();
+  if (!query) throw new Fail("missing <words | domain | url>", "api-anything context book ratings");
+  const budget = v.budget === undefined ? undefined : Number(v.budget);
+  if (budget !== undefined && (!Number.isInteger(budget) || budget < 200 || budget > 4000))
+    throw new Fail(
+      `--budget must be an integer from 200 to 4000, got "${v.budget}"`,
+      "api-anything context book ratings --budget 1600",
+    );
+  const c = contextOf(query, {
+    ...(budget !== undefined ? { budget } : {}),
+    ...(v.site ? { site: v.site } : {}),
+  });
+  const top = c.sites[0];
+  out({
+    ok: true,
+    query,
+    text: c.text,
+    ...(c.truncated ? { truncated: "budget" } : {}),
+    stats: {
+      nodes: c.stats.nodes,
+      edges: c.stats.edges,
+      loadMs: c.stats.loadMs,
+      queryMs: c.stats.queryMs,
+      cached: c.stats.cached,
+      chars: c.chars,
+    },
+    next: top
+      ? `check ${top.site} is the site the user means (${top.confidence}), then api-anything ops ${top.site} for its schemas; api-anything call <site> <op> runs one. The also list holds other sites that may fit better`
+      : "nothing on this machine matched: api-anything search asks the shared catalog, or api-anything learn learns the page",
+  });
   return 0;
 }
 
@@ -2108,7 +2161,7 @@ const COMMANDS: Record<string, { run: (p: Parsed) => number | Promise<number>; f
   status: { run: cmdStatus, flags: [] },
   stats: { run: cmdStats, flags: ["days", "card"] },
   revert: { run: cmdRevert, flags: [] },
-  export: { run: cmdExport, flags: ["out", "keep-examples", "force", "strict-scan"] },
+  context: { run: cmdContext, flags: ["budget", "site"] },
   search: { run: cmdSearch, flags: [] },
   interface: { run: cmdInterface, flags: [] },
   pull: { run: cmdPull, flags: [] },

@@ -116,7 +116,8 @@
         "steps": [
           {
             "action": "wait",
-            "ms": 3000
+            "selector": "input[placeholder=\"Filter by name\"]",
+            "ms": 5000
           },
           {
             "action": "fill",
@@ -288,7 +289,8 @@
         "steps": [
           {
             "action": "wait",
-            "ms": 3000
+            "selector": "input[placeholder=\"Filter by name\"]",
+            "ms": 5000
           },
           {
             "action": "fill",
@@ -470,7 +472,8 @@
         "steps": [
           {
             "action": "wait",
-            "ms": 3000
+            "selector": "input[placeholder=\"Filter by name\"]",
+            "ms": 5000
           },
           {
             "action": "fill",

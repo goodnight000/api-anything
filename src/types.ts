@@ -80,7 +80,10 @@ export interface SeenDialog {
 export interface TriggerStep {
   action: "click" | "fill" | "press" | "wait" | "goto";
   selector?: string;
+  /** "fill"/"press": what to type; "wait": text that must appear in the page */
   value?: string;
-  /** milliseconds for "wait" */
+  /** "wait" with a selector: what it must become (default "visible") */
+  state?: "attached" | "visible" | "hidden" | "detached";
+  /** "wait": the longest it waits (ms); a bare wait with no selector/value sleeps this long (default 1000) */
   ms?: number;
 }

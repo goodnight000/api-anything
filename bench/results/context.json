@@ -1,0 +1,141 @@
+{
+  "generatedAt": "2026-11-28T17:50:01.869Z",
+  "command": "node --import tsx bench/context.mjs",
+  "node": "v24.16.0",
+  "platform": "win32 x64",
+  "catalog": {
+    "sites": 115,
+    "operations": 388,
+    "catalogJsonChars": 914193,
+    "graph": {
+      "sites": 115,
+      "ops": 388,
+      "params": 486,
+      "fields": 952,
+      "domains": 117,
+      "topics": 239,
+      "nodes": 2297,
+      "edges": 4548,
+      "byConfidence": {
+        "declared": 1644,
+        "observed": 1042,
+        "lexical": 1862,
+        "inferred": 0
+      }
+    }
+  },
+  "retrieval": {
+    "queries": 10,
+    "site": {
+      "top1": 1,
+      "top3": 1,
+      "mrr": 1
+    },
+    "op": {
+      "top1": 1,
+      "top3": 1,
+      "mrr": 1
+    },
+    "misses": []
+  },
+  "payload": {
+    "queries": 24,
+    "contextChars": {
+      "p50": 808,
+      "p95": 1277,
+      "max": 1331,
+      "avg": 773.04
+    },
+    "findSitesShapedChars": {
+      "p50": 3552,
+      "p95": 5214,
+      "max": 5300,
+      "avg": 3476.96
+    },
+    "fullCatalogChars": 914193,
+    "examples": [
+      {
+        "query": "airbnb search airbnb",
+        "contextChars": 59,
+        "baselineChars": 468,
+        "sites": 0
+      },
+      {
+        "query": "amazon amazon com",
+        "contextChars": 131,
+        "baselineChars": 2953,
+        "sites": 1
+      },
+      {
+        "query": "arxiv public arxiv",
+        "contextChars": 966,
+        "baselineChars": 4512,
+        "sites": 4
+      },
+      {
+        "query": "bbcgoodfood signed recipe",
+        "contextChars": 1068,
+        "baselineChars": 3154,
+        "sites": 4
+      },
+      {
+        "query": "chownow public restaurant",
+        "contextChars": 612,
+        "baselineChars": 4345,
+        "sites": 3
+      }
+    ]
+  },
+  "discoveryCalls": {
+    "before": [
+      "find_sites",
+      "list_operations"
+    ],
+    "after": [
+      "find_context"
+    ],
+    "savedPerQuestion": 1
+  },
+  "latencyMs": {
+    "build": {
+      "runs": 12,
+      "p50": 34.53,
+      "p95": 50.41,
+      "avg": 37.01
+    },
+    "query": {
+      "runs": 60,
+      "p50": 10.7,
+      "p95": 15.05,
+      "avg": 11.44
+    },
+    "contextOf": {
+      "runs": 60,
+      "p50": 9.75,
+      "p95": 11.8,
+      "avg": 9.99
+    },
+    "cachedDiskLoad": {
+      "runs": 12,
+      "p50": 17.44,
+      "p95": 19.32,
+      "avg": 17.66
+    }
+  },
+  "syntheticStats": {
+    "sites": 8,
+    "ops": 8,
+    "params": 13,
+    "fields": 16,
+    "domains": 8,
+    "topics": 2,
+    "nodes": 55,
+    "edges": 49,
+    "byConfidence": {
+      "declared": 29,
+      "observed": 16,
+      "lexical": 4,
+      "inferred": 0
+    }
+  }
+}

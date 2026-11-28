@@ -85,6 +85,7 @@ export const TriggerStepSchema = z.object({
   action: z.enum(["click", "fill", "press", "wait", "goto"]),
   selector: z.string().optional(),
   value: z.string().optional(),
+  state: z.enum(["attached", "visible", "hidden", "detached"]).optional(),
   ms: z.number().optional(),
 });
 

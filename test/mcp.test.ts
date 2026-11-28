@@ -140,6 +140,7 @@ test("MCP gives every tool every hint: reads read-only and idempotent, writes on
       const { tools } = await s.client.listTools();
       const hints = Object.fromEntries(tools.map((t) => [t.name, t.annotations]));
       assert.deepEqual(hints.list_sites, LOCAL);
+      assert.deepEqual(hints.find_context, LOCAL);
       assert.deepEqual(hints.list_operations, LOCAL);
       assert.deepEqual(hints.get_job, LOCAL);
       // a read is advertised as a read whether or not writes are on, so a client need not ask for each
@@ -921,6 +922,79 @@ test("MCP call_operation of an op the site lacks points at list_operations for t
     const listed = await s.tool(r.nextCall.tool, r.nextCall.args);
     assert.equal(listed.isError, false);
     assert.equal(listed.site, "hacker-news");
+  } finally {
+    await s.done();
+  }
+});
+
+test("the catalog is also served as resources: every site, and one site's reads", async () => {
+  const s = await connect();
+  try {
+    saveMixed("https://api.example.test");
+    await s.start();
+    const { resources } = await s.client.listResources();
+    assert.deepEqual(
+      resources.map((r) => r.uri),
+      ["api-anything://sites"],
+    );
+    const { resourceTemplates } = await s.client.listResourceTemplates();
+    assert.deepEqual(
+      resourceTemplates.map((r) => r.uriTemplate),
+      ["api-anything://site/{name}"],
+    );
+    const read = async (uri: string) =>
+      JSON.parse(((await s.client.readResource({ uri })).contents[0] as { text: string }).text);
+    const all = await read("api-anything://sites");
+    assert.ok(
+      all.some((x: { name: string; operations: number }) => x.name === "mw" && x.operations === 1),
+      JSON.stringify(all),
+    );
+    const one = await read("api-anything://site/mw");
+    assert.deepEqual(
+      one.operations.map((o: { name: string }) => o.name),
+      ["find"],
+      "a write is not offered by default",
+    );
+    assert.equal(one.operations[0].inputSchema.type, "object");
+    const missing = await read("api-anything://site/nope");
+    assert.equal(missing.next, "list_sites");
+  } finally {
+    await s.done();
+  }
+});
+
+test("MCP find_context answers a task in one call, with a budget and a next step", async () => {
+  const s = await connect();
+  try {
+    saveSite(
+      parseSite({
+        name: "library",
+        baseUrl: "https://library.example",
+        description: "a public catalog of books and their ratings",
+        operations: [
+          {
+            name: "searchBooks",
+            description: "find books and their average ratings",
+            readOnly: true,
+            request: { method: "GET", url: "https://library.example/books?q=one" },
+            slots: [{ param: "q", at: ["query:q"] }],
+            params: [{ name: "q", required: true }],
+            response: { format: "json", shape: { avgRating: "number" } },
+            trigger: { url: "https://library.example/" },
+          },
+        ],
+      }),
+    );
+    await s.start();
+    const r = await s.tool("find_context", { query: "book ratings", site: "library", budget: 600 });
+    assert.equal(r.isError, false);
+    assert.equal(r.ok, true);
+    assert.match(r.text, /library/);
+    assert.match(r.text, /searchBooks/);
+    assert.ok(r.stats.chars <= 600, JSON.stringify(r.stats));
+    assert.match(r.next, /call_operation|list_operations/);
+    const none = await s.tool("find_context", { query: "zzzqqq nonexistent capability" });
+    assert.match(none.next, /find_sites/);
   } finally {
     await s.done();
   }

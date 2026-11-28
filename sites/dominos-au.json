@@ -169,7 +169,8 @@
         "steps": [
           {
             "action": "wait",
-            "ms": 3000
+            "selector": "input[name=streetNo]",
+            "ms": 5000
           },
           {
             "action": "fill",
