@@ -55,7 +55,7 @@ describe("proxy config", () => {
   });
 
   test("API_ANYTHING_NO_PROXY matches IPv4/IPv6 CIDR blocks and wildcard host patterns cleanly", () => {
-    const c = cfg("http://p:1", "10.0.0.0/8, 192.168.1.0/24, fc00::/7, *corp.com, a.*.com, 172.16.*:8443");
+    const c = cfg("http://p:1", "10.0.0.0/8, 192.168.1.0/24, fc00::/7, *corp.com, a.*.com, .acme.*, 172.16.*:8443");
     for (const [url, through] of [
       ["http://10.2.3.4/x", false],
       ["http://11.2.3.4/x", true],
@@ -66,13 +66,17 @@ describe("proxy config", () => {
       ["https://mycorp.com/", false],
       ["https://a.sub.com/", false],
       ["https://b.sub.com/", true],
+      ["https://app.acme.com/", false],
+      ["https://a.b.acme.net/", false],
+      ["https://acme.net/", true],
+      ["https://notacme.com/", true],
       ["https://172.16.0.5:8443/", false],
       ["https://172.16.0.5/", true],
     ] as const)
       assert.equal(proxied(url, c), through, url);
     assert.equal(
-      bypassList(cfg("http://p:1", "10.0.0.0/8,[fc00::]/7,*corp.com,a.*.com,10.*").noProxy),
-      "10.0.0.0/8,fc00::/7,*corp.com,a.*.com,10.*",
+      bypassList(cfg("http://p:1", "10.0.0.0/8,[fc00::]/7,*corp.com,a.*.com,.acme.*,10.*").noProxy),
+      "10.0.0.0/8,fc00::/7,*corp.com,a.*.com,.acme.*,10.*",
     );
   });
 

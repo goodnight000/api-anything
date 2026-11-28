@@ -117,7 +117,8 @@ export function proxied(url: string, cfg: ProxyConfig | undefined = proxyConfig(
     if (isWildcardPattern(raw)) {
       const { host: pat, port: patPort } = splitHostPort(raw);
       if (patPort && patPort !== port) return false;
-      const re = new RegExp(`^${pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`, "i");
+      const normalized = pat.startsWith(".") ? `*${pat}` : pat;
+      const re = new RegExp(`^${normalized.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`, "i");
       return re.test(host) || re.test(bareHost);
     }
     const e = entryOf(raw);
