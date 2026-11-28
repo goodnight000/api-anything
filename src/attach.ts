@@ -8,7 +8,6 @@ import { lstatSync, mkdirSync } from "node:fs";
 import { isIP } from "node:net";
 import { userInfo } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { proxyConfig } from "./proxy.js";
 
 /** The attached browser could not be used; nothing was sent through it. `next` says what to do. */
 export class AttachError extends Error {
@@ -131,11 +130,6 @@ export const ATTACH_MS = 5000;
 export async function attachEndpoint(env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const raw = attachSetting(env);
   if (!raw) throw new AttachError("API_ANYTHING_CDP is not set", START);
-  if (proxyConfig(env))
-    throw new AttachError(
-      "API_ANYTHING_CDP and API_ANYTHING_PROXY are both set: an attached browser's traffic does not go through the proxy, and the proxy's cleartext protection cannot be held in it",
-      "unset one of API_ANYTHING_CDP and API_ANYTHING_PROXY",
-    );
   let url: URL | undefined;
   try {
     url = new URL(raw);

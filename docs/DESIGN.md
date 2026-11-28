@@ -1426,9 +1426,7 @@ attach to. A DevTools endpoint is full control of a browser.
   `API_ANYTHING_CDP` and open the window in api-anything's own browser, whose profile keeps what they
   do and which a pulled spec's tiers 2 and 3 run in, then retry with the variable unset; its
   `nextCall` is `report`, a step for the user, not the attached window.
-- Refused while attached: `API_ANYTHING_PROXY` set as well (the attached browser's traffic does not
-  go through the proxy, and the cleartext guard cannot be installed on it); and everything that
-  works on api-anything's own profile, which is never opened while attached: putting imported
+- Refused while attached: everything that works on api-anything's own profile, which is never opened while attached: putting imported
   cookies into the profile (the import still fills the jar), the cookie refresh from the profile on
   `auth`, and logout's clearing of the profile (logout
   still removes the jar and the captures, and says the profile kept the site's cookies when an
@@ -1473,14 +1471,16 @@ not a way past a bot wall: a wall seen through a proxy still answers `blocked`, 
   and 3, learning, heals' recaptures and `login --window` leave from the same address. The 32 MiB
   body cap applies on the proxied path as on the direct one.
 - `API_ANYTHING_NO_PROXY`: comma- or space-separated. `a.com`, `.a.com` and `*.a.com` each cover
-  `a.com` and its subdomains; `host:port` only that port; an IP address only itself; `*` every host.
-  Chrome's bypass list reads `a.com` as that host alone, so each entry is given to it as the host and
-  `*.` its subdomains. Loopback (`localhost`, `127.0.0.0/8`, `[::1]`) bypasses the proxy at every tier,
+  `a.com` and its subdomains; `host:port` only that port; an IP address, CIDR range (`10.0.0.0/8`,
+  `fc00::/7`), or wildcard host pattern (`*corp.com`, `a.*.com`) bypasses the proxy at every tier;
+  `*` every host. Chrome's bypass list reads `a.com` as that host alone, so plain domain entries
+  are given to it as the host and `*.` its subdomains, while CIDRs and wildcards pass through as
+  written. Loopback (`localhost`, `127.0.0.0/8`, `[::1]`) bypasses the proxy at every tier,
   Chrome's own default; the entry `<-loopback>`, Chrome's token for it, sends loopback through too.
   (Playwright sends loopback through unless the list names a loopback host, so Chrome's list always
-  names `localhost,127.0.0.1,[::1]` without `<-loopback>`.) An entry tier 1 cannot match the way
-  Chrome would (a CIDR range, a `*` inside a name) is refused when the variable is read, so the two
-  never route a host differently.
+  names `localhost,127.0.0.1,[::1]` without `<-loopback>`.) Malformed CIDR entries are rejected when
+  the variable is read; `API_ANYTHING_CDP` may be set alongside `API_ANYTHING_PROXY` (tier 1 uses
+  the proxy while the attached browser uses its own network).
 - The private-address guard still runs before every request and redirect hop of a public-only op,
   but with a proxy set it only covers what this machine's DNS returns: `badAddress` already refuses
   IP literals and single-label names, and a public name the proxy's resolver maps to an address on

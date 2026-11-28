@@ -42,16 +42,42 @@ describe("proxy config", () => {
     assert.equal(proxied("https://a.com/", undefined), false);
   });
 
-  test("NO_PROXY entries tier 1 cannot match as Chrome would, and undecodable credentials, are refused", () => {
-    for (const e of ["10.0.0.0/8", "*corp.com", "a.*.com"])
-      assert.throws(() => cfg("http://p:1", e), new RegExp(`entry ${e.replace(/[.*]/g, "\\$&")} is not supported`));
-    assert.doesNotThrow(() => cfg("http://p:1", "*.corp.com,*,<-loopback>"));
+  test("API_ANYTHING_NO_PROXY supports CIDR ranges and wildcards, while malformed CIDR and undecodable credentials are refused", () => {
+    for (const bad of ["10.0.0.0/99", "notanip/8", "10.0.0.0/8/1", "http://example.com"])
+      assert.throws(() => cfg("http://p:1", bad), /is not supported/);
+    assert.doesNotThrow(() => cfg("http://p:1", "10.0.0.0/8,fc00::/7,*corp.com,a.*.com,*.corp.com,*,<-loopback>"));
     assert.throws(
       () => proxyConfig({ API_ANYTHING_PROXY: "http://u:p%zz@h.example:1" }),
       (e: Error) => /not validly percent-encoded/.test(e.message) && !e.message.includes("p%zz"),
     );
     // a name that starts with 127 is no loopback address
     assert.equal(proxied("http://127.example.com/", cfg("http://p:1")), true);
+  });
+
+  test("API_ANYTHING_NO_PROXY matches IPv4/IPv6 CIDR blocks and wildcard host patterns cleanly", () => {
+    const c = cfg("http://p:1", "10.0.0.0/8, 192.168.1.0/24, fc00::/7, *corp.com, a.*.com, .acme.*, 172.16.*:8443");
+    for (const [url, through] of [
+      ["http://10.2.3.4/x", false],
+      ["http://11.2.3.4/x", true],
+      ["http://192.168.1.50/", false],
+      ["http://192.168.2.50/", true],
+      ["http://[fc12::1]/", false],
+      ["http://[2001:db8::1]/", true],
+      ["https://mycorp.com/", false],
+      ["https://a.sub.com/", false],
+      ["https://b.sub.com/", true],
+      ["https://app.acme.com/", false],
+      ["https://a.b.acme.net/", false],
+      ["https://acme.net/", true],
+      ["https://notacme.com/", true],
+      ["https://172.16.0.5:8443/", false],
+      ["https://172.16.0.5/", true],
+    ] as const)
+      assert.equal(proxied(url, c), through, url);
+    assert.equal(
+      bypassList(cfg("http://p:1", "10.0.0.0/8,[fc00::]/7,*corp.com,a.*.com,.acme.*,10.*").noProxy),
+      "10.0.0.0/8,fc00::/7,*corp.com,a.*.com,.acme.*,10.*",
+    );
   });
 
   test("an unusable value is refused without quoting its credentials", () => {
