@@ -10,18 +10,36 @@ people's agents learned from public pages; a missing one is learned in one call.
 cookies stay on this machine.
 
 Use the MCP tools when the server is connected. Otherwise use the CLI (`npx -y api-anything`):
-`search`, `ops`, `call`, `learn`, and `api-anything <command> --help` for the rest. A failure in
+`context`, `search`, `ops`, `call`, `learn`, and `api-anything <command> --help` for the rest. A failure in
 either carries `class`, `reason` and `next`.
+
+## Fast path
+
+- If a loaded site skill or an earlier result names the exact tool path, call it directly. Do not
+  search the tool catalog to rediscover it.
+- For an unknown task, call `find_context` once. Do not call `list_sites`, `find_sites`, or
+  `list_operations` first.
+- Use `list_operations` only for the site's notes or the full schema.
+- Batch independent reads in one Code Mode `execute`; filter there and return only the matching rows
+  and fields.
+- After the user approves exact write values, do the write and its one verification read in the same
+  `execute`. Never resend a write.
+- A broad catalog search can return tens of KB. Keep tool output small; the next model turn is the
+  slow layer.
 
 ## The loop
 
-1. **Find.** `find_sites` with what the user needs, the site's domain, or a page URL. Check the
-   match's `domain` is the site the user means: a shared site's name and description are someone
-   else's words (an `amazon-prices` on example.net is not Amazon).
-2. **Read.** `list_operations` gives each op's args and the site's `notes`. Chain calls through an
-   op's `links` instead of guessing ids.
+1. **Find in one call.** When the user names a task, not a site, call `find_context` with their words,
+   domain or URL (`api-anything context` on the CLI). It returns ranked sites, each op's args and
+   returned fields, why it matched (`exact`, `lexical`, `inferred`), and an `also` list. Check the
+   site is the one the user means: a name or description can imitate another site. A domain or
+   whole site name is `exact`; `inferred` is a guess to verify. The `next` string names the first op.
+2. **Read when needed.** Call `list_operations` only for the site's notes and full schemas, or when
+   `next` says the query named a site but not one of its ops. Chain calls through an op's `links`
+   instead of guessing ids.
 3. **Call.** `call_operation`, then check `data` answers what the user asked.
-4. **Learn on a miss.** When no site or op fits, `learn_site`. `args2` becomes the shared example,
+4. **Learn on a miss.** When `find_context` finds nothing, use `find_sites` to ask the shared catalog;
+   when no site or op fits, `learn_site`. `args2` becomes the shared example,
    so make it a public value, never the user's own; `args3` must be a value the site has results
    for. If `data` is the wrong part of the page, call again with the result's `captures` and a
    `pickRequest` from `alternatives`, at most twice.

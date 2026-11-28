@@ -60,6 +60,8 @@ let losses = 0;
 const IDLE_CLOSE_MS = 3_000;
 const LOCK_WAIT_MS = 15_000;
 const LOCKED = /ProcessSingleton|profile (directory )?is already in use|SingletonLock/i;
+// Windows Chrome closes its singleton process instead of naming the lock; Playwright sees a closed target.
+const WINDOWS_LOCKED = /Target page, context or browser has been closed/i;
 
 /** Another process holds api-anything's browser profile. */
 export class ProfileInUse extends Error {
@@ -109,7 +111,8 @@ async function launch(
     try {
       return await chromium.launchPersistentContext(profileDir, options);
     } catch (e) {
-      if (!LOCKED.test((e as Error).message)) throw e;
+      const message = (e as Error).message;
+      if (!(LOCKED.test(message) || (process.platform === "win32" && WINDOWS_LOCKED.test(message)))) throw e;
       if (Date.now() > until) throw new ProfileInUse(profileDir);
       await sleep(500);
     }
@@ -1114,10 +1117,22 @@ async function runStep(page: Page, s: TriggerStep): Promise<void> {
     }
     case "press":
       return s.selector ? page.press(s.selector, need(s.value, "a key")) : page.keyboard.press(need(s.value, "a key"));
-    case "wait":
-      if (s.selector) await page.waitForSelector(s.selector);
-      else await page.waitForTimeout(s.ms ?? 1000);
+    case "wait": {
+      // A condition, not a sleep: return as soon as the page shows what the step asked for.
+      if (s.selector) {
+        await page.waitForSelector(s.selector, {
+          state: s.state ?? "visible",
+          ...(s.ms !== undefined ? { timeout: s.ms } : {}),
+        });
+      } else if (s.value) {
+        const text = s.value;
+        await page.waitForFunction((t: string) => (document.body?.innerText ?? "").includes(t), text, {
+          timeout: s.ms ?? 15_000,
+          polling: 100,
+        });
+      } else await page.waitForTimeout(s.ms ?? 1000);
       return;
+    }
     case "goto":
       return goto(page, need(s.value ?? s.selector, "a url in value"));
   }

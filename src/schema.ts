@@ -299,6 +299,22 @@ export function findSitesSchema(): JsonSchema {
   });
 }
 
+/** find_context: a ranked, budgeted slice of the catalog, as text, plus the call it points at. */
+export function findContextSchema(): JsonSchema {
+  return object({
+    ok: bool,
+    query: str,
+    text: str,
+    sites: objects,
+    also: objects,
+    truncated: str,
+    stats: anyObject,
+    next: str,
+    nextCall: NEXT_CALL_SCHEMA,
+    error: str,
+  });
+}
+
 /** site_status: this machine's record of each site's ops. */
 export function siteStatusSchema(): JsonSchema {
   return object(

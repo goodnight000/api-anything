@@ -2546,6 +2546,9 @@ or whose literal (outside `{param}`s) is random-looking; add's save and `export`
   duplicate guard records the write, so a call that sends nothing leaves nothing for a repeat to be
   held back by. Nothing sent means the send-once rule is untouched. This check ignores `guestCookies` (see above), so a guest's write still
   reaches the server, whose 401 or 403 is retried as any write's is.
+  `vetShared` warns when a write is `learnedLoggedIn` but its site pins no `loginCookies`, and `call --dry`
+  reports the same shape as `preflight: {class: "auth", write: "not_sent"}` before any send, so an agent
+  can fix or clear the flag in one step instead of spending a write attempt to learn the rule.
 - **`logout <site|url>`** takes what `login` takes: a site or session file of that very name first
   (the names `status` and a seal error list), else the site `login` would name for that domain or URL;
   a name that is neither is an error, never a success. It deletes the session file (it reads no sealed
@@ -2750,6 +2753,9 @@ independent alternative.
     1 fail, 2 inconclusive only; see Verify unattended)
   - `readback <site> <write> <read> [k=v ...] [--find field=value]` (how a write's call proves it
     landed; see Writes)
+  - `context "<words | domain | url>" [--budget n] [--site s]` turns a task into a ranked, budgeted
+    map of this machine's sites and ops, from the same graph `find_context` uses. It is the one-call
+    CLI entry before `ops` and `call`; on a miss, `search` still asks the shared catalog.
   - `sites`, `ops <site>` (params with their description and format, `returns` where the recipe names them: the keys a result item
     can carry, read from the op's `pick`, else from an HTML recipe's fields when no `extract` reshapes its
     items, so it cannot disagree with the recipe; a key the site leaves out is absent, and the site's notes: `<site>.md` beside its
@@ -2800,7 +2806,7 @@ independent alternative.
     the same step for a
     program. `test/execute.test.ts` checks the fields over every class, a read and a write, and
     what was sent.
-- **MCP server** (`api-anything mcp`) with fixed meta-tools: `list_sites`, `find_sites`, `list_operations`,
+- **MCP server** (`api-anything mcp`) with fixed meta-tools: `find_context`, `list_sites`, `find_sites`, `list_operations`,
   `call_operation`, `call_batch`, `get_result` (local result views, above), `get_job`, `site_status`
   (`status`, see the call log), `login` (so an agent can fix an `auth` failure itself) and `learn_site`
   (`mcp-learn.ts`), plus `call_write_operation` on a server started with `--allow-writes`, so the tool list costs the same at 2 sites or 200. `find_sites` is `search` (see
@@ -2864,6 +2870,19 @@ independent alternative.
   `api-anything login <site>` in a terminal (their browser's cookies, no password) or `--window`, and
   `nextCall` names no tool, rather than a step that would only fail. A `blocked` result's window mode
   needs no import and keeps the tool. MCP cannot create operations: capture and add are CLI only.
+  - **Context graph** (`context.ts`, `graph.ts`, `docs/CONTEXT.md`): `find_context` answers a task in
+    one local call. A deterministic graph over every installed spec holds sites, domains, ops, params,
+    returned fields and a few shared topic words, with typed edges labelled `declared`, `observed`,
+    `lexical` or `inferred` by where they came from (not by how trustworthy a site is). A question
+    seeds nodes by exact domain, name and op-signature words; two hops of weighted traversal, a query
+    coverage bonus and a penalty for action words rank sites and ops. The answer is a budgeted text
+    map (`200..4000` characters over MCP and CLI) with each match's `exact`/`lexical`/`inferred`
+    confidence and why, cross-site `also` neighbours, and a `next` that names the first op's args or
+    asks for `list_operations` when the query named a site but not one of its ops. It reads no network
+    and knows no site by name; ranking comes from the installed specs. The graph is cached at
+    `~/.api-anything/graph.json`, keyed to the spec files' paths, sizes and times, with a corrupt or
+    stale cache rebuilt rather than trusted. `context` is the same answer on the CLI. A miss still
+    goes to `find_sites` and then `learn_site` as before.
   - **Reads and writes are separate tools**, because MCP hints are per tool and clients act on them:
     Codex and VS Code skip the approval prompt for a `readOnlyHint` tool and ask for a
     `destructiveHint` one, and Claude Code and Codex run read-only tools in parallel. One

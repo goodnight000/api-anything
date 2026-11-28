@@ -398,7 +398,8 @@
           },
           {
             "action": "wait",
-            "ms": 1500
+            "selector": "button:has-text(\"Review Type\")",
+            "ms": 5000
           },
           {
             "action": "click",

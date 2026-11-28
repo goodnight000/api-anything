@@ -1021,6 +1021,12 @@ export function vetShared(site: Site, notes?: string): Vetted {
       else if (siteOf(c.host.toLowerCase()) !== opSite) errors.push(at(`${where} is off the op's own site ${opSite}`));
     }
     if (op.learnedLoggedIn) warnings.push(at("learned while signed in: calls use the caller's own login"));
+    if (!op.readOnly && op.learnedLoggedIn && !site.loginCookies?.length)
+      warnings.push(
+        at(
+          "learned while signed in but the site names no loginCookies: a call re-imports once, then refuses this write before sending if no live login cookie is found",
+        ),
+      );
     const pub = new Set((op.public ?? []).map((h) => h.toLowerCase()));
     for (const leaf of literalCredentials(op.request, pub))
       errors.push(at(`request ${leaf.at.join(" > ")} holds a literal credential`));

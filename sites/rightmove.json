@@ -39,7 +39,8 @@
         "steps": [
           {
             "action": "wait",
-            "ms": 5000
+            "selector": "[data-monitor-testid=for-sale-search-input]",
+            "ms": 8000
           },
           {
             "action": "fill",

@@ -7,9 +7,9 @@
  * parens, big integers, the site's own percent-encoding) stays identical.
  *
  * Root steps: path:<i> (i-th segment after the leading slash), query:<key>, header:<name>,
- * form:<key> (urlencoded body), body. A repeated key's later occurrences are query[<n>]:<key> and
- * form[<n>]:<key> (n counts from 0). Below them json:<RFC 6901 pointer>, and b64 (the current
- * string is base64 of JSON, as some apps pack their state into one query param).
+ * form:<key> (urlencoded or multipart body field), body. A repeated key's later occurrences are
+ * query[<n>]:<key> and form[<n>]:<key> (n counts from 0). Below them json:<RFC 6901 pointer>, and b64
+ * (the current string is base64 of JSON, as some apps pack their state into one query param).
  */
 import type { Request } from "./spec.js";
 
@@ -302,6 +302,52 @@ function setPair(raw: string, key: string, value: string, n = 0): string {
   return parts.join("&");
 }
 
+interface MultipartPart {
+  name: string;
+  value: string;
+  start: number;
+  end: number;
+}
+
+function multipartBoundary(req: Request): string | undefined {
+  const ct = Object.entries(req.headers).find(([k]) => k.toLowerCase() === "content-type")?.[1] ?? "";
+  const m = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(ct);
+  return (m?.[1] ?? m?.[2])?.trim() || undefined;
+}
+
+/** Multipart fields with the byte offsets of their values, so a rewrite keeps every other byte. */
+function multipartParts(req: Request): MultipartPart[] | undefined {
+  const boundary = multipartBoundary(req);
+  const body = req.body;
+  if (!boundary || body === undefined) return undefined;
+  const delim = `--${boundary}`;
+  const chunks = body.split(delim);
+  if (chunks.length < 2) return undefined;
+  const parts: MultipartPart[] = [];
+  let offset = 0;
+  for (let i = 1; i < chunks.length; i++) {
+    const chunk = chunks[i]!;
+    const start = offset + delim.length;
+    offset = start + chunk.length;
+    if (chunk.startsWith("--")) break;
+    let from = 0;
+    let to = chunk.length;
+    if (chunk.startsWith("\r\n")) from = 2;
+    else if (chunk.startsWith("\n")) from = 1;
+    else return undefined;
+    if (chunk.endsWith("\r\n")) to -= 2;
+    else if (chunk.endsWith("\n")) to -= 1;
+    else return undefined;
+    const headEnd = chunk.indexOf("\r\n\r\n", from);
+    if (headEnd < 0) return undefined;
+    const head = chunk.slice(from, headEnd);
+    const name = /content-disposition:[^\r\n]*;\s*name="([^"]*)"/i.exec(head)?.[1];
+    if (!name) return undefined;
+    parts.push({ name, value: chunk.slice(headEnd + 4, to), start: start + headEnd + 4, end: start + to });
+  }
+  return parts;
+}
+
 export function isFormBody(req: Request): boolean {
   const ct = Object.entries(req.headers).find(([k]) => k.toLowerCase() === "content-type")?.[1] ?? "";
   return /application\/x-www-form-urlencoded/i.test(ct);
@@ -352,6 +398,20 @@ function rootLayer(req: Request, step: Step): { value: string | undefined; put: 
       };
     }
     case "form": {
+      const parts = multipartParts(req);
+      if (parts) {
+        const part = parts.filter((p) => p.name === arg)[n];
+        return {
+          value: part?.value,
+          put: (v) => {
+            if (!part) throw new Error(`no multipart form field ${JSON.stringify(arg)} in the body`);
+            const text = asText(v);
+            if (text.includes(`--${multipartBoundary(req)!}`) || /[\r\n]/.test(text))
+              throw new Error(`multipart form field ${JSON.stringify(arg)} cannot hold a line break or the boundary`);
+            return { ...req, body: req.body!.slice(0, part.start) + text + req.body!.slice(part.end) };
+          },
+        };
+      }
       const pairs = parsePairs(req.body ?? "");
       const p = pairs[nthPair(pairs, arg, n)];
       return {
@@ -541,8 +601,16 @@ export function walk(req: Request): Leaf[] {
   pairs("query", u.query ?? "");
   for (const [name, value] of Object.entries(req.headers)) add([`header:${name.toLowerCase()}`], value);
   if (req.body !== undefined && req.body !== "") {
-    // Some clients (Algolia's) send a JSON body labeled form-urlencoded to skip the CORS preflight.
-    if (isFormBody(req) && !/^\s*[[{]/.test(req.body)) {
+    const parts = multipartParts(req);
+    if (parts) {
+      const seen = new Map<string, number>();
+      for (const part of parts) {
+        const n = seen.get(part.name) ?? 0;
+        seen.set(part.name, n + 1);
+        add([n ? `form[${n}]:${part.name}` : `form:${part.name}`], part.value);
+      }
+    } else if (isFormBody(req) && !/^\s*[[{]/.test(req.body)) {
+      // Some clients (Algolia's) send a JSON body labeled form-urlencoded to skip the CORS preflight.
       pairs("form", req.body);
     } else {
       add(["body"], req.body);

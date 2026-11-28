@@ -10,7 +10,7 @@ import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import * as zlib from "node:zlib";
 import { addCookiesToProfile, browserAvailable, closeBrowser, openBrowser } from "../../src/browser.js";
 import { classify, judge, type Observed } from "../../src/classify.js";
@@ -743,6 +743,27 @@ describe("allowWrites at every entry point", () => {
     // verify runs reads only
     const v = await cli("verify", "wr");
     assert.equal(fx.hits.filter((h) => h.method === "POST").length, 0, v.out);
+  });
+
+  test("CLI --dry warns before a signed-in write would be refused for no login cookie", async () => {
+    site("dryauth", {
+      ...rd("me", "/plain"),
+      readOnly: false,
+      learnedLoggedIn: true,
+    });
+    saveSession("dryauth", {
+      cookies: [cookie("guest", "GUEST-SECRET", "127.0.0.1")],
+      values: {},
+    });
+    const d = await cli("call", "dryauth", "me", "--dry");
+    assert.equal(d.code, 0, d.err);
+    assert.doesNotMatch(d.out, /GUEST-SECRET/);
+    const got = JSON.parse(d.out);
+    assert.equal(got.dry, true);
+    assert.equal(got.preflight.class, "auth");
+    assert.equal(got.preflight.write, "not_sent");
+    assert.match(got.preflight.reason, /no live login cookie/);
+    assert.equal(fx.hits.length, 0);
   });
 
   test("CLI: an invalid --max-tier is rejected", async () => {
@@ -1581,7 +1602,7 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
     await closeBrowser();
     site("two", rd("l", "/plain", { minTier: 2 }));
     const holder = `
-      import { call } from ${JSON.stringify(join(ROOT, "src/execute.ts"))};
+      import { call } from ${JSON.stringify(pathToFileURL(join(ROOT, "src/execute.ts")).href)};
       const r = await call("two", "l", {}, { minIntervalMs: 0 });
       console.log("HOLDER " + r.ok);
       await new Promise((r) => setTimeout(r, 8000)); // an MCP server stays up with Chrome open
@@ -1612,7 +1633,7 @@ describe("browser tiers", { skip: !browserAvailable() && "no Chromium browser in
 
 test("two processes merging browser cookies into one jar lose nothing", async () => {
   const script = (tag: string) => `
-    import { mergeCapture } from ${JSON.stringify(join(ROOT, "src/session.ts"))};
+    import { mergeCapture } from ${JSON.stringify(pathToFileURL(join(ROOT, "src/session.ts")).href)};
     for (let i = 0; i < 150; i++) mergeCapture("race", [{ name: "${tag}" + i, value: "v", domain: "race.test", path: "/", expires: -1, httpOnly: false, secure: false }]);
   `;
   const run = (tag: string) =>
@@ -1756,7 +1777,7 @@ describe("a read refused for the browser's identity headers", () => {
 
 test("two processes writing state.json (tier memory, stale marks) lose nothing", async () => {
   const script = (tag: string) => `
-    import { rememberTier } from ${JSON.stringify(join(ROOT, "src/store.ts"))};
+    import { rememberTier } from ${JSON.stringify(pathToFileURL(join(ROOT, "src/store.ts")).href)};
     for (let i = 0; i < 150; i++) rememberTier("race", "${tag}" + i, 2);
   `;
   const run = (tag: string) =>

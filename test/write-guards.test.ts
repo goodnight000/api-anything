@@ -381,7 +381,7 @@ describe("a trigger run that ran out of time in its steps", () => {
         assert.ok(waits * 3 <= TRIGGER_BUDGET_MS, `${site.name} ${op.name} waits ${waits} ms in its steps`);
       }
     }
-    assert.ok(longest >= 5000, "the bundled specs do have step waits");
+    assert.ok(longest >= 2000, "the bundled specs still keep a settle wait where a click's result has no selector");
   });
 });
 

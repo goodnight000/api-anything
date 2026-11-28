@@ -10,13 +10,14 @@
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, type RegisteredTool, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { AttachError, attached } from "./attach.js";
 import { idleWork } from "./background.js";
 import { BATCH_CONCURRENCY, BatchItemSchema, callReads } from "./batch.js";
 import { closeBrowser, ProfileInUse } from "./browser.js";
+import { contextOf } from "./context.js";
 import { DEADLINE, DeadlineExceeded, within } from "./deadline.js";
 import { describeOperation, inputSchema } from "./describe.js";
 import { type CallOptions, call, type NextCall } from "./execute.js";
@@ -46,6 +47,7 @@ import { getResult, MAX_RESULT_CHARS, MIN_RESULT_CHARS, type ResultView } from "
 import {
   CALL_RESULT_SCHEMA,
   callBatchSchema,
+  findContextSchema,
   findSitesSchema,
   getResultSchema,
   type JsonSchema,
@@ -536,9 +538,12 @@ export function createToolset({
     {
       instructions:
         `Calls these websites' own data requests directly, usually over plain HTTP: ${listSites().join(", ")}. ` +
-        "When the user wants data from one of them, prefer list_operations then call_operation over web search or a browser. " +
-        "For any other website, find_sites first: someone may have shared it, and list_operations then fetches it. " +
+        "When the user names a task rather than a site, find_context is the one call: it returns the ranked sites and ops with their args, in budget. " +
+        "When the user names one of them, prefer list_operations then call_operation over web search or a browser. " +
         "When nothing fits, learn_site learns it in one call: the page URL with {param} placeholders, the user's values, and two other public values you choose. " +
+        "For several reads, one call_batch answers them in order (up to 20); the catalog is also served as resources: api-anything://sites and api-anything://site/{name}. " +
+        "A list of two or more records comes back as data {columns, rows}: match by column name and read each row by position. " +
+        "For several independent reads of one site, send several call_operation calls in parallel from Code Mode; call_batch runs same-site calls one at a time. " +
         "Check a match's domain is the site the user means, and that data answers what they asked. " +
         "On a failure, follow next at most once, then stop and report class, reason and next. " +
         "Send a write only when the user asked for that exact action, and never ask for a password. " +
@@ -687,6 +692,58 @@ export function createToolset({
                 : top
                   ? { tool: "list_operations", args: { site: top.site } }
                   : { tool: "list_sites", args: {} },
+        });
+      }),
+  );
+
+  server.registerTool(
+    "find_context",
+    {
+      description:
+        'One call from a question to the operations that answer it: this machine\'s catalog as a ranked, budgeted map (site, op, args, returned fields). Use it first when the user names a task rather than a site ("book ratings", "cheapest flight to rome"), instead of list_sites, then find_sites, then list_operations. Each site says why it matched: exact (its domain or its name), lexical (words in its own text), or inferred (reached only through the graph: a guess to check). Then call_operation the first op with its args. It reads this machine only: find_sites asks the shared catalog when nothing fits.',
+      inputSchema: {
+        query: z.string().describe("the user's question or task: words, a domain or a URL"),
+        site: z.string().optional().describe("rank only this site, when the user already named it"),
+        budget: z.number().int().min(200).max(4000).optional().describe("characters of text to return (default 1600)"),
+      },
+      outputSchema: outputSchema(findContextSchema()),
+      annotations: LOCAL_HINTS,
+    },
+    ({ query, site, budget }) =>
+      guard(async () => {
+        const c = contextOf(query, { ...(site ? { site } : {}), ...(budget ? { budget } : {}) });
+        const top = c.sites[0];
+        const op = top?.ops[0];
+        const needs = op ? op.args.filter((a) => a.required).map((a) => a.name) : [];
+        // Every op tied on score means the query named the site, not one of its ops: the site's list is
+        // the next read, not a guess at the first op.
+        const tied = !!top && top.ops.length > 1 && top.ops.every((x) => x.score === top.ops[0]?.score);
+        return reply({
+          ok: true,
+          query,
+          text: c.text,
+          ...(c.truncated ? { truncated: "budget" } : {}),
+          stats: {
+            nodes: c.stats.nodes,
+            edges: c.stats.edges,
+            loadMs: c.stats.loadMs,
+            queryMs: c.stats.queryMs,
+            cached: c.stats.cached,
+            chars: c.chars,
+          },
+          next:
+            top && op
+              ? tied
+                ? `the query names ${top.site}, not one of its ops: call list_operations {"site":"${top.site}"} to choose.`
+                : `check ${top.site} is the site the user means (${top.confidence}), then call_operation {"site":"${top.site}","op":"${op.op}","args":{${needs.map((n) => `"${n}":"<value>"`).join(",")}}}${c.also.length ? "; the also list is other sites that may fit better" : ""}`
+              : "nothing in this machine's catalog matched: call find_sites with the same query to ask the shared catalog, or learn_site the page.",
+          ...(top && op && !needs.length
+            ? {
+                nextCall: tied
+                  ? { tool: "list_operations", args: { site: top.site } }
+                  : { tool: "call_operation", args: { site: top.site, op: op.op, args: {} } },
+              }
+            : {}),
         });
       }),
   );
@@ -928,7 +985,8 @@ export function createToolset({
   );
 
   const WRITE_DESCRIPTION =
-    "A write changes the user's account: only call it when the user asked for that exact action. A write's `write` says what it did: not_sent, not_applied, accepted, applied (its readback found it) or may_have_applied; never send one again that is accepted, applied or may_have_applied without checking the site.";
+    "A write changes the user's account: only call it when the user asked for that exact action. A write's `write` says what it did: not_sent, not_applied, accepted, applied (its readback found it) or may_have_applied; never send one again that is accepted, applied or may_have_applied without checking the site. " +
+    "A 2xx whose data holds the created record is proof the site took it; when no readback can match an auto-assigned value, `write` stays `accepted` — verify from that data or a compact read, do not resend.";
   if (allowWrites)
     server.registerTool(
       "call_write_operation",
@@ -1140,6 +1198,80 @@ export function createToolset({
           );
         return asJob(`login ${t.site}`, "", () => importLogin(t, !users));
       }),
+  );
+  /**
+   * The catalog as resources: a host preloads context without a tool round-trip (the MCP split
+   * moodle-style servers use). Local only: a read never pulls a spec or sends a request.
+   */
+  const catalog = () =>
+    listSites().map((name) => {
+      try {
+        const { site } = loadSite(name)!;
+        return {
+          name,
+          ...(site.description ? { description: site.description } : {}),
+          ...(site.aliases?.length ? { aliases: site.aliases } : {}),
+          operations: site.operations.filter((o) => allowWrites || o.readOnly).length,
+        };
+      } catch (e) {
+        return { name, error: (e as Error).message };
+      }
+    });
+
+  const siteCatalog = (name: string) => {
+    let r: ReturnType<typeof loadSite>;
+    try {
+      r = loadSite(name);
+    } catch (e) {
+      return { site: name, error: (e as Error).message, next: "list_sites" };
+    }
+    if (!r) return { site: name, error: "site is not installed", next: "list_sites" };
+    const writes = allowWrites && !agentPulled(r.site.name);
+    const notes = siteNotes(r.site.name);
+    return {
+      site: r.site.name,
+      ...(r.site.description ? { description: r.site.description } : {}),
+      operations: r.site.operations
+        .filter((o) => writes || o.readOnly)
+        .map((o) => {
+          const d = describeOperation(r.site, o.name);
+          return {
+            name: o.name,
+            ...(o.description ? { description: o.description } : {}),
+            ...(o.readOnly ? {} : { write: true }),
+            inputSchema: d.params,
+            output: d.output,
+            ...(d.links ? { links: d.links } : {}),
+          };
+        }),
+      ...(notes ? { notes } : {}),
+    };
+  };
+
+  const asJson = (uri: URL, value: unknown) => ({
+    contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(value) }],
+  });
+
+  server.registerResource(
+    "sites",
+    "api-anything://sites",
+    {
+      title: "api-anything sites",
+      description: "Every installed site and how many operations it has, as list_sites returns them.",
+      mimeType: "application/json",
+    },
+    async (uri) => asJson(uri, catalog()),
+  );
+
+  server.registerResource(
+    "site",
+    new ResourceTemplate("api-anything://site/{name}", { list: undefined }),
+    {
+      title: "A site's operations",
+      description: "One site's operations, their params and the site's notes, as list_operations returns them.",
+      mimeType: "application/json",
+    },
+    async (uri, { name }) => asJson(uri, siteCatalog(String(name))),
   );
   registerLearn(server, { asJob });
   return {
